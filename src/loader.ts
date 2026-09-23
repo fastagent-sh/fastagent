@@ -4,7 +4,7 @@
  */
 import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { basename, extname, join, relative } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { log } from "./log.ts";
@@ -254,10 +254,17 @@ function changedFiles(before: CodeStamp, after: CodeStamp): string[] {
   return [...changed, ...[...before.keys()].filter((file) => !after.has(file))];
 }
 
-/** What a live code directory holds now, and "why this is not what is on disk" when its last reload failed. */
-export interface Live<T> {
-  value: T;
-  failure?: string;
+/**
+ * What each live code directory's last reload could NOT load, by agent dir, then by directory (`tools/`,
+ * `routines/`). The ONE way a failure reaches the agent: the pi prompt reads it every turn (create.ts), whichever
+ * directory failed and whichever layer loaded it — `routines/` is loaded by the neutral service, far from the prompt.
+ * Entries are disk-derived and cleared by the reload that succeeds.
+ */
+const failures = new Map<string, Map<string, string>>();
+
+/** The live directories of this agent whose last reload failed, and why. */
+export function liveCodeFailures(agentDir: string): { label: string; failure: string }[] {
+  return [...(failures.get(resolve(agentDir)) ?? [])].map(([label, failure]) => ({ label, failure }));
 }
 
 /**
@@ -265,9 +272,10 @@ export interface Live<T> {
  * disk. Loaded again only when {@link codeStamp} moved; what a caller already holds is unaffected.
  *
  * A reload that fails KEEPS THE LAST VALUE THAT LOADED and says why: in the log once per state of the directory, and
- * as `failure` for as long as that state lasts, for a caller that can put it in front of whoever will fix it. Boot
- * refuses the same failure, but here refusing would fail every read after it — including the turn the agent needs to
- * repair what it just broke. All or nothing: a half-applied directory is a set nobody wrote.
+ * in {@link liveCodeFailures} for as long as that state lasts — the agent that broke the file is the one placed to
+ * fix it, and a tool or a routine that is simply absent tells it nothing. Boot refuses the same failure, but here
+ * refusing would fail every read after it — including the turn the agent needs to repair what it just broke. All or
+ * nothing: a half-applied directory is a set nobody wrote.
  *
  * Only TypeScript reloads ({@link reloadKind}); a change to a file Node caches is said to need a restart, and when
  * that is all that changed nothing is reloaded — logging "reloaded" over a file Node still has cached is the one
@@ -280,16 +288,17 @@ export function liveCode<T>(options: {
   boot: { stamp: CodeStamp; value: T };
   /** Load the directory, or throw why it cannot be; given what was held, for a caller that reports the difference. */
   load: (previous: T) => Promise<T>;
-}): () => Promise<Live<T>> {
+}): () => Promise<T> {
   const { dir, agentDir, load } = options;
   const label = `${relative(agentDir, dir)}/`;
-  let current: Live<T> & { stamp: CodeStamp } = options.boot;
+  const failed = failures.get(resolve(agentDir)) ?? new Map<string, string>();
+  failures.set(resolve(agentDir), failed);
+  let current = options.boot;
   let reloading: Promise<void> | undefined;
-  const answer = (): Live<T> => ({ value: current.value, failure: current.failure });
   return async () => {
     const stamp = await codeStamp(dir);
     const changed = changedFiles(current.stamp, stamp);
-    if (changed.length === 0) return answer();
+    if (changed.length === 0) return current.value;
     const cached = changed.filter((file) => reloadKind(file) === "restart");
     if (cached.length > 0) {
       log.warn(
@@ -299,17 +308,19 @@ export function liveCode<T>(options: {
     }
     if (cached.length === changed.length) {
       current = { ...current, stamp };
-      return answer();
+      return current.value;
     }
     // Concurrent reads share one reload; whichever stamp it read, the next read compares again.
     reloading ??= (async () => {
       try {
         const value = await load(current.value);
         current = { stamp, value };
+        failed.delete(label);
         log.info(`[fastagent] ${label} changed — reloaded`);
       } catch (error) {
         const failure = (error as Error).message;
-        current = { stamp, value: current.value, failure };
+        current = { stamp, value: current.value };
+        failed.set(label, failure);
         log.warn(
           `[fastagent] ${label} changed but could not be loaded, so the previous version stays in use until the ` +
             `next change under ${label} loads: ${failure}`,
@@ -319,6 +330,6 @@ export function liveCode<T>(options: {
       }
     })();
     await reloading;
-    return answer();
+    return current.value;
   };
 }

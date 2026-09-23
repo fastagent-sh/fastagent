@@ -13,6 +13,7 @@ import type { Agent } from "../src/agent.ts";
 import type { LoadedRoutine } from "../src/schedule/routine.ts";
 import { ROUTINE_POLL_MS, createScheduler } from "../src/schedule/scheduler.ts";
 import { routineChanges } from "../src/service.ts";
+import { addWakeup } from "../src/schedule/wakeups.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -141,4 +142,27 @@ it("the change line names what the agent gave itself — added, re-timed, re-wor
     "~ poll (0 * * * * → * * * * *), ~ brief (prompt), + digest (by name), − cleanup",
   );
   expect(routineChanges(after, after)).toBeUndefined();
+});
+
+it("with self-scheduling off, a wake-up left in state does not fire — its unwake tool is not mounted", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-07T10:30:00Z"));
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const stateRoot = await mkdtemp(join(tmpdir(), "fa-live-routines-"));
+  const added = addWakeup(
+    stateRoot,
+    { session: "chat", prompt: "check again", cron: "*/15 * * * *" },
+    new Date("2026-07-07T10:30:00Z"),
+  );
+  expect(added.ok).toBe(true);
+  const { agent, calls } = recordingAgent();
+  const scheduler = Effect.runSync(
+    createScheduler({ agent, stateRoot, routines: [], read: async () => [], wakeups: false }),
+  );
+  scheduler.start();
+
+  await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+  expect(calls).toEqual([]);
+  scheduler.stop();
 });

@@ -149,7 +149,9 @@ keeps them, so a change to one is said to need a restart and is never reported a
 `routines/` goes live on the same machinery (loader.ts `liveCode`): the routes read it per request, and the
 resident clock polls it every 30 seconds and re-arms only what changed — a removed or re-timed routine loses its
 loop after any fire in flight, an added or re-timed one is armed from its newest claim as a boot would arm it, and
-a fire takes its prompt from the latest read. A changed set is logged in one line (service.ts `routineChanges`):
+a fire takes its prompt from the latest read. A reload that fails reaches the model the way a tools one does:
+`liveCode` records it (`liveCodeFailures`), and the pi prompt lists every live directory that failed, whichever
+layer loaded it. A changed set is logged in one line (service.ts `routineChanges`):
 a routine is work the agent gives itself, so what it gave itself is said where it takes effect. On AgentCore the
 clock is the EventBridge rules `deploy` writes, so routines there are the booted list.
 The rest of the code — `channels/`, config — is the agent's wiring, reloaded by a restart (the dev

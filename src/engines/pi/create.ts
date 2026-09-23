@@ -18,7 +18,7 @@ import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
-import type { Live, ModuleLoadFailure } from "../../loader.ts";
+import { type ModuleLoadFailure, liveCodeFailures } from "../../loader.ts";
 import {
   type FastagentTool,
   type ToolCollision,
@@ -173,8 +173,8 @@ export function piBasePrompt(
   options: {
     tools?: MountedTool[];
     persona?: string;
-    /** Why `tools/` as it is on disk is not what is mounted (a failed live reload, loader.ts `liveCode`). */
-    toolsFailure?: string;
+    /** The agent's live code directories whose last reload failed, and why (loader.ts `liveCodeFailures`). */
+    codeFailures?: readonly { label: string; failure: string }[];
   } = {},
 ): string {
   const mounted = options.tools ?? [];
@@ -194,9 +194,12 @@ export function piBasePrompt(
       ? "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files."
       : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
   // Said where the model reads its tools: it is the one that edits tools/, and an absent tool does not say why.
-  const failureNote = options.toolsFailure
-    ? `\n\nYour tools/ changed but could not be loaded, so the tools above are the last set that loaded. The load is retried when a file under tools/ changes — after fixing a helper outside tools/, change one inside it too. A missing secret is read when the service starts, so it needs a restart:\n${options.toolsFailure}`
-    : "";
+  const failureNote = (options.codeFailures ?? [])
+    .map(
+      ({ label, failure }) =>
+        `\n\nYour ${label} changed but could not be loaded, so the last version of it that loaded stays in use. The load is retried when a file under ${label} changes — after fixing a helper outside ${label}, change one inside it too. A missing secret is read when the service starts, so it needs a restart:\n${failure}`,
+    )
+    .join("");
   const deferredNote =
     deferredCount > 0
       ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
@@ -208,7 +211,7 @@ export function piBasePrompt(
     ? ""
     : isAgentcoreRuntime()
       ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn, and TypeScript files in routines/ within 30 seconds; changes to channels, configuration or any other file in tools/ or routines/ take effect when the service restarts.`;
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn, and TypeScript files in routines/ within 30 seconds; changes to channels, configuration or any other file in tools/ or routines/ take effect when the service restarts. A cron fires only while this service is running: if the deployment may scale to zero when idle, it sleeps through a cron you add — whether it may was decided when it was deployed, so tell whoever operates it.`;
   return `${identity}
 
 Available tools:
@@ -429,7 +432,7 @@ export async function assemblePiFromDefinition(
   options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & {
     /** The tools as they are NOW, asked once per invoke; `tools` is the boot answer. The directory opener supplies it
      *  so the agent's own `tools/` go live without a restart ({@link createPiAgentFromDir}). */
-    readTools?: () => Promise<Live<MountedTool[]>>;
+    readTools?: () => Promise<MountedTool[]>;
   },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
@@ -472,13 +475,14 @@ export async function assemblePiFromDefinition(
       reportFindingsIfChanged(def.dir, def);
       // Read with the prompt because the prompt LISTS them: a new tool the model is not told about is one it
       // does not call.
-      const read = readTools ? await readTools() : undefined;
-      const live = read ? withSearchTool(read.value) : tools;
+      const live = readTools ? withSearchTool(await readTools()) : tools;
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn
           // like AGENTS.md so edits go live.
-          base: options.base ?? piBasePrompt({ tools: live, persona: def.persona, toolsFailure: read?.failure }),
+          // After the tools are read: a reload they just attempted is in the failures this turn reports.
+          base:
+            options.base ?? piBasePrompt({ tools: live, persona: def.persona, codeFailures: liveCodeFailures(dir) }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
         }),

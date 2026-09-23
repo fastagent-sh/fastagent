@@ -3,12 +3,13 @@
  * debounced edits to the agent's CODE inputs.
  */
 import { spawn } from "node:child_process";
-import { extname, relative, sep } from "node:path";
+import { readdirSync } from "node:fs";
+import { extname, join, relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
-import { reloadKind } from "./loader.ts";
+import { isModuleFile, reloadKind } from "./loader.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
@@ -56,10 +57,29 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
  * `liveCode` warns for exactly these). Anything else there — TypeScript, a new `tools/lib/` directory — the worker
  * takes in itself, and a restart would cost it every session in flight. With no worker, everything restarts: the one
  * that exited refused a broken file at boot, and this change may be the fix.
+ *
+ * One exception: a worker that booted with NO routines has no `POST /run` — a route is decided at boot (service.ts)
+ * — so its first routine restarts it, and the route appears the way it did before routines went live.
  */
-export function devChangeRestarts(root: string, path: string, serving: boolean): boolean {
-  if (serving && inLiveCode(relative(root, path).split(sep)[0])) return reloadKind(path) === "restart";
-  return true;
+export function devChangeRestarts(
+  root: string,
+  path: string,
+  worker: { serving: boolean; routinesAtBoot: boolean },
+): boolean {
+  const dir = relative(root, path).split(sep)[0];
+  if (!worker.serving || !inLiveCode(dir)) return true;
+  if (dir === "routines" && !worker.routinesAtBoot && reloadKind(path) === "fresh") return true;
+  return reloadKind(path) === "restart";
+}
+
+/** Whether `routines/` declares anything a worker spawned now would load — what decides its `POST /run`. */
+function hasRoutines(agentDir: string): boolean {
+  try {
+    return readdirSync(join(agentDir, "routines")).some(isModuleFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
@@ -69,6 +89,7 @@ export async function runDevSupervisor(
 ): Promise<void> {
   // The placement arrives RESOLVED from the command (which already routed its refusal through failStartup).
   let worker: ReturnType<typeof spawn> | undefined;
+  let routinesAtBoot = false; // did the running worker boot with routines (and so with `POST /run`)?
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
   let timer: NodeJS.Timeout | undefined;
@@ -77,6 +98,7 @@ export async function runDevSupervisor(
   let tunnel: Tunnel | undefined;
 
   const spawnWorker = (): void => {
+    routinesAtBoot = hasRoutines(placement.agentDir);
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
     // biome-ignore lint/style/noNonNullAssertion: argv[1] is always the script path under a node entry
     const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
@@ -133,7 +155,7 @@ export async function runDevSupervisor(
     ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir)),
   });
   watcher.on("all", (_event, path) => {
-    if (!devChangeRestarts(placement.agentDir, path, worker !== undefined)) return;
+    if (!devChangeRestarts(placement.agentDir, path, { serving: worker !== undefined, routinesAtBoot })) return;
     clearTimeout(timer);
     timer = setTimeout(triggerReload, 200);
   });

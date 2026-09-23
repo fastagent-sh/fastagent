@@ -93,28 +93,59 @@ describe("dev-supervisor: devChangeRestarts (which watched change costs the work
   const root = join("/work", "agent");
 
   it("TypeScript under tools/ reloads in the serving worker, so it restarts nothing", () => {
-    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), true)).toBe(false);
-    expect(devChangeRestarts(root, join(root, "tools", "lib", "word.ts"), true)).toBe(false);
+    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), { serving: true, routinesAtBoot: true })).toBe(
+      false,
+    );
+    expect(
+      devChangeRestarts(root, join(root, "tools", "lib", "word.ts"), { serving: true, routinesAtBoot: true }),
+    ).toBe(false);
   });
 
   it("nor does a directory under tools/ — an agent's first helper creates tools/lib/ in the middle of its turn", () => {
     // chokidar reports it as `addDir`/`unlinkDir`; with no extension it is neither code nor cached code.
-    expect(devChangeRestarts(root, join(root, "tools", "lib"), true)).toBe(false);
+    expect(devChangeRestarts(root, join(root, "tools", "lib"), { serving: true, routinesAtBoot: true })).toBe(false);
+  });
+
+  it("the FIRST routine restarts a worker that booted with none — POST /run exists only from boot", () => {
+    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), { serving: true, routinesAtBoot: false })).toBe(
+      true,
+    );
+    // ...but not a helper directory beside it, and nothing under tools/.
+    expect(devChangeRestarts(root, join(root, "routines", "lib"), { serving: true, routinesAtBoot: false })).toBe(
+      false,
+    );
+    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), { serving: true, routinesAtBoot: false })).toBe(
+      false,
+    );
   });
 
   it("routines/ is live code too: its TypeScript re-arms in the serving worker, a cached format restarts it", () => {
-    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), true)).toBe(false);
-    expect(devChangeRestarts(root, join(root, "routines", "daily.mjs"), true)).toBe(true);
-    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), false)).toBe(true);
+    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), { serving: true, routinesAtBoot: true })).toBe(
+      false,
+    );
+    expect(devChangeRestarts(root, join(root, "routines", "daily.mjs"), { serving: true, routinesAtBoot: true })).toBe(
+      true,
+    );
+    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), { serving: false, routinesAtBoot: true })).toBe(
+      true,
+    );
   });
 
   it("with the worker DOWN it restarts — the worker refused a broken tool at boot, and this may be the fix", () => {
-    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), false)).toBe(true);
+    expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), { serving: false, routinesAtBoot: true })).toBe(
+      true,
+    );
   });
 
   it("a format Node caches, and every other code input, restart the serving worker", () => {
-    expect(devChangeRestarts(root, join(root, "tools", "lib", "data.json"), true)).toBe(true);
-    expect(devChangeRestarts(root, join(root, "channels", "telegram.ts"), true)).toBe(true);
-    expect(devChangeRestarts(root, join(root, "fastagent.config.ts"), true)).toBe(true);
+    expect(
+      devChangeRestarts(root, join(root, "tools", "lib", "data.json"), { serving: true, routinesAtBoot: true }),
+    ).toBe(true);
+    expect(
+      devChangeRestarts(root, join(root, "channels", "telegram.ts"), { serving: true, routinesAtBoot: true }),
+    ).toBe(true);
+    expect(devChangeRestarts(root, join(root, "fastagent.config.ts"), { serving: true, routinesAtBoot: true })).toBe(
+      true,
+    );
   });
 });

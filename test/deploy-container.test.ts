@@ -91,11 +91,14 @@ describe("deploy/container: shared Docker context", () => {
       process.env.FASTAGENT_RELEASE_FILE = values[0];
       expect(piBasePrompt()).toContain("Your workspace survives restarts and deployments");
       expect(piBasePrompt()).toContain("replaces your definition directory");
+      // routines/ goes live, residency does not: a scale-to-zero deploy sleeps through a cron the agent adds later.
+      expect(piBasePrompt()).toContain("it sleeps through a cron you add");
       // The host whose storage a deploy RESETS must not be told that work outside the definition
       // survives one — that would name a location its next deploy erases.
       process.env.FASTAGENT_AGENTCORE = "1";
       expect(piBasePrompt()).not.toContain("survives restarts and deployments");
       expect(piBasePrompt()).toContain("resets this host's storage entirely");
+      expect(piBasePrompt()).not.toContain("sleeps through a cron"); // its clock is EventBridge, not the machine
     } finally {
       for (const [key, value] of [
         ["FASTAGENT_RELEASE_FILE", before],

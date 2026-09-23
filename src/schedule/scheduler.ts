@@ -64,6 +64,12 @@ export interface SchedulerOptions {
    * resident clock to re-arm what changed. Without it the boot list is armed once, as it was.
    */
   read?: () => Promise<readonly LoadedRoutine[]>;
+  /**
+   * Poll the self-scheduled wake-ups (default on). Off when the agent may not schedule itself: a recurring wake-up
+   * left in state from before `selfSchedule` was turned off would otherwise keep firing, and its envelope's
+   * `unwake({ id })` names a tool that is no longer mounted.
+   */
+  wakeups?: boolean;
 }
 
 /**
@@ -242,6 +248,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       now = () => new Date(clock.currentTimeMillisUnsafe()),
       externalClock = false,
       read,
+      wakeups = true,
     } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
@@ -432,7 +439,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           const last = lastFires.get(s.name);
           arm({ ...s, cron: s.cron }, last ? new Date(last) : current, current);
         }
-        if (!stopped) launch("wake-up poll", wakeLoop);
+        if (!stopped && wakeups) launch("wake-up poll", wakeLoop);
         // The external clock arms nothing here, so there is nothing for a changed list to re-arm.
         if (!stopped && read && !externalClock) launch("routines/ poll", reconcileLoop(read));
       },

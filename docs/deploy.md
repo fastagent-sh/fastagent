@@ -146,6 +146,8 @@ Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundr
 
 **One of those reasons has a way out: `routines/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /run`](api-reference.md#post-run) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
 
+**Residency is decided at deploy, from the routines deployed.** `routines/` goes live while the agent runs, so an agent can give itself a cron after a deploy that found none — and a machine allowed to scale to zero sleeps through it: the clock re-arms it, but nothing wakes the machine at its instant. The deployed system prompt tells the agent so. Commit the routine and redeploy (which re-reads it), keep one machine running, or call it from a scheduler you own as above.
+
 `selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a GitHub channel (its turns have no replay) and a long-connection channel (it cannot reconnect from zero).
 
 ## Railway

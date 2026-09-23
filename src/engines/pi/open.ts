@@ -19,7 +19,7 @@ import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.t
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import { type CodeStamp, type Live, codeStamp, liveCode, refuseBrokenDeclarations } from "../../loader.ts";
+import { type CodeStamp, codeStamp, liveCode, refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
@@ -139,15 +139,14 @@ async function mountableTools(config: FastagentConfig, agentDir: string, workspa
 /**
  * The agent's own `tools/`, LIVE ({@link liveCode}): each invoke asks, and gets them as they are on disk — so a tool
  * the agent wrote for itself is one it can call on its next turn, with no restart. A turn already running keeps the
- * tools it was bound with. A failed reload's `failure` goes into the prompt (create.ts): the agent that broke the
- * file is the one placed to fix it, and a tool that is simply absent tells it nothing.
+ * tools it was bound with. A failed reload reaches the prompt through `liveCodeFailures` (create.ts).
  */
 export function liveTools(
   opened: { config: FastagentConfig; agentDir: string; workspace: string },
   boot: { stamp: CodeStamp; tools: MountedTool[] },
   /** What the opener adds on top of the discovered set (the `wake` tool), applied to every reload as at boot. */
   mount: (tools: MountedTool[]) => MountedTool[] = (tools) => tools,
-): () => Promise<Live<MountedTool[]>> {
+): () => Promise<MountedTool[]> {
   const { config, agentDir, workspace } = opened;
   return liveCode({
     dir: join(agentDir, "tools"),

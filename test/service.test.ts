@@ -300,6 +300,17 @@ describe("createAgentService", () => {
     }
   });
 
+  it("with selfSchedule off, the only poll is the routines' — no wake-up poll", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const service = await createAgentService(await agentDir());
+    try {
+      expect(timers.mock.calls.filter((args) => args[1] === 30_000)).toHaveLength(1);
+    } finally {
+      await service.close();
+      timers.mockRestore();
+    }
+  });
+
   it("close() detaches from the caller's signal", async () => {
     // A host that opens and closes surfaces while holding one long-lived signal would otherwise
     // accumulate listeners, each pinning a whole closed surface through its closure.

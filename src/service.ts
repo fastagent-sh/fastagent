@@ -266,7 +266,8 @@ async function liveServingRoutines(
       return next;
     },
   });
-  return { routines, read: async () => (await live()).value };
+  // A failed reload reaches the agent through `liveCodeFailures`, which the pi prompt reads every turn.
+  return { routines, read: live };
 }
 
 /** `+ digest (0 9 * * *), ~ poll (0 * * * * → * * * * *), − cleanup`, or nothing when no routine changed. */
@@ -296,7 +297,14 @@ export function startSchedules(
   // A live list keeps the clock up with nothing to arm yet: the first routine may be one the agent writes.
   if (routines.length === 0 && !selfSchedule && !options.read) return { routines, stop: () => {} };
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock, read: options.read }),
+    createScheduler({
+      agent,
+      stateRoot,
+      routines,
+      externalClock: options.externalClock,
+      read: options.read,
+      wakeups: selfSchedule,
+    }),
   );
   scheduler.start();
   if (routines.length > 0) {

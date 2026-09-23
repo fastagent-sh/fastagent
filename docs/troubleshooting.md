@@ -98,9 +98,12 @@ For `start`, hosted environments can set `PORT`.
 - **The TypeScript in `routines/`** goes live the same way: `POST /run` and `GET /routines` read it per request, and
   the clock re-arms within 30 seconds — a new routine is armed, a removed one disarmed, a re-timed one re-armed on
   its new cron, and an edited prompt is what the next fire says. The change is logged in one line
-  (`routines changed: + digest (0 9 * * *), − cleanup`). A serve that booted with no routines has no `POST /run`
-  until it restarts; the clock still arms a routine written later. On AgentCore the clock is the EventBridge rules
-  `deploy` writes, so routines there change with a deploy.
+  (`routines changed: + digest (0 9 * * *), − cleanup`); a reload that fails is logged and told to the agent in its
+  system prompt, as for `tools/`. A serve that booted with no routines has no `POST /run` until it restarts — `dev`
+  restarts its worker for the first one; under `start` the clock still arms it. On AgentCore the clock is the
+  EventBridge rules `deploy` writes, so routines there change with a deploy.
+- **Self-scheduled wake-ups fire only while `selfSchedule` is on.** One left in state after turning it off stays
+  there and does not fire.
   - **Only TypeScript** (`.ts`, `.mts`, `.cts`, `.tsx`). A `.js`, `.mjs`, `.cjs` or `.json` file under `tools/` or
     `routines/` is loaded by Node itself, which keeps it as first read — as in pi's `/reload`. Editing one restarts
     the `dev` worker; under `start` it logs that a restart is needed, and nothing is reported as reloaded.
