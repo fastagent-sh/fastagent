@@ -20,7 +20,7 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
-import { isMachineCommand, resolveCommandSurface } from "../engines/pi/agent-session-factory.ts";
+import { type MachineLoan, machineLoan } from "../engines/pi/agent-session-factory.ts";
 import {
   createPiModelRuntime,
   createPiModels,
@@ -61,6 +61,15 @@ function reportWorkspaceHint(hint: string | undefined): void {
   if (hint) reportLine("hint", hint);
 }
 
+/** The `machine:` line — ONE wording for the startup report and `info`, or undefined when the box lends nothing. */
+export function machineLine({ commands, settings }: MachineLoan): string | undefined {
+  const parts = [
+    ...(commands.length > 0 ? [commands.map((c) => c.name).join(", ")] : []),
+    ...(settings.length > 0 ? [`pi settings ${settings.join(", ")}`] : []),
+  ];
+  return parts.length > 0 ? `${parts.join(" · ")} (from this machine — NOT in a deployment)` : undefined;
+}
+
 /** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
@@ -96,10 +105,8 @@ export async function reportAssembly(
   reportLine("skills", a.definition.skills.map((s) => s.name).join(", ") || "(none)");
   // Said at boot because it is the one difference between this process and the deployed copy of it that an
   // author cannot see any other way.
-  const borrowed = (await resolveCommandSurface(a.agentDir, a.workspace)).filter(isMachineCommand);
-  if (borrowed.length > 0) {
-    reportLine("machine", `${borrowed.map((c) => c.name).join(", ")} (from this machine — NOT in a deployment)`);
-  }
+  const lent = machineLine(await machineLoan(a.agentDir, a.workspace));
+  if (lent) reportLine("machine", lent);
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {

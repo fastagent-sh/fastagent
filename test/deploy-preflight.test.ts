@@ -96,6 +96,24 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(note?.text).toContain("fastagent add skill <name>"); // the way to make it travel
   });
 
+  it("names the pi settings this machine lends, and where to put them so they travel", async () => {
+    // Tuned on the laptop, absent in the image: the deployed agent retries and compacts on pi's defaults while
+    // `dev` did not, and nothing else in a deploy says so.
+    const home = await mkdtemp(join(tmpdir(), "fa-preflight-settings-"));
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+    vi.stubEnv("HOME", home);
+
+    const pre = await call(await workspace(), {});
+
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    const note = pre.messages.find((message) => message.text.includes("pi settings"));
+    expect(note?.level).toBe("note");
+    expect(note?.text).toContain("retry");
+    expect(note?.text).toContain("<workspace>/.pi/settings.json"); // the remedy, which travels
+  });
+
   it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
     // The value file is how a deployment picks a model without editing the committed default; the operator's
     // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.

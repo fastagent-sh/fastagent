@@ -236,6 +236,12 @@ definition's own `skills/` *and* from this machine, by pi's [Agent Skills](https
 discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, project `.pi/skills/` and `.agents/skills/`).
 A name in the definition wins a collision.
 
+The machine is read once, at startup; restart to pick up a skill installed after that. Skills and
+prompts from pi **packages** (`packages` in pi's `settings.json`) are included when the package is
+installed or can be installed. If one cannot be (offline, a typo, a registry 404), fastagent warns and
+runs without the skills and prompts of every package until restart; the definition and the machine's
+local skills still load.
+
 A deployed image is a machine too, and an empty one unless you put something in it. So the moment that
 stops being true is the deploy, and that is where it is reported: `deploy` prints a note naming the
 skills and prompts this machine lends the agent and the image will not have.
@@ -264,10 +270,15 @@ definition, where a reader can see it.
 
 The knobs that shape a turn rather than the agent — compaction, retries, prompt-cache warming, transport
 timeouts — belong to pi, not to `fastagent.config.ts`, and they come from the machine like everything
-else above: `dev`, `start` and `chat` all read pi's own file, so the posture you tuned locally is the
-posture you get. A deployed image has no such file unless it was built with one, and then pi's defaults
-apply. There is no definition-local override today; if you need one pinned to the artifact, say so and
-it becomes a `fastagent.config.ts` key rather than a path someone has to know about.
+else above: `dev`, `start` and `chat` all read pi's own files (serving reads them once, at startup), so
+the posture you tuned locally is the posture you get.
+
+pi has two, and only one of them travels. The **global** file, `~/.pi/agent/settings.json`, is this
+machine's: a deployed image does not have it unless it was built with one, and then pi's defaults
+apply — `deploy` names every turn setting you set there. The **project** file,
+`<workspace>/.pi/settings.json`, sits inside the workspace, so the image carries it and the deployed
+agent reads it from the same place. That is where a setting goes when the artifact must pin it; the
+project file wins over the global one, as it does in pi.
 
 The file is pi's own settings format; the ones worth knowing here:
 

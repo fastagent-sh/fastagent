@@ -20,7 +20,7 @@ import {
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
-import { isMachineCommand, resolveCommandSurface } from "../engines/pi/agent-session-factory.ts";
+import { machineLoan } from "../engines/pi/agent-session-factory.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
@@ -188,9 +188,8 @@ export async function preflightDeploy(input: {
   // the ones this laptop supplies are exactly the capability a deployed copy loses. A NOTE, not a gate: the author
   // knows what they are shipping, and stopping a deploy over a skill they never meant to carry is how a warning
   // becomes something to skim past. `fastagent add skill <name>` is the way to carry one.
-  const borrowed = (await resolveCommandSurface(agentDir, workspace))
-    .filter(isMachineCommand)
-    .map((command) => command.name);
+  const loan = await machineLoan(agentDir, workspace);
+  const borrowed = loan.commands.map((command) => command.name);
   if (borrowed.length > 0) {
     const shown = borrowed.slice(0, 6).join(", ");
     messages.push({
@@ -199,6 +198,18 @@ export async function preflightDeploy(input: {
         `${borrowed.length} skill(s)/prompt(s) come from THIS machine and will not be in the image ` +
         `(${shown}${borrowed.length > 6 ? ", …" : ""}) — \`fastagent add skill <name>\` vendors one into the ` +
         `definition, where it travels`,
+    });
+  }
+  // The engine half of the same loan. Tuned on this laptop, absent in the image — so the deployed agent retries,
+  // compacts and warms its cache on pi's defaults while `dev` did not, and nothing else in a deploy says so. The
+  // project file travels (it is inside the workspace), which makes it the way to pin one.
+  if (loan.settings.length > 0) {
+    messages.push({
+      level: "note",
+      text:
+        `pi settings ${loan.settings.join(", ")} come from THIS machine's global settings file and will not be in ` +
+        `the image, so the deployed agent runs on pi's defaults for them — move them to ` +
+        `<workspace>/.pi/settings.json, which travels`,
     });
   }
 

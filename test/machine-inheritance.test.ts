@@ -17,7 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
-import { resolveCommandSurface } from "../src/engines/pi/agent-session-factory.ts";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { machineLoan, piAgentSessionFactory, resolveCommandSurface } from "../src/engines/pi/agent-session-factory.ts";
+import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
@@ -219,4 +221,63 @@ it("reports the machine's broken files ONCE, not once per `GET /control/commands
     warned.filter((line) => line.includes("description")),
     warned.join("\n"),
   ).toHaveLength(1);
+});
+
+it("a pi package this machine cannot install degrades to a warning — the turn still runs", async () => {
+  // Resolving a missing package INSTALLS it, and a failed install throws out of pi's `reload()`. Uncaught, one
+  // offline laptop or registry 404 failed boot, `info`, `deploy` and every turn, over a skill nobody asked for.
+  // `npmCommand: ["false"]` is that failure without the network.
+  const home = await machine({ skills: { metar: "Read aviation weather." } });
+  await writeFile(
+    join(home, ".pi", "agent", "settings.json"),
+    JSON.stringify({ npmCommand: ["false"], packages: ["npm:not-installed-anywhere"] }),
+  );
+  const warned: string[] = [];
+  const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
+
+  const prompt = await promptSentBy(await definition());
+  warn.mockRestore();
+
+  expect(prompt).toContain("Read aviation weather."); // the machine's LOCAL half survives
+  expect(warned.join("\n")).toMatch(/pi packages could not be resolved.*not-installed-anywhere/);
+});
+
+it("GLOBAL turn settings are lent and reported; the PROJECT file travels and is not", async () => {
+  // The same path rule as skills: `<workspace>/.pi/settings.json` rides into the image with `COPY . .`, the global
+  // one does not. A global `retry.enabled: false` used to change `dev` and silently revert once deployed.
+  const home = await machine({});
+  await mkdir(join(home, ".pi", "agent"), { recursive: true });
+  await writeFile(
+    join(home, ".pi", "agent", "settings.json"),
+    JSON.stringify({ retry: { enabled: false }, compaction: {}, theme: "dark" }),
+  );
+  const dir = await definition();
+  await mkdir(join(dir, ".pi"), { recursive: true });
+  await writeFile(join(dir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "off" }));
+
+  const { settings } = await machineLoan(dir, dir);
+
+  expect(settings).toEqual(["retry"]); // not `compaction: {}` (pi's default), not `theme` (not a turn setting)
+  expect(settings).not.toContain("cacheWarming"); // the project file's, which travels
+});
+
+it("the PROJECT settings file is honored by a served turn — the way to pin one to the artifact", async () => {
+  // The deploy note tells an author to move a setting here, so this has to be true: the served loader reads the
+  // project scope of the machine snapshot, and the project file is inside the workspace.
+  await machine({});
+  const dir = await definition();
+  await mkdir(join(dir, ".pi"), { recursive: true });
+  await writeFile(join(dir, ".pi", "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+  const { faux } = makeFaux();
+  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+  modelRuntime.registerNativeProvider(faux.provider);
+
+  const session = await piAgentSessionFactory({
+    sessions: piInMemorySessionRecordStore({ cwd: dir }),
+    engine: async () => ({ modelRuntime, model: faux.getModel() }),
+    readDefinition: () => ({ systemPrompt: "test", skills: [] }),
+    cwd: dir,
+  })("s");
+
+  expect(session.settingsManager.getRetryEnabled()).toBe(false);
 });

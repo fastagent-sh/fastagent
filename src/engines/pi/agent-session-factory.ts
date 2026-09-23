@@ -16,6 +16,7 @@ import {
   type ToolDefinition,
   createAgentSessionFromServices,
   DefaultResourceLoader,
+  SettingsManager,
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
@@ -212,15 +213,49 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
-/** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 /** pi's own shapes, taken from the loader rather than re-declared: both carry a `filePath` this file classifies by. */
 type DiscoveredSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
 type DiscoveredPrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
+
+type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
+
+/** pi's settings files as read at boot, per scope — pi merges them, so they stay apart here. */
+interface MachineSettings {
+  global: Settings;
+  project: Settings;
+}
 
 /** What the box lends an agent, read once per process. */
 interface MachineResources {
   skills: DiscoveredSkill[];
   prompts: DiscoveredPrompt[];
+  settings: MachineSettings;
+}
+
+/**
+ * A SettingsManager over a snapshot: pi's `reload()` re-reads THIS rather than the files, and a write stays in
+ * memory — a served turn never edits the operator's `~/.pi/agent/settings.json`.
+ */
+function settingsFrom(snapshot: MachineSettings): SettingsManager {
+  const stored: Record<keyof MachineSettings, string | undefined> = {
+    global: JSON.stringify(snapshot.global),
+    project: JSON.stringify(snapshot.project),
+  };
+  return SettingsManager.fromStorage({
+    withLock(scope, fn) {
+      const next = fn(stored[scope]);
+      if (next !== undefined) stored[scope] = next;
+    },
+  });
+}
+
+/**
+ * The snapshot minus pi `packages`. Resolving one INSTALLS it when it is missing (`npm install`, `git clone`), and a
+ * failed install throws out of `reload()`.
+ */
+function withoutPackages({ global, project }: MachineSettings): MachineSettings {
+  const strip = ({ packages: _, ...rest }: Settings): Settings => rest;
+  return { global: strip(global), project: strip(project) };
 }
 
 /** Keyed by the two directories it reads: the workspace (project-level) and pi's own (user-level). */
@@ -239,15 +274,41 @@ const machineReads = new Map<string, Promise<MachineResources>>();
  * started either. Restart to pick one up — and a deployment restarts on every release anyway.
  */
 export function machineResources(workspace: string): Promise<MachineResources> {
+  // pi's own answer for where its user-level resources live, asked rather than spelled: `~/.pi/agent` written
+  // here would be a second copy of a convention (and of `PI_CODING_AGENT_DIR`) that belongs to pi.
   const agentDir = getAgentDir();
   const key = `${workspace}\u0000${agentDir}`;
   const cached = machineReads.get(key);
   if (cached) return cached;
   const reading = (async (): Promise<MachineResources> => {
+    const files = SettingsManager.create(workspace, agentDir);
+    const settings: MachineSettings = { global: files.getGlobalSettings(), project: files.getProjectSettings() };
     // Discovery ONLY — no definition overrides here, because this is the other half. Extensions stay off for the
     // same concurrency reason the serving posture keeps them off.
-    const loader = new DefaultResourceLoader({ cwd: workspace, agentDir, noExtensions: true, noContextFiles: true });
-    await loader.reload();
+    const discover = async (snapshot: MachineSettings) => {
+      const loader = new DefaultResourceLoader({
+        cwd: workspace,
+        agentDir,
+        settingsManager: settingsFrom(snapshot),
+        noExtensions: true,
+        noContextFiles: true,
+      });
+      await loader.reload();
+      return loader;
+    };
+    let loader: DefaultResourceLoader;
+    try {
+      loader = await discover(settings);
+    } catch (error) {
+      // THE MACHINE'S HALF DEGRADES; it does not take the definition down with it. A package this box lists but
+      // cannot install (offline, a typo, a registry 404) would otherwise fail boot, `info`, `deploy` and every turn
+      // — for a skill the agent may never use. Its local skills and prompts still load; restart once it is fixed.
+      log.warn(
+        `[fastagent] this machine's pi packages could not be resolved, so their skills and prompts are left out ` +
+          `until restart: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      loader = await discover(withoutPackages(settings));
+    }
     const { skills, diagnostics } = loader.getSkills();
     // The machine's broken files, said ONCE — this read is the process's only one. A `SKILL.md` with no
     // description in `~/.pi/agent/skills` used to be absent from the prompt, absent from the listing, and silent.
@@ -256,12 +317,13 @@ export function machineResources(workspace: string): Promise<MachineResources> {
         `[fastagent] skill ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
       );
     }
-    return { skills, prompts: loader.getPrompts().prompts };
+    return { skills, prompts: loader.getPrompts().prompts, settings };
   })();
   machineReads.set(key, reading);
   return reading;
 }
 
+/** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
   skills: () => Skill[];
@@ -333,18 +395,24 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   let services: Promise<AgentSessionServices> | undefined;
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
-  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
-    createAgentSessionServices({
+  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> => {
+    const machine = await machineResources(cwd);
+    return createAgentSessionServices({
       cwd,
       modelRuntime,
+      // Packageless: this loader discards everything packages contribute (skills and prompts come from the machine
+      // read, extensions do not run, there is no TUI to theme), so resolving them would only add a network install,
+      // and its failure, to a turn.
+      settingsManager: settingsFrom(withoutPackages(machine.settings)),
       // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
       // question the two assemblies answer differently.
       resourceLoaderOptions: definitionResourceLoaderOptions({
         systemPrompt: () => definition.systemPrompt,
         skills: () => definition.skills,
-        machine: await machineResources(cwd),
+        machine,
       }),
     });
+  };
 
   return async (sessionId, inherit) => {
     const next = await options.readDefinition();
@@ -359,8 +427,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       //
       // AGAINST THE DEFINITION WE LAST APPLIED, never against the loader's skill list: that list is the merge
       // (definition + machine), so comparing the definition's half to it made `definitionChanged` true whenever the
-      // machine had any skill at all — a full `reload()` per turn on a loader concurrent turns share, re-reading
-      // settings, re-resolving packages, re-scanning four directories and clearing pi's extension cache.
+      // machine had any skill at all — a full `reload()` per turn on a loader concurrent turns share, re-scanning
+      // pi's resource directories and clearing its extension cache.
       //
       // The MACHINE's half is therefore not live: it is read once, when this process built its services. That is
       // the same deal as the rest of the environment — a `PATH` entry added after a process started does not reach
@@ -443,24 +511,19 @@ function toPiSkills(skills: Skill[]) {
 /**
  * The names a `/` composer completes: the definition's skills, this machine's skills, and its prompt templates.
  *
- * `source` says whether a name TRAVELS. A definition's skill is in the artifact and will be there after a deploy;
- * everything else belongs to the box this process is running on, which a deployed copy will not have unless its
- * image was built with one. That distinction is the client's only way to warn before someone builds a workflow on
- * a name that disappears in the cloud, and it costs nothing to carry.
+ * `source` says whether a name TRAVELS, decided by where its file is ({@link commandSource}): inside the
+ * workspace it rides into the image, outside it belongs to the box this process runs on. That distinction is the
+ * client's only way to warn before someone builds a workflow on a name that disappears in the cloud.
  *
- * THROUGH pi's ResourceLoader, over {@link definitionResourceLoaderOptions} — the same posture a turn is bound
- * with. Re-deriving "which skills exist" here would be a second implementation of the standard's four directories
- * and their differing rules, and the two would answer differently the first time either moved.
+ * The machine's half is {@link machineResources} — the same snapshot a bound session runs on, and pi's own
+ * discovery rather than a re-derivation of the standard's directories, so the list and the turn cannot disagree
+ * about which names exist.
  */
 export async function resolveCommandSurface(agentDir: string, workspace: string): Promise<AgentCommand[]> {
   const own = await loadAgentSkills(agentDir, { cwd: workspace });
   // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the author's composer with
   // no signal anywhere.
   reportFindingsIfChanged(own.dir, own);
-  // THE LOADER ALONE. `createAgentSessionServices` would build a `ModelRuntime` with it — reading `auth.json` and
-  // `models.json` — and a listing has no use for one. `getAgentDir()` is pi's own answer for where its user-level
-  // resources live, asked rather than spelled: writing `~/.pi/agent` here would be this file's second copy of a
-  // convention it has spent the rest of the change NOT copying.
   // THE SAME SNAPSHOT a bound session runs on, not a second reading of the same directories: a listing that
   // re-discovered would offer names installed after this process booted, which the next prompt would not expand.
   const machine = await machineResources(workspace);
@@ -499,7 +562,51 @@ function commandSource(kind: "skill" | "prompt", filePath: string | undefined, w
   return inside ? kind : `machine-${kind}`;
 }
 
-/** Does this `source` name something that will NOT be in a deployment? The one reading of it, for every caller. */
-export function isMachineCommand(command: AgentCommand): boolean {
+/** Does this `source` name something that will NOT be in a deployment? */
+function isMachineCommand(command: AgentCommand): boolean {
   return command.source.startsWith("machine-");
+}
+
+/**
+ * The pi settings that change what a TURN does — the ones worth an author's attention when they will not travel.
+ * Presentation-only keys (theme, editor, TUI) are the machine's business and stay out of the report;
+ * `defaultThinkingLevel` does too, because the definition's `thinkingLevel` overrides it in every posture.
+ */
+const TURN_SETTINGS = [
+  "compaction",
+  "retry",
+  "cacheWarming",
+  "thinkingBudgets",
+  "transport",
+  "httpIdleTimeoutMs",
+  "websocketConnectTimeoutMs",
+] as const;
+
+/** Set to something, as opposed to absent or `{}` — pi treats both of those as its default. */
+function isSet(value: unknown): boolean {
+  if (value === undefined) return false;
+  return !(typeof value === "object" && value !== null && Object.keys(value).length === 0);
+}
+
+/** What this machine lends the agent and a deployed image will not have. */
+export interface MachineLoan {
+  /** Skills and prompt templates from outside the workspace. */
+  commands: AgentCommand[];
+  /** {@link TURN_SETTINGS} keys set in pi's GLOBAL settings file. */
+  settings: string[];
+}
+
+/**
+ * THE ANSWER to "what does this box lend", for every place that has to say it (AGENTS.md: anything inherited is
+ * reported where it stops being true) — `deploy`'s pre-flight, the startup `machine:` line, `info`.
+ *
+ * Settings are the GLOBAL file's only. The project file is `<workspace>/.pi/settings.json`, inside the workspace,
+ * so `COPY . .` carries it and the deployed process reads it from the same place: it travels, the way a project
+ * `.pi/skills` does. A global `retry.enabled: false` does not, and without this the deployed agent quietly went
+ * back to pi's retry budget with nothing in the deploy to say so.
+ */
+export async function machineLoan(agentDir: string, workspace: string): Promise<MachineLoan> {
+  const commands = (await resolveCommandSurface(agentDir, workspace)).filter(isMachineCommand);
+  const { global } = (await machineResources(workspace)).settings;
+  return { commands, settings: TURN_SETTINGS.filter((key) => isSet(global[key])) };
 }
