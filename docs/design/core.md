@@ -138,7 +138,11 @@ The pi reference prompt has four segments:
 
 `persona.md` is authored identity; `AGENTS.md` is project context. The definition is re-read for every
 invocation, so persona/context/skill edits take effect on the next turn; code modules are reloaded by
-the dev supervisor instead. The low-level `createPiAgent({ instructions })` path takes the prompt body
+the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
+runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
+process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool
+(`selfSchedule`). `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
+release. (Reloading them in-process was built and removed: see #582.) The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 
 ### Promise ports
