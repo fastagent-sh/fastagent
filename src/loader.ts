@@ -3,8 +3,8 @@
  * config).
  */
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { basename, extname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { log } from "./log.ts";
@@ -209,4 +209,116 @@ export function moduleLoadHint(error: NodeJS.ErrnoException): string {
     return '\n  (the agent dir must be ESM — set "type": "module" in package.json)';
   }
   return "";
+}
+
+/** Every file under a code directory, at any depth, with its size and modification time ({@link codeStamp}). */
+export type CodeStamp = ReadonlyMap<string, string>;
+
+/**
+ * What a code directory the agent rewrites (`tools/`, `routines/`) looks like on disk. Asked per invoke or per poll,
+ * so it stats and never imports; a change here is what makes the next read load the directory again. Helpers
+ * imported from OUTSIDE the directory are not in it — they reload with the file that imports them, when it changes.
+ */
+export async function codeStamp(dir: string): Promise<CodeStamp> {
+  let files: string[];
+  try {
+    files = (await readdir(dir, { recursive: true, withFileTypes: true }))
+      // Only what could be imported: a README or an editor's swap file coming and going is not a change.
+      .filter((entry) => entry.isFile() && reloadKind(entry.name) !== undefined)
+      .map((entry) => join(entry.parentPath, entry.name))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const { size, mtimeMs } = await stat(file);
+        return [file, `${size}\u0000${mtimeMs}`] as const;
+      } catch (error) {
+        // Removed between the listing and the stat — a turn running `rm` or `git checkout` beside this one, or an
+        // editor's temp file. Gone is a state of the directory, not a fault; the next stamp sees it. Not reproduced in
+        // a test: the window is two awaits wide and there is no seam to hold it open.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    }),
+  );
+  return new Map(stamps.filter((stamp) => stamp !== undefined));
+}
+
+/** The files added, removed or rewritten between two stamps. */
+function changedFiles(before: CodeStamp, after: CodeStamp): string[] {
+  const changed = [...after].filter(([file, stamp]) => before.get(file) !== stamp).map(([file]) => file);
+  return [...changed, ...[...before.keys()].filter((file) => !after.has(file))];
+}
+
+/** What a live code directory holds now, and "why this is not what is on disk" when its last reload failed. */
+export interface Live<T> {
+  value: T;
+  failure?: string;
+}
+
+/**
+ * A code directory the agent rewrites while it runs (`tools/`, `routines/`), LIVE: each read gets it as it is on
+ * disk. Loaded again only when {@link codeStamp} moved; what a caller already holds is unaffected.
+ *
+ * A reload that fails KEEPS THE LAST VALUE THAT LOADED and says why: in the log once per state of the directory, and
+ * as `failure` for as long as that state lasts, for a caller that can put it in front of whoever will fix it. Boot
+ * refuses the same failure, but here refusing would fail every read after it — including the turn the agent needs to
+ * repair what it just broke. All or nothing: a half-applied directory is a set nobody wrote.
+ *
+ * Only TypeScript reloads ({@link reloadKind}); a change to a file Node caches is said to need a restart, and when
+ * that is all that changed nothing is reloaded — logging "reloaded" over a file Node still has cached is the one
+ * outcome worse than not reloading.
+ */
+export function liveCode<T>(options: {
+  /** The directory, and the agent dir its files are named relative to in the log. */
+  dir: string;
+  agentDir: string;
+  boot: { stamp: CodeStamp; value: T };
+  /** Load the directory, or throw why it cannot be; given what was held, for a caller that reports the difference. */
+  load: (previous: T) => Promise<T>;
+}): () => Promise<Live<T>> {
+  const { dir, agentDir, load } = options;
+  const label = `${relative(agentDir, dir)}/`;
+  let current: Live<T> & { stamp: CodeStamp } = options.boot;
+  let reloading: Promise<void> | undefined;
+  const answer = (): Live<T> => ({ value: current.value, failure: current.failure });
+  return async () => {
+    const stamp = await codeStamp(dir);
+    const changed = changedFiles(current.stamp, stamp);
+    if (changed.length === 0) return answer();
+    const cached = changed.filter((file) => reloadKind(file) === "restart");
+    if (cached.length > 0) {
+      log.warn(
+        `[fastagent] ${cached.map((file) => relative(agentDir, file)).join(", ")} changed — only TypeScript in ` +
+          `${label} reloads while the agent runs, so restart to load this change`,
+      );
+    }
+    if (cached.length === changed.length) {
+      current = { ...current, stamp };
+      return answer();
+    }
+    // Concurrent reads share one reload; whichever stamp it read, the next read compares again.
+    reloading ??= (async () => {
+      try {
+        const value = await load(current.value);
+        current = { stamp, value };
+        log.info(`[fastagent] ${label} changed — reloaded`);
+      } catch (error) {
+        const failure = (error as Error).message;
+        current = { stamp, value: current.value, failure };
+        log.warn(
+          `[fastagent] ${label} changed but could not be loaded, so the previous version stays in use until the ` +
+            `next change under ${label} loads: ${failure}`,
+        );
+      } finally {
+        reloading = undefined;
+      }
+    })();
+    await reloading;
+    return answer();
+  };
 }

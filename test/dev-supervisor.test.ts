@@ -102,6 +102,12 @@ describe("dev-supervisor: devChangeRestarts (which watched change costs the work
     expect(devChangeRestarts(root, join(root, "tools", "lib"), true)).toBe(false);
   });
 
+  it("routines/ is live code too: its TypeScript re-arms in the serving worker, a cached format restarts it", () => {
+    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), true)).toBe(false);
+    expect(devChangeRestarts(root, join(root, "routines", "daily.mjs"), true)).toBe(true);
+    expect(devChangeRestarts(root, join(root, "routines", "daily.ts"), false)).toBe(true);
+  });
+
   it("with the worker DOWN it restarts — the worker refused a broken tool at boot, and this may be the fix", () => {
     expect(devChangeRestarts(root, join(root, "tools", "greet.ts"), false)).toBe(true);
   });

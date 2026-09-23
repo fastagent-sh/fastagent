@@ -18,10 +18,9 @@ import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
-import type { ModuleLoadFailure } from "../../loader.ts";
+import type { Live, ModuleLoadFailure } from "../../loader.ts";
 import {
   type FastagentTool,
-  type LiveTools,
   type ToolCollision,
   isDeferredTool,
   loadTools,
@@ -174,7 +173,7 @@ export function piBasePrompt(
   options: {
     tools?: MountedTool[];
     persona?: string;
-    /** Why `tools/` as it is on disk is not what is mounted ({@link LiveTools}). */
+    /** Why `tools/` as it is on disk is not what is mounted (a failed live reload, loader.ts `liveCode`). */
     toolsFailure?: string;
   } = {},
 ): string {
@@ -209,7 +208,7 @@ export function piBasePrompt(
     ? ""
     : isAgentcoreRuntime()
       ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database). Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn; changes to channels, routines, configuration or any other file in tools/ take effect when the service restarts.`;
+      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it. Markdown definition files and TypeScript files in tools/ are read each turn, and TypeScript files in routines/ within 30 seconds; changes to channels, configuration or any other file in tools/ or routines/ take effect when the service restarts.`;
   return `${identity}
 
 Available tools:
@@ -430,7 +429,7 @@ export async function assemblePiFromDefinition(
   options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & {
     /** The tools as they are NOW, asked once per invoke; `tools` is the boot answer. The directory opener supplies it
      *  so the agent's own `tools/` go live without a restart ({@link createPiAgentFromDir}). */
-    readTools?: () => Promise<LiveTools>;
+    readTools?: () => Promise<Live<MountedTool[]>>;
   },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
@@ -474,7 +473,7 @@ export async function assemblePiFromDefinition(
       // Read with the prompt because the prompt LISTS them: a new tool the model is not told about is one it
       // does not call.
       const read = readTools ? await readTools() : undefined;
-      const live = read ? withSearchTool(read.tools) : tools;
+      const live = read ? withSearchTool(read.value) : tools;
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn

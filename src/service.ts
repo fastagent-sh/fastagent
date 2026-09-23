@@ -1,4 +1,5 @@
 /** The product, as one call: an agent directory becomes a live service. */
+import { join } from "node:path";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -16,7 +17,7 @@ import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
-import { refuseBrokenDeclarations } from "./loader.ts";
+import { codeStamp, liveCode, refuseBrokenDeclarations } from "./loader.ts";
 import { gateSecrets } from "./secrets-gate.ts";
 import type { LoadedRoutine } from "./schedule/routine.ts";
 
@@ -119,12 +120,17 @@ export async function routesFor(
    * signature checks as the only way into a public port. Named for the config key it carries, not for the
    * "built-in fallback" it once withheld — that concept is gone.
    *
-   * `routines` mounts `POST /run` and `GET /routines`. Passed in rather than loaded here so the routes and
-   * the resident clock
-   * cannot disagree about which routines exist (`loadServingRoutines`). `serveRun` overrides the default
-   * that route inherits from `serveInvoke`.
+   * `routines` — the ones the serve booted with — mounts `POST /run` and `GET /routines`; `readRoutines` is what
+   * those routes answer from per request, the live list (`liveServingRoutines`), and the boot list when there is
+   * none. Passed in rather than loaded here so the routes and the resident clock cannot disagree about which
+   * routines exist. `serveRun` overrides the default that route inherits from `serveInvoke`.
    */
-  options: { serveInvoke?: boolean; serveRun?: boolean; routines?: readonly LoadedRoutine[] } = {},
+  options: {
+    serveInvoke?: boolean;
+    serveRun?: boolean;
+    routines?: readonly LoadedRoutine[];
+    readRoutines?: () => Promise<readonly LoadedRoutine[]>;
+  } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -158,12 +164,13 @@ export async function routesFor(
   // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing. Both ride
   // this table for the reason the table exists: they authenticate nobody, so they inherit the JSON body gate, the
   // cross-origin policy, the reserved path and the startup report's account of what is open.
-  if (shouldServeRun(options)) {
-    const routines = options.routines ?? [];
-    const run = createRunHandler({ agent, routines });
-    if (run) unverified["POST /run"] = run;
-    const list = createRoutineListHandler({ routines });
-    if (list) unverified["GET /routines"] = list;
+  // WIRING, decided once: a serve that booted with no routines has no `POST /run`, as it has no channel it did not
+  // boot with. What the routes answer is live.
+  const booted = options.routines ?? [];
+  if (shouldServeRun(options) && booted.length > 0) {
+    const read = options.readRoutines ?? (async () => booted);
+    unverified["POST /run"] = createRunHandler({ agent, read });
+    unverified["GET /routines"] = createRoutineListHandler({ read });
   }
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
@@ -235,17 +242,61 @@ export async function loadServingRoutines(agentDir: string): Promise<LoadedRouti
   return routines;
 }
 
-/** Start the resident clock over routines {@link loadServingRoutines} already gated. */
+/**
+ * The agent's `routines/`, LIVE ({@link liveCode}): the gated boot load, and a reader the clock polls and the routes
+ * ask per request — so a routine the agent writes for itself is armed without a restart. A changed set is said in
+ * one line, because a routine is work the agent gives ITSELF: a self-writing routine, a fan-out, a mistaken
+ * `* * * * *` all surface there (#583).
+ */
+async function liveServingRoutines(
+  agentDir: string,
+): Promise<{ routines: LoadedRoutine[]; read: () => Promise<LoadedRoutine[]> }> {
+  const dir = join(agentDir, "routines");
+  // Stamped BEFORE loading: a file written while the load runs then reads as a change on the next read.
+  const stamp = await codeStamp(dir);
+  const routines = await loadServingRoutines(agentDir);
+  const live = liveCode({
+    dir,
+    agentDir,
+    boot: { stamp, value: routines },
+    load: async (previous) => {
+      const next = await loadServingRoutines(agentDir);
+      const changes = routineChanges(previous, next);
+      if (changes) log.info(`[fastagent] routines changed: ${changes}`);
+      return next;
+    },
+  });
+  return { routines, read: async () => (await live()).value };
+}
+
+/** `+ digest (0 9 * * *), ~ poll (0 * * * * → * * * * *), − cleanup`, or nothing when no routine changed. */
+export function routineChanges(before: readonly LoadedRoutine[], after: readonly LoadedRoutine[]): string | undefined {
+  const when = (r: LoadedRoutine) => (r.cron === undefined ? "by name" : `${r.cron}${r.tz ? ` ${r.tz}` : ""}`);
+  const old = new Map(before.map((r) => [r.name, r]));
+  const now = new Map(after.map((r) => [r.name, r]));
+  const lines: string[] = [];
+  for (const r of after) {
+    const was = old.get(r.name);
+    if (!was) lines.push(`+ ${r.name} (${when(r)})`);
+    else if (when(was) !== when(r)) lines.push(`~ ${r.name} (${when(was)} → ${when(r)})`);
+    else if (was.prompt !== r.prompt) lines.push(`~ ${r.name} (prompt)`);
+  }
+  for (const r of before) if (!now.has(r.name)) lines.push(`− ${r.name}`);
+  return lines.length > 0 ? lines.join(", ") : undefined;
+}
+
+/** Start the clock over routines {@link loadServingRoutines} already gated; `read` keeps a resident one live. */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
   selfSchedule: boolean,
   routines: LoadedRoutine[],
-  options: { externalClock?: boolean } = {},
+  options: { externalClock?: boolean; read?: () => Promise<readonly LoadedRoutine[]> } = {},
 ): { routines: LoadedRoutine[]; stop: () => void } {
-  if (routines.length === 0 && !selfSchedule) return { routines, stop: () => {} };
+  // A live list keeps the clock up with nothing to arm yet: the first routine may be one the agent writes.
+  if (routines.length === 0 && !selfSchedule && !options.read) return { routines, stop: () => {} };
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock }),
+    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock, read: options.read }),
   );
   scheduler.start();
   if (routines.length > 0) {
@@ -365,12 +416,13 @@ export async function mountAgentService(
   if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
 
   // Loaded BEFORE the routes, because `POST /run` is one of them and the resident clock below must run over the
-  // same list — two loads would be two answers to "which routines exist".
-  const routines = await loadServingRoutines(agentDir);
+  // same list — two loads would be two answers to "which routines exist". One live reader serves both.
+  const { routines, read: readRoutines } = await liveServingRoutines(agentDir);
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
     ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
     ...(opened.serveRun !== undefined ? { serveRun: opened.serveRun } : {}),
     routines,
+    readRoutines,
   });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
@@ -425,7 +477,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, opened.selfSchedule, routines),
+            try: () => startSchedules(agent, stateRoot, opened.selfSchedule, routines, { read: readRoutines }),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),

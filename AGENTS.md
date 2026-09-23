@@ -188,7 +188,8 @@ src/
 │   ├── run.ts              # POST /run: an API, by name. NO occurrence — that lives where we own the clock
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
 │   ├── discover.ts         # routines/ filesystem discovery; a bad file is isolated
-│   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
+│   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish;
+│   │                       # a live routines/ list re-arms only what changed (reconcile)
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,

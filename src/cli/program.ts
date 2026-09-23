@@ -81,8 +81,8 @@ const dev: CommandSpec = {
   summary: "serve the agent locally, restarting on code edits",
   description:
     "Assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/skills and " +
-    "TypeScript tools/ are re-read every turn (edits go live next turn); edits to code inputs — channels/, " +
-    "routines/, fastagent.config.ts, package.json, .secrets/.env, other files in tools/ — restart the worker. Files the agent writes as " +
+    "TypeScript tools/ and routines/ go live without a restart; edits to code inputs — channels/, " +
+    "fastagent.config.ts, package.json, .secrets/.env, other files in tools/ or routines/ — restart the worker. Files the agent writes as " +
     "work product never trigger a restart.",
   args: [DIR_ARG],
   flags: [

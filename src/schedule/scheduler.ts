@@ -59,6 +59,11 @@ export interface SchedulerOptions {
   now?: () => Date;
   /** External slot delivery owns cron timers and catch-up; local wake polling still runs. */
   externalClock?: boolean;
+  /**
+   * The routines as they are now (service.ts `liveServingRoutines`), polled every {@link ROUTINE_POLL_MS} by a
+   * resident clock to re-arm what changed. Without it the boot list is armed once, as it was.
+   */
+  read?: () => Promise<readonly LoadedRoutine[]>;
 }
 
 /**
@@ -76,6 +81,8 @@ export interface SchedulerOptions {
  */
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
+/** How long a routine the agent wrote may wait to be armed: the clock polls the live list this often. */
+export const ROUTINE_POLL_MS = 30_000;
 
 /**
  * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
@@ -234,11 +241,17 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       routines,
       now = () => new Date(clock.currentTimeMillisUnsafe()),
       externalClock = false,
+      read,
     } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
+    /** The routines as last read, by name: a fire takes its PROMPT from here, so a prompt edit needs no re-arm. */
+    let latest = new Map(routines.map((r) => [r.name, r]));
+    /** One entry per routine with a cron: WHICH cron it was armed for, and its loop — none when it never fires. */
+    const armed = new Map<string, { when: string; loop?: Fiber.Fiber<unknown, unknown> }>();
+    const when = (s: LoadedRoutine) => `${s.cron}\u0000${s.tz ?? ""}`;
 
-    const launch = (label: string, work: Effect.Effect<void>): void => {
+    const launch = (label: string, work: Effect.Effect<void>): Fiber.Fiber<unknown, unknown> =>
       fork(
         Effect.withFiber((fiber) => {
           // Publish ownership before a synchronous invoke callback can re-enter stop().
@@ -258,7 +271,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           );
         }),
       );
-    };
     const cronLoop = (s: LoadedRoutine, first: Date) =>
       Effect.gen(function* () {
         let due: Date | undefined = first;
@@ -272,7 +284,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           }
           // `slot: due` is what two schedulers have in common: both compute the same cron instant, so both try to
           // claim the same name and exactly one wins. Claiming `now()` would give them different names.
-          yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
+          yield* fireScheduleOnce({ agent, stateRoot, schedule: latest.get(s.name) ?? s, slot: due, now }).pipe(
             Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => {
                 // Nothing to record: this fault happens BEFORE the claim exists (that is what keeps the slot
@@ -285,6 +297,63 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             Effect.uninterruptible,
           );
           due = s.cron === undefined ? undefined : nextRun(s.cron, s.tz, now());
+        }
+      });
+
+    /**
+     * Arm one routine from `from` — its last fire, or now. A routine that has never fired does not catch up the
+     * occurrence it missed while the process was down: nothing recorded that it was ever armed then, so "missed" is
+     * not a fact this process has. Every arming after the first resumes from the claim.
+     */
+    const arm = (s: LoadedRoutine & { cron: string }, from: Date, current: Date): void => {
+      const due = nextRun(s.cron, s.tz, from);
+      if (!due) {
+        log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
+        armed.set(s.name, { when: when(s) });
+        return;
+      }
+      if (due.getTime() <= current.getTime()) log.info(`[schedule] ${s.name}: catching up a missed run`);
+      armed.set(s.name, { when: when(s), loop: launch(s.name, cronLoop(s, due)) });
+    };
+
+    /**
+     * Bring the armed set in line with the routines as they are now. A routine removed, or whose cron or tz changed,
+     * loses its loop — a fire in flight finishes first (`fireScheduleOnce` is uninterruptible) and its claim stands;
+     * one added or re-timed is armed from its newest claim, exactly as a boot would arm it. The claim is also what
+     * keeps an old loop still finishing and its replacement off the same slot.
+     */
+    const reconcile = (next: readonly LoadedRoutine[]): void => {
+      if (stopped) return;
+      latest = new Map(next.map((r) => [r.name, r]));
+      for (const [name, entry] of armed) {
+        const routine = latest.get(name);
+        if (routine?.cron !== undefined && when(routine) === entry.when) continue;
+        entry.loop?.interruptUnsafe();
+        armed.delete(name);
+      }
+      const current = now();
+      for (const s of next) {
+        if (s.cron === undefined || armed.has(s.name)) continue;
+        const last = latestFire(stateRoot, s.name)?.firedAt;
+        arm({ ...s, cron: s.cron }, last ? new Date(last) : current, current);
+      }
+    };
+    const reconcileLoop = (readRoutines: () => Promise<readonly LoadedRoutine[]>) =>
+      Effect.gen(function* () {
+        for (;;) {
+          yield* Effect.sleep(ROUTINE_POLL_MS);
+          yield* Effect.tryPromise({ try: readRoutines, catch: (cause) => new PortFailure(cause) }).pipe(
+            Effect.flatMap((next) =>
+              Effect.try({ try: () => reconcile(next), catch: (cause) => new PortFailure(cause) }),
+            ),
+            // The routines could not be read, or a claim could not be: the clock keeps what it has armed.
+            Effect.catchTag("PortFailure", (error) =>
+              Effect.sync(() =>
+                log.error(`[schedule] routines/ re-read failed (retrying next poll): ${String(error.cause)}`),
+              ),
+            ),
+            Effect.uninterruptible,
+          );
         }
       });
 
@@ -360,19 +429,12 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           // NO CRON, NO CLOCK. A routine without one is not unscheduled by accident — it is reached by name
           // (`POST /run`, `fastagent routine run`), so there is nothing here to arm and nothing to warn about.
           if (s.cron === undefined) continue;
-          // FROM THE LAST FIRE, or from now when there was none. A routine that has never fired does not catch
-          // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
-          // so "missed" is not a fact this process has. Every boot after the first resumes from the claim.
           const last = lastFires.get(s.name);
-          const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
-          if (!due) {
-            log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
-            continue;
-          }
-          if (due.getTime() <= current.getTime()) log.info(`[schedule] ${s.name}: catching up a missed run`);
-          launch(s.name, cronLoop(s, due));
+          arm({ ...s, cron: s.cron }, last ? new Date(last) : current, current);
         }
         if (!stopped) launch("wake-up poll", wakeLoop);
+        // The external clock arms nothing here, so there is nothing for a changed list to re-arm.
+        if (!stopped && read && !externalClock) launch("routines/ poll", reconcileLoop(read));
       },
       stop() {
         stopped = true;

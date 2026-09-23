@@ -62,14 +62,14 @@ async function callGreet(tools: MountedTool[]): Promise<string> {
 it("a rewritten helper reaches the next invoke — and the tool still sees its turn", async () => {
   const dir = await agentDir();
   const readTools = await live(dir);
-  expect(await callGreet((await readTools()).tools)).toBe("hello from /the/workspace");
+  expect(await callGreet((await readTools()).value)).toBe("hello from /the/workspace");
 
   // Only the HELPER changes. Node's own import cache would keep it (a busted entry URL re-reads the entry alone).
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "good morning";\n`);
 
   // `/the/workspace`, not this process's cwd: the reloaded tool re-evaluated fastagent's source, and still reads the
   // one turn context the host sets.
-  expect(await callGreet((await readTools()).tools)).toBe("good morning from /the/workspace");
+  expect(await callGreet((await readTools()).value)).toBe("good morning from /the/workspace");
 });
 
 it("an unchanged tools/ is not imported again", async () => {
@@ -93,7 +93,7 @@ it("a reload that fails keeps the tools that loaded, logs once, tells the model 
 
   await writeFile(join(dir, "tools", "broken.ts"), "export default {\n");
   const broken = await readTools();
-  expect(await callGreet(broken.tools)).toBe("hello from /the/workspace");
+  expect(await callGreet(broken.value)).toBe("hello from /the/workspace");
   expect(broken.failure).toMatch(/tools\/broken\.ts/);
   // The log is not re-announced every turn; the model, which has no log, hears it every turn the state lasts.
   expect((await readTools()).failure).toBe(broken.failure);
@@ -102,7 +102,7 @@ it("a reload that fails keeps the tools that loaded, logs once, tells the model 
   await rm(join(dir, "tools", "broken.ts"));
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "fixed";\n`);
   const fixed = await readTools();
-  expect(await callGreet(fixed.tools)).toBe("fixed from /the/workspace");
+  expect(await callGreet(fixed.value)).toBe("fixed from /the/workspace");
   expect(fixed.failure).toBeUndefined();
 });
 
@@ -129,7 +129,7 @@ it("each invoke binds, and its prompt lists, the tools read for THAT invoke", as
     model: "faux/faux-1",
     providers: [faux.provider],
     tools: current,
-    readTools: async () => ({ tools: current, failure }),
+    readTools: async () => ({ value: current, failure }),
   });
   const agent = agentOf(assembly);
 
@@ -159,7 +159,7 @@ it("reloads under Bun too — whose own import() would keep the first module for
 
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "from bun";\n`);
 
-  expect(await callGreet((await readTools()).tools)).toBe("from bun from /the/workspace");
+  expect(await callGreet((await readTools()).value)).toBe("from bun from /the/workspace");
 });
 
 it("one load evaluates a helper its tools share ONCE — a pool stays one pool", async () => {
@@ -217,7 +217,7 @@ it("a change only Node's cache would serve is said to need a restart — never l
   warned.length = 0;
   await writeFile(join(dir, "tools", "lib", "limits.js"), "export const max = 3;\n");
   await writeFile(join(dir, "tools", "lib", "word.ts"), `export const word = "mixed";\n`);
-  expect(await callGreet((await readTools()).tools)).toBe("mixed from /the/workspace");
+  expect(await callGreet((await readTools()).value)).toBe("mixed from /the/workspace");
   expect(warned.join("\n")).toMatch(/tools\/lib\/limits\.js changed/);
 });
 

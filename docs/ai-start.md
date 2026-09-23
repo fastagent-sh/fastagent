@@ -289,11 +289,12 @@ fastagent dev
 ```
 
 `dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, skills, and the TypeScript under `tools/`
-(helpers in `tools/lib/` included) are read on the next turn, in `start` as in `dev`; a reload that fails keeps
-the previous tools and says why. With watching enabled, changes under the agent's `channels/`, `routines/`, and
-`extensions/` restart the worker, as do `.js`, `.mjs`, `.cjs` and `.json` files under `tools/` (Node keeps those
-cached) and changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved `.env` (only when
-that file is inside the agent directory).
+(helpers in `tools/lib/` included) are read on the next turn, and the TypeScript under `routines/` within 30
+seconds, in `start` as in `dev`; a reload that fails keeps the previous version and says why. With watching
+enabled, changes under the agent's `channels/` and `extensions/` restart the worker, as do `.js`, `.mjs`, `.cjs`
+and `.json` files under `tools/` or `routines/` (Node keeps those cached) and changes to its
+`fastagent.config.ts`, `package.json`, `models.json`, and resolved `.env` (only when that file is inside the
+agent directory).
 
 **After editing a helper outside `tools/`, `channels/` and `routines/`, stop and restart `fastagent dev`.** It is
 not watched, and a tool reloads it only when something under `tools/` changes. `start` serves without watching. `chat` opens the same definition in an interactive TUI.

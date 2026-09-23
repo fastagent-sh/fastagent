@@ -62,7 +62,8 @@ export async function loadRoutines(dir: string): Promise<{
 }> {
   await assertInsideAgentDir(dir, "routines");
   await warnAboutStaleSchedulesDir(dir);
-  const { modules, failures } = await loadModuleDir(join(dir, "routines"));
+  // Fresh: the agent can rewrite its own routines while it runs, and each read must see them as they are now.
+  const { modules, failures } = await loadModuleDir(join(dir, "routines"), { fresh: true });
   const byName = new Map<string, LoadedRoutine>();
   const secrets = new Map<string, DeclaredSecret[]>();
   for (const { name, label, file, mod } of modules) {

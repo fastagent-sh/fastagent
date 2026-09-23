@@ -75,6 +75,20 @@ describe("createAgentService", () => {
       expect(await listed.json()).toEqual([{ name: "daily", cron: "0 9 * * *" }, { name: "reindex" }]);
       // HEAD is answered by the GET route (channels/serve.ts), so a probe of the catalogue works.
       expect((await service.handler(new Request("http://h/routines", { method: "HEAD" }))).status).toBe(200);
+
+      // LIVE: a routine the agent writes for itself is on the route at the next request, and the change is said.
+      // TypeScript, because that is what a running process can re-read (loader.ts `reloadKind`).
+      const informed: string[] = [];
+      const info = vi.spyOn(log, "info").mockImplementation((message) => void informed.push(message));
+      await writeFile(join(dir, "routines", "weekly.ts"), `export default { cron: "0 9 * * 1", prompt: "plan" };\n`);
+      const relisted = await service.handler(new Request("http://h/routines"));
+      expect(await relisted.json()).toContainEqual({ name: "weekly", cron: "0 9 * * 1" });
+      // ...and REWRITTEN, which is what Node's own import cache would keep as first read.
+      await writeFile(join(dir, "routines", "weekly.ts"), `export default { cron: "30 17 * * 5", prompt: "plan" };\n`);
+      const retimed = await service.handler(new Request("http://h/routines"));
+      info.mockRestore();
+      expect(await retimed.json()).toContainEqual({ name: "weekly", cron: "30 17 * * 5" });
+      expect(informed.join("\n")).toContain("routines changed: + weekly (0 9 * * 1)");
     } finally {
       await service.close();
     }
@@ -267,7 +281,7 @@ describe("createAgentService", () => {
     }
   });
 
-  it("close() stops the self-scheduling poll timer", async () => {
+  it("close() stops the poll timers — self-scheduling's and the live routines'", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
     const service = await createAgentService(
@@ -275,9 +289,10 @@ describe("createAgentService", () => {
     );
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
-      expect(polls).toHaveLength(1);
+      // The wake-up poll and the routines/ poll (scheduler.ts ROUTINE_POLL_MS).
+      expect(polls).toHaveLength(2);
       await service.close();
-      expect(cleared).toHaveBeenCalledWith(polls[0]);
+      for (const poll of polls) expect(cleared).toHaveBeenCalledWith(poll);
     } finally {
       await service.close();
       timers.mockRestore();

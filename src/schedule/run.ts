@@ -103,38 +103,35 @@ export async function runRoutineByName(agent: Agent, routine: LoadedRoutine): Pr
  * request body was for. `cron` is here because it answers "will this run on its own, or is my clock the only one?",
  * which is a caller's question, not the definition's secret.
  *
- * Mounted exactly where `POST /run` is: it describes that route, so listing names a caller cannot use would be a
- * catalogue of nothing.
+ * Mounted exactly where `POST /run` is (service.ts decides): it describes that route, so listing names a caller
+ * cannot use would be a catalogue of nothing. `read` answers per request — the routines are live (service.ts).
  */
 export function createRoutineListHandler(options: {
-  routines: readonly LoadedRoutine[];
-}): ((req: Request) => Promise<Response>) | undefined {
-  const { routines } = options;
-  if (routines.length === 0) return undefined;
-  const body = routines.map((r) => ({
-    name: r.name,
-    ...(r.cron !== undefined ? { cron: r.cron } : {}),
-    ...(r.tz !== undefined ? { tz: r.tz } : {}),
-  }));
+  read: () => Promise<readonly LoadedRoutine[]>;
+}): (req: Request) => Promise<Response> {
   // NO METHOD CHECK. The router dispatches `GET /routines` here and nothing else, so the only thing such a check
   // could reach is HEAD — which `channels/serve.ts` deliberately answers with the GET route, the same way
   // `GET /health` is HEAD-probeable. Checking would break that and buy nothing.
-  return async () => Response.json(body);
+  return async () =>
+    Response.json(
+      (await options.read()).map((r) => ({
+        name: r.name,
+        ...(r.cron !== undefined ? { cron: r.cron } : {}),
+        ...(r.tz !== undefined ? { tz: r.tz } : {}),
+      })),
+    );
 }
 
 /**
- * Build the handler for `POST /run`, bound to what this serve loaded.
- *
- * `undefined` when the definition declares nothing runnable: a route that can only ever answer 404 is not a route,
- * and the startup report names what is actually mounted.
+ * Build the handler for `POST /run`. `read` answers per request — the routines are live (service.ts) — while whether
+ * the route exists at all is decided once, at boot, by the caller: a route that can only ever answer 404 is not a
+ * route, and the startup report names what is actually mounted.
  */
 export function createRunHandler(options: {
   agent: Agent;
-  routines: readonly LoadedRoutine[];
-}): ((req: Request) => Promise<Response>) | undefined {
-  const { agent, routines } = options;
-  if (routines.length === 0) return undefined;
-
+  read: () => Promise<readonly LoadedRoutine[]>;
+}): (req: Request) => Promise<Response> {
+  const { agent, read } = options;
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
     const wrongType = refuseNonJsonBody(req);
@@ -152,6 +149,7 @@ export function createRunHandler(options: {
     if (typeof name !== "string" || name === "") {
       return text('need { "name": string } — e.g. {"name":"daily"}\n', 400);
     }
+    const routines = await read();
     const routine = routines.find((r) => r.name === name);
     // Drift: a caller outliving the thing it calls. The names are listed so an operator can see whether it is a
     // typo or a stale job without shelling in.

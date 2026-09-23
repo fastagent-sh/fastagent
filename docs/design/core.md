@@ -146,7 +146,13 @@ placed to fix it.
 Only TypeScript is re-read that way (`reloadKind`): jiti hands `.js`/`.mjs`/`.cjs`/`.json` to Node, whose cache
 keeps them, so a change to one is said to need a restart and is never reported as reloaded. A file nothing imports
 (`README.md`, an editor's swap file) is not a change at all.
-The rest of the code — `channels/`, `routines/`, config — is the agent's wiring, reloaded by a restart (the dev
+`routines/` goes live on the same machinery (loader.ts `liveCode`): the routes read it per request, and the
+resident clock polls it every 30 seconds and re-arms only what changed — a removed or re-timed routine loses its
+loop after any fire in flight, an added or re-timed one is armed from its newest claim as a boot would arm it, and
+a fire takes its prompt from the latest read. A changed set is logged in one line (service.ts `routineChanges`):
+a routine is work the agent gives itself, so what it gave itself is said where it takes effect. On AgentCore the
+clock is the EventBridge rules `deploy` writes, so routines there are the booted list.
+The rest of the code — `channels/`, config — is the agent's wiring, reloaded by a restart (the dev
 supervisor's, in `dev`). The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 

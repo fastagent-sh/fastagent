@@ -30,7 +30,7 @@ function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
 }
 
 const handlerFor = async (routines: LoadedRoutine[], agent: Agent) => ({
-  handle: createRunHandler({ agent, routines }),
+  handle: createRunHandler({ agent, read: async () => routines }),
 });
 
 const run = (handle: (req: Request) => Promise<Response>, body: unknown, init: RequestInit = {}) =>
@@ -132,8 +132,8 @@ describe("schedule/run: POST /run", () => {
     // of the request body was for. `cron` IS here: "will this run on its own, or is my clock the only
     // one?" is a caller's question.
     const list = createRoutineListHandler({
-      routines: [hourly(), { name: "reindex", prompt: "secret instructions" } as LoadedRoutine],
-    })!;
+      read: async () => [hourly(), { name: "reindex", prompt: "secret instructions" } as LoadedRoutine],
+    });
     const res = await list(new Request("http://h/routines"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([
@@ -147,14 +147,7 @@ describe("schedule/run: POST /run", () => {
     // NO method check of its own: the router sends only `GET /routines` here, and HEAD is answered by
     // the GET route on purpose (channels/serve.ts) — a check would break that probe and reach nothing
     // else. The route table is what refuses a POST. (service.test.ts covers HEAD through the real wire.)
-    // Nothing declared, no catalogue — the same rule POST /run follows.
-    expect(createRoutineListHandler({ routines: [] })).toBeUndefined();
-  });
-
-  it("is not built at all when the definition declares nothing runnable", async () => {
-    // A route that can only ever answer 404 is not a route, and its absence is what the startup report
-    // and the deploy runbook describe.
-    expect(createRunHandler({ agent: recordingAgent().agent, routines: [] })).toBeUndefined();
+    // Nothing declared, no catalogue — service.ts mounts neither route then (service.test.ts).
   });
 
   it("reports a turn that failed, with a 200 — the CALL succeeded", async () => {

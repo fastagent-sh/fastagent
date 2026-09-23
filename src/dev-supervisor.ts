@@ -14,12 +14,15 @@ import { declaredChannels } from "./channels/discover.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
-/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. `tools/` is half of one: its
- *  TypeScript reloads per invoke (open.ts `liveTools`), in `start` as much as here; a format Node caches does not
- *  (loader.ts `reloadKind`), so those still restart the worker ({@link devChangeRestarts}). */
-const CODE_INPUT_DIRS = ["channels", "routines", "extensions"] as const;
+/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. */
+const CODE_INPUT_DIRS = ["channels", "extensions"] as const;
+/** The code the agent rewrites while it runs: its TypeScript reloads in the worker (loader.ts `liveCode` — tools per
+ *  invoke, routines per clock poll), in `start` as much as here; a format Node caches does not (`reloadKind`), so
+ *  those still restart the worker ({@link devChangeRestarts}). */
+const LIVE_CODE_DIRS = ["tools", "routines"] as const;
+const inLiveCode = (segment: string | undefined) => LIVE_CODE_DIRS.includes(segment as (typeof LIVE_CODE_DIRS)[number]);
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, tools/ (.js, .mjs, .cjs, .json), package.json, fastagent.config.ts, models.json, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, tools/ and routines/ (.js, .mjs, .cjs, .json), package.json, fastagent.config.ts, models.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -36,10 +39,10 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // any other code input.
     if (rel === AGENT_MODELS_FILE) return false;
     const segments = rel.split(sep);
-    // Everything under tools/ a tool could import stays in scope — TypeScript too, because a worker that is DOWN
-    // (it refused a broken tool at boot) must hear the fix; whether a change restarts is decided per event
-    // (devChangeRestarts). A directory has no extension, so it stays in scope and its files are asked one by one.
-    if (segments[0] === "tools") return extname(path) !== "" && reloadKind(path) === undefined;
+    // Everything under tools/ and routines/ that could be imported stays in scope — TypeScript too, because a worker
+    // that is DOWN (it refused a broken file at boot) must hear the fix; whether a change restarts is decided per
+    // event (devChangeRestarts). A directory has no extension, so it stays in scope and its files are asked one by one.
+    if (inLiveCode(segments[0])) return extname(path) !== "" && reloadKind(path) === undefined;
     if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
     // The `.env` restarts too (credentials are process-bound).
     if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
@@ -48,15 +51,14 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
 }
 
 /**
- * Whether a change the watcher reported restarts the worker. Under `tools/`, while a worker serves, only what that
- * worker cannot take in itself does: a format Node caches — the SAME line its reload draws (open.ts `liveTools` warns
- * for exactly these). Anything else there — TypeScript, a new `tools/lib/` directory — the worker handles on its next
- * invoke, and a restart would cost it every session in flight. With no worker, everything restarts: the one that
- * exited refused a broken tool at boot, and this change may be the fix.
+ * Whether a change the watcher reported restarts the worker. Under `tools/` and `routines/`, while a worker serves,
+ * only what that worker cannot take in itself does: a format Node caches — the SAME line its reload draws (loader.ts
+ * `liveCode` warns for exactly these). Anything else there — TypeScript, a new `tools/lib/` directory — the worker
+ * takes in itself, and a restart would cost it every session in flight. With no worker, everything restarts: the one
+ * that exited refused a broken file at boot, and this change may be the fix.
  */
 export function devChangeRestarts(root: string, path: string, serving: boolean): boolean {
-  const underTools = relative(root, path).split(sep)[0] === "tools";
-  if (serving && underTools) return reloadKind(path) === "restart";
+  if (serving && inLiveCode(relative(root, path).split(sep)[0])) return reloadKind(path) === "restart";
   return true;
 }
 
@@ -139,7 +141,7 @@ export async function runDevSupervisor(
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills and TypeScript tools/ edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills and TypeScript tools/ and routines/ edits go live without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {
