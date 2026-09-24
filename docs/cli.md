@@ -1,43 +1,46 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, schedule, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, routine, and deploy commands with flags."
 status: current
 ---
 
 # CLI reference
 
-The `fastagent` CLI is the file-first workflow for creating, inspecting, serving, and operating an agent.
-
 ```bash
 fastagent <command> [args] [options]
 ```
 
-Most commands take an optional workspace directory (the agent is there, or in its `./fastagent/`). When omitted, the current directory is used.
+Most commands take an optional workspace directory (the agent is there, or in its `./fastagent/`). The default is
+the current directory.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `init [dir]` | Scaffold a runnable agent. |
-| `info [dir]` | Inspect what an agent assembles into without serving. |
+| `info [dir]` | Show what an agent assembles into, without serving. |
 | `models [search]` | List model specs. |
-| `login [provider]` | Store provider credentials in the project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`). |
+| `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`. |
 | `dev [dir]` | Serve locally with watch/reload. |
-| `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
-| `invoke <message> [dir]` | Run one agent turn and exit. |
-| `routine run <name> [dir]` | Run one routine's turn immediately (authoring loop), cron or not. |
-| `routine history <name> [dir]` | Print a routine's recent fires (what they said is in the session). |
-| `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus the agent's own pending wake-ups. |
-| `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
+| `chat [dir]` | Open the assembled agent in pi's interactive TUI. |
+| `invoke <message> [dir]` | Run one turn and exit. |
+| `routine run <name> [dir]` | Run one routine's turn now, cron or not. |
+| `routine history <name> [dir]` | Print a routine's recent fires. |
+| `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus pending wake-ups. |
+| `tool <name> <json> [dir]` | Run one tool directly. |
+| `add telegram\|slack\|feishu\|lark [dir]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
-| `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel --run` starts app+tunnel, reads the ephemeral URL, and auto-registers Telegram, locally onboarded Slack, and Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
-| `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--force` overwrites artifacts; idle behavior (`auto_stop_machines`, `min_machines_running`) is edited in the generated `fly.toml`. |
-| `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--run` drives the railway CLI to completion on an UNLINKED dir (auth → init/add/volume → variables → `railway up` → mint domain → telegram webhook; carries your local credential; needs the railway CLI); a dir already linked to a project is refused unless `--into-linked` (provision into it) — a routine redeploy is just `railway up`. `--force` overwrites artifacts. |
-| `deploy agentcore [dir]` | Generate `agentcore.template.yaml`, optional `lambda/index.js`, and shared image artifacts. The Runtime stack includes a forwarder for webhooks or scheduled work. State rides managed SessionStorage at `/mnt/data`: it survives compute stop/resume and the platform resets it on every deploy. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks and stops the fixed runtime session so the next invocation uses the new image. Long-connection channels require webhook mode. A stale generated template gates `--run` until `--force`. |
-| `logs agentcore [dir]` | Discover the deployed stack's CloudWatch log group and run `aws logs tail`. Defaults to the Runtime's application stdout/stderr; `--source forwarder` selects the separate Lambda ingress logs. `--since <duration>` sets the history window and `--follow` keeps polling. Read-only; does not change `FASTAGENT_LOG_LEVEL`. |
-| `destroy agentcore [dir] [--run]` | Delete every AWS resource the deploy created — stack, artifact bucket, ECR repository, both log groups (forwarder and runtime), and any pending wake alarms — in the order the dependencies demand. A stack that does not reach DELETE_COMPLETE stops the rest: what it still holds is billing, and the image it was built from is what a retry needs. Without `--run` it deletes nothing and lists what is out there. AgentCore-only: the other hosts have their own (`fly apps destroy`, `railway down`, `docker compose down -v`). |
+| `deploy docker [dir]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
+| `deploy fly [dir]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
+| `deploy railway [dir]` | Generate `railway.json`, `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
+| `deploy agentcore [dir]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
+| `logs agentcore [dir]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
+| `destroy agentcore [dir] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
 | `start [dir]` | Serve without watch. |
+
+`deploy` writes artifacts and prints a runbook; only `--run` touches a host. Existing artifacts are kept unless
+`--force`; a generated one that no longer matches the definition is flagged stale and gates `--run`. See
+[Deploy](deploy.md).
 
 ## `fastagent init`
 
@@ -45,15 +48,17 @@ Most commands take an optional workspace directory (the agent is there, or in it
 fastagent init [dir] [--no-install] [--agent-dir <name>]
 ```
 
-Creates a self-iterating agent — it can edit its own definition (persona.md and skills are re-read every turn). A fresh agent has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.secrets/.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore hygiene is two scaffolded files: the agent `.gitignore` (`node_modules/`, `.state/`, a stray `.env`) and `.secrets/.gitignore` (everything but `.env.example`). fastagent writes both once, at `init` — no later command reads, rewrites or verifies them, so they are yours. They are separate on purpose: the root one is the file you will edit, and a nested `.gitignore` outranks it, so the credentials stay protected either way.
+Creates the agent in `./fastagent/` (or `--agent-dir <name>`) inside `dir`: `persona.md`, a
+`writing-great-skills` example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`,
+`.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`. No
+`AGENTS.md` is scaffolded; an existing one in the workspace is read as project context. The directory around the
+agent gets no writes and becomes its workspace.
 
-**Where the files land** — no detection, no prompt, no choice. The WHOLE agent — definition, config, `.secrets/`, `.state/` — goes into `./fastagent/`; the directory around it gets zero writes and becomes the agent's WORKSPACE when you point fastagent there. The agent self-contains its `package.json`, so the workspace's manifest and lockfile are never touched. `init` refuses when the target already holds a `fastagent.config.ts` (already an agent) or any other content.
+`init` refuses when the target already holds a `fastagent.config.ts` or other content. `--agent-dir` must be a
+single directory name; to deploy, keep it to letters, digits, `-` and `_`. A second agent beside an existing one is
+supported; see [More than one agent](configuration.md#more-than-one-agent).
 
-`--agent-dir <name>` names that directory anything you like: **the name never decides what IS an agent** — a `fastagent.config.ts` does, so `./bot/` and `./fastagent/` are equally agents. The name carries weight in exactly one place, and only among agents already identified: when a workspace holds several and nothing selects, the one named `fastagent` answers (see `FASTAGENT_AGENT` below). It must be a single directory name (a path would put the agent where fastagent's one-level lookup could not find it). To deploy it, keep the name to letters, digits, `-` and `_`: the release manifest carries it into the container, and `deploy` refuses anything else by name.
-
-**A standalone agent repository is still a supported shape** — that repository is the WORKSPACE, and the definition lives in `./fastagent/` inside it. `init` will not write a definition INTO a directory that already holds other files, which is why `--agent-dir .` is refused: the agent would inherit that directory's `package.json`, and a `fastagent.config.ts` under a CommonJS manifest does not load at all. A scaffolded subdirectory carries its own `type: module`. (Placement still *resolves* an agent sitting at a directory, so an existing layout of that shape keeps serving.)
-
-What a served agent's workspace turns out to be is not decided here: it is whatever directory you later point fastagent at (see `dev`/`start` below). `init`'s one placement duty is to refuse a target the lookup could never SELECT — an agent already resolving AT `dir`, which wins over anything inside it and would hide the new one. A second agent BESIDE an existing one is fine and supported: several agents can share one workspace (an engineer's, a PM's, a content owner's, all driving the same repository), and `FASTAGENT_AGENT=<name>` picks between them — the one named `fastagent` answers by default. `init` prints the note when a workspace crosses into that shape. The config is a DECLARATION, not configuration: its contents may be `export default {}` (a model can come from `--model`), but a directory has to SAY it is an agent — the job `package.json` and `Cargo.toml` do for their tools. A directory holding nothing else is already a complete agent.
+A `fastagent.config.ts` makes a directory an agent, whatever its name. Its contents may be `export default {}`.
 
 ## `fastagent info`
 
@@ -61,19 +66,18 @@ What a served agent's workspace turns out to be is not decided here: it is whate
 fastagent info [dir] [--json] [--model provider/modelId]
 ```
 
-Prints the assembled surface without starting a server:
+Prints, without serving:
 
-- model source,
-- config path,
-- persona presence and context files (`AGENTS.md`),
+- agent and workspace directories, config path, model and its source,
+- persona and context files (`AGENTS.md`),
 - skills and their diagnostics,
-- the complete coding-tool set (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), plus authored tools and collisions,
-- channel files that IMPORT cleanly (`info` loads them to read their declarations); one that fails to import is absent from this list and reported instead — as a warning, and as `channelFailures` in `--json`,
-- schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
-- declared secrets (`defineTool({ secrets })`, `defineChannel({ secrets })`, `defineRoutine({ secrets })`), flagging any that have no value here (`dev`/`start` refuse to boot without them),
-- session directory.
+- coding tools, authored tools and collisions,
+- channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
+- routines with their next fire instant (a broken routine file is reported),
+- declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
+- state, sessions and auth paths.
 
-`info` is read-only: it does not create sessions or modify `.state/`/`.secrets/`.
+Read-only.
 
 ## `fastagent models`
 
@@ -81,9 +85,7 @@ Prints the assembled surface without starting a server:
 fastagent models [search]
 ```
 
-Lists available model specs in `provider/modelId` form. Pass a search string to filter.
-
-Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.ts`.
+Lists model specs (`provider/modelId`), optionally filtered.
 
 ## `fastagent login`
 
@@ -91,31 +93,20 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.ts`.
 fastagent login [provider] [-g|--global] [--no-input]
 ```
 
-Authenticates a model provider and **writes** to the project-level `<agent dir>/.secrets/auth.json` (dir override: `FASTAGENT_SECRETS_DIR`; file override: `FASTAGENT_AUTH_PATH`). `-g` writes the user-global `~/.fastagent/.secrets/auth.json` instead, as does running outside any agent (announced on stderr). Inside an agent but not at its root (`fastagent/tools/`), it refuses and tells you where to `cd`. FastAgent uses its own credential file, separate from pi's CLI state.
+Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). `-g`, or
+running outside any agent, writes `~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it
+refuses and says where to `cd`.
 
-**Writing and reading are deliberately asymmetric**, the shape npm uses for `-g`. An agent READS the global file for any provider its own file does not have, so one `fastagent login -g openai-codex` serves every agent on the machine. Writing defaults to the project so that giving *one* agent a different account is the explicit act, and so a `login` cannot silently rewrite a credential another agent depends on.
-
-The fallback is **per provider, not per file**: logging Anthropic into a project does not hide the OpenAI credential you have globally. And a refresh is written back to the layer it was read from — a global credential stays global. That matters because both providers rotate refresh tokens: two copies of one grant each invalidate the other, so FastAgent never creates a second copy.
-
-**`deploy` does not read the global file.** A deployment carries the project-level `auth.json` only — the artifact is the truth, never the builder machine's state — so after a `login -g` a `deploy … --run` still reports `no model credential`. Carry the global one explicitly with `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json fastagent deploy … --run`, or `fastagent login` (no `-g`) in the agent dir. Note this moves an OAuth grant into a second file: see the warning at the end of this section.
-
-An API-key login is verified immediately with one minimal request (OAuth needs no check — completing
-the flow proves the credential): a definitive rejection (HTTP 401) removes the bad key and prompts
-for it again on the spot (cancel to stop), so a mistyped key is corrected at login time instead of
-failing at the first invoke; an inconclusive failure (network, quota, permissions) keeps the key and
-prints the provider's message.
-
-**fastagent sets the mode of the files it creates, and nothing else.** `auth.json` is `0600` — and
-stays `0600`, because fastagent owns that file end to end and replaces it whole on every credential
-write, so even one you placed by hand `0644` is tightened. `.secrets/.env` is different: fastagent
-only appends to it, so it is `0600` when `add <channel>` had to create it, and otherwise keeps the
-mode its owner gave it — a `.env` you produced with `cp .secrets/.env.example .secrets/.env` carries
-that command's mode, and `chmod 600` on it is yours to run. Directory permissions are yours too:
-fastagent never sets or repairs them. Rails draws the same line (it chmods the `master.key` it
-generates and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/config` inside a `0755`
-`~/.aws`).
-
-**Running several agents off one account on your dev machine?** Point them all at the one global file: set `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` (a `.env` entry or a shell env var), or just `login` from outside any agent. A leading `~` is expanded to your home dir in `FASTAGENT_AUTH_PATH` (shell variables like `$HOME` are not — use `~` or an absolute path). Sharing **one file** is safe — a single cross-process lock serializes OAuth refresh, so concurrent instances always read the latest token. (What is *not* safe is copying the file around: two files over one grant each rotate the single-use refresh token and break the other.)
+- An agent reads the global file for any provider its own file lacks, so one `login -g` serves every agent on the
+  machine. A refresh is written back to the file it was read from.
+- `deploy` carries the project file only. After `login -g`, deploy with
+  `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`, or run `fastagent login` in the agent dir.
+- Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
+  each copy rotates the single-use refresh token and breaks the other.
+- An API-key login is checked with one request. A 401 removes the key and asks again; other failures keep it and
+  print the provider's message.
+- `auth.json` is always written `0600`. `.secrets/.env` is `0600` only when fastagent creates it; directories keep
+  the permissions you gave them.
 
 ## `fastagent dev`
 
@@ -123,22 +114,14 @@ generates and leaves `config/` alone), as does the aws CLI (a `0600` `~/.aws/con
 fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
-live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
-`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`.
+Serves the agent locally. `persona.md`, `AGENTS.md` and `skills/` are re-read every turn. A supervisor restarts the
+worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`.
 
-With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
-provider already has credentials are listed first and annotated with the source (e.g. `ready —
-OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke` / `routine run` / `chat` / `deploy`). Pass `--model` or set
-`FASTAGENT_MODEL` to skip the prompt — `deploy` takes no `--model`, so there it is the config value or
-`FASTAGENT_MODEL` in `.secrets/.env`.
+With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `routine run`,
+`chat`, `deploy`) show the model catalog and write the pick to the config.
 
-Model precedence:
-
-```txt
---model > FASTAGENT_MODEL > fastagent.config.ts model
-```
+`--tunnel` opens a Cloudflare Quick Tunnel (needs `cloudflared`), prints the public URL, and registers webhooks
+where it can; see [Local webhook development](channels.md#local-webhook-development).
 
 ## `fastagent chat`
 
@@ -146,33 +129,14 @@ Model precedence:
 fastagent chat [dir] [--model provider/modelId]
 ```
 
-Opens the same assembled agent in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+Opens the agent in pi's TUI with the definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/`,
+plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
-What it runs is **this agent's identity** on **this machine's environment**, the same split serving uses: the
-definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/` are loaded, your machine's skills and
-prompt templates are inherited alongside them (see
-[What the machine lends the agent](configuration.md#what-the-machine-lends-the-agent)), and your pi's own
-extensions and `APPEND_SYSTEM.md` stay out.
-
-Sessions are pi's own per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), so `/resume` finds them
-beside your other chats. A served conversation — a schedule's, a channel thread's — is not opened here: it belongs to
-the process serving it, and `fastagent routine history` is what reports on one.
-
-Auth is fastagent's, same as every other command: `FASTAGENT_AUTH_PATH` > the
-agent `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
-to the same file). With no model set, `chat` runs the same first-run picker as the serving commands
-(credential-annotated catalog, inline login) and writes the choice back to the config.
-
-**pi's settings are the machine's, with one exception.** Theme, keybindings, external editor and the rest of the
-TUI come from your `~/.pi/agent/settings.json`, as they should — they are a person's, not an agent's. Reasoning
-effort does not: a served turn takes it from `thinkingLevel` in `fastagent.config.ts` (default `medium`), so `chat`
-does too, and a `defaultThinkingLevel` you saved for coding does not quietly make this the one posture that answers
-at a different effort than your deployment.
-
-The rest of pi's turn-shaping settings — `compaction`, `retry`, `cacheWarming`, `thinkingBudgets`, `transport`, the
-HTTP timeouts — come from your machine in every posture, `chat` and `dev`/`start` alike (see
-[Engine settings](configuration.md#engine-settings-piagentsettingsjson)), the same way its skills do. A deployed image
-has no such file unless it was built with one.
+- Sessions are pi's per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), separate from served
+  sessions.
+- Auth is fastagent's (`FASTAGENT_AUTH_PATH` > the agent's `auth.json`); pi's `/login` writes to the same file.
+- TUI settings (theme, keybindings, editor) come from `~/.pi/agent/settings.json`. Reasoning effort comes from
+  `thinkingLevel` in `fastagent.config.ts`, as when serving.
 
 ## `fastagent invoke`
 
@@ -180,13 +144,7 @@ has no such file unless it was built with one.
 fastagent invoke <message> [dir] [--model provider/modelId] [--no-input]
 ```
 
-Runs one turn through the same agent assembly and exits:
-
-- answer text streams to stdout,
-- tool and diagnostic lines go to stderr,
-- a `failed` terminal event exits non-zero.
-
-Use this for smoke tests and scripts.
+Runs one turn and exits: answer text to stdout, tool and diagnostic lines to stderr, non-zero exit on `failed`.
 
 ## `fastagent routine run`
 
@@ -194,19 +152,9 @@ Use this for smoke tests and scripts.
 fastagent routine run <name> [dir] [--model provider/modelId] [--no-input]
 ```
 
-Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
-prompt). Fires `routines/<name>.ts` now, without waiting for its cron, using the schedule's stable
-session, so you see exactly what the served scheduler would do:
-
-- answer text streams to stdout, tool/diagnostic lines to stderr, a `failed` turn exits non-zero (like `invoke`),
-- no name → usage on stderr, exit 2; an unknown schedule name → exit 1 with the available names,
-- it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
-
-A `routines/<name>.ts` file default-exports `defineRoutine({ prompt, cron?, tz? })`. With a `cron`, the
-clock fires it when you `dev`/`start`; without one, its name is the only way in (`POST /run`, or this
-command). The filename becomes a directory name in the state
-root, so it cannot be `.`, `..`, or contain a path separator. Output is the agent's tools' job — the scheduler
-only fires and logs. See the [API reference](./api-reference.md#routine-authoring).
+Fires `routines/<name>.ts` now, in the routine's session, and streams like `invoke`. It does not advance the
+routine's fire state. No name → exit 2; an unknown name → exit 1 with the available names. See
+[Routine authoring](api-reference.md#routine-authoring).
 
 ## `fastagent routine history`
 
@@ -214,53 +162,30 @@ only fires and logs. See the [API reference](./api-reference.md#routine-authorin
 fastagent routine history <name> [dir] [--json]
 ```
 
-Prints one schedule's recent fires: when each fired, its outcome (`completed` / `failed` / `interrupted`, or
-`unreported` for a fire nothing settled), and how long it took (blank when nothing timed it — an
-`interrupted` fire was never timed by anybody).
+Prints a routine's recent fires: time, outcome, and duration. Text output shows the last 20; `--json` shows all
+retained fires (the last 512).
 
-`interrupted` means the process stopped between claiming that slot and finishing its turn — a restart or
-rolling deploy landing mid-run. The slot stays skipped (it is not replayed), and the next start of a
-**resident** scheduler (`start`, `dev`, `deploy docker|fly|railway`) records it.
+| Outcome | Meaning |
+|---|---|
+| `completed` / `failed` | The turn finished, or failed. |
+| `interrupted` | The process stopped mid-turn. The slot is not replayed; the next resident start records it. |
+| `unreported` | Still running, or never settled (AgentCore has no resident start to record it). |
 
-A fire reads `unreported` when nothing settled it: one still running, or one nothing will ever settle. The
-second case is AgentCore: it delivers slots from an external clock, so no boot of it runs the reconciler,
-on the host that reclaims its container most often.
+What a fire said is in its session (`routine:<name>` under `<state root>/sessions/`), whose path this command
+prints. A failure before the model was reached (credentials, model, a missing secret) is only in the logs, under
+the host's retention.
 
-The fired slots ARE the claims (`<state root>/schedule/claims/<name>/`), so that half is bounded by
-construction — the last 512 fires per schedule (~8.5 hours of a minute cron, ~3 weeks of an hourly one),
-nothing that grows. Text output tails the most recent 20; `--json` prints the whole retained window.
-Read-only.
+Wake-ups have no history here, only log lines.
 
-**WHAT a run said is in its session.** Every fire runs in a session (`routine:<name>` for a cron) under
-`<state root>/sessions/`, where the text is stored exactly once, as a JSON-lines journal. This command
-prints that location under the rows.
+## `fastagent routine list`
 
-**WHY a failed one failed is in the session only when the turn got that far.** A failure inside the turn
-lands on its assistant record (`stopReason: "error"` plus the message), so the journal has it. A
-failure BEFORE the model was reached — bad credentials, an unresolvable model, a secrets-gate refusal — and a
-fire that never reached a turn at all leave nothing in the session: their only record is the `failed` log
-line, **under the host's retention, not this one's**. Claims can reach ~3 weeks while Fly's and Railway's
-logs are typically days, so a `failed` row here can outlive its own explanation ([Deploy](deploy.md) covers
-per-host retention).
+```bash
+fastagent routine list [dir] [--json]
+```
 
-These rows say WHEN each fire happened; the session is in time order. Matching them is left to you on
-purpose — a schedule's fires share one continuing conversation, nothing records which turn came from which
-fire, and `fastagent routine run`, a wake-up and the control plane append to the same session.
-
-Two things have no claim and therefore no history here, only logs: the agent's self-scheduled **wake-ups**
-(taken out of the store before the turn starts) and a **stale slot** (one that arrived after the schedule had
-already claimed a later one — that instant will never run, which a clock that moved backwards can produce in
-a row; it is logged as a warning, where an ordinary duplicate delivery is an info line).
-
-`fastagent routine list [dir]` reads both owners. From the DEFINITION: every declared routine with its
-next cron instant, or `on demand` where it declares none (those are reached by name — `POST /run`,
-`routine run`). From the STATE: the agent's own pending wake-ups, prefixed `wake` (id, next fire,
-one-shot/cron, session, prompt). `--json` gives both as `routines` and `wakeups`.
-
-**Reading a wake-up is an operator's; cancelling one is the agent's.** `unwake({ id })` is
-session-scoped and there is no command beside it: a wake-up fires only while a serve is running, and a
-running serve is one whose session can be spoken to, so "the alarm is loose" and "the agent is
-unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`.
+Lists every declared routine with its next cron instant (or `on demand`), and the agent's pending wake-ups (id,
+next fire, one-shot or cron, session, prompt). The agent cancels its own wake-ups with `unwake({ id })`; as a last
+resort, edit `<state root>/schedule/wakeups.json`.
 
 ## `fastagent tool`
 
@@ -268,53 +193,41 @@ unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedu
 fastagent tool <name> '<json-args>' [dir]
 ```
 
-Runs one discovered or configured tool directly, without a model or server. The call receives its
-workspace cwd but no session manager; a session-dependent tool reports that requirement itself.
-
-Example:
+Runs one tool directly, without a model or server. It gets the workspace cwd but no session.
 
 ```bash
 fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
-The result goes to stdout as data; stderr reports how much of it the model would receive
-(`result: 143910 chars ≈ 35978 tokens to the model`). See
-[Output budget](api-reference.md#output-budget) for what to do about a large one.
+The result goes to stdout; stderr reports its size in model tokens. See
+[Output budget](api-reference.md#output-budget).
 
 ## `fastagent add telegram|slack|feishu|lark`
 
 ```bash
 fastagent add telegram [dir]
-fastagent add slack [dir]      # create/install an internal app; --no-onboard scaffolds only
-fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app (scan-to-create; credentials → .secrets/.env)
-fastagent add lark [dir]     # Lark intl — opens console + collects/validates credentials
-                             # both take --ingress websocket|webhook (asked when omitted)
+fastagent add slack [dir]    # create/install an internal app; --no-onboard scaffolds only
+fastagent add feishu [dir]   # 飞书: scan-to-create the app
+fastagent add lark [dir]     # Lark international: console + credential validation
+                             # feishu/lark take --ingress websocket|webhook (asked when omitted)
 ```
 
-Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, a random string the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — they are covered by the `.secrets/.gitignore` written at `init`. Everything (glue, companion tool, secrets) lands in the agent dir (`./fastagent/`) — the same place `dev`/`start` discover channels. The channel file is written once and is yours after that; a companion tool (`tools/slack-send.ts`, `tools/telegram-send.ts`, …) is the package's and is rewritten on every `add`, so after upgrading the package, re-run `add <kind>` (`--no-onboard` skips the app prompts) to refresh it.
+Writes `channels/<kind>.ts` (yours after that) and a companion send tool (`tools/<kind>-send.ts`, rewritten on
+every `add`), appends variables to `.secrets/.env.example`, and writes generated secrets such as
+`TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run `add <kind>` after upgrading the package to refresh the send
+tool.
 
-An enabled `channels/*.ts|*.js|*.mjs` file must load successfully or `dev` / `start` fails. To
-intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; channel files, not config,
-are the enable/disable source of truth.
+Slack:
 
-Slack scaffolds `channels/slack.ts` plus `tools/slack-send.ts`; `--group-behavior context|mentions`
-selects the created app's manifest scopes/events (the runtime has one behavior; it hears what the app
-is allowed to), defaulting to context-aware `context`; choose `mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
-creates a new internal app with `agent_view`, native Agent streaming, and suggested prompts through
-`apps.manifest.create`, installs it
-through OAuth, and writes the Bot User OAuth Token + the Signing Secret to `.secrets/.env`. The configuration refresh token stays owner-readable
-under `<state root>/channels/slack/` and is used locally by `dev --tunnel` / `deploy --run` to update the
-Events API URL; it never travels to the host. `--no-onboard` preserves the manual scaffold-only path.
-`--replace-config` skips the menu and directly replaces the local App Configuration token pair — the
-repair when automatic Request URL updates fail because the tokens expired or were revoked. It works only
-on the machine that onboarded the app (the pair lives in its local state); other machines set the Request
-URL manually in the Slack console.
+- `--group-behavior context|mentions` picks the app's scopes: `context` (default) hears channel messages,
+  `mentions` is least privilege.
+- Onboarding creates the app through `apps.manifest.create`, installs it through OAuth, and writes the bot token
+  and signing secret to `.secrets/.env`. The App Configuration token stays in `<state root>/channels/slack/` on
+  this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.
+- `--replace-config` replaces that token pair when it has expired or been revoked. Other machines set the Request
+  URL in the Slack console.
 
-See:
-
-- [Telegram channel](telegram.md)
-- [Slack channel](slack.md)
-- [Feishu channel (Lark compatibility)](feishu.md)
+See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
 ## `fastagent add skill`
 
@@ -322,13 +235,8 @@ See:
 fastagent add skill <source> [dir] [--update]
 ```
 
-Vendors an Agent Skills skill into `skills/<name>/` in the agent dir (`./fastagent/skills/` in the default placement). Sources can be:
-
-- a GitHub-style ref,
-- a local path,
-- a bare name from local global skill directories.
-
-Use `--update` to overwrite an existing vendored skill. Review the result with `git diff` before deploying.
+Vendors a skill into the agent's `skills/<name>/`. `<source>` is a GitHub-style ref, a local path, or a bare name
+from the machine's skill directories. `--update` overwrites an existing one.
 
 ## `fastagent start`
 
@@ -336,74 +244,36 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Runs the agent in production posture: no watch, same assembly as `dev`.
-
-Port precedence:
+Serves without watch. Binds all interfaces by default.
 
 ```txt
---port > PORT > fastagent.config.ts http.port > 8787
+port:     --port > PORT > fastagent.config.ts http.port > 8787
+bind:     --bind > all interfaces
+/invoke:  --no-invoke > fastagent.config.ts http.invoke > served
+state:    FASTAGENT_STATE_DIR   > <agent dir>/.state
+secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets
 ```
 
-Bind precedence:
-
-```txt
---bind > all interfaces
---no-invoke > fastagent.config.ts http.invoke > served
-```
-
-`dev` reads the same chain but ends it at `127.0.0.1` — see [Bind address](configuration.md#bind-address).
-
-Session directory precedence:
-
-```txt
-FASTAGENT_STATE_DIR      > <agent dir>/.state       (mutable machine state)
-FASTAGENT_SECRETS_DIR    > <agent dir>/.secrets        (.env + auth.json)
-<state root>/sessions   # no separate knob: move FASTAGENT_STATE_DIR
-```
-
-**`FASTAGENT_AGENT` — which agent, when a workspace holds several.** Not a path knob: it is an input to
-every command, because several agents can share one workspace (an engineer's, a PM's and a content
-owner's agent all driving the same repository). It ASSERTS the agent by directory name — a directory
-without one by that name refuses rather than serving a different agent — and with nothing set, the
-agent named `fastagent` (the `init` default) answers. Scope it per repository (an `.envrc`) or per
-command (`FASTAGENT_AGENT=pm fastagent dev`); `deploy` bakes the selected agent into the image, so the
-container never re-picks. Selection lives in your environment on purpose: it is per-person, and a file
-committed to the shared workspace could not express "mine".
-
-For deployments, point the state root (sessions, channel state) and the secrets dir (the
-seeded/rotated `auth.json`) at durable storage:
-
-```bash
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
-```
+`FASTAGENT_AGENT` selects the agent by directory name when a workspace holds several; a name that matches nothing
+fails. Set it per repository (`.envrc`) or per command. `deploy` bakes the selected agent into the image.
 
 ## Global options
 
-Flags belong to their command and come **after** it: `fastagent info --json`, not
-`fastagent --json info`. (Earlier releases accepted flags anywhere on the line; that form now fails
-with `unknown option`, exit 2 — move the flag after the command/subcommand.)
-
-Only two options are global:
-
-| Option | Meaning |
-|---|---|
-| `-h`, `--help` | Print help. Works per command too: `fastagent deploy --help`, `fastagent help deploy`. |
-| `-v`, `--version` | Print the package version. |
-
-Recurring per-command options (same meaning everywhere they appear):
+Flags come after the command: `fastagent info --json`. Global: `-h`/`--help` (also per command, and
+`fastagent help <command>`) and `-v`/`--version`.
 
 | Option | Commands | Meaning |
 |---|---|---|
-| `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: `127.0.0.1` for `dev`, all interfaces for `start` (containers need it); `--bind 0.0.0.0` opens a dev serve to the LAN. See [Bind address](configuration.md#bind-address). |
-| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run — nor `POST /run`, which it takes with it even where the definition set `http.run: true` (both start a turn for an anonymous caller, and this flag exists for the run whose definition cannot be edited). The data plane is unauthenticated and runs a turn with the agent's full tools, so a serve meant to be reached only through its channels' signed webhooks should withhold it — `dev --tunnel` publishes the port, and that is the case this flag is for. Prefer it over `http.invoke: false` for a one-off: the config value travels into a deployed image. |
-| `--no-input` | `dev`, `start`, `invoke`, `routine run`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
-| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model override for THIS local run (`--model > FASTAGENT_MODEL > config`). `deploy` has no such flag: it resolves the deployed model from `.secrets/.env`'s `FASTAGENT_MODEL` over `config.model`, so the choice is reproducible from what travels. |
+| `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
+| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke`, `POST /run` or `GET /routines` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
+| `--no-input` | `dev`, `start`, `invoke`, `routine run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/.env`, then `config.model`. |
 | `--json` | `info`, `routine history`, `routine list` | Machine-readable output. |
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Success (including help/version displays). |
-| `1` | Runtime failure — a failed turn, a broken definition, a deploy gate, an unknown tool/schedule name, invalid runtime configuration (e.g. a bad `PORT` env). |
-| `2` | Usage error — unknown command/flag, missing/empty/invalid arguments, conflicting flags. A mistyped command suggests the nearest one (`fastagent depoly` → “Did you mean deploy?”). |
+| `0` | Success (including help and version). |
+| `1` | Runtime failure: a failed turn, a broken definition, a deploy gate, an unknown tool or routine name, invalid runtime configuration. |
+| `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |

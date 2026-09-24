@@ -13,14 +13,7 @@ This guide takes you from an installed CLI to a live local agent service.
 - Node >= 22.19 (`node --version`).
 - FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
 
-Model credentials come in step 2 — after the agent exists, because `fastagent login` stores them
-**per project**.
-
-List available model specs with:
-
-```bash
-fastagent models
-```
+Model credentials come in step 2, after the agent exists. `fastagent models` lists model specs.
 
 ## 1. Create an agent
 
@@ -29,7 +22,8 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is a **self-iterating agent** — it is files, and it can edit its own definition (persona.md and skills are re-read every turn). The agent lands in `fastagent/`; the directory around it is its WORKSPACE — what it works on, and where its `AGENTS.md` is read from:
+The agent lands in `fastagent/`; the directory around it is its **workspace**: its working directory, and where
+its `AGENTS.md` is read from. The agent can edit its own definition; `persona.md` and skills are re-read every turn.
 
 ```txt
 my-agent/                              # the workspace — the agent's cwd, untouched by init
@@ -43,7 +37,10 @@ my-agent/                              # the workspace — the agent's cwd, unto
     └── .gitignore
 ```
 
-`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. Don't want the code tool? Delete `tools/fetch-url.ts` — the scaffold is one shape, and everything in it is yours after `init`.
+`persona.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
+[mattpocock/skills](https://github.com/mattpocock/skills)) shows how. No `AGENTS.md` is scaffolded; the workspace's
+own is read as project context. Add skills with `fastagent add skill <owner/repo/path>`; delete
+`tools/fetch-url.ts` if you do not want it.
 
 ## 2. Inspect it
 
@@ -53,17 +50,15 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** Same command, same result: `init` puts the WHOLE agent into `./fastagent/` — zero writes elsewhere, so the project's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. A `fastagent.config.ts` file identifies the agent; `fastagent/` is only the default directory name.
+**In an existing project**, run `fastagent init .`: the agent goes into `./fastagent/` with no writes elsewhere, and
+the project becomes its workspace. `--agent-dir bot` picks another directory name; a `fastagent.config.ts` is what
+makes a directory an agent.
 
-**The repository IS the agent?** (A standalone agent repo, or a monorepo package.) Run `fastagent init` in it: that repository becomes the WORKSPACE and the definition lands in `./fastagent/`, which is also the shape `fastagent deploy` needs. **Want a different directory name?** `fastagent init . --agent-dir bot` — the `fastagent.config.ts` inside is what makes a directory an agent, never its name.
-
-A fresh agent presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
-terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
-stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking
-one that needs auth runs the login flow right there — and writes your pick back to
-`fastagent.config.ts`. Credentials are stored per project (`<agent dir>/.secrets/auth.json`, no global
-fallback), so a login from another directory is invisible here. To set the model non-interactively
-(or in CI/deploy, where there is no prompt):
+A fresh agent presets no model. The first `fastagent dev` (or `start` / `invoke`) in a terminal shows the model
+catalog, providers with credentials first; picking one that needs auth runs the login, and the pick is written to
+`fastagent.config.ts`. Credentials are stored in `<agent dir>/.secrets/auth.json`, with
+`~/.fastagent/.secrets/auth.json` (`fastagent login -g`) as a fallback. To set the model without a prompt (CI,
+deploy):
 
 ```bash
 fastagent dev --model provider/model-id
@@ -77,7 +72,8 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` assembles the agent and serves it on `:8787`. persona.md/AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The data plane is `POST /invoke`, always served.
+`dev` serves the agent on `:8787`. Edits to `persona.md`, `AGENTS.md` and `skills/` apply on the next turn; code
+edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
 
 Send one turn:
 
@@ -150,15 +146,15 @@ Mention the tool in `persona.md` so the model knows when to use it. `fastagent d
 fastagent start
 ```
 
-`start` uses the same assembly as `dev`, but does not watch files. There is no build step: copy the agent to a host with Node >= 22.19, install dependencies, and run `fastagent start`.
+`start` serves like `dev` without watching files. There is no build step: copy the agent to a host with
+Node >= 22.19, install dependencies, and run `fastagent start`.
 
-For deployments, point both machinery roots at durable storage: the state root (sessions **and** channel state — Telegram's durable turn replay lives there too) and the secrets dir (the agent's `.env` and the `auth.json` an OAuth refresh rotates on the box):
+For deployments, point the state root (sessions and channel state) and the secrets dir (`.env` and `auth.json`) at
+durable storage:
 
 ```bash
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
-
-(Sessions have no knob of their own: they live under the state root, so the one variable moves them with the channel state they belong beside. Neither variable moves `auth.json` — that is `FASTAGENT_SECRETS_DIR`.)
 
 ## 7. Add channels
 
@@ -196,14 +192,10 @@ export default defineRoutine({
 });
 ```
 
-The prompt must say where output goes — the scheduler only fires the agent; delivery is a send tool's
-job. `fastagent add telegram` scaffolds one (`tools/telegram-send.ts` sends a message or a file); and
-because a scheduled turn runs outside any chat, the agent has no chat context — **the prompt must name
-the target chat id**. That id is environment-specific, so declare it in `secrets` and build the prompt
-from it (as above) rather than hardcoding it: same contract as a tool's secrets — `deploy` carries the
-value and `dev`/`start` refuse to boot while it is unset. Set `TEAM_CHAT_ID` in `.secrets/.env` first —
-the same gate refuses a run while the name is unset. Then test it immediately (without waiting for
-the cron, and without touching the real fire state):
+The scheduler only fires the agent; a send tool delivers the output (`fastagent add telegram` scaffolds
+`tools/telegram-send.ts`). A scheduled turn has no chat, so **the prompt must name the target chat id**. Declare the
+id in `secrets` and build the prompt from it: `dev`/`start` refuse to boot while it is unset. Set `TEAM_CHAT_ID` in
+`.secrets/.env`, then test without waiting for the cron (the real fire state is not touched):
 
 ```bash
 fastagent routine run daily-digest

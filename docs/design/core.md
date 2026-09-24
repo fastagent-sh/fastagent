@@ -264,7 +264,7 @@ machine too, and whatever its builder put in it is that environment's answer
 
 Extensions stay out of this, for a reason that is not portability: pi's extension runtime is
 process-wide, and serving runs concurrent turns for unrelated conversations
-(`docs/configuration.md#why-serving-does-not-run-them`). So does the system prompt — inheriting
+(`docs/configuration.md#extensions`). So does the system prompt — inheriting
 capability is one thing, inheriting an identity would be the agent becoming someone else's.
 
 Workspace tools merge in this order: all pi coding tools

@@ -6,293 +6,292 @@ status: current
 
 # Deploy
 
-FastAgent has **no application build step** — the directory is the deployable unit. Deployment is: copy the agent to a host with Node >= 22.19 (or Bun), install dependencies, and run `fastagent start`. The `deploy` command wraps that for a target: it generates a definition-aware container recipe plus target config and prints an ordered runbook. `--run` drives the target CLI instead of handing you the runbook.
+FastAgent has no application build step: the directory is the deployable unit. Deploying means copying the agent to
+a host with Node >= 22.19 (or Bun), installing dependencies, and running `fastagent start`. `fastagent deploy`
+generates a container recipe and target config and prints an ordered runbook; `--run` executes it with the host's
+CLI.
 
 ```bash
 fastagent deploy docker                 # Dockerfile + local Compose + runbook
-fastagent deploy docker --tunnel        # generate Compose with a Quick Tunnel service
+fastagent deploy docker --tunnel        # Compose with a Quick Tunnel service
 fastagent deploy docker --run           # start the app service
-fastagent deploy docker --tunnel --run  # start app+tunnel and register webhooks
-fastagent deploy fly           # Dockerfile + fly.toml + runbook
+fastagent deploy docker --tunnel --run  # start app + tunnel and register webhooks
+fastagent deploy fly                    # Dockerfile + fly.toml + runbook
 fastagent deploy fly --run
 fastagent deploy railway
 fastagent deploy railway --run
-fastagent deploy agentcore       # CloudFormation stack for AWS Bedrock AgentCore + runbook
+fastagent deploy agentcore              # CloudFormation stack for AWS Bedrock AgentCore + runbook
 fastagent deploy agentcore --run
 ```
 
-FastAgent generates only what it can know from the definition: image shape, state root, exact secret names, channel paths, and target-specific runtime settings. Local Docker can opt into an ephemeral Cloudflare Quick Tunnel; durable ingress, reverse proxies, DNS, and TLS remain operator-owned. Generation and execution stay separate: `--tunnel` shapes Compose, while `--run` is the only flag that starts Docker.
+Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are yours.
 
 ## Before you deploy
 
-Three things must be true, or the deployed box crash-loops on boot:
-
-| Requirement | Why | How |
-|---|---|---|
-| **A model resolves** | The usual `flag > environment > config` chain, evaluated in **the environment being deployed** rather than this machine's. That environment is declared by `.secrets/.env`, so its `FASTAGENT_MODEL` wins and `deploy` records it in the release manifest (`fastagent.release.json`, rewritten by every deploy); `config.model` is the fallback and ships in the config file. Your shell is not part of the deployed environment, and `deploy` has no `--model` flag — a deployment's inputs are files, so that they survive the next deploy that omits them. | Either source. `deploy` prints the effective model and its source, and warns (or, under `--run`, gates) when neither resolves one. A **hand-written** Dockerfile is read only if it sets `ENV FASTAGENT_RELEASE_FILE` — without it the manifest is never read, so a model that lives only in `.secrets/.env` would not reach the box; `deploy` gates that combination. |
-| **The value file holds the deployed environment** | The host needs the model API key, every channel's credentials, and whatever else your code reads. | `--run` carries every variable in the agent's `.secrets/.env` (except `PORT` and the `FASTAGENT_*` names the deployment sets itself) and nowhere else — a variable exported in your shell does not reach the deployment. A name code declares (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the env-key model auth must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. AgentCore receives the variables as one `FastagentEnv` parameter, so its template does not change when the file gains a name. |
-| **Workspace, state and secrets are durable** | Local directories remain where you created them. | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`, and a new release replaces only the nested definition. AgentCore uses managed SessionStorage at `/mnt/data`, which the platform resets on every deploy. |
-
-Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deploy` lists it as a host secret automatically. In a runbook-only deploy, an OAuth/stored login still needs a provider API key or an `auth.json` placed on the volume. Under `--run`, FastAgent carries the local auth file as an absent-only `FASTAGENT_AUTH_SEED`, so a credential already refreshed on the volume is never overwritten.
+| Requirement | How |
+|---|---|
+| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
+| **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
+| **A model credential** | An env-key credential travels as a variable. An OAuth/stored login travels, under `--run`, as `FASTAGENT_AUTH_SEED` and is written to the volume only when no `auth.json` is there, so a refreshed one is never overwritten. In a manual deploy, set a provider API key or place `auth.json` on the volume. |
+| **Durable storage** | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 
 ## Local Docker
 
-Prerequisite: Docker Engine/Desktop with Docker Compose 2.3.3 or newer (`docker compose version`).
+Requires Docker Compose 2.3.3 or newer.
 
 ```bash
 fastagent deploy docker
 ```
 
-This generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fastagent/fastagent.compose.yml`. The Compose file contains one `agent` service:
+Generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fastagent/fastagent.compose.yml` with one
+`agent` service:
 
-- the generated or user-owned Dockerfile,
-- `127.0.0.1:<port>` for safe host-local access,
-- a named volume mounted at `/data`,
-- `FASTAGENT_STATE_DIR=/data/.state`, `FASTAGENT_SECRETS_DIR=/data/.secrets`, `PORT`, and the exact model/channel/extra secret names,
+- the generated or your own Dockerfile,
+- `127.0.0.1:<port>` published on the host,
+- a named volume at `/data`,
+- `env_file: .secrets/.env` (a fixed path, created empty when missing), with `FASTAGENT_STATE_DIR`,
+  `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH` and `PORT` pinned after it,
 - `restart: unless-stopped`.
-
-By default it contains no public ingress. If a webhook channel needs a temporary public URL, generate an independent cloudflared service alongside the app:
-
-```bash
-fastagent deploy docker --tunnel
-```
-
-This still only writes files. The FastAgent Dockerfile remains unchanged; Compose adds a pinned `cloudflare/cloudflared` image pointing at the Docker-internal `http://agent:<port>`. The tunnel service prepends `agent,localhost,127.0.0.1` to both `NO_PROXY` forms so Docker Desktop's injected proxy cannot intercept origin traffic; webhook registration still honors the host's `HTTPS_PROXY`. Start immediately or later — the existing Compose file remains authoritative:
-
-```bash
-fastagent deploy docker --tunnel --run  # generate + start
-# or, after generation:
-fastagent deploy docker --run           # starts the existing app+tunnel topology
-```
-
-`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram, locally onboarded Slack, and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; scaffold-only/manual Slack prints its console URL. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
-
-The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
-
-Operate the generated topology. The generated Compose names the value file itself (`env_file`), so every command
-is spelled the same way and none needs a flag to reach the deployed environment's declaration:
 
 ```bash
 docker compose -f fastagent/fastagent.compose.yml up -d --build
 docker compose -f fastagent/fastagent.compose.yml logs -f agent
 docker compose -f fastagent/fastagent.compose.yml ps
-docker compose -f fastagent/fastagent.compose.yml down     # state volume is kept
+docker compose -f fastagent/fastagent.compose.yml down     # keeps the state volume
 docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
-`env_file` rather than per-name `${NAME:-}` interpolation is the point: interpolation resolves from your shell or
-the *project* `.env`, which is exactly the source a deployment must not have. Naming the file means the container
-reads the same declaration by hand and under `--run` alike, so nothing has to be carried through the build machine,
-filtered, or blanked. The one value not in that file is `FASTAGENT_AUTH_SEED`, which `--run` mints from your local
-`auth.json`; it stays a seam in the committed topology so a hand-run `up` can supply it **from that command's own
-environment**. Writing this one key into the value file has no effect: `environment:` is applied after `env_file`, so
-the pinned `${FASTAGENT_AUTH_SEED:-}` line blanks it and the container starts without seeding `auth.json`.
+`--run` checks Docker and the daemon, gates missing values before building, runs `up -d --build`, checks the
+services, and waits for `/health`. It passes the one value not in `.secrets/.env`, `FASTAGENT_AUTH_SEED`, through
+Compose's environment; a hand-run `up` can set it the same way.
 
-The entry is a **fixed** path, `<agent>/.secrets/.env`, never whatever `FASTAGENT_SECRETS_DIR` resolves to on the
-build machine: this file is committed, so it has to mean the same thing everywhere. `deploy` creates the file when it
-is missing (empty — a deployment that declares nothing declares it in an empty file), because Compose refuses an
-`env_file` entry pointing at a path that does not exist. If `FASTAGENT_SECRETS_DIR` sends this machine's read
-somewhere else, generating artifacts warns and `--run` gates: the credential check would pass on one file while the
-container reads the other and starts with nothing declared.
+Notes:
 
-Two things follow from Compose's own behaviour and are worth knowing:
+- Compose expands `$VAR` inside `env_file` values, so a value containing `$` reaches the container changed.
+  `deploy` warns. `$$` fixes Compose but breaks every other reader of the file; prefer a value without `$`.
+- If `FASTAGENT_SECRETS_DIR` points this machine at a different value file than the committed Compose reads,
+  generating warns and `--run` gates.
 
-- The machinery variables (`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`) are pinned in `environment:`, which Compose applies **after** `env_file`. The scaffolded
-  `.env.example` lists some of them as local overrides; pinning keeps a laptop path from sending the container's
-  sessions or credentials outside the volume.
-- Compose expands `$VAR` **inside** `env_file` values (raw mode needs Compose 2.30, above our floor). A value
-  containing `$` reaches the container rewritten, and an undefined name becomes empty. `deploy` warns when it finds
-  one, and does not tell you to escape it: `$$` works for Compose only, while `fastagent dev`/`start` and every other
-  host read this same file literally and would keep the extra `$`. Prefer a value without `$`.
+### Quick Tunnel
 
-### Taking ownership of Docker files
+```bash
+fastagent deploy docker --tunnel        # add a cloudflared service to the Compose file
+fastagent deploy docker --tunnel --run  # start both, read the URL, register webhooks
+```
 
-Generated files are defaults, not a second source of truth:
+The `tunnel` service points at `http://agent:<port>`. `--run` reads the `*.trycloudflare.com` URL from its logs and
+registers webhooks as `dev --tunnel` does: Telegram, locally onboarded Slack and Feishu/Lark automatically,
+manual Slack prints its URL, long-connection channels are skipped.
 
-- An existing `Dockerfile`, `.dockerignore`, or `fastagent.compose.yml` is kept byte-for-byte and used by `--run`.
-- Editing a generated Dockerfile or Compose file may produce a drift warning, but never an automatic rewrite. Remove its first generated-marker line to suppress that classification after taking ownership.
-- `--force` regenerates artifacts fastagent GENERATED (they carry a marker line); a file without that marker is never touched, with or without it. Delete such a file to hand the path back to deploy.
-- To regenerate only one artifact while preserving the others, delete that file and rerun (with or without `--force`).
-- `--tunnel` only shapes a newly generated/forced Compose file. If an existing authoritative file has no `tunnel` service, `--tunnel --run` gates before Docker side effects and tells you to edit, delete/regenerate, or use `--force`.
-- A custom Dockerfile owns system packages/base-image details; `config.deploy.apt` only shapes the generated Dockerfile.
+The URL changes whenever the tunnel container or Docker restarts, so the service has no restart policy: re-run
+`fastagent deploy docker --tunnel --run` to register the new URL. For a stable endpoint, use your own named tunnel
+or reverse proxy.
 
-The `agent` service name is the small contract used by `--run`; the optional generated service is named `tunnel`. Add other sidecars, networks, volumes, or custom ports freely. If you remove the host port, `--run` accepts the running app and uses the Compose ingress readiness floor.
+### Owning the Docker files
+
+- An existing `Dockerfile`, `.dockerignore` or `fastagent.compose.yml` is kept byte for byte and used by `--run`.
+- `--force` regenerates only files fastagent generated (they start with a marker line). Remove the marker to own a
+  file; delete a file to hand it back.
+- `--tunnel` shapes only a newly generated Compose file. `--tunnel --run` against a kept file without a `tunnel`
+  service stops before touching Docker.
+- `config.deploy.apt` applies only to the generated Dockerfile.
+- `--run` relies on the service named `agent` (and `tunnel`). Add other services, networks, volumes or ports freely.
 
 ## Fly.io
 
-Prereqs: [flyctl](https://fly.io/docs/flyctl/install) installed and `fly auth login`.
+Requires [flyctl](https://fly.io/docs/flyctl/install) and `fly auth login`.
 
 ```bash
 fastagent deploy fly
 ```
 
-Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy runbook:
+Generates `fly.toml`, `Dockerfile` and `.dockerignore`, and prints the runbook:
 
-1. `fly apps create <name>` — one-time (Fly app names are globally unique; if taken, edit `app` in `fly.toml` and re-run `deploy`).
-2. `fly ips allocate-v4 --shared` + `fly ips allocate-v6` — one-time, free. `[http_service]` declares a service; it does not allocate an address to reach it on. `fly deploy` does that on a *first* deploy only, and just warns when it fails — leaving a machine that serves and a `https://<name>.fly.dev` with no DNS record. Skip if `fly ips list` already shows one.
-3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
-4. `fly deploy` builds and ships — and creates the `data` volume on a first deploy, in `primary_region` and at `[mounts].initial_size`. Creating that volume up front instead pins it to a host chosen without the machine, which is how a deploy ends at `insufficient resources … existing volume`. For a new definition release, run `fastagent deploy fly` first to refresh the release manifest, then build and ship again.
-5. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
-
-Or let the CLI do all of it:
+1. `fly apps create <name>` (names are global; if taken, edit `app` in `fly.toml` and re-run `deploy`).
+2. `fly ips allocate-v4 --shared` and `fly ips allocate-v6`. A first `fly deploy` allocates them but only warns if
+   that fails, leaving `https://<name>.fly.dev` without DNS. Skip if `fly ips list` shows one.
+3. `fly secrets set …` for the listed variables.
+4. `fly deploy`, which creates the `data` volume on the first deploy. For a new release, run
+   `fastagent deploy fly` first to refresh the release manifest.
+5. Register each route channel's webhook at the live URL.
 
 ```bash
-fastagent deploy fly --run   # idempotent, resumable; carries .secrets/.env's values to Fly
+fastagent deploy fly --run   # idempotent and resumable
 ```
 
-Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms) with `min_machines_running = 0`. Both lines are in the generated `fly.toml` and are yours to edit — the artifact is the knob, and `deploy` never regenerates it without `--force`. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
-
-**Declared crons and long-connection channels keep one machine running.** A cron has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
-
-**One of those reasons has a way out: `routines/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /run`](api-reference.md#post-run) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
-
-The agent's own wake-ups are **not** a reason to stay up. Every serve mounts the `wake` tool, and the wake-up store is on the volume: a machine that scaled to zero fires what is due when a request next wakes it, late but not lost. A long-connection channel (it cannot reconnect from zero) has no way out.
+Idle behavior is **suspend** with `min_machines_running = 0`. Both lines are in `fly.toml` and are yours to edit.
 
 ## Railway
 
-Prereqs: the [Railway CLI](https://docs.railway.com/guides/cli) and `railway login`.
+Requires the [Railway CLI](https://docs.railway.com/guides/cli) and `railway login`.
 
 ```bash
 fastagent deploy railway
 ```
 
-Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile`, `.dockerignore`, then prints the runbook. Railway's source of truth is the linked **project's platform state**, not a committed file, so setup is ordered CLI steps:
+Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.dockerignore`, and prints the runbook:
 
-1. `railway init` — create + link a project (or `railway link` to attach an existing one).
-2. `railway add --service <name>` — the volume and variables are service-scoped; the service must exist first.
-3. `railway volume add --mount-path /data` — persistent state.
-4. `railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets <SECRETS>` — **before** the first deploy, or the box boots without them.
-5. `railway up` uploads and builds the Dockerfile on Railway. For a new definition release, run `fastagent deploy railway` first to refresh the release manifest.
-6. `railway domain` — mint the public URL, then register route-channel webhooks; locally onboarded Slack updates from local state, manual Slack prints its URL, and long-connection channels are skipped.
-
-Or:
+1. `railway init` (or `railway link`).
+2. `railway add --service <name>`.
+3. `railway volume add --mount-path /data`.
+4. `railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets …` before the
+   first deploy.
+5. `railway up`. For a new release, run `fastagent deploy railway` first.
+6. `railway domain`, then register webhooks.
 
 ```bash
-fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
+fastagent deploy railway --run   # provisions an unlinked dir end to end
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with a long-connection channel (with it on, the agent's own wake-ups fire late, when a request wakes the service); a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
+`--run` refuses a dir already linked to a project unless `--into-linked`. The build uses the
+`RAILWAY_DOCKERFILE_PATH` variable; pointing the service at `fastagent/railway.json` (Settings → Config-as-code,
+dashboard only) adds the `/health` deploy gate.
+
+## Scale to zero
+
+| Definition has | Fly (`min_machines_running`) / Railway (App Sleeping) |
+|---|---|
+| a routine with a `cron` | kept up — unless an external clock calls [`POST /run`](api-reference.md#post-run) instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job) |
+| a long-connection channel | kept up; an outbound connection cannot wake a stopped machine |
+| neither | may scale to zero |
+
+The generated `fly.toml` and the Railway runbook follow this table. If a kept `fly.toml` scales to zero where it
+should not, `deploy` warns and `--run` refuses until you raise it.
+
+Wake-ups do not keep a machine up: they are stored on the volume, and a machine that scaled to zero fires what is
+due when a request next wakes it, late but not lost.
 
 ## AWS Bedrock AgentCore
 
-Prereqs: AWS CLI v2 with credentials in a [region where AgentCore is available](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html), and Docker with buildx — this is the one target whose image builds **on your machine** (the platform requires a linux/arm64 image in your account's ECR and has no remote builder). No VPC, no filesystem and no other AWS resource has to exist first.
+Requires AWS CLI v2 with credentials in a
+[region where AgentCore is available](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html),
+and Docker with buildx: the linux/arm64 image builds on your machine.
 
 ```bash
 fastagent deploy agentcore
+fastagent deploy agentcore --run
 ```
 
-Generates `fastagent/agentcore.template.yaml`, `fastagent/lambda/index.js` when needed, container files and a release manifest, then prints the runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a **unique tag per deploy**, `aws cloudformation deploy` with the secret parameters, read the stack outputs, register webhooks. `--run` drives all of it (aws + docker CLIs) and carries your local model credential.
+Generates `fastagent/agentcore.template.yaml`, `fastagent/lambda/index.js`, container files and a release manifest.
+The runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a unique tag
+per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
-After deployment, read the agent process logs without hunting through CloudWatch:
+The stack carries:
+
+- the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
+- a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
+  verify signatures as on every host) and manages wake alarms;
+- **EventBridge Scheduler rules** for each routine's `cron`. A cron EventBridge cannot express stops the deploy;
+- **wake alarms**: pending wake-ups become one-shot EventBridge schedules that wake the container on time.
+
+Variables from `.secrets/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
+change the template.
+
+What to know:
+
+- **Idle cost.** A session keeps its microVM for `deploy.agentcore.idleTimeoutSeconds` (default 180) after it goes
+  idle, and memory bills for that time; after it, the next message cold-starts. `/ping` reports `HealthyBusy`
+  while work runs, so a turn is not cut short.
+- **Every deploy resets the state.** Managed SessionStorage survives compute stop/resume but is wiped on every
+  runtime update (every deploy) and after 14 idle days: sessions, channel state and pending wake-ups start blank.
+  For state that survives deploys, use Fly or Railway.
+- **Every deploy re-seeds the credential.** With OAuth, the refresh token is shared with your machine and
+  single-use, so the box can lose model access between deploys; use a provider API key here.
+- **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
+  fails the deploy with the runtime's error.
+- **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
+- **No long-connection channels.** Use webhook mode; `--run` refuses otherwise.
+- **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
+  `session` selects the conversation.
+- **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).
+- **A kept template that no longer matches the definition** (a new routine or channel) stops `--run` until
+  `--force`. A template without the marker line is never regenerated.
+
+### Logs
 
 ```bash
-fastagent logs agentcore --follow
+fastagent logs agentcore --follow                    # the Runtime's stdout/stderr
+fastagent logs agentcore --source forwarder --follow  # the forwarder Lambda
 ```
 
-The command resolves the same workspace-derived CloudFormation stack, reads its `RuntimeArn`, discovers the actual per-endpoint log group, and tails it — the same FastAgent stdout/stderr messages emitted locally. It does not change logging behavior or `FASTAGENT_LOG_LEVEL` (`start` remains `info`; set the existing environment knob to `debug` when the detailed turn trace is needed). The public ingress is a separate Lambda and therefore a separate source:
+Log groups appear on first use; before that, the command says what has not happened yet. CloudWatch keeps logs
+forever by default, and they are where a failed scheduled turn's reason is. Set a retention (the runbook and
+`--run` print this):
 
 ```bash
-fastagent logs agentcore --source forwarder --follow
-```
-
-AWS creates each log group on first use. Before the first Runtime invocation or forwarder event, the command says which trigger is missing instead of sending `aws logs tail` to a nonexistent group. Pass the same `[dir]` used for deploy when running from somewhere else.
-
-**Set a retention period on those groups.** CloudWatch keeps log data indefinitely by default and nothing in the stack creates the groups (each service creates its own) — so this is the one state path this host does not reclaim on its own, and it is also where WHY a scheduled turn failed is recorded. Both the runbook and `--run` print the command; it is one call per group:
-
-```bash
-aws logs put-retention-policy --log-group-name <the group the command above resolves> --retention-in-days 14
+aws logs put-retention-policy --log-group-name <group> --retention-in-days 14
 ```
 
 ### Tearing it down
 
 ```bash
-fastagent destroy agentcore        # what is out there; deletes nothing
+fastagent destroy agentcore        # list what exists; delete nothing
 fastagent destroy agentcore --run  # delete it
 ```
 
-`aws cloudformation delete-stack` is not enough, which is why this is a command. The S3 artifact bucket and
-the ECR repository have to exist **before** the stack that reads the forwarder zip and the image from them, so
-they are not stack resources. Both log groups are created by AWS on first write, so no template owns them
-(the runtime's holds every turn the agent ever printed). And a wake alarm is minted at runtime by the
-container, so nothing in the template lists it — after the Lambda is gone it retries into nothing for weeks.
+Deletes the stack, the artifact bucket, the ECR repository, both log groups and pending wake alarms, which
+`aws cloudformation delete-stack` alone leaves behind. It prints the account and region first. A read it cannot
+complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops the rest.
 
-It prints the account and **region** it is working in before it reads anything: every resource here is regional,
-and a profile pointing somewhere other than the deploy's region would otherwise answer "nothing in this
-account" — which reads as "already clean". A read it cannot complete (denied, throttled, expired token) stops
-the command instead of being taken for absence.
-
-Two boundaries worth knowing before you run it:
-
-- **The session storage goes with the stack.** There is no way to delete this deployment and keep the
-  conversations. A bucket holding anything but the forwarder's zips is the one thing the command keeps, and it
-  tells you what is in it.
-- **Webhook registrations are NOT removed.** `deploy --run` registered your Function URL with Telegram /
-  Slack / Feishu, and destroy only touches AWS. Point them somewhere else, or clear them — for Telegram,
-  `curl "https://api.telegram.org/bot<token>/deleteWebhook"` — otherwise the platform keeps delivering to a
-  URL that no longer answers.
-
-AgentCore differs from the resident-box hosts in kind — the Runtime has **no public URL** of its own (its ingress is the SigV4 `InvokeAgentRuntime` API) and **no resident process** (compute is per-session microVMs, reclaimed after the configured idle timeout — 3 minutes by default). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
-
-- the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
-- a **forwarder Lambda** with a public Function URL, on every stack: it fronts the webhooks when there are any (channels verify signatures exactly as on every host) and owns the wake alarms;
-- **EventBridge Scheduler rules** firing each `routines/*.ts` cron (the container arms no resident timers; the rule carries `<aws.scheduler.scheduled-time>`, which EventBridge repeats unchanged on a redelivery, so the container dedupes on it). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
-- the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
-
-What to know before choosing it:
-
-- **The idle tail is the standing cost, and you set it.** Compute is reclaimed after `deploy.agentcore.idleTimeoutSeconds` (default 180 s, AWS bounds 60–1209600) of idle, and memory bills for that whole tail; a session past it cold-starts on the next message. A chat agent talked to in bursts is cheaper to keep warm than to restart, a schedule-only agent is not — raise or lower it in `fastagent.config.ts`. A turn in flight is never cut short: `/ping` reports `HealthyBusy` while work is running.
-- **A deploy resets the state.** Storage is the platform's managed SessionStorage at `/mnt/data`. It keeps the workspace, `.state` and `.secrets` across compute stop/resume — an idle-reclaimed agent resumes with its memory — and AWS **wipes it on every runtime version update, i.e. on every deploy**, and after 14 idle days. So sessions, channel state and pending wake-ups start blank after each deploy. Cross-deploy memory would need EFS or S3 Files, both VPC-only and therefore a NAT gateway for model/channel egress (~$33/mo standing); if you need it, use `deploy fly` or `deploy railway` and their real volumes. The S3 bucket here holds only the forwarder deployment package.
-- **Deploying is re-authenticating.** The credential seed is absent-only, so a restart keeps an `auth.json` the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Caveat for OAuth: a refresh token is single-use and shared with your machine, so the box can lose model access between deploys — deploy again, or use a provider API key.
-- **Nothing opens before the first invocation.** Runtime filesystems appear on invoke, so `/ping` answers immediately while the definition, credentials and channels wait for the first envelope. `deploy --run` probes exactly that path, so a bad credential or a broken `channels/` module fails at deploy time with the runtime's own error text.
-- **Redeploys stop the fixed runtime session** so the next call uses the new image. In-flight work is interrupted, and its state is wiped with the mount — replay does not survive a deploy here.
-- **Long-connection channels cannot run here** — the connection is the ingress and nothing wakes a reclaimed session; switch the channel to webhook mode (`--run` gates on this).
-- **Programmatic invokes reuse the deployment's fixed `runtimeSessionId`**, printed in the runbook. The envelope's `session` still selects an independent conversation. The workspace lease rejects competing writers.
-- **The webhook body limit is the host's, not the channel's.** A Lambda Function URL request caps at 6 MB, so a webhook body over roughly 4 MiB cannot reach the container at all.
-- **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule or a channel), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
-
-## Serving an existing repo (agentDir layout)
+- Conversations are deleted with the stack. A bucket holding anything besides forwarder packages is kept and
+  reported.
+- Webhook registrations on Telegram, Slack or Feishu are not removed. Clear them yourself (Telegram:
+  `curl "https://api.telegram.org/bot<token>/deleteWebhook"`).
 
 ## What deploy bakes
 
-Deploy requires a nested definition. Point it at the workspace containing `fastagent/` (or another selected agent directory). The image initializes persistent storage once:
+Deploy needs a nested definition: point it at the workspace containing `fastagent/`. The image initializes
+persistent storage once:
 
 ```text
 <persistent-root>/
-├── base/                 # Working directory, project files and optional .git
-│   └── fastagent/        # Deployment-managed definition
-├── .state/               # Sessions, channels and scheduled work
-├── .secrets/             # Credentials, including refreshed auth.json
-└── .deployment/          # Release and recovery metadata
+├── base/                 # working directory, project files, optional .git
+│   └── fastagent/        # deployment-managed definition
+├── .state/               # sessions, channels, scheduled work
+├── .secrets/             # credentials, including refreshed auth.json
+└── .deployment/          # release and recovery metadata
 ```
 
-Every `fastagent deploy <host>` invocation, including generation without `--run`, writes a new release ID to `fastagent/fastagent.release.json`. Building and deploying that manifest publishes a new definition release even when the author's files are unchanged. Regenerate it before manually building a new release. Restarting the same release preserves definition edits. A different release replaces only `base/fastagent/`, including deleting obsolete definition files. Other workspace files, uncommitted/untracked work, Git history and refreshed credentials remain. Author-side project-code updates outside the definition require explicit synchronization. Definition replacement may leave a dirty Git tree.
+- Every `fastagent deploy <host>` writes a new release id to `fastagent/fastagent.release.json` (rewritten every
+  time; do not edit it). Restarting the same release keeps definition edits; a new release replaces only
+  `base/fastagent/`, deleting obsolete definition files. Other workspace files, uncommitted work, Git history and
+  credentials stay.
+- Updates are staged and an interrupted one completes before the agent opens. A file lock at
+  `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
+- Only `fastagent/package.json` dependencies install at build time; keep the deploy CLI and the agent's FastAgent
+  dependency on the same version.
+- Markdown in the definition is read every turn; tools, channels and config need a restart; a new release replaces
+  edits made on the box.
 
-Startup stages updates before publishing them and completes an interrupted update before opening the agent. A kernel file lock excludes competing starters until the owner exits. Keep `.deployment/lock` in place even when the service is stopped; removing the inode would bypass another starter's lock. Custom images need `flock`. Credentials seed only when absent. Download caches live under `/tmp/fastagent/`, off the volume.
+**Artifacts** land in the agent dir (`Dockerfile`, `Dockerfile.dockerignore`, `fastagent.compose.yml` /
+`fly.toml` / `railway.json`). The one file outside it is the workspace-root `.dockerignore`, which excludes
+`.secrets` contents (except `.env.example` and `.gitignore`), `**/.state`, `**/node_modules`, `**/.cache` and
+`**/.env*`, and keeps `.git`.
 
-On AgentCore the same layout sits on managed SessionStorage, which the platform wipes on every deploy — see [above](#aws-bedrock-agentcore).
+- Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
+  never touched.
+- A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
+- A kept `.dockerignore` that drops the agent dir or does not exclude `fastagent/.secrets/auth.json` gates `--run`;
+  an unexcluded `.state` or `node_modules` warns. Patterns are root-anchored: use `**/.secrets/**`.
 
-- **Artifacts land in the agent dir** — `fastagent/Dockerfile`, `fastagent/Dockerfile.dockerignore`, and `fastagent/fastagent.compose.yml` / `fastagent/fly.toml` / `fastagent/railway.json` — so they never collide with Docker/deploy files the workspace already owns. **One write outside the agent dir**: a `.dockerignore` at the workspace root (context-packers only read that form; it excludes `.secrets` contents (except tracked `.env.example` + `.gitignore`) and `**/.state`, plus `**/node_modules`, `**/.cache` and `**/.env*`, and does *not* exclude `.git`). **Ownership decides what deploy may overwrite, not `--force` and not the path.** Every generated artifact opens with a marker line: `--force` regenerates ONES WE WROTE, and a file without the marker is never touched (delete it to hand the path back). So a hand-written `Dockerfile`, a `.dockerignore` the repo already had, or a `fly.toml` you tuned all survive `--force`. A generated artifact that no longer matches what the current definition would produce is **kept and reported**, and under `--run` that report becomes a refusal: deploying from it would ship something the definition does not describe. `--force` regenerates it; removing its generated-by marker (the `# Generated by` line, or the `x-generated-by` key in `railway.json`) hands you the path for good. The one artifact outside this rule is `fastagent.release.json`: it is pure build output (the release id, the agent directory, and the model this deploy resolved), so it is rewritten unconditionally and must not be hand-edited. For a kept `.dockerignore`, preflight then asks it about the paths that matter: if it would drop the agent dir (the context ships without the agent) or would NOT exclude `fastagent/.secrets/auth.json` (the packer bakes credentials into the image), that **gates `--run`** and warns generate-only; an unexcluded `.state`/`node_modules` warns, and a `.git` exclude gets a note (kills the agent's pull/push loop). Note that dockerignore patterns are root-anchored: a bare `.secrets` line covers only the workspace root, not the agent's own `fastagent/.secrets` — use `**/.secrets/**`, then re-include the two tracked scaffolds when `.git` ships. Docker Compose builds from the workspace root through the namespaced file; the Fly runbook passes explicit flags (`fly deploy . --config fastagent/fly.toml --dockerfile fastagent/Dockerfile`); on Railway the build entry rides the `RAILWAY_DOCKERFILE_PATH` service variable (set with the machinery variables — fully scriptable), and pointing the service at `fastagent/railway.json` (Settings → Config-as-code — dashboard-only) is an *optional* enhancement: it adds the `/health` deploy gate, while Railway's default restart policy already matches the file's `ON_FAILURE`.
-- **The image initializes the whole workspace.** Only the agent's dependencies (`fastagent/package.json`) are installed at build time. Keep the deploy CLI and the agent's FastAgent dependency on the same version. Other project dependencies are installed when needed.
-- **Git collaboration follows the agent's policy**: when the workspace is a git repo, `git` is baked in and `.git` ships in the image, so the agent can `git pull` to freshen content and `commit`/`push` its work back; credentials ride `.secrets/.env` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
-- **Git is optional collaboration, not a persistence requirement.** Non-Git workspaces retain ongoing work too.
-- **Definition edits survive restarts.** Markdown is live-read each turn; tools, channels and configuration need a service restart. A new release can replace those edits. The deployed system prompt explains this boundary.
+**Git**: when the workspace is a repo, `git` is installed and `.git` ships, so the agent can pull and push;
+credentials go in `.secrets/.env` (e.g. `GH_TOKEN`) and the push policy in `persona.md`. Some host CLIs strip
+`.git` (`railway up` does), so check `git status` on the box after the first deploy. A non-git workspace that needs
+git sets `deploy: { apt: ["git"] }`. Add `.git` to `.dockerignore` for a smaller image.
 
 ## Other Docker hosts
 
-The generated `Dockerfile` runs the directory on any container platform; `fastagent.compose.yml` is the local single-machine topology. Bring your own remote Docker host by supplying a persistent volume, secrets, and—only for route channels—public ingress/webhook registration. A long-connection channel requires an always-on process instead.
-
-`config.deploy.apt` bakes extra apt packages into the image; a package needing a custom apt repo or a different base image means providing your own `Dockerfile` (`deploy` keeps an existing one). See [Configuration](configuration.md#config-file).
-
-`.git` ships in the image by default (the agent's pull/push loop needs it); for a smaller image with no git needs, add a `.git` line to the generated `.dockerignore`. The git **binary** is baked in exactly when the workspace ships a `.git`; a non-git workspace that still needs git declares `deploy: { apt: ["git"] }` in `fastagent.config.ts`.
+The generated `Dockerfile` runs on any container platform. Supply a persistent volume, the variables, and, for
+route channels, public ingress and webhook registration. A long-connection channel needs an always-on process.
 
 ## Single-machine tier
 
-Resident recipes require **one active replica** with durable storage. Multiple replicas need shared storage and coordination for sessions, channel state, and scheduled work; separate volumes split those records. The `PiSessionRecordStore` / `Lease` seams cover engine sessions (see [Embedding](embedding.md)), not every channel's state.
-
-AgentCore uses one SessionStorage workspace and one fixed runtime session for every entry point; separate conversations still use separate envelope session ids. That storage does not survive a deploy.
+Resident deployments need **one active replica** with durable storage. More replicas need shared storage and
+coordination for sessions, channel state and scheduled work. The `PiSessionRecordStore` / `Lease` seams cover
+engine sessions (see [Embedding](embedding.md)), not channel state.
 
 ## Where next
 
-- [CLI reference](cli.md) — the full `deploy` flag list.
-- [Configuration](configuration.md) — `deploy.apt` and state-root knobs.
-- [Channels](channels.md) — webhook registration and the fire-and-forget vs replay model.
+- [CLI reference](cli.md)
+- [Configuration](configuration.md)
+- [Channels](channels.md)

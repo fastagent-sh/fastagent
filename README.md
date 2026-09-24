@@ -204,9 +204,7 @@ test/    vitest suite (faux models by default) + reusable SPEC conformance
 docs/    user docs, SPEC, and maintainer design notes
 ```
 
-Single package, likely long-term; subpath exports (not sibling packages) are the module boundary.
-A `packages/` workspace split is deliberately deferred until a second published artifact with
-independent dependencies/versioning actually exists.
+One package; subpath exports are the module boundary.
 
 ## Status
 

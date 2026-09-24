@@ -109,27 +109,14 @@ type ChannelHandler = (req: Request) => Response | Promise<Response>;
 type Routes = Record<string, ChannelHandler>;
 ```
 
-Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**.
+Route keys are `"/path"` (any method) or `"METHOD /path"`, and the path is a **literal**: `:id` and `*` are
+ordinary characters. Startup refuses two keys naming the same route (`"/x"` and `"GET /x"`), a route inside a
+mounted prefix, and a path containing `?`, `#`, `.` or `..` segments. Paths are matched without percent-decoding.
+`HEAD` is answered from the `GET` route unless you define one. A path that exists under another method answers 405;
+an unknown path, 404.
 
-Dispatch is a map lookup on the literal path, so "would these two fight over a request?" is string
-equality — a fact about the keys, not a prediction about a matcher. `:id` and `*` carry no pattern
-meaning here; they are ordinary characters, so a key containing one simply never matches.
-
-Startup refuses only what would cost ANOTHER route: two keys naming the same one (`"/x"` and
-`"GET /x"`), a route inside a mounted prefix, and any path a URL rewrites (`?`/`#`, `.`/`..`) —
-that request arrives under a different path, so the key never matches AND compares as distinct,
-hiding the collision.
-
-Paths are matched as they arrive, without percent-decoding — decoding would undo the normalisation
-`URL` performs, turning `%2F..%2F` back into `/../`. `HEAD` is answered from the `GET` route without
-the content (RFC 9110); writing an explicit `HEAD` route is allowed and takes precedence.
-
-A path that exists under another method answers 405, an unknown path 404; remote clients read that
-404 as version skew rather than as a fault.
-
-A handler owning a whole path prefix (the session control plane is the one) is mounted beside the
-routes rather than spelled as a key. `createAgentService` does that wiring; a route landing inside
-such a mount is refused at assembly, because the mount would answer requests aimed at it.
+A handler owning a whole prefix (the session control plane) is mounted beside the routes; `createAgentService`
+wires it and refuses a route inside it.
 
 ## pi assembly
 
@@ -237,7 +224,7 @@ function createPiAgentFromDir(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
+The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`.
 
 ```ts
 interface FastagentConfig {
@@ -273,27 +260,21 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
 
-The Zod schema is also declared to the provider for **constrained sampling** (`strict: "prefer"`, the
-posture pi's own built-in tools take): on a model that supports it, arguments are sampled against the
-schema instead of validated after the fact, so a malformed call costs nothing to correct. A schema that
-cannot be expressed strictly, or a provider without strict mode, falls back to an ordinary function tool
-— nothing to configure either way, and nothing reports which tools fell back. If one of yours keeps
-receiving malformed arguments, check whether its schema uses a construct pi cannot express strictly:
-`z.record(...)`, a union of objects or arrays, `z.tuple(...)`, or `z.looseObject(...)`. Enums, literals,
-scalar unions, nested objects and arrays of objects are all fine. One consequence to know: a strict schema has no "absent", so a constrained
-model sends `null` for an optional field. pi drops those before your `execute` runs, but only where your own
-schema rejects `null` — so any nullable field keeps its `null`, and a `.nullable().optional()` field arrives as
-`null` where it used to be absent. If a tool distinguishes the two (patch semantics: absent means "leave it",
-`null` means "clear it"), spell the two cases out some other way.
+The Zod schema is also sent to the provider for **constrained sampling** (`strict: "prefer"`): on a model that
+supports it, arguments are sampled against the schema. A schema that cannot be expressed strictly, or a provider
+without strict mode, falls back silently to an ordinary function tool. Constructs that cannot be strict:
+`z.record(...)`, a union of objects or arrays, `z.tuple(...)`, `z.looseObject(...)`.
+
+A strict schema has no "absent", so a constrained model sends `null` for an optional field. pi drops those
+`null`s unless your schema accepts `null`, so a `.nullable().optional()` field arrives as `null`. If a tool treats
+absent and `null` differently, model the two cases another way.
 
 ### Running a tool alone in its batch
 
-A model can call several tools in one assistant message, and pi executes that batch concurrently.
-`defineTool({ ..., executionMode: "sequential" })` opts out: pi runs any batch containing this tool one
-call at a time. Reach for it when a tool's work cannot safely overlap another's — it writes a file the
-other reads, holds an exclusive resource, or drives something single-session. The default (`"parallel"`,
-inherited when the option is omitted) is right for anything that only reads or only touches its own
-state.
+A model can call several tools in one assistant message, and pi runs the batch concurrently.
+`defineTool({ ..., executionMode: "sequential" })` makes pi run any batch containing this tool one call at a time.
+Use it when a tool's work must not overlap another's (shared files, exclusive resources). The default is
+`"parallel"`.
 
 ### Declaring the secrets a tool needs
 
@@ -310,8 +291,7 @@ export default defineTool({
 });
 ```
 
-**This is how agent code gets a credential — not `process.env`.** The declaration buys two things a
-bare read cannot have:
+Read credentials this way rather than from `process.env`:
 
 - **`dev`/`start` refuse to boot**, and `deploy --run` refuses to start, while a declared name has no value,
   naming the file. Without the declaration the same mistake surfaces as a failed tool call on the deployed
@@ -321,10 +301,9 @@ bare read cannot have:
 `deploy` carries every variable in `.secrets/.env` whether or not code declares it; a declaration makes one
 required.
 
-`ctx.secrets` reads the process environment on every call, so a value rotated IN THE ENVIRONMENT
-takes effect without a restart — a value rotated in `.secrets/.env` does not, since that file is read
-once at startup. Its keys are typed from the list: a typo is a compile error. `defineChannel` and `defineRoutine` take the same
-field, and `fastagent info` prints every declared name plus the ones with no local value.
+`ctx.secrets` reads the process environment on every call; `.secrets/.env` is read once at startup. Its keys are
+typed from the list. `defineChannel` and `defineRoutine` take the same field, and `fastagent info` prints every
+declared name and flags the ones with no value.
 
 The second `execute` argument is a `ToolContext`:
 
@@ -345,17 +324,13 @@ interface ReadonlySessionManager {
 }
 ```
 
-During serving and `fastagent chat`, `sessionManager` is FastAgent's read-only adapter over the current
-conversation. It is undefined in a sessionless direct call such as `fastagent tool`. Current bindings
-ride `AsyncLocalStorage`, not definition closures, because a tool is built once and reused across turns.
-The built-in **`wake`** tool uses `sessionManager.getSessionId()` to schedule a follow-up in the same
-conversation.
+During serving and `fastagent chat`, `sessionManager` is a read-only view of the current conversation; it is
+undefined in a sessionless call such as `fastagent tool`. `getSessionId()` returns the caller's session id.
 
 ### Output budget
 
-Everything a tool returns is spent from the model's context, on every turn that keeps the result in
-view. One GitHub repository object is ~6 KB, so returning a raw `/search/repositories` page (30
-results) costs ~180 KB — roughly 45k tokens for one call.
+Everything a tool returns is spent from the model's context, on every turn that keeps the result in view. A
+raw page of 30 search results from a typical REST API can cost ~45k tokens.
 
 Return what the model needs, not what the API sent:
 
@@ -370,53 +345,28 @@ Return what the model needs, not what the API sent:
 [fastagent] result: 143910 chars ≈ 35978 tokens to the model
 ```
 
-That measures the tool result's content text, which is not what the command prints — the printed form
-is the indented `details`, so measuring the piped stdout answers a different question.
-
 Tools are plain ES modules, so they can be imported and tested without fastagent: `node --test
 test/my-tool.test.ts` on Node 22+ needs no framework and no test script.
 
 ### Deferred tools
 
-For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it:
-its schema stays out of every request (and the model's sight) until discovered. When any deferred tool
-is mounted, fastagent automatically mounts the built-in **`search_tools`** loader (an agent's own tool
-named `search_tools` wins — the author owns the concept then): the model searches by keywords, matching
-tools are activated mid-turn, and the activation is recorded in the session, so it survives fastagent's
-per-invoke session rebind for the rest of that conversation.
+For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it: its schema
+stays out of requests until discovered. When any deferred tool is mounted, the built-in **`search_tools`** loader
+is mounted too (your own tool named `search_tools` replaces it). The model searches by keyword, matching tools are
+activated mid-turn, and the activation is recorded in the session for the rest of that conversation.
 
-Costs and behavior to know:
-
-- **Discovery rides on the `description`** — a deferred tool the model never searches for effectively
-  does not exist. Write descriptions with the search in mind.
-- On models with native deferred tool loading, an activation preserves the provider's prompt-cache
-  prefix; everywhere else activation still works but may pay a cache miss. The supported-model matrix
-  is pi's (see its Dynamic Tool Loading docs) and evolves with pi releases — fastagent adds no
-  restriction of its own.
-- `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
-  loader can use; `activate` is additive, ignores unknown names, and returns ONLY the names it actually
-  activated. Report from that return value, and count your own activation cap against it: `activate` is
-  atomic, but a loader's own `active()` -> decide -> `await` -> `activate()` sequence interleaves with a
-  sibling call in the same batch, so two parallel calls can otherwise both claim one activation (and each
-  spend a full cap). Declare `executionMode: "sequential"` to serialize the batch instead.
-  Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
-  the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
-  `deferred: true` type-checks).
-- At L1 (`createPiAgent`) the `instructions` are verbatim by contract — fastagent does not inject the
-  discovery note the directory path's base prompt carries. When passing deferred tools at L1, tell the
-  model about `search_tools` in your own instructions (or rely on the loader's description alone,
-  which is weaker).
-- An activation is persisted as a dedicated DELTA entry in the session ("this conversation activated
-  these deferred tools"): on reopen the active set is rebuilt as the initial set (current non-deferred
-  tools) plus the accumulated deltas. A tool you add to the agent later joins existing
-  conversations, and a tool you later flip to `deferred` drops out of sessions that never discovered
-  it.
-- **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
-  the session starts with deferred tools inactive, the same `search_tools` loader discovers and
-  activates them (bridged to chat's resident session instead of the served one), and the prompt is
-  identical. One divergence: chat activations do not survive `/new`/`/resume` — pi's chat session
-  does not record them, so a resumed conversation re-discovers via `search_tools` (on the serving
-  path activations persist in the session for the conversation's life).
+- **Discovery searches the `description`.** Write descriptions with the search in mind.
+- On models with native deferred loading, activation keeps the provider's prompt-cache prefix; elsewhere it may
+  cost a cache miss. The supported models are pi's (see its Dynamic Tool Loading docs).
+- `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the bridge for a custom loader.
+  `activate` is additive, ignores unknown names, and returns only the names it actually activated; count against
+  that return value. A loader that awaits between `active()` and `activate()` should declare
+  `executionMode: "sequential"`. `ToolActivation` and `FastagentTool` (`AgentTool` + `deferred`) are exported.
+- `createPiAgent` uses `instructions` verbatim, so mention `search_tools` there yourself when passing deferred
+  tools.
+- On reopen, the active set is today's non-deferred tools plus the conversation's recorded activations: a tool
+  added later joins existing conversations, and one made `deferred` drops out of those that never discovered it.
+- `fastagent chat` behaves the same, except that activations do not survive `/new` or `/resume`.
 
 ## Channel authoring
 
@@ -444,11 +394,9 @@ is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
 
-Enabled files under `tools/`, `channels/` and `routines/` are declarations, so a run that cannot load one refuses
-to start and names every file that failed: an agent short a tool or a cron is not the agent its author described,
-and a service that announced itself ready leaves nothing to notice that by. An absent directory is valid, and
-`<name>.ts.disabled` is how a file is turned off on purpose. Inspection (`fastagent info`, `fastagent tool`) is the
-exception: it loads what it can and reports the rest.
+A serve refuses to start if an enabled file under `tools/`, `channels/` or `routines/` cannot load, and names
+every file that failed. An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
+report the rest.
 
 Channel adapters can also use:
 
@@ -462,11 +410,8 @@ See [Channel development](channel-development.md).
 
 ## Routine authoring
 
-A **routine** is the unit of work, and the only named one: a prompt the definition owns, addressed by
-name. `cron` is a *field* of it, not a second concept — with one, a clock fires it; without one, its
-name is the only way in (`POST /run`, `fastagent routine run`). That is why this is not called a
-"schedule": the file used to be named for the time it carried, and a file carrying no time made the
-name a lie.
+A **routine** is a prompt the definition owns, addressed by name. With a `cron`, the clock fires it; without one,
+it runs only by name (`POST /run`, `fastagent routine run`).
 
 ```ts
 interface Routine {
@@ -484,10 +429,8 @@ function defineRoutine<const S extends readonly string[]>(routine: {
 }): Routine;
 ```
 
-An agent declares routines by dropping `routines/<name>.ts`, mirroring `tools/`/`channels/`; the
-filename becomes the routine name (it also becomes a directory name under
-`<stateRoot>/schedule/claims/`, so `.`, `..` and path separators are refused — everything else a
-filename may contain is fine). Each file default-exports `defineRoutine({ prompt, cron? })`.
+Each `routines/<name>.ts` default-exports `defineRoutine(...)`; the filename is the routine name (`.`, `..` and
+path separators are refused).
 
 ```ts
 // routines/daily-digest.ts        → routine "daily-digest", fired by the clock and callable by name
@@ -506,41 +449,24 @@ export default defineRoutine({
 export default defineRoutine({ prompt: "Re-read the docs and refresh your notes." });
 ```
 
-**A routine keeps one continuing conversation.** All of its turns run in `routine:<name>`, so it
-remembers its previous runs and knows nothing about any user's chat. That is also what separates it
-from a **wake-up**: the agent can schedule work for itself (the `wake` tool), and conceptually that is
-the same idea — work to be done later — but every operational difference follows from one root. A
-routine is written in the *definition* (versioned, reviewed, shipped with the image, named by its
-author, reachable by name); a wake-up is written into the *state* by a running agent (minted id,
-cancellable, aimed back at the conversation it came from). Code and data. `fastagent routine list` reads
-both — the wake-ups prefixed `wake` — but only the agent cancels one, with `unwake`.
+**A routine keeps one continuing conversation**, `routine:<name>`: it remembers its previous runs and knows nothing
+about users' chats. A **wake-up** (the `wake` tool) is work the agent schedules for itself at runtime, stored in
+state and fired back into the conversation that made it; only the agent cancels one, with `unwake`.
+`fastagent routine list` shows both.
 
-**The delivery target belongs in `secrets`, not in the prompt text.** A chat/channel id is
-environment-specific, so declare it and build the prompt from it: the builder runs once at load, its
-keys are typed from the list, and `dev`/`start` refuse to boot while the name is unset — instead of a
-hardcoded id travelling to the wrong workspace.
+**Put the delivery target in `secrets`.** A chat or channel id differs per environment: declare it and build the
+prompt from it. The builder runs once at load, and `dev`/`start` refuse to boot while the name is unset.
 
-The scheduler is a time-trigger (the N axis, clock form): on each cron instant it invokes the agent
-with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:
+On each cron instant the scheduler invokes the agent with `prompt` in `routine:<name>`. It:
 
-- **carries no `session` field** — a session id is runtime conversational context, not a build-time
-  value. It derives a stable per-schedule session (`routine:<name>`), so a
-  schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
-  storage, like the telegram channel deriving a session from `chat.id`);
-- **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome (and the
-  failure detail when there is one). What the turn SAID is not logged and not copied into the fire's record: it is
-  in the session above, persisted under `<stateRoot>/sessions/` as a journal file.
-  `fastagent routine history` prints the fired slots and their outcomes;
-- **catches up an overdue run once** — each fired slot leaves a claim under `<stateRoot>/schedule/claims/<name>/`,
-  created with `O_EXCL` before the invoke: creating it IS the decision, so a slot fires at most once even with
-  several schedulers over one state root (two `start`s, a restart overlapping its predecessor, an external clock
-  racing the resident one). The newest claim also says when the schedule last fired, which is where a run missed
-  while the process was down resumes — once on the next start, not per missed slot. A routine that has never
-  fired has no claim to resume from, so its first armed slot is the next one, not the one it was down for.
-  A slot older than the newest claim is refused as a stale replay.
+- **delivers nothing** — the agent's tools send output; the scheduler logs the outcome, and failure details. What
+  the turn said is in the session under `<stateRoot>/sessions/`.
+- **fires each slot at most once** — a claim under `<stateRoot>/schedule/claims/<name>/` is created before the
+  invoke, even with several schedulers over one state root.
+- **catches up one overdue run** after downtime, not one per missed slot. A routine that has never fired starts
+  at its next slot. A slot older than the newest claim is refused as a stale replay.
 
-The scheduler is started by
-the serve path (`dev`/`start`); `fastagent routine run <name>` runs one schedule's turn immediately for authoring.
+The scheduler runs while `dev`/`start` serves; `fastagent routine run <name>` runs one turn immediately.
 
 ### `GET /routines`
 
@@ -551,99 +477,60 @@ curl -sS https://your-agent/routines
 # [{"name":"daily-digest","cron":"0 9 * * *","tz":"America/New_York"},{"name":"reindex"}]
 ```
 
-**Names and schedules, never prompts.** What a routine *says* is the definition's content; handing it
-to an unauthenticated caller would publish the agent's behaviour, which is the one thing keeping the
-prompt out of the request body was for. `cron` is included because *"will this run on its own, or is my
-clock the only one?"* is a caller's question — its absence means by name only.
-
-Mounted exactly where `POST /run` is (same table, same `http.run`): it is the catalogue *of* that route,
-so listing names nobody can use would be a catalogue of nothing. The names were already public — the
-404 below lists them, deliberately, so an operator can tell a typo from a stale caller — so the only
-thing this adds is not having to guess wrong first.
+Names and schedules only, never prompts. A missing `cron` means the routine runs by name only. Served exactly
+where `POST /run` is.
 
 ### `POST /run`
 
-A serve that declares any routine also answers `POST /run` — **an API that runs one declared unit
-of work by name**:
+A serve that declares any routine also answers `POST /run`, which runs one declared routine by name:
 
 ```bash
 curl -sS -X POST https://your-agent/run \
   -H 'content-type: application/json' -d '{"name":"daily-digest"}'
 ```
 
-**It is not a time trigger, and that distinction is the design.** Occurrence semantics — a slot, a
-claim, a fire history, an overlap policy — exist exactly where fastagent owns the clock:
+The body names the routine and nothing else; the prompt stays in `routines/<name>.ts`.
 
-| clock | who owns it | what a run gets |
+This route is an API, not a clock: it records no slot and no fire history.
+
+| Clock | Owner | What a run gets |
 |---|---|---|
-| the resident loop (`dev` / `start`) | us, in-process | occurrence + claim / settle / history |
-| AgentCore | us — `deploy` writes the EventBridge rule, injects `<aws.scheduler.scheduled-time>`, and the forwarder relays it behind an ingress secret | occurrence, end to end |
-| anything else (a platform cron, CI, a script, a button) | **you** | this API |
+| the resident loop (`dev` / `start`) | fastagent | slot claim, settlement, history |
+| AgentCore | fastagent (`deploy` writes EventBridge rules) | slot claim, settlement, history |
+| anything else (platform cron, CI, a script) | you | this API |
 
-The first two know which occurrence a run is for because they produced it. This route cannot be told,
-and pretending otherwise was measurably worse than admitting it: an instant on the wire is a number
-the receiver has to police, and each way it could be wrong bought its own defence — one dated ahead
-poisoned the claim gate permanently, one off the grid minted a claim no occurrence would ever match,
-an old one replayed history a turn at a time. A platform cron drifting by a few minutes (Railway
-documents exactly that) then lost an occurrence outright.
+There is no idempotency key: retrying may re-run work whose side effects already landed, so retry only work
+that tolerates running twice.
 
-**The body names WHAT to run and nothing else.** The prompt stays in `routines/<name>.ts`, which is
-what makes this different from driving `POST /invoke` from a cron line — the caller there brings its
-own text, and with it the agent's behaviour. The name rides in the body rather than the path because a
-declared name is a filename (`每日简报`, `my schedule` are both legal) and a path segment would mean
-percent-encoding it.
+**Exposure**: unauthenticated, with the agent's full tool authority, like `POST /invoke`. `http.invoke: false`
+withholds both; `http.run: true` keeps this one.
 
-**There is no idempotency key, and the reply is why.** One was built here and removed: it deduplicated
-the *call*, not the *work*. A turn that sent one message and then died would answer a keyed retry with
-"already ran" — safety exactly where it is absent, which is the same reason [a failed fire is not
-retried](#post-run). It was also a bounded window, so the guarantee came with an asterisk, and
-`POST /invoke` offers none of it on the same port under the same exposure. **Retry policy is yours,
-because only you know whether your work tolerates running twice** — and what makes a retry safe is
-idempotent work, which only the author can arrange.
+**Replies:**
 
-What the reply gives you instead is *where to look*: `session` is the session the turn ran in, and its
-journal is where that turn's output actually is (`fastagent routine history <name>`, or
-`/control/sessions/<id>/events` where the observation plane is served). An id minted per call would
-appear nowhere else.
+| Reply | Meaning |
+|---|---|
+| `200 { name, session, ran: true, failed?, ms }` | The routine ran. `failed` means the turn did not finish; its side effects may have landed. |
+| `200 { name, session, ran: false, reason, ms }` | The previous run of this routine is still going; try later. |
+| `400` | Malformed body. |
+| `404` | Unknown name; the reply lists the available ones. |
 
-**It is exactly as exposed as `POST /invoke`**: unauthenticated, with the agent's full tool authority.
-`http.invoke: false` withholds both; `http.run: true` keeps this one for a port whose only other
-ingress is the channels' signature checks. A gateway in front is the answer to anything more. The
-framework authenticates nothing — [design §14](design/session-control.md).
+`session` is where the output is (`fastagent routine history <name>`, or `/control/sessions/<id>/events`).
 
-The route follows `http.invoke`: turning the anonymous turn endpoint off takes this one with it, since
-that is what `http.invoke: false` means.
+**Keeping the clock elsewhere.** A scaled-to-zero deployment needs an external clock:
+[Fly](https://fly.io/docs/blueprints/task-scheduling/) has Cron Manager, supercronic or scheduled Machines; Railway
+has a cron service (5-minute floor) that can call this route over the private network, which also wakes a slept
+service. On AgentCore `deploy` registers the rules, and `http.run` is inert; run a routine by name there with
+`aws bedrock-agentcore invoke-agent-runtime` and `{"kind":"routine-run","name":"reindex"}`.
 
-**Replies.** `200 { name, session, ran: true, failed?, ms }` — the call was accepted and the work ran;
-`failed` means the turn itself did not finish, and retrying would re-run a turn whose side effects may
-already have landed. `200 { name, session, ran: false, reason, ms }` — the previous turn of this work
-is still running and holds its session; try later. `400` is a malformed body; `404` names the work this
-deployment does have, so a stale caller is distinguishable from a typo (the name you sent is clipped to
-64 characters in the reply, and nothing else you sent is echoed).
+**Self-scheduling.** Every serve (`dev`/`start`, not one-shot `invoke`/`routine run`) mounts the built-in
+**`wake`** and **`unwake`** tools:
 
-**Where the time should live instead.** A scaled-to-zero deployment needs its clock outside the
-process, and every host has its own: [Fly](https://fly.io/docs/blueprints/task-scheduling/) offers
-Cron Manager, supercronic or scheduled Machines; Railway offers a **cron service** (Settings → Cron
-Schedule, 5-minute floor) which can call this route over the private network, and traffic from another
-service in the project is what wakes a slept one. On AgentCore none of this applies — `deploy` already
-registered the rules, and `http.run` is inert there and says so at startup. **By name is still
-reachable there**, through the IAM-gated `routine-run` envelope rather than a public route: that host
-publishes none of ours, so `aws bedrock-agentcore invoke-agent-runtime` with
-`{"kind":"routine-run","name":"reindex"}` is the door. It is the same contract as `POST /run` and a
-stricter one — AWS has already said who the caller is.
-
-**Self-scheduling.** Every serve (`dev`/`start`, where the poller runs — not the
-one-shot `invoke`/`routine run`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
-records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
-`<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes
-the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR
-self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session through `ToolContext.sessionManager`; guardrails cap the minimum delay,
-the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own with `unwake({ id })`, and that is the
-only way: it is session-scoped, and there is no operator command beside it. A wake-up fires only while a
-serve is running, and a running serve is one whose session can be spoken to (`POST /invoke`, the control
-plane's `follow_up`, or the chat thread it lives in) — so "the alarm is loose" and "the agent is
-unreachable" cannot both be true. The last resort is editing `<stateRoot>/schedule/wakeups.json`, which
-needs no command.
+- `wake({ in: "30m", prompt })` records a one-shot wake-up; `wake({ cron: "0 9 * * *", tz?, prompt })` a
+  recurring one. Wake-ups persist under `<stateRoot>/schedule/` and fire back into the same session, with the
+  prompt marked as the agent's own scheduled turn.
+- Limits: a minimum delay, at least 10 minutes between recurring fires, and a per-session pending cap.
+- `unwake({ id })` cancels one, from the session that made it. There is no operator command; as a last resort,
+  edit `<stateRoot>/schedule/wakeups.json`.
 
 ## Config and models
 
@@ -662,22 +549,14 @@ const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
-`fastagent login` writes the **project-level** `<agent dir>/.secrets/auth.json` by default; `GLOBAL_AUTH_PATH`
-is `createPiModels`'s default when no `authPath` is passed, and the explicit one-file share target
-(`FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`). Note the two defaults differ: an embedder calling
-`createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
-to read the project's credential (the `createPiAgentFrom*` openers already do).
+`fastagent login` writes `<agent dir>/.secrets/auth.json` by default. `createPiModels()` with no `authPath` reads
+`GLOBAL_AUTH_PATH` instead; pass `authPath` to read a project's file (the `createPiAgentFrom*` openers do).
 
-**The file is fastagent's; the directory is yours.** Every credential write puts mode `0600` on
-`auth.json` and creates the directory it lands in if needed, without setting its mode. A directory
-others can read leaks the FILENAMES (which providers are configured), not the credentials — `chmod
-700` it yourself if that matters.
+Credential writes set `auth.json` to `0600` and create its directory if needed, without setting the directory's
+mode.
 
-Provider injection:
-
-`Provider`, `ProviderAuth` and `Model` are re-exported as TYPES because they appear in our options —
-a caller must be able to name them. The factory that builds one is pi's own: import `createProvider`
-from `@earendil-works/pi-ai` directly, so its API answers to its own package.
+`Provider`, `ProviderAuth` and `Model` are re-exported as types. Build a provider with `createProvider` from
+`@earendil-works/pi-ai`.
 
 ## Sessions and leases
 
@@ -702,16 +581,12 @@ function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSession
 a relative path means "inside the workspace this store serves". `cwd` also scopes lookups: two stores
 sharing one `dir` but serving different workspaces never open each other's sessions.
 
-Session ids are the Caller's, and arbitrary — a telegram group is `-1001234567890`, a feishu thread
-carries `:` and `/`. pi accepts none of those as a record name, so the store encodes them
-injectively (`-1001234567890` becomes `s-1001234567890` on disk, readable enough to tell which room a
-file belongs to). A record is published complete: pi buffers a new session until its first assistant
-message, which would otherwise lose the user's question to a crash AND make open-or-create
-non-idempotent.
+Session ids are the caller's and may contain any character (`-1001234567890`, `feishu:oc_x:omt_y`). The store
+encodes them into file names (`-1001234567890` → `s-1001234567890`). A new record is written as soon as it is
+created, so a crash before the first answer does not lose the question.
 
-Both backends inherit: the durable one forks the parent's record, the in-memory one copies its path
-entry by entry. Inheritance is a property of the contract, not of the medium — a thread must not
-forget its room because the store happens to be in memory.
+Both backends support `SessionInheritance`: a new session named with a `parentSession` starts from that session's
+history.
 
 Lease:
 
@@ -791,51 +666,32 @@ await s1.followUp({ text: "then summarize" });  // FIFO queue
 await s1.abort();                                // invoke ends failed{code:"aborted"}, run_settled{aborted}
 ```
 
-With steering/follow-ups the invoke stream terminates at the run's SETTLE (all queued continuations
-drained) — for consumers that never act on a run, a run equals a single turn, byte-identical
-behavior. Actions on an idle session reject with `no_active_run` before acceptance; one that reached
-a run but could not take effect (the run raced to settlement) rejects with `run_command_failed`. Both
-are `retryable: false` — the same call fails again; consult `state()` before trying again. The race
-window applies to all three symmetrically: an
-accepted `abort` can still settle `completed`, and an accepted `steer`/`follow_up` can settle
-without its prompt being consumed, when the run finishes inside the window — acceptance is not
-outcome; the settlement is the truth.
+With steering or follow-ups, the invoke stream ends when the run settles (all queued continuations done). Actions
+on an idle session reject with `no_active_run`; an action that reached a run that was already settling rejects
+with `run_command_failed`. Both are `retryable: false`; check `state()` first. An accepted action can still lose
+the race: an `abort` may settle `completed`, and a `steer`/`followUp` may settle unconsumed. The settlement is what
+happened.
 
-`commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
-the definition exposes, plus the skills and prompt templates the machine this process runs on lends it
-(core §5). `source` is how each is invoked: `skill` or `prompt`. It is a LISTING, not a dispatch surface: to RUN one, send its engine spelling as ordinary
-prompt text and let the engine expand it — for the pi engine a skill is `/skill:<name> [args]`, which
-the server turns into the skill's body with the arguments appended, and a prompt template is the bare
-`/<name>`.
-Do not expand it client-side; the files belong to the agent, which may be on another machine. An
-unknown name goes through as plain text, silently, so check the name against this list if a typo should
-be visible — a skill whose file became unreadable is off this list too (the loader warns `read_failed`
-and drops it), so the one comparison covers both. The remaining case is a list that outlived its file
-(a steer mid-run, a definition replaced under the container): the prompt goes through unexpanded and
-the server logs `skill_expansion failed`. For a data-plane client the list is COMPLETE — skills are the
-only thing the engine expands, since the definition's `extensions/` (pi's command registration) are
-not run when serving and prompt templates are off — so a `/` menu binds to it and nothing else. (A
-chat channel's `/stop` is the channel's, intercepted before the agent, not a name from here.) It is
-read live and uncached — the definition's `skills/` is re-read per call (the ②
-context walk the full load does is skipped: this answers at composer-open frequency) — so a skill
-added while serving appears at once; `[]` means the agent exposes none. It is also the one read that can REJECT:
-a definition the server cannot read at all is a deployment fault with no truthful degraded value, and
-the rejection carries no stable code (remotely: an uncoded non-2xx → `ControlRequestError`). Wrap the
-call, and expect no `error.code` to branch on.
+`commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills and
+the machine's skills and prompt templates. `source` is `skill` or `prompt`. It is a listing only. To run one, send
+its spelling as prompt text and the server expands it: a skill is `/skill:<name> [args]`, a prompt template is
+`/<name>`. Do not expand names client-side.
 
-`sessions.list()` is the deployment's conversation list — `{ session, name?, createdAt, updatedAt,
-messageCount, preview? }` per record, with `session` being the id the CALLER minted (a channel's
-thread key, not a storage name). It is DEPLOYMENT-level: it answers for every session at once, so a
-multi-tenant facade in front of one deployment must not expose it (it does not need to — it already
-holds its own user→sessions mapping). It is the one read besides `commands()` that can REJECT, and
-unlike that one it carries a stable code: a store that cannot be enumerated answers
-`sessions_unavailable` (remotely: 503 with the code on `ControlRequestError.code`), because `[]`
-already means "no sessions".
+- An unknown name goes through as plain text, so check a name against this list if a typo should be visible. A
+  skill whose file cannot be read is dropped from the list (the loader warns `read_failed`).
+- If a file disappears after the list was read (a steer mid-run, a replaced definition), the prompt goes through
+  unexpanded and the server logs `skill_expansion failed`.
+- The list is complete for a served agent: `extensions/` do not run when serving. A chat channel's `/stop` is
+  handled by the channel, not listed here.
+- It is re-read on every call. `[]` means the agent exposes none. It rejects (with no stable code) when the
+  definition cannot be read at all.
 
-Building that list reads and parses EVERY record, every call — there is no cache (one was tried and
-deleted: it missed on every poll of a busy deployment, since each append moves the file). Measured at
-20 ms for 100 sessions / 8 MB, and it yields to the event loop between records, so a timer refresh is
-fine at human intervals. Drive the OPEN conversation from `events()` rather than by re-listing.
+`sessions.list()` returns `{ session, name?, createdAt, updatedAt, messageCount, preview? }` for every session in
+the deployment, keyed by the caller's id. Do not expose it through a multi-tenant facade. A store that cannot be
+enumerated rejects with `sessions_unavailable` (remotely: 503, code on `ControlRequestError.code`).
+
+`list()` reads every record on each call (about 20 ms for 100 sessions / 8 MB), so poll it at human intervals and
+follow an open conversation with `events()`.
 
 Writes run between runs, under the SAME lease (`session_busy` while a run is active, retryable at
 idle). A session's PROPERTIES are one patch — `update` validates every field before writing any, so a
@@ -865,10 +721,8 @@ if (!r.ok && r.error.code === "partial_update") {
 }
 ```
 
-`retryable` is what answers whether a call may be re-sent; `ok: false` on its own does not, and this
-is the code it does not hold for. A field this serve does not know rejects
-`unsupported_capability` — the same code on both planes, naming the field, so a newer client talking
-to an older serve knows which one to drop; a wrong value type is `invalid_command`.
+Use `retryable` to decide whether to re-send, not `ok` alone. An unknown field rejects `unsupported_capability`,
+naming it; a wrong value type rejects `invalid_command`.
 
 `leafEntryId` is the write verb for the tree `entries()` publishes: it moves the session's active
 leaf, so the next turn hangs off it instead of the old one — which is also how sibling branches come
@@ -885,21 +739,15 @@ await control.sessions.fork({ from: "s1", at: entryId, into: "s1-b" }); // copy 
 await s1.delete();                                                       // irreversible
 ```
 
-`fork` names its target: `into` is a Caller id like any other, so the plane invents nothing. It is
-IDEMPOTENT — the new record carries where it came from, so repeating the same fork answers `ok: true`
-and writes nothing (a retry after a lost response does not produce a second record), while the same
-id holding a different history rejects `invalid_command`. Cloning is `fork` at the session's own
-`leafEntryId`. There is no `create` — `invoke` is what brings a session into being. `delete` ends the
-session's live `events()` streams. Nothing in this plane is authenticated — see below.
+`fork` copies history into the session `into`. It is idempotent: repeating the same fork answers `ok: true` and
+writes nothing; `into` already holding a different history rejects `invalid_command`. Clone a session by forking
+at its own `leafEntryId`. There is no `create`: `invoke` creates sessions. `delete` ends the session's live
+`events()` streams.
 
-Overrides persist in the session record and every later turn's fresh session binding applies them on any
-serving path, channels included. `resolveSessionSettings` clamps both recorded thinking levels and
-configured defaults to the current model's capabilities using pi's own clamp. Defaults apply when the
-active path has no valid thinking override, including after navigation removes one. The journal keeps
-the recorded preference, which returns when the session moves back to a capable model. `state()`,
-`state_changed`, and execution use the same resolved level, including after a deployment changes the
-configured model. The clamp takes the lowest supported level at or above the requested one and falls
-back downward only if nothing above exists; filling a gap can increase reasoning cost.
+Overrides persist in the session and apply to every later turn, channels included. A thinking level the current
+model does not support is clamped to the lowest supported level at or above it (below only if none is above), which
+can raise reasoning cost; the recorded preference returns when the session moves back to a capable model.
+`state()`, `state_changed` and execution all report the same resolved level.
 
 Writes require an existing session (`no_such_session` otherwise): sessions are created by `invoke` or
 copied by `fork`, never minted by an update. Invalid payloads reject `invalid_command` before acceptance.
@@ -916,19 +764,16 @@ For agent assembly the store lives inside the opener, so ask the opener to wire 
 const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
 ```
 
-A serve (`serving: true`, which `createAgentService` passes) gets a hub without asking, because a chat
-channel's stop command aborts the running turn through it — that action needs no boundary. What
-`sessionControl: true` adds is the write side and, in a service, the `/control/*` routes.
+A serve (`serving: true`, which `createAgentService` passes) always gets a hub, because chat channels abort a turn
+through it. `sessionControl: true` adds the write side and, in a service, the `/control/*` routes.
 
 ### Remote (HTTP + SSE)
 
 The same contract over the wire — for a Web panel, a desktop app, or any other remote client. Server
 side, set `sessionControl: true` and dev/start mount the routes.
 
-**fastagent authenticates nothing.** Not `/invoke`, not `/control/*`. Authentication is the
-deployment's: a gateway, an IdP-backed proxy, a private network, AgentCore's IAM, or — when you embed
-the handler — your own middleware in front of it. A port that reaches the internet with no such layer
-is a public remote control for your agent.
+**fastagent authenticates nothing**, `/invoke` and `/control/*` included. Put a gateway, an authenticating proxy,
+a private network, or your own middleware in front; without one, a public port is a public remote control.
 
 ```ts
 import { createAgentService } from "@fastagent-sh/fastagent";
@@ -981,19 +826,11 @@ GET    /routines                           what this agent will run by name
 POST   /run                                {name} — run one of them
 ```
 
-The data plane is a root verb endpoint, not part of this prefix: `/control/*` is REST over session
-resources, `POST /invoke` is the RPC every LLM API of this shape uses (the session rides in the body
-because a Caller-minted id may contain `:` and `/`).
-
 `{id}` is percent-encoded, so a Telegram group is `/control/sessions/tg%3A-1001234567890` — session
 ids are opaque Caller strings and may contain `:` and `/`.
 
-The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
-gap — and any mid-stream transport failure, a server restart included — throws from the events
-iterator so the consumer's failure handling owns it (only the consumer's own detach reads as a
-clean end); recovery is the standard reconnect steps. Exposing the port beyond loopback exposes an
-unauthenticated remote-control surface — put real authentication and authorization in front of it
-([design §14](design/session-control.md)).
+The client consumes the transport envelope (`epoch`/`seq`): a sequence gap or a mid-stream failure, a server
+restart included, throws from the events iterator; recover with the reconnect steps above.
 
 ## Subpath exports
 
@@ -1007,6 +844,5 @@ import { feishuChannel, feishuTransport, type FeishuTransport } from "@fastagent
 import { larkChannel, larkTransport, type LarkTransport } from "@fastagent-sh/fastagent/lark";
 ```
 
-`/core` loads no third-party package at all, which is what makes it the right dependency for a
-channel package or a second engine. The root entry remains the supported all-in-one. See
+`/core` loads no third-party package, so a channel package can depend on it. The root entry exports everything. See
 [Telegram channel](telegram.md), [Slack channel](slack.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

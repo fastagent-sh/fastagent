@@ -39,9 +39,10 @@ Precedence:
 
 The selected provider has no credentials.
 
-Most common cause: you ran `fastagent login` **from a different directory**. Login is project-level —
-it writes `<agent dir>/.secrets/auth.json`, and there is no fallback to the global file. Run it inside the
-agent, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`.
+Most common cause: you ran `fastagent login` in a different agent. Login writes `<agent dir>/.secrets/auth.json`;
+an agent also reads `~/.fastagent/.secrets/auth.json` (written by `fastagent login -g`) for providers its own file
+lacks, but not another project's file. An explicit `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` disables that
+fallback.
 
 Options:
 
@@ -91,15 +92,12 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
-  with no restart (and no watcher involvement).
-- **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`) restart the
-  dev worker — a new process is the only way to drop the ESM module cache.
+- **`persona.md`, `AGENTS.md`, and `skills/`** are re-read every turn.
+- **Code inputs** (`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
+  restart the dev worker.
 
-Nothing else is watched: files the agent itself writes into the workspace (its work product) never
-trigger a restart. Helper code imported from outside `tools/`/`channels/` is out of watch scope —
-keep it under `tools/`, or restart manually. (`fastagent chat` is a startup snapshot — restart it
-to pick up any edit.)
+Nothing else is watched, including files the agent writes and helper code imported from outside those
+directories; restart manually for those. `fastagent chat` reads everything once at startup.
 
 If the worker stopped after a broken code edit, save another change after fixing the error. The supervisor should retry.
 
@@ -115,17 +113,14 @@ By default, machine state (sessions, channel state, schedule state) lives under 
 <secrets dir>   # default <agent dir>/.secrets
 ```
 
-A redeploy that replaces the agent wipes both. Point each at durable storage (the generated
-deploy targets set both):
+A redeploy that replaces the agent wipes both. Point each at durable storage (generated deployments do):
 
 ```bash
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
-Sessions have no separate knob — moving them alone was never enough for a channel-backed deployment
-(Telegram's durable turn state lives under the same state root), so the state root moves all of it.
-Moving only the state root still leaves a rotated `auth.json` in the agent dir — set
-`FASTAGENT_SECRETS_DIR` too.
+Sessions live under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent
+dir.
 
 ## `session busy`
 
@@ -140,10 +135,8 @@ Fixes depend on the channel:
 
 ## Tool, channel or schedule failed to load
 
-An enabled file under `tools/`, `channels/` or `routines/` is a declaration of what this agent has. If
-it cannot import, validate its required environment, or return a valid export, `dev` / `start` fails
-naming every file that failed, instead of running an agent short a tool, dropping an endpoint back to
-`/invoke`, or reporting itself ready with a cron that will never fire.
+If an enabled file under `tools/`, `channels/` or `routines/` cannot import, is missing a declared secret, or has
+an invalid export, `dev` / `start` fails and names every such file.
 
 Fix the reported files and environment. To intentionally disable one without deleting it, rename it so
 it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
@@ -152,8 +145,7 @@ it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
 mv channels/telegram.ts channels/telegram.ts.disabled
 ```
 
-`fastagent info` is the exception: it loads what it can and reports the rest, so it still works on a
-definition that cannot start.
+`fastagent info` loads what it can and reports the rest.
 
 ## Webhook not receiving events locally
 
@@ -224,14 +216,12 @@ Telegram documents/audio/video and Slack files are downloaded under:
 <state root>/channels/slack/files/c-<channel>/
 ```
 
-The directory is `c-` followed by the URL-encoded conversation id, so an id carrying `/` or `:`
-(a Feishu thread, a custom route's own id) still names one directory: `oc_x:thread/1` is stored as
-`c-oc_x%3Athread%2F1`. The full path is appended to the prompt. Make sure the agent has filesystem tools enabled.
+The directory is `c-` plus the URL-encoded conversation id (`oc_x:thread/1` → `c-oc_x%3Athread%2F1`). The full
+path is appended to the prompt.
 
-These files are kept across restarts and never pruned by FastAgent, so an ENOENT here means the state
-root moved (check `FASTAGENT_STATE_DIR` and, on a deployed box, that the volume is mounted) or something
-outside FastAgent removed them. The flip side is that the directory grows with every inbound file: it is
-yours to size and prune.
+FastAgent never prunes these files, so an ENOENT means the state root moved (check `FASTAGENT_STATE_DIR`, and that
+the volume is mounted) or something else removed them. The directory grows with every inbound file; size and prune
+it yourself.
 
 ## Feishu URL verification fails
 
@@ -286,14 +276,10 @@ A broken `routines/<name>.ts` file is reported by `fastagent info` before it eve
 
 ## Deployed agent crash-loops with `missing model`
 
-`deploy` resolves the model in **the environment being deployed**, not in yours. That environment is
-declared by `.secrets/.env`, so its `FASTAGENT_MODEL` is recorded in the release manifest
-(`fastagent.release.json`), with `model` in `fastagent.config.ts` as the fallback (the config file ships
-too). A `FASTAGENT_MODEL` exported in your shell belongs to this machine's environment and never
-reaches the box, and `deploy` has no `--model` flag. Set a source and redeploy — `deploy` prints the
-effective model and where it read it. Note the manifest's value outranks the deployed box's own
-`.secrets/.env`, so switching models means editing the source here and redeploying, not editing the
-file on the box. See [Deploy](deploy.md).
+`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/.env`, else `model` in `fastagent.config.ts`. A
+`FASTAGENT_MODEL` exported in your shell is not read, and `deploy` has no `--model` flag. Set one of the two and
+redeploy; `deploy` prints the effective model and its source. To switch models, change it here and redeploy. See
+[Deploy](deploy.md).
 
 ## Webhooks stop working after a tunnel restart
 
@@ -310,14 +296,11 @@ FastAgent CLI commands install proxy-aware fetch handling. Set standard proxy en
 HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-Then retry `fastagent login`, `fastagent dev`, or `fastagent start`. The variables may also live in the agent's
-`.secrets/.env` — every command reads it before deciding where its requests go, so a tool's `fetch`, a channel's
-app-creation flow and a skill download all follow the same proxy.
+Then retry. The variables can also live in the agent's `.secrets/.env`; every command reads it before making
+requests.
 
-Loopback (`localhost`, `127.0.0.1`, `::1`) always stays direct — it is added to whatever `NO_PROXY` you set, so a proxy
-variable does not break local health probes, a control-plane client, or an `ssh -L`
-forward. A LAN address is not loopback: if you run `fastagent dev --bind 192.168.1.5`, a client that dials that address
-sends it through the proxy — put it in `NO_PROXY` yourself.
+Loopback (`localhost`, `127.0.0.1`, `::1`) is always added to `NO_PROXY`. A LAN address is not: after
+`fastagent dev --bind 192.168.1.5`, add that address to `NO_PROXY` yourself.
 
 ## Need a machine-readable report
 

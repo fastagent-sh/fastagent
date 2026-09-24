@@ -67,8 +67,8 @@ one subscription mode at a time. To migrate later, change the channel factory an
 together, then publish a version; changing only one side makes the bot deaf. Use separate apps when dev
 and production intentionally use different modes.
 
-Onboarding diverges by cloud on purpose: Feishu supports CLI app creation (scan-to-create), while Lark's
-bound confirmation flow is broken and therefore uses the unbound launcher plus guided credential input.
+Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
+guided credential input, because its bound confirmation flow does not work.
 Within either cloud, ingress determines the remaining work. WebSocket's runtime credential set stops at
 the validated/persisted App ID/Secret pair; onboarding continues through group-permission guidance and
 opens Events & Callbacks so the user can select long connection and publish.
@@ -95,9 +95,8 @@ device-authorization grant) as its default behavior. The CLI opens a one-time co
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1`. Onboarding requests
-`application:application:patch` for every app it creates, whichever ingress you pick: only webhook uses
-it on day one, but a WebSocket app that later moves to webhook cannot acquire it in passing, because
-changing mode is a migration the CLI refuses to perform. The CLI immediately persists App ID/Secret to
+`application:application:patch` for every app it creates, whichever ingress you pick, so the app can move to
+webhook later. The CLI immediately persists App ID/Secret to
 `.secrets/.env` before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
@@ -192,7 +191,7 @@ therefore import the module and inspect its function/object shape before secrets
 A transient disconnect therefore does not settle `closed` or make the already-ready health probe flap.
 Exhausted retries or a non-retryable setup error reject `closed` and fail serving visibly. Framework
 shutdown aborts the supplied signal; the adapter translates that single command into `WSClient.close()`
-and resolves `closed`. There is deliberately no second public `close()` path. See Feishu's
+and resolves `closed`. See Feishu's
 [long-connection guide](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/long-connection-mode).
 
 ## Webhook event verification
@@ -310,7 +309,7 @@ Every answered turn uses ONE **streaming card** (a card entity in streaming mode
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
 - on completion, the same card settles into the final answer as Markdown (streaming off).
 
-Card snapshots ride the cardkit quota (50 QPS per app, 10 QPS per card entity, no edit ceiling) — deliberately **not** the 5 QPS per-chat message quota or the 20-edit cap on text messages, which is what makes a live preview viable on this platform at all.
+Card snapshots use the cardkit quota (50 QPS per app, 10 QPS per card, no edit cap), not the 5 QPS per-chat message quota or the 20-edit cap on text messages.
 
 Degrade tiers, all visible in the operator log:
 
@@ -345,15 +344,14 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `bot.json` — the bot's own `open_id` (bound to the `appId` that resolved it — kept state pointed at a different app must not let the new bot answer mentions of the old one), cached from `bot/v3/info` so a cold start can match group @mentions IMMEDIATELY: on AgentCore the channel is constructed inside the first request, and without the cache that request's own mention would race the identity fetch and lose (buffered instead of answered); a successful `bot/v3/info` that reports no identity clears the cache,
-- `thread-participants.json` — a bounded record of what the Agent HEARD in each thread, written for every group thread the channel can see, in every posture — including ones where the summon rule cannot read it, because the posture is configuration and a record outlives a change to it: the humans it saw speak (capped at two, since the rule only asks whether a second one exists) and whether it has answered there. Nothing is read back from the platform, so losing the file costs one mention per thread to re-enter it,
+- `bot.json` — the bot's own `open_id`, bound to its `appId` and cached from `bot/v3/info` so a cold start recognizes @mentions immediately,
+- `thread-participants.json` — per thread, the humans the Agent heard (at most two) and whether it has answered there. Losing the file costs one mention per thread to re-enter it,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
-- `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Kept across restarts and never pruned by FastAgent: the path the agent was given stays readable, and the directory's size is an operator's capacity decision.
+- `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Never pruned by FastAgent; size and prune it yourself.
 
-The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
-after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
-between those writes, a failed ring write, or a duplicate older than the cap can therefore still re-run
-or re-fold. Interrupted-turn recovery also remains L1 at-least-once and can repeat tool side effects.
+The seen ring is best-effort dedup, not exactly-once: a crash between writes, a failed ring write, or a duplicate
+older than the cap can still re-run a turn. Interrupted-turn recovery is at-least-once and can repeat tool side
+effects.
 
 The state home lives under `.state/`, which the agent `.gitignore` excludes. Single-process semantics: two processes must not share a state dir.
 
