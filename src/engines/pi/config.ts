@@ -13,7 +13,6 @@ import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { assertCorsOrigins } from "../../channels/serve.ts";
-import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
@@ -28,10 +27,6 @@ export interface FastagentConfig {
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
   /**
-   * `host` is the bind address. Unset leaves the last rung to the command: `start` binds all interfaces (what
-   * containers need), `dev` binds `127.0.0.1`. `0.0.0.0` is all interfaces either way; `127.0.0.1` keeps the serve
-   * (including `/control/*`) off the LAN.
-   *
    * `cors` names the origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin:
    * any page your users visit can call this port and read the reply, and every route here is unauthenticated. Set it
    * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
@@ -49,7 +44,7 @@ export interface FastagentConfig {
    * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
    * with the URL can drive it".
    */
-  http?: { port?: number; host?: string; cors?: string[]; invoke?: boolean; run?: boolean };
+  http?: { port?: number; cors?: string[]; invoke?: boolean; run?: boolean };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
   selfSchedule?: boolean;
   /**
@@ -183,8 +178,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "http" must be an object`);
   }
   for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "host" && key !== "cors" && key !== "invoke" && key !== "run") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, host, cors, invoke, run)`);
+    if (key !== "port" && key !== "cors" && key !== "invoke" && key !== "run") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, cors, invoke, run)`);
     }
   }
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
@@ -196,11 +191,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
-  }
-  // Validated as strictly as http.port: an unbindable string ("banana") must fail HERE, not surface later as a
-  // topology diagnostic about "the interface you bound".
-  if (c.http?.host !== undefined && (typeof c.http.host !== "string" || !isBindAddress(c.http.host))) {
-    throw new Error(`${path}: "http.host" must be an IP address or "localhost" (e.g. "127.0.0.1", "0.0.0.0")`);
   }
   if (c.deploy !== undefined && (typeof c.deploy !== "object" || c.deploy === null)) {
     throw new Error(`${path}: "deploy" must be an object`);

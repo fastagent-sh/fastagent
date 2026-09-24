@@ -1,6 +1,6 @@
 /**
- * The ONE reading of a bind address, shared by everything that parses, binds, warns about, or ships one (the CLI flag,
- * `http.host` validation, the Node host, the deploy pre-flight).
+ * The ONE reading of a bind address, shared by everything that parses, binds, warns about, or ships one (the CLI flag, the
+ * Node host, the startup report).
  */
 import { isIP } from "node:net";
 

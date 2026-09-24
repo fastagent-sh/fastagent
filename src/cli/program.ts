@@ -207,7 +207,7 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
-    "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
+    "  bind:     --bind > all interfaces (dev: 127.0.0.1)\n" +
     "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
     "  /run:     --no-invoke > fastagent.config.ts http.run > http.invoke\n" +
     "            (with GET /routines; both only where routines/ declares something)\n" +

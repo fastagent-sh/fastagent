@@ -6,7 +6,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
-import { classifyBind } from "../bind.ts";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
 import {
@@ -488,21 +487,6 @@ export async function preflightDeploy(input: {
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
-  // `http.host` travels in the artifact (config is what deploy ships), and any non-wildcard value that is right on a
-  // laptop is wrong in a container.
-  const configBind = classifyBind(config.http?.host);
-  if (configBind !== "wildcard") {
-    const issue =
-      `fastagent.config.ts sets http.host: "${config.http?.host}" — it travels into the image, where ` +
-      (configBind === "loopback"
-        ? `nothing outside the container can reach the serve (published port, health check, webhooks).`
-        : `that address does not exist, so the container fails to bind at start.`) +
-      ` Drop it and use \`--bind ${config.http?.host}\` locally instead.`;
-    // Warn when only producing artifacts (the operator may be deploying somewhere that fronts the port), gate
-    // `--run`, where the unreachable bind is a certainty rather than a possibility.
-    if (run) return { ok: false, gate: issue };
-    messages.push({ level: "warn", text: issue });
-  }
   // EVERYTHING the definition declared it needs, from wherever it was declared. `deploy.secrets` is now only the list
   // for what no code declares. Read through the SAME resolver dev/start mount with, so "which tool declarations
   // count" has one answer (config.tools declare too; a shadowed file's declaration is dropped in both places).
