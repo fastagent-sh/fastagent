@@ -1,6 +1,6 @@
 /**
- * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda + EventBridge schedules); no public URL and
- * no resident process.
+ * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda behind a Function URL + EventBridge
+ * schedules); no resident process.
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,8 +53,9 @@ export const agentcoreHost: HostDeploy = {
           `host that serves it behind your own auth (docs/design/session-control.md §14).`,
       );
     }
-    // selfSchedule is fully supported: pending wake-ups are mirrored into one-shot EventBridge schedules via the
-    // forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts).
+    // Wake-ups are a default capability here as everywhere: pending ones are mirrored into one-shot EventBridge
+    // schedules via the forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts), which is why every stack
+    // has one.
     const loaded = await loadRoutines(agentDir).catch(failStartup);
     if (loaded.failures.length > 0) {
       failStartup(
@@ -85,7 +86,6 @@ export const agentcoreHost: HostDeploy = {
       schedules: loaded.routines.flatMap((r) =>
         r.cron === undefined ? [] : [{ name: r.name, cron: r.cron, ...(r.tz !== undefined ? { tz: r.tz } : {}) }],
       ),
-      selfSchedule: !!config.selfSchedule,
       idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
@@ -108,7 +108,7 @@ export const agentcoreHost: HostDeploy = {
         // wordings drift apart.
         console.error(
           `[fastagent] warn: ${templateArtifact.path} no longer matches this definition ` +
-            `(channels/routines/selfSchedule or a deploy.agentcore setting changed) — the kept template would ` +
+            `(channels/routines or a deploy.agentcore setting changed) — the kept template would ` +
             `silently drop the difference.`,
         );
       }
@@ -156,9 +156,9 @@ async function runDeployAgentcore(
   const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
   const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
   // The wake-alarm shared secret (container ↔ forwarder).
-  if (topology.wakeAlarms) secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
+  secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
   // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
-  if (topology.forwarder) secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
+  secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
   gateOnModelCredential(needsModelCredential);
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides — never argv);
   // 0700/0600 and removed after the run, success or gate.
@@ -200,9 +200,7 @@ async function runDeployAgentcore(
     if (outcome.url) console.error(`[fastagent] webhook ingress → ${outcome.url}`);
     const logsDir = shellArg(workspace);
     console.error(`[fastagent] runtime logs → fastagent logs agentcore ${logsDir} --follow`);
-    if (topology.forwarder) {
-      console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
-    }
+    console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
     // `--run` never prints the runbook, and this is the ONE step in it that nothing else will remind anyone of: a
     // log group is created by whatever writes it, CloudWatch keeps log data indefinitely, and these logs are where
     // a failed turn's reason lives. The runtime's group name is only known after discovery, so it is named by the command that
@@ -211,12 +209,10 @@ async function runDeployAgentcore(
       `[fastagent] logs are kept FOREVER until you say otherwise: aws logs put-retention-policy ` +
         `--log-group-name <the group \`fastagent logs agentcore ${logsDir} --follow\` resolves> --retention-in-days 14`,
     );
-    if (topology.forwarder) {
-      console.error(
-        `[fastagent] ...and for the forwarder: aws logs put-retention-policy ` +
-          `--log-group-name ${forwarderLogGroup(name)} --retention-in-days 14`,
-      );
-    }
+    console.error(
+      `[fastagent] ...and for the forwarder: aws logs put-retention-policy ` +
+        `--log-group-name ${forwarderLogGroup(name)} --retention-in-days 14`,
+    );
     console.error(
       `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
         `  --runtime-session-id "${ingressSessionId(name)}" \\\n` +

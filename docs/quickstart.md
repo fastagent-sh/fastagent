@@ -213,8 +213,8 @@ On resident hosts, the cron fires while `dev`/`start` is serving; keep the proce
 [AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
 `fastagent routine history <name>` answers "did last night's run silently fail?", and
 `fastagent routine list` shows the selected local state's pending work. Agents can
-also schedule **themselves** (a built-in `wake` tool — "check the deploy in 10 minutes") — opt in with
-`selfSchedule: true` in `fastagent.config.ts`. See the [CLI reference](cli.md) and
+also schedule **themselves** with the built-in `wake` tool ("check the deploy in 10 minutes"), mounted on every
+serve. See the [CLI reference](cli.md) and
 [API reference](api-reference.md#routine-authoring).
 
 ## Where next

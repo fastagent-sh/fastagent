@@ -6,7 +6,7 @@
 // what runs (and what the manual runbook zips) — not an input you can change.
 // Webhooks (Function URL) and EventBridge Scheduler fires are forwarded as envelopes to the
 // AgentCore Runtime over SigV4 InvokeAgentRuntime, all on ONE fixed ingress session (fastagent
-// channel state is single-writer; one session = at most one microVM). With selfSchedule, this
+// channel state is single-writer; one session = at most one microVM). This
 // Lambda also OWNS the wake alarms: the container POSTs its pending wake-ups to /__fastagent/
 // wake-alarm (shared secret) and each becomes a self-deleting one-shot EventBridge schedule that
 // pokes this Lambda — which wakes the container, whose wake pump fires the due entry.

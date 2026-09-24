@@ -47,7 +47,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   modelAuth: "OPENAI_API_KEY",
   channels: [],
   schedules: [],
-  selfSchedule: false,
   hasPackageJson: false,
   runtime: "node",
   hasLockfile: false,
@@ -95,8 +94,7 @@ describe("the agentcore template (parsed)", () => {
       {},
       WEBHOOK_CHANNELS,
       { schedules: SCHEDULES },
-      { selfSchedule: true },
-      { ...WEBHOOK_CHANNELS, schedules: SCHEDULES, selfSchedule: true },
+      { ...WEBHOOK_CHANNELS, schedules: SCHEDULES },
       { ...WEBHOOK_CHANNELS, secrets: [{ name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" }] },
     ]) {
       const t = parseTemplate(over);
@@ -109,7 +107,7 @@ describe("the agentcore template (parsed)", () => {
   });
 
   it("resolves every reference — a typo would only surface at deploy time", () => {
-    const t = parseTemplate({ ...WEBHOOK_CHANNELS, schedules: SCHEDULES, selfSchedule: true });
+    const t = parseTemplate({ ...WEBHOOK_CHANNELS, schedules: SCHEDULES });
     const known = new Set([
       ...Object.keys(t.Resources),
       ...Object.keys(t.Parameters ?? {}),
@@ -127,7 +125,7 @@ describe("the agentcore template (parsed)", () => {
   });
 
   it("puts each property under the resource that owns it", () => {
-    const t = parseTemplate({ ...WEBHOOK_CHANNELS, selfSchedule: true });
+    const t = parseTemplate(WEBHOOK_CHANNELS);
     const forwarder = Object.entries(t.Resources).find(([, r]) => r.Type === "AWS::Lambda::Function")!;
     const runtime = Object.entries(t.Resources).find(([, r]) => r.Type === "AWS::BedrockAgentCore::Runtime")!;
 

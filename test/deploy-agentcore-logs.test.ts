@@ -91,20 +91,6 @@ describe("agentcore logs", () => {
     expect(aws.commands().some((command) => command.startsWith("logs tail"))).toBe(false);
   });
 
-  it("refuses forwarder logs for an invoke-only deployment", async () => {
-    const aws = fakeAws((args) => {
-      if (args[0] === "cloudformation") return { stdout: outputs(false) };
-      if (args[1] === "describe-log-groups") return { stdout: "[]" };
-      return {};
-    });
-
-    const result = await tailAgentcoreLogs({ name: "my-agent", source: "forwarder", follow: false }, aws.cli);
-
-    // Both facts agree (no ingress URL output AND no log group) — no tail attempt, no wrong trigger advice.
-    expect(result).toMatchObject({ ok: false, gate: expect.stringMatching(/invoke-only deployment/) });
-    expect(aws.commands().some((command) => command.startsWith("logs tail"))).toBe(false);
-  });
-
   it("tails a forwarder that exists without an ingress URL output", async () => {
     // ForwarderUrl is the INGRESS URL, not the forwarder's existence: a topology keeping the Lambda
     // while dropping the public URL (schedules-only) still has forwarder logs, and must get them.

@@ -37,9 +37,9 @@
  *   scheduler:GetSchedule     the expression and completion action, which the list summary omits.
  *   scheduler:DeleteSchedule  teardown, here and in the workflow sweep.
  *
- * And this is the first fixture with `selfSchedule: true`, i.e. the first `topology.forwarder` deployment:
- * the forwarder Lambda, its Function URL, the wake role (iam:CreateRole / PassRole / AttachRolePolicy)
- * and the forwarder artifact bucket are all created here and nowhere else in the suite.
+ * Every stack carries the wake mechanism (it is not a switch), so this fixture needs nothing extra: the
+ * forwarder Lambda, its Function URL, the wake role (iam:CreateRole / PassRole / AttachRolePolicy) and the
+ * forwarder artifact bucket.
  */
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
@@ -93,13 +93,9 @@ beforeAll(async () => {
   const agentDir = join(workspace, "fastagent");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
-  // `selfSchedule` is what puts the whole mechanism in the deployment: it mounts the `wake` tool in the
-  // container (open.ts, serving + selfSchedule), and it puts the forwarder, its Function URL and the
-  // wake/scheduler IAM into the template. Without it there is no chain to test.
-  await writeFile(
-    join(agentDir, "fastagent.config.ts"),
-    `export default { model: ${JSON.stringify(MODEL)}, selfSchedule: true };\n`,
-  );
+  // Every serve mounts the `wake` tool (open.ts), and every stack carries the forwarder, its Function URL and the
+  // wake/scheduler IAM — so a plain config is the whole chain.
+  await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(

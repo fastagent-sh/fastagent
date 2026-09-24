@@ -54,7 +54,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   assertTunnelBindable(host, tunnel);
   const a = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
-    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
+    serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });

@@ -125,7 +125,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           routines,
           routineFailures: sched.failures,
           channelFailures: inspected.failures,
-          selfSchedule: config.selfSchedule ?? false,
           stateRoot,
           sessionsDir,
           authPath,
@@ -144,7 +143,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     return;
   }
   // One padded label writer: hand-spaced labels drifted out of alignment the moment a longer one
-  // (agent/workspace/selfSchedule) joined the report.
+  // (agent/workspace) joined the report.
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
@@ -168,7 +167,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     routines.map((r) => `${r.name} (${r.cron === null ? "on demand" : `next ${r.next ?? "never"}`})`).join(", ") ||
       "(none)",
   );
-  line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
   line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
   if (unsetSecrets.length > 0)
     cont(`⚠ dev/start refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);

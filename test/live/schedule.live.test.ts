@@ -66,7 +66,7 @@ describe("routines: a cron fire reaches the agent, its session, and its claim", 
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
-    const { routines, stop } = startSchedules(agent, stateRoot, false, await loadServingRoutines(dir));
+    const { routines, stop } = startSchedules(agent, stateRoot, await loadServingRoutines(dir));
     cleanups.push(stop);
     expect(
       routines.map((r) => r.name),

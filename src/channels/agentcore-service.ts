@@ -154,7 +154,7 @@ export async function mountAgentcoreService(
 
   // Started here, not deferred to an envelope.
   const routines = await loadServingRoutines(agentDir);
-  const scheduled = startSchedules(agent, stateRoot, opened.selfSchedule, routines, { externalClock: true });
+  const scheduled = startSchedules(agent, stateRoot, routines, { externalClock: true });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
     const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });

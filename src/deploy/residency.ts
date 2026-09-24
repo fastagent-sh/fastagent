@@ -7,13 +7,18 @@
  * phrase its own REMEDY — the setting it owns — never re-derive the reason.
  *
  * ORDER IS THE POINT, not just precedence: the reason reported has to be the one an operator cannot work around,
- * because the message it produces differs. A runtime-minted wake-up has no substitute at all; a
- * declared schedule has one, because the clock does not have to be ours — see {@link CRON_CAN_BE_EXTERNAL}.
+ * because the message it produces differs. A declared schedule has a substitute, because the clock does not have to
+ * be ours — see {@link CRON_CAN_BE_EXTERNAL}; a long connection has none.
+ *
+ * A WAKE-UP IS NOT A REASON. Every serve mounts `wake`, so counting it would pin every deployment up. It does not
+ * need to: the wake-up store is on the volume and the poll drains what is due when the process starts, so a box that
+ * slept fires it late, when a request next wakes it — never loses it. {@link WAKEUPS_WHEN_ASLEEP} says so where
+ * scaling to zero is offered.
  */
 import type { DeclaredChannel } from "../channels/discover.ts";
 
 /** Why one machine has to stay up. Also the order they are checked in. */
-export type ResidencyReason = "wake-ups" | "cron" | "long-connection";
+export type ResidencyReason = "cron" | "long-connection";
 
 export interface Residency {
   reason: ResidencyReason;
@@ -23,25 +28,21 @@ export interface Residency {
 
 /**
  * The ONE reason a caller may offer a way out of: a cron is a TIME, and a time can be kept elsewhere — a platform
- * scheduler, a CI cron, a crontab — which then calls this agent. Nothing else here can be moved out: a wake-up is
- * minted by the agent at runtime inside its own state, so nothing outside can know to send it.
+ * scheduler, a CI cron, a crontab — which then calls this agent. Nothing else here can be moved out: a long
+ * connection is one this process holds.
  */
 export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "cron";
+
+/** What scaling to zero costs the agent's own wake-ups — said next to every setting that allows it. */
+export const WAKEUPS_WHEN_ASLEEP =
+  "the agent's own wake-ups then fire when a request next wakes the machine, not on time";
 
 /** What forbids scale-to-zero for this deployment, or `undefined` when nothing does. */
 export function residencyFor(facts: {
   channels: readonly DeclaredChannel[];
   /** `routines/` declares at least one cron. */
   hasCron: boolean;
-  /** The agent may schedule ITSELF (`selfSchedule`, the wake tool). */
-  hasWakeups: boolean;
 }): Residency | undefined {
-  if (facts.hasWakeups) {
-    return {
-      reason: "wake-ups",
-      why: "a self-scheduled wake-up is minted at runtime, so nothing outside this process can know to send it",
-    };
-  }
   if (facts.hasCron) {
     return {
       reason: "cron",

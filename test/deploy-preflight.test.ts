@@ -499,10 +499,12 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("detects the two halves of a time trigger separately — only one of them has a way out", async () => {
-    // Neither → false, no note.
+  it("a declared cron keeps a machine up and names its way out; the agent's own wake-ups do not", async () => {
+    // Nothing → false, no note. Every serve mounts `wake`, so a wake-up is NOT a reason to stay up: a box that slept
+    // fires what is due when a request next wakes it.
     const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
-    expect(none.ok && !none.hasCron && !none.hasWakeups).toBe(true);
+    expect(none.ok && !none.hasCron).toBe(true);
+    if (none.ok) expect(none.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
 
     // A ROUTINE IS NOT A CRON. `cron` is a field, so what pins a machine up is a routine that DECLARES one —
     // counting routine files answered a different question and made a by-name-only definition pay for an idle
@@ -512,7 +514,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await mkdir(join(byNameOnly, "routines"), { recursive: true });
     await wf(join(byNameOnly, "routines", "reindex.ts"), `export default { prompt: "refresh" };\n`);
     const onDemand = await call(byNameOnly, { model: "openai/gpt-4o-mini" });
-    expect(onDemand.ok && !onDemand.hasCron && !onDemand.hasWakeups).toBe(true);
+    expect(onDemand.ok && !onDemand.hasCron).toBe(true);
     if (onDemand.ok) {
       expect(onDemand.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
     }
@@ -528,29 +530,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(broken.ok && broken.hasCron).toBe(true);
     await wf(join(dir, "routines", "daily.ts"), `export default { cron: "0 9 * * *", prompt: "go" };\n`);
     const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(withCron.ok && withCron.hasCron && !withCron.hasWakeups).toBe(true);
+    expect(withCron.ok && withCron.hasCron).toBe(true);
     if (withCron.ok) {
       const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.level).toBe("note");
       expect(note?.text).toContain("POST /run");
-    }
-
-    // selfSchedule alone → hasWakeups, and the note offers NO way out: a wake-up is minted at runtime, so no
-    // external clock can know to send it. Offering the same advice here would quietly drop turns.
-    const wake = await call(await workspace(), { model: "openai/gpt-4o-mini", selfSchedule: true });
-    expect(wake.ok && wake.hasWakeups && !wake.hasCron).toBe(true);
-    if (wake.ok) {
-      const note = wake.messages.find((m) => /keeps one machine running/.test(m.text));
-      expect(note?.text).toContain("no way around it");
-      expect(note?.text).not.toContain("POST /run");
-    }
-
-    // BOTH → the wake-up is what gets reported, because it is the one with no substitute.
-    const both = await call(dir, { model: "openai/gpt-4o-mini", selfSchedule: true });
-    expect(both.ok && both.hasCron && both.hasWakeups).toBe(true);
-    if (both.ok) {
-      expect(both.messages.filter((m) => /keeps one machine running/.test(m.text))).toHaveLength(1);
-      expect(both.messages.find((m) => /keeps one machine running/.test(m.text))?.text).not.toContain("POST /run");
     }
   });
 

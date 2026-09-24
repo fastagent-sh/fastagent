@@ -158,10 +158,9 @@ function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS
 export function paramsFileContent(
   imageUri: string,
   secrets: Record<string, string>,
-  forwarder?: { bucket: string; key: string },
+  forwarder: { bucket: string; key: string },
 ): string {
-  const params = [`ImageUri=${imageUri}`];
-  if (forwarder) params.push(`ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
+  const params = [`ImageUri=${imageUri}`, `ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`];
   for (const [name, param] of Object.entries(MINTED_PARAMS)) {
     if (secrets[name] !== undefined) params.push(`${param}=${secrets[name]}`);
   }
@@ -346,51 +345,48 @@ export async function deployAgentcoreRun(
   }
 
   // The forwarder package must exist before CloudFormation can create its Lambda.
-  let forwarderParams: { bucket: string; key: string } | undefined;
-  if (plan.topology.forwarder) {
-    const bucket = deploymentBucketName(plan.name, account);
-    const head = await cli.present(["s3api", "head-bucket", "--bucket", bucket]);
-    // Same shape as the repository above: a 403 is not a 404, and creating on top of it fails with a message
-    // about the wrong thing.
-    if ("unreadable" in head) {
-      return gate(`could not read deployment bucket ${bucket} (${head.unreadable}) — fix that, then re-run`);
-    }
-    if ("absent" in head) {
-      log(`creating deployment bucket ${bucket}…`);
-      // us-east-1 is the ONE region that must not carry a LocationConstraint (the API rejects it).
-      const createArgs = ["s3api", "create-bucket", "--bucket", bucket];
-      if (region !== "us-east-1") createArgs.push("--create-bucket-configuration", `LocationConstraint=${region}`);
-      if ((await aws(createArgs)).code !== 0) {
-        return gate(`\`aws s3api create-bucket --bucket ${bucket}\` failed — see the output above; fix and re-run`);
-      }
-    }
-    if (
-      (
-        await aws(
-          [
-            "s3api",
-            "put-public-access-block",
-            "--bucket",
-            bucket,
-            "--public-access-block-configuration",
-            "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
-          ],
-          { capture: true },
-        )
-      ).code !== 0
-    ) {
-      return gate(`could not block public access on ${bucket}; fix and re-run`);
-    }
-    // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so identical source
-    // must map to an identical key (hence the deterministic zip) and changed source to a new one.
-    const zip = zipSingleFile("index.js", Buffer.from(forwarderSource()));
-    const key = `forwarder/${createHash("sha256").update(zip).digest("hex").slice(0, 16)}.zip`;
-    const zipPath = await writeForwarderZip(zip);
-    if ((await aws(["s3", "cp", zipPath, `s3://${bucket}/${key}`])).code !== 0) {
-      return gate("uploading the forwarder package to S3 failed — see the output above; fix and re-run");
-    }
-    forwarderParams = { bucket, key };
+  const bucket = deploymentBucketName(plan.name, account);
+  const head = await cli.present(["s3api", "head-bucket", "--bucket", bucket]);
+  // Same shape as the repository above: a 403 is not a 404, and creating on top of it fails with a message
+  // about the wrong thing.
+  if ("unreadable" in head) {
+    return gate(`could not read deployment bucket ${bucket} (${head.unreadable}) — fix that, then re-run`);
   }
+  if ("absent" in head) {
+    log(`creating deployment bucket ${bucket}…`);
+    // us-east-1 is the ONE region that must not carry a LocationConstraint (the API rejects it).
+    const createArgs = ["s3api", "create-bucket", "--bucket", bucket];
+    if (region !== "us-east-1") createArgs.push("--create-bucket-configuration", `LocationConstraint=${region}`);
+    if ((await aws(createArgs)).code !== 0) {
+      return gate(`\`aws s3api create-bucket --bucket ${bucket}\` failed — see the output above; fix and re-run`);
+    }
+  }
+  if (
+    (
+      await aws(
+        [
+          "s3api",
+          "put-public-access-block",
+          "--bucket",
+          bucket,
+          "--public-access-block-configuration",
+          "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+        ],
+        { capture: true },
+      )
+    ).code !== 0
+  ) {
+    return gate(`could not block public access on ${bucket}; fix and re-run`);
+  }
+  // Content-hashed key: CloudFormation rolls the function only when a parameter VALUE changes, so identical source
+  // must map to an identical key (hence the deterministic zip) and changed source to a new one.
+  const zip = zipSingleFile("index.js", Buffer.from(forwarderSource()));
+  const key = `forwarder/${createHash("sha256").update(zip).digest("hex").slice(0, 16)}.zip`;
+  const zipPath = await writeForwarderZip(zip);
+  if ((await aws(["s3", "cp", zipPath, `s3://${bucket}/${key}`])).code !== 0) {
+    return gate("uploading the forwarder package to S3 failed — see the output above; fix and re-run");
+  }
+  const forwarderParams = { bucket, key };
 
   // 5. Registry login — the password flows stdout→stdin between the two runners, never argv.
   const password = await aws(["ecr", "get-login-password"], { capture: true });
@@ -475,12 +471,8 @@ export async function deployAgentcoreRun(
       // aws-cli.ts's — this file had its own third spelling of "already gone".
       const noSession = "absent" in stopped;
       const stderr = noSession ? "" : stopped.refused;
-      if (noSession || !plan.topology.forwarder) {
-        log(
-          noSession
-            ? "note: no ingress session to stop (first deploy, or already reclaimed)"
-            : `note: could not stop the ingress session (${stderr.trim().split("\n")[0]}) — the previous image may keep serving until it is reclaimed`,
-        );
+      if (noSession) {
+        log("note: no ingress session to stop (first deploy, or already reclaimed)");
       } else {
         // A GATE, not a warning: the probe below reaches the SAME fixed session id, so a session still running the
         // previous image would answer it and the deploy would claim to have verified a serving path it never touched.
@@ -495,7 +487,7 @@ export async function deployAgentcoreRun(
   }
 
   // 8c.
-  if (plan.topology.forwarder && !url) {
+  if (!url) {
     return gate(
       "this deployment needs the forwarder but the stack has no ForwarderUrl output — regenerate the " +
         "template with --force",

@@ -91,14 +91,10 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
   });
 
-  it("selfSchedule: accepts a boolean (opt-in to the wake tool), rejects a non-boolean", async () => {
-    const ok = await mkdtemp(join(tmpdir(), "fa-selfsched-ok-"));
-    await writeFile(join(ok, "fastagent.config.ts"), `export default { selfSchedule: true };\n`);
-    expect((await loadConfig(ok)).config.selfSchedule).toBe(true);
-
-    const bad = await mkdtemp(join(tmpdir(), "fa-selfsched-bad-"));
-    await writeFile(join(bad, "fastagent.config.ts"), `export default { selfSchedule: "yes" };\n`);
-    await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
+  it("selfSchedule is not a key: every serve mounts the wake tool", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-selfsched-"));
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { selfSchedule: true };\n`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "selfSchedule"/);
   });
 });
 

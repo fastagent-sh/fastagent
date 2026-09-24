@@ -235,15 +235,16 @@ export async function loadServingRoutines(agentDir: string): Promise<LoadedRouti
   return routines;
 }
 
-/** Start the resident clock over routines {@link loadServingRoutines} already gated. */
+/**
+ * Start the clock over routines {@link loadServingRoutines} already gated — on every serve, routines or not: the
+ * agent's own wake-ups are a default capability, and this is what fires them.
+ */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
-  selfSchedule: boolean,
   routines: LoadedRoutine[],
   options: { externalClock?: boolean } = {},
 ): { routines: LoadedRoutine[]; stop: () => void } {
-  if (routines.length === 0 && !selfSchedule) return { routines, stop: () => {} };
   const scheduler = Effect.runSync(
     createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock }),
   );
@@ -326,8 +327,6 @@ export interface MountableAgent {
   /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
    *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
   publishControl: boolean;
-  /** Whether the agent schedules its own follow-up turns (the `wake` tool). */
-  selfSchedule: boolean;
   /**
    * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
    * — see `channels/serve.ts`; setting this is the only way to narrow it, and an empty list is refused.
@@ -425,7 +424,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, opened.selfSchedule, routines),
+            try: () => startSchedules(agent, stateRoot, routines),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),

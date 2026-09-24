@@ -28,8 +28,8 @@ host CLI prints against the driver's **parsing** assumptions (`listHasName`, `in
 
 **A probe's fixture is its specification**, not boilerplate to copy from the file next door. Fly and
 Railway have one topology whatever the definition says; AgentCore's is a *function* of it
-(`needsForwarder` — a webhook channel, a schedule, or `selfSchedule` — decides whether a forwarder, a
-Function URL, EventBridge rules and the artifact bucket exist at all). Three copied lines of
+(a webhook channel or a schedule decides whether webhook relay and EventBridge rules exist; the
+forwarder, its Function URL and the artifact bucket are on every stack, for the wake alarms). Three copied lines of
 persona+config landed on the small side, so both agentcore probes spent a release describing a
 deployment neither performed: 98 lines of template validated while the comment claimed 900, and a
 teardown deleting three things where two were created. Reading what the product CAN do is not reading

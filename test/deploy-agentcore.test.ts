@@ -31,7 +31,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   modelAuth: "OPENAI_API_KEY",
   channels: [],
   schedules: [],
-  selfSchedule: false,
   hasPackageJson: false,
   runtime: "node",
   hasLockfile: false,
@@ -109,10 +108,11 @@ describe("deploy agentcore: cron translation", () => {
 });
 
 describe("deploy agentcore: the plan", () => {
-  it("pure-invoke shape: template only (no forwarder, no schedules), lean runbook", () => {
+  it("minimal shape (no channel, no schedule): the forwarder is still there — it carries the wake alarms", () => {
     const plan = planAgentcoreDeploy(baseInput());
     expect(plan.artifacts.map((a) => a.path)).toEqual([
       `fastagent/${TEMPLATE_FILE}`,
+      `fastagent/${FORWARDER_FILE}`,
       "fastagent/fastagent.release.json",
       "fastagent/Dockerfile",
       ".dockerignore",
@@ -127,13 +127,14 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain('PORT: "8080"');
     expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
     expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
-    expect(template).not.toContain("AWS::Lambda::Function");
+    expect(template).toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
+    expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
     expect(plan.untranslatableSchedules).toEqual([]);
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
     expect(plan.runbook.join("\n")).toContain("fastagent deploy agentcore");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
-    expect(plan.runbook.join("\n")).not.toContain("--source forwarder");
+    expect(plan.runbook.join("\n")).toContain("--source forwarder");
     // The only state this host does not reclaim: a turn's reply is a log line, and CloudWatch keeps log data
     // indefinitely until someone sets a retention policy. The runbook has to say so — nothing else will.
     expect(plan.runbook.join("\n")).toContain("aws logs put-retention-policy");
@@ -200,18 +201,7 @@ describe("deploy agentcore: the plan", () => {
       { name: "impossible", reason: expect.stringMatching(/BOTH day-of-month/) },
     ]);
     expect(plan.runbook.join("\n")).toContain('schedule "impossible" has NO EventBridge rule');
-    // Schedules alone (no route channels) still need the forwarder — it is the fire path.
-    expect(template).toContain("Type: AWS::Lambda::Function");
-    expect(plan.topology).toEqual({ webhooks: false, forwarder: true, wakeAlarms: false });
-  });
-
-  it("the topology counts the schedules EventBridge CAN express — an untranslatable one alone buys no forwarder", () => {
-    // The CLI used to count every loaded schedule while the template counted the translated ones, so
-    // this definition deployed a bucket and forwarder parameters into a stack that declared neither.
-    const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "impossible", cron: "0 9 1 * 1" }] }));
-    expect(plan.topology).toEqual({ webhooks: false, forwarder: false, wakeAlarms: false });
-    expect(plan.artifacts.map((a) => a.path)).not.toContain(FORWARDER_FILE);
-    expect(plan.artifacts[0]!.content).not.toContain("Type: AWS::Lambda::Function");
+    expect(plan.topology).toEqual({ webhooks: false });
   });
 
   it("identifier collisions fail the plan visibly (a silently wrong stack is worse)", () => {
@@ -248,10 +238,11 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("-f agent/Dockerfile");
   });
 
-  it("selfSchedule brings the full wake-alarm topology: forwarder, secret param, roles, env", () => {
-    const plan = planAgentcoreDeploy(baseInput({ selfSchedule: true }));
+  it("every stack carries the full wake-alarm topology: forwarder, secret param, roles, env", () => {
+    // Wake-ups are a default capability, so even a definition with no channel and no routine needs the forwarder —
+    // it is the alarm registrar and the poke target.
+    const plan = planAgentcoreDeploy(baseInput());
     const template = plan.artifacts[0]!.content;
-    // selfSchedule alone needs the forwarder — it is the alarm registrar and the poke target.
     expect(template).toContain("Type: AWS::Lambda::Function");
     expect(template).toContain("WakeSchedulerRole:");
     expect(template).toContain("FastagentWakeSecret:");
@@ -365,13 +356,6 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("elasticfilesystem");
   });
 
-  it("an invoke-only deployment (no forwarder) carries no bucket wiring at all", () => {
-    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    expect(template).not.toContain("ForwarderBucket");
-    expect(template).not.toContain("s3:GetObject");
-    expect(template).not.toContain("s3:ListBucket");
-  });
-
   it("holds an idle session for 3 minutes by default — within the platform's 60–1209600 range", () => {
     // The idle tail is what memory bills for after the agent stops working (CPU stops immediately),
     // so it is the deployment's main standing cost. HealthyBusy keeps a BUSY session alive whatever
@@ -450,14 +434,13 @@ describe("deploy agentcore: the plan", () => {
       expect(template).toContain("InvokedViaFunctionUrl: true");
     });
 
-    it("declares the ingress secret whenever a forwarder exists, and stamps it on both sides", () => {
+    it("declares the ingress secret on every stack, and stamps it on both sides", () => {
       const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!
         .content;
       expect(template).toContain("  FastagentIngressSecret:");
       expect(template).toContain("FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret"); // runtime
       expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret"); // forwarder
-      // An invoke-only deployment has no forwarder, so nothing to authenticate.
-      expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).not.toContain("FastagentIngressSecret");
+      expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain("FastagentIngressSecret:");
     });
   });
 

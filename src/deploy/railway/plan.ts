@@ -2,7 +2,7 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { CRON_CAN_BE_EXTERNAL, residencyFor } from "../residency.ts";
+import { CRON_CAN_BE_EXTERNAL, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
@@ -25,8 +25,6 @@ export interface RailwayPlanInput extends ContainerInput {
   secrets?: readonly DeploymentSecret[];
   /** `routines/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
   hasCron: boolean;
-  /** `selfSchedule` is on — the wake tool, which forbids it with no external substitute. */
-  hasWakeups: boolean;
 }
 
 export interface RailwayPlan {
@@ -169,12 +167,12 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   // Scale-to-zero: App Sleeping is dashboard-only (no CLI/API) — a manual step, not a generated setting. WHY it is
   // forbidden is residency.ts's to decide; the SETTING and the path through the dashboard are Railway's.
-  const residency = residencyFor({ channels, hasCron: input.hasCron, hasWakeups: input.hasWakeups });
+  const residency = residencyFor({ channels, hasCron: input.hasCron });
   runbook.push(
     ``,
     residency
       ? `# Scale-to-zero: do NOT enable App Sleeping — ${residency.why}.`
-      : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
+      : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping —\n# ${WAKEUPS_WHEN_ASLEEP}.`,
     ...(residency?.reason === CRON_CAN_BE_EXTERNAL
       ? [
           `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
@@ -186,6 +184,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
           `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
           `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
           `# \`POST /run\` is an API, not a clock: read its contract — docs/api-reference.md#post-run.`,
+          `# Asleep, ${WAKEUPS_WHEN_ASLEEP}.`,
         ]
       : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,

@@ -204,7 +204,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     );
   }
   const traced = logAgentLoop(agent);
-  const onStateReady = isAgentcoreRuntime() && config.selfSchedule ? armWakeAlarms(stateRoot) : undefined;
+  const onStateReady = isAgentcoreRuntime() ? armWakeAlarms(stateRoot) : undefined;
   const mountable = withRunOverrides(opened, opts);
   const service = await (isAgentcoreRuntime()
     ? mountAgentcoreService(mountable, { wrapAgent: () => traced, onStateReady })

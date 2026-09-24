@@ -32,7 +32,7 @@ agent/
 3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Time triggers** — cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history (`fastagent routine history`).
+6. **Time triggers** — cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent routine history`).
 
 ## Design choices
 
@@ -124,7 +124,7 @@ Implemented today:
 - Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
-- Cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history.
+- Cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `routine`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).

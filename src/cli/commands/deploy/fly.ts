@@ -22,7 +22,6 @@ export const flyHost: HostDeploy = {
     const { opts, agentDir, workspace, channels, pre, write } = ctx;
     const {
       hasCron,
-      hasWakeups,
       modelAuth,
       modelKeyInDefinition,
       authPath,
@@ -48,7 +47,7 @@ export const flyHost: HostDeploy = {
     // KEEP mode: the kept fly.toml may still scale to zero — which would sleep through the very thing the
     // GENERATED one keeps a machine up for. Same question, same answer: `residencyFor` decides, here too, so the
     // kept-file gate and the generated setting cannot disagree.
-    const residency = residencyFor({ channels, hasCron, hasWakeups });
+    const residency = residencyFor({ channels, hasCron });
     if (flyTomlKept && residency) {
       const min = parseFlyMinMachines(flyToml as string);
       if ((min ?? 0) === 0) {
@@ -68,7 +67,6 @@ export const flyHost: HostDeploy = {
       channels,
       secrets: pre.secrets,
       hasCron,
-      hasWakeups,
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });
