@@ -101,15 +101,15 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
-    "@earendil-works/pi-agent-core": "^0.86.0",
-    "@earendil-works/pi-ai": "^0.86.0",
-    "@earendil-works/pi-coding-agent": "^0.86.0",
+    "@earendil-works/pi-agent-core": "^0.87.0",
+    "@earendil-works/pi-ai": "^0.87.0",
+    "@earendil-works/pi-coding-agent": "^0.87.0",
     "@hono/node-server": "^2.1.1",
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "croner": "^10.0.1",
-    "effect": "4.0.0-rc.115",
+    "effect": "4.0.0-rc.117",
     "giget": "^3.3.0",
     "ignore": "^7.0.5",
     "proper-lockfile": "^4.1.2",
@@ -117,14 +117,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.2",
+    "@biomejs/biome": "^2.5.14",
     "@types/express": "^5.0.6",
     "@types/proper-lockfile": "^4.1.4",
     "express": "^5.2.1",
-    "fastify": "^5.12.1",
-    "knip": "^6.29.0",
+    "fastify": "^5.12.5",
+    "knip": "^6.37.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0",
+    "vitest": "^5.0.1",
     "yaml": "^2.9.0"
   }
 }

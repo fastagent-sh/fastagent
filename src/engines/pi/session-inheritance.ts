@@ -3,7 +3,7 @@
  * the room knew"), on pi's `SessionManager`.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { CompactionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { CompactionEntry, ContextEditEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { isConversationMessage, isPlaneMarker } from "./session-markers.ts";
 
@@ -194,6 +194,8 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
       thinkingLevel?: string;
       tokensBefore?: number;
       details?: unknown;
+      targetId?: string;
+      replacement?: ContextEditEntry["replacement"];
     };
     let childId: string | undefined;
     switch (entry.type) {
@@ -224,6 +226,14 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
           entry.tokensBefore ?? 0,
           entry.details,
         );
+        break;
+      case "context_edit":
+        // pi omits an abandoned retry/overflow attempt from the model's context this way; dropping the edit would
+        // hand that attempt back to the copy. Its target is a message, which the copy always anchors.
+        if (entry.targetId && entry.replacement !== undefined) {
+          const target = copied.get(entry.targetId);
+          if (target) childId = child.appendContextEdit(target, entry.replacement);
+        }
         break;
       case "model_change":
         if (entry.provider && entry.modelId) childId = child.appendModelChange(entry.provider, entry.modelId);

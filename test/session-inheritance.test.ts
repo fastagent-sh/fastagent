@@ -241,6 +241,26 @@ describe("inheritance edges", () => {
     expect(context).not.toContain("question 0"); // …and the older ones are outside it
   });
 
+  it("what pi removed from the room's context stays removed in the thread", async () => {
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("old answer"));
+    room.appendCompaction("the summary", null, 100); // retains nothing: points at itself
+    room.appendMessage({ role: "user", content: "question", timestamp: 2 });
+    const abandoned = room.appendMessage(fauxAssistantMessage("abandoned attempt"));
+    room.appendContextEdit(abandoned, null); // how pi drops a retried/overflowed attempt
+    room.appendMessage(fauxAssistantMessage("final answer"));
+
+    const thread = await store.openOrCreate("thread-edits", { parentSession: "room" });
+
+    const context = JSON.stringify(thread.buildSessionContext().messages);
+    expect(context).toContain("the summary");
+    expect(context).toContain("final answer");
+    expect(context).not.toContain("old answer");
+    expect(context).not.toContain("abandoned attempt");
+  });
+
   it("a failure while preparing the fork leaves no record under the id", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-inherit-partial-"));
     const cwd = process.cwd();
