@@ -1,4 +1,4 @@
-/** One spelling of "a reader sees the whole file or none of it", after five copies of it drifted apart. */
+/** One spelling of "a reader sees the whole file or none of it", for every state writer. */
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 

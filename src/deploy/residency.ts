@@ -1,10 +1,8 @@
 /**
  * WHAT FORBIDS SCALING TO ZERO — one rule, read by every host that can scale.
  *
- * It was spelled twice: Fly's `min_machines_running` comment and Railway's App-Sleeping runbook line each carried
- * the same three conditions in the same order with different words, and the words had already drifted (one said
- * "no external wake-up for a cron instant", the other "a sleeping service sleeps through them"). A host may only
- * phrase its own REMEDY — the setting it owns — never re-derive the reason.
+ * A host may only phrase its own REMEDY — the setting it owns (`min_machines_running`, App Sleeping) — never
+ * re-derive the reason.
  *
  * ORDER IS THE POINT, not just precedence: the reason reported has to be the one an operator cannot work around,
  * because the message it produces differs. A declared schedule has a substitute, because the clock does not have to

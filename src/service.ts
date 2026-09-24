@@ -103,9 +103,8 @@ export function shouldServeRun(serve: { serveInvoke?: boolean; serveRun?: boolea
 /**
  * The surface this deployment serves: the DATA plane (`POST /invoke`), `GET /health`, and the discovered channels.
  *
- * `/invoke` is the framework's interface, so it is always there — it used to appear only when a definition declared
- * NO channel, which made "can I curl this deployment" depend on whether someone had added telegram. It is RESERVED
- * for the same reason `/control/*` is: a channel taking that path would silently replace the one route every client,
+ * `/invoke` is the framework's interface, so it is served whatever channels a definition declares (unless
+ * `http.invoke: false`). It is RESERVED for the same reason `/control/*` is: a channel taking that path would silently replace the one route every client,
  * every doc and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
  */
 export async function routesFor(

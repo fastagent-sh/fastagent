@@ -159,8 +159,7 @@ export function busyRetryStream(
  * PRIMARY refs are the opposite policy and stay with their channel: a failure there throws, so the
  * agent never runs on an input the user pointed at and we failed to load.
  *
- * All three channels wrote this reduce out, once per resource kind, and the log wording had already
- * drifted apart — hence `what`, which is the only part that is the platform's.
+ * Shared by all three channels; `what` is the only part that is the platform's.
  */
 export async function loadBackground<R, T>(
   refs: readonly R[],

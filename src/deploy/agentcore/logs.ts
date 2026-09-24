@@ -33,7 +33,7 @@ export async function tailAgentcoreLogs(
   const cli = awsCli(aws);
   const stack = agentcoreStackName(plan.name);
   // THROUGH THE ADJUDICATOR, like every other read of an AWS result in this directory: an exit code alone cannot
-  // separate "deploy it first" from `AccessDeniedException`, and this file used to say the first for both.
+  // separate "deploy it first" from `AccessDeniedException`.
   const outputsRead = await cli.read(
     ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
     awsJson(pickStackOutputs),

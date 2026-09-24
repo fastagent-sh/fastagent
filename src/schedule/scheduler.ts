@@ -100,8 +100,7 @@ function oneLine(text: string): string {
  * {@link fireScheduleOnce}.
  *
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
- * unstructured, in a stream with a wider audience and a bound that differs per host — which is the growth #546 asked
- * us to stop, relocated rather than removed.
+ * unstructured, in a stream with a wider audience and a bound that differs per host.
  */
 export function runTurn(agent: Agent, label: string, session: string, prompt: string) {
   return Effect.gen(function* () {

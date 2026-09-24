@@ -142,8 +142,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     );
     return;
   }
-  // One padded label writer: hand-spaced labels drifted out of alignment the moment a longer one
-  // (agent/workspace) joined the report.
+  // One padded label writer, so labels stay aligned.
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);

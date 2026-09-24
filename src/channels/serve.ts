@@ -148,9 +148,8 @@ export interface RouterSurface {
  * platform's signature inside itself — a Telegram webhook is public on purpose. Ours check nothing, so the router
  * checks for them.
  *
- * TWO TABLES, not one table plus a list of which keys are which. While it was a parallel array, three readers each
- * had their own chance to answer differently, and two of them did: a channel serving `/invoke` was announced as
- * our data plane, and the same fact was hand-written as `[]` in one place while derived in another.
+ * TWO TABLES, not one table plus a list of which keys are which, so the three readers (browser reachability, the JSON
+ * body gate, the startup report) cannot answer differently.
  *
  * CAVEAT, stated because we cannot enforce it: a CUSTOM channel that verifies nothing lands in `selfVerifying`
  * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the

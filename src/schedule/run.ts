@@ -20,15 +20,12 @@
  *   - the reply says what happened and WHERE TO LOOK (the session the turn ran in). Retry policy is the caller's,
  *     because only the caller knows whether its work tolerates running twice
  *   - it is exactly as exposed as `POST /invoke`: unauthenticated, full tool authority, `http.invoke: false` and a
- *     gateway in front are the answers. The framework authenticates nothing (docs/design/session-control.md §14),
- *     and the previous version's per-occurrence rate ceiling was a bound that looked like a security property
- *     while `/invoke` sat open on the same port
+ *     gateway in front are the answers. The framework authenticates nothing (docs/design/session-control.md §14)
  *
- * AND NO IDEMPOTENCY KEY. One was built here and removed: it deduplicated the CALL, not the WORK. A turn that sent
- * one message and then died would answer a keyed retry with "already ran" — safety exactly where it is absent,
- * which is the same reason a failed fire is not retried (schedule/scheduler.ts). It was also a bounded window, so
- * the guarantee came with an asterisk, and `POST /invoke` offers none of it on the same port under the same
- * exposure. What makes a retry safe is idempotent WORK, which only the author can arrange.
+ * AND NO IDEMPOTENCY KEY. A key would deduplicate the CALL, not the WORK: a turn that sent one message and then died
+ * would answer a keyed retry with "already ran" — safety exactly where it is absent, which is the same reason a failed
+ * fire is not retried (schedule/scheduler.ts). What makes a retry safe is idempotent WORK, which only the author can
+ * arrange.
  *
  * NAME IN THE BODY, not the path. A declared name is a filename (`每日简报`, `my schedule` are both legal), and a
  * path segment would mean percent-encoding it — the cost the control plane pays for session ids and this route has

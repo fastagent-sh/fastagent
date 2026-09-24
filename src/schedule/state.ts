@@ -220,10 +220,9 @@ export type SlotClaimOutcome =
 /**
  * Take a cron slot, or report that it is not ours to take.
  *
- * `O_EXCL` is the whole mechanism: creating the file IS the decision, and the kernel gives it to exactly one creator.
- * The read-modify-write of `fires.json` this replaced looked atomic in one process and was not across two, so a
- * second scheduler on the same state (two `start`s, a restart overlapping its predecessor, an external clock racing
- * the resident one) ran the same cron twice.
+ * `O_EXCL` is the whole mechanism: creating the file IS the decision, and the kernel gives it to exactly one creator,
+ * even with a second scheduler on the same state (two `start`s, a restart overlapping its predecessor, an external
+ * clock racing the resident one).
  *
  * Two ways to lose it, and both must hold beyond the pruning window: the slot's own claim exists, or a LATER slot has
  * already been claimed — a delivery older than the newest claim is a stale replay (AWS keeps retrying an event for up

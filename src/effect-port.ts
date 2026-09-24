@@ -16,10 +16,8 @@
  *     platform error types and every operator-facing message read the ORIGINAL error, so the
  *     wrapper carries it verbatim and {@link portError} is how a caller gets it back.
  *
- * Both were re-derived per module during the Effect migration: the channel kit, the pi engine, the
- * AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
- * join-on-interrupt combinator that differed only in the word in front of `Failure`. Four copies of
- * one piece of knowledge, and the next module would have made five.
+ * The channel kit, the pi engine, the AgentCore runtime and the scheduler all cross through here, so each rule is
+ * written once.
  *
  * What is NOT here is a policy: whether a failure rejects a request, is logged, or ends a turn stays
  * with the caller that knows. The only opinion this module holds is the one above.
@@ -30,8 +28,7 @@ import * as Exit from "effect/Exit";
 import { log } from "./log.ts";
 
 /** A Promise port's failure, carrying the original error as `cause`. One tag, because every caller
- *  that discriminates does so on WHAT FAILED (its own control flow), never on which module wrapped
- *  it — the four tags this replaced were never told apart by anyone. */
+ *  that discriminates does so on WHAT FAILED (its own control flow), never on which module wrapped it. */
 export class PortFailure extends Error {
   readonly _tag = "PortFailure";
   constructor(cause: unknown) {

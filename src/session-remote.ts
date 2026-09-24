@@ -36,11 +36,10 @@ const PAYLOAD_TIMEOUT_MS = 60_000;
  * WHY a stream connection ended, carried BY the abort that ended it.
  *
  * Three independent deciders abort one connection — the consumer walking away, a phase deadline, the idle watchdog —
- * and every reader afterwards (the generator's catch, `ready`, the invoke plane's terminal) needs to know which. That
- * question used to be answered by reconstruction: booleans set beside each aborter and re-read by each catch, where
- * being wrong is silent. `AbortSignal.reason` already carries it: `fetch` and `reader.read()` reject with the reason
- * OBJECT itself (verified on Node 22.19 and 26), and a second bare `abort()` does not overwrite it — so the decider
- * states the reason once and nobody infers it.
+ * and every reader afterwards (the generator's catch, `ready`, the invoke plane's terminal) needs to know which.
+ * `AbortSignal.reason` carries it: `fetch` and `reader.read()` reject with the reason OBJECT itself (verified on
+ * Node 22.19 and 26), and a second bare `abort()` does not overwrite it — so the decider states the reason once and
+ * nobody infers it.
  */
 type StreamEndKind = "cancelled" | "connect-timeout" | "idle";
 class StreamEnded extends Error {
@@ -182,9 +181,8 @@ export interface RemoteEndpointOptions {
   /**
    * The transport seam. fastagent authenticates nothing, so whatever fronts the serve is what a caller has to
    * satisfy: wrap `fetch` here to add a gateway credential, refresh it, sign the request, or pin a client
-   * certificate. A plain `headers` option was tried and removed — it covered only the static-token case that this
-   * already covers, and a deployment behind an IdP proxy needs the refresh it could not express. Tests inject a
-   * fake through the same seam.
+   * certificate — a static header cannot express the refresh an IdP proxy needs. Tests inject a fake through the
+   * same seam.
    */
   fetchFn?: typeof fetch;
 }

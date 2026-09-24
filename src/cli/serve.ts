@@ -114,8 +114,8 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  *
  * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
  * (`channels/serve.ts`), so a page the developer merely visits can drive this port from their browser and read the
- * reply — and a loopback bind, which used to make that impossible, no longer does. Nobody opts into a default, so
- * the one posture the decision costs is the one that has to hear about it.
+ * reply, loopback bind or not. Nobody opts into a default, so the one posture the decision costs is the one that
+ * has to hear about it.
  *
  * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
  * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,

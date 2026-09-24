@@ -49,11 +49,9 @@ function secretNamesProblem(value: unknown): string | undefined {
  * THE READ: what a code-input module declared, attributed to its file — the one implementation for
  * `tools/`, `routines/` and `channels/`.
  *
- * It is one function because it was four, and the fourth was written without the shape check the
- * other three had: a `secrets: "FOO"` in a channel file crashed the whole directory with a
- * `TypeError` naming nothing, while the same mistake in a tool was that file's load failure. What a
- * caller DOES with a bad declaration still differs (push a failure and skip, or throw inside its own
- * per-file try), so the verdict travels back as data rather than as an exception.
+ * One function, so every code input gets the same shape check: a `secrets: "FOO"` is that file's load
+ * failure, wherever it is. What a caller DOES with a bad declaration differs (push a failure and skip, or throw
+ * inside its own per-file try), so the verdict travels back as data rather than as an exception.
  */
 export function readSecretDeclaration(
   moduleDefault: unknown,

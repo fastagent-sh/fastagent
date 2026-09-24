@@ -3,8 +3,7 @@
  *
  * A ROUTINE IS THE UNIT OF WORK, and the only named one in the system: a prompt the definition owns, addressed by
  * name. `cron` is a FIELD of it, not a second concept — with one, a clock fires it; without one, it is reached by
- * name alone (`POST /run`). That is why this is not called a "schedule" any more: the file used to be named for the
- * time it carried, and a file carrying no time made the name a lie.
+ * name alone (`POST /run`).
  *
  * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts), and
  * conceptually that is the same idea — work to be done later. Every operational difference between them follows

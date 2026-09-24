@@ -101,15 +101,11 @@ export function awsCli(aws: CliRunner): AwsCli {
  * `SyntaxError: Unexpected end of JSON input` out of a command whose CLI has no catch-all, i.e. a Node stack
  * trace where one actionable line belonged.
  *
- * AND NOT AN EMPTY LIST. An earlier version returned `[]` for empty stdout, on the claim that the AWS CLI prints
- * nothing for a paginated list with no results. It does not (header, point 4: all three of our list commands
- * print a real document). That claim came from a test double, and acting on it turned output we failed to read
- * into "there is nothing there" — a bucket reported clean because its listing was truncated is the same defect
- * class as a denial read as an absence, reached from the other side. Empty stdout needs no branch of its own:
+ * AND NOT AN EMPTY LIST. The AWS CLI prints a real document for a list with no results (header, point 4), so empty
+ * stdout is output we failed to read, never "there is nothing there". It needs no branch of its own:
  * `JSON.parse("")` throws like any other unreadable output, and {@link awsCli} names it `(no output)`.
  *
- * ONE FUNCTION for lists and single values, because they were the same three lines twice — in a module whose
- * whole argument is that a rule with two implementations has none.
+ * ONE FUNCTION for lists and single values.
  */
 export function awsJson<T>(pick: (parsed: unknown) => T | undefined): (stdout: string) => T | undefined {
   return (stdout) => {
