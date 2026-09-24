@@ -240,7 +240,7 @@ complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops 
 
 ## What deploy bakes
 
-Deploy needs a nested definition: point it at the workspace containing `fastagent/`. The image initializes
+Point deploy at the workspace or at its `fastagent/`; both resolve the same agent. The image initializes
 persistent storage once:
 
 ```text

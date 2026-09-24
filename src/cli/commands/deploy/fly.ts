@@ -83,7 +83,7 @@ export const flyHost: HostDeploy = {
 /** `deploy fly --run`: drive flyctl to completion (idempotent, resumable). */
 async function runDeployFly(
   params: ResolvedPlacement & {
-    /** Where the agent's files sit relative to the build context — `"fastagent/"` or `""` (flat). */
+    /** Where the agent's files sit relative to the build context, e.g. `"fastagent/"`. */
     agentPrefix: string;
     appName: string;
     modelAuth: string | undefined;

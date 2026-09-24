@@ -95,7 +95,7 @@ describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () =>
 });
 
 describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
-  it("warns only about keys fastagent itself reads — an application's .env is not ours to lecture about", async () => {
+  it("names every key a stray agent-root .env sets, and still loads the real one", async () => {
     const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
     const { tmpdir, homedir } = await import("node:os");
     const { join } = await import("node:path");
@@ -112,14 +112,12 @@ describe("env: a stray .env at the agent root is announced, not silently ignored
       expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets FASTAGENT_MODEL/);
       expect(process.env.FASTAGENT_MODEL).toBeUndefined(); // announced, never loaded behind the user's back
 
-      // An existing flat agent directory can also be the author's repository (runtime resolution still supports
-      // that shape), where a root `.env` is their APPLICATION's and "move the values there" would break it. Nothing
-      // here can tell those apart, so the warning is scoped to keys fastagent itself reads — and stays
-      // silent about everything else, however long the agent runs without a `.secrets/.env`.
+      // The agent directory is fastagent's, so any value there is misplaced, not only fastagent's own names.
       await writeFile(join(agent, ".env"), "DATABASE_URL=postgres://real\n");
       warn.mockClear();
       loadDotEnv(agent);
-      expect(warn).not.toHaveBeenCalled();
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets DATABASE_URL/);
+      expect(process.env.DATABASE_URL).toBeUndefined();
 
       // …and the agent's own env still loads from the right place, warning or not.
       await mkdir(join(agent, ".secrets"), { recursive: true });

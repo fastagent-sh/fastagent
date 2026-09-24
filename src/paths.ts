@@ -7,7 +7,7 @@ import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-/** The directory name `init` gives a nested agent (`<workspace>/fastagent/`) unless `--agent-dir` names another. */
+/** The directory name `init` gives an agent (`<workspace>/fastagent/`) unless `--agent-dir` names another. */
 export const DEFAULT_AGENT_DIRNAME = "fastagent";
 
 /** The user-global machinery home under `$HOME`. */
