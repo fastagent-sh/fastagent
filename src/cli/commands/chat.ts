@@ -11,5 +11,5 @@ export async function runChat(dirArg: string, opts: { model?: string }): Promise
   process.chdir(placement.workspace);
   // Lazy-import: chat pulls pi's interactive TUI module graph; headless start/dev never need it.
   const { runPiChat } = await import("../../engines/pi/chat.ts");
-  await runPiChat(placement.workspace, { model: opts.model }).catch(failStartup);
+  await runPiChat(placement.agentDir, { model: opts.model }).catch(failStartup);
 }

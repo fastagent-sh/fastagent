@@ -7,15 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { displayPath, placementDeadEnd, readTextIfExists, resolvePlacement, workspaceHint } from "../src/paths.ts";
+import { displayPath, placementDeadEnd, readTextIfExists, resolvePlacement } from "../src/paths.ts";
 
-describe("paths: resolvePlacement — one marker, and the directory you point at", () => {
+describe("paths: resolvePlacement — one marker; the workspace is the agent's parent", () => {
   const config = async (dir: string): Promise<void> => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   };
 
-  it("the agent is the config holder one level inside; the workspace is what you pointed at", async () => {
+  it("the agent is the config holder one level inside; the workspace is its parent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await config(join(dir, "fastagent"));
     expect(resolvePlacement(dir)).toEqual({ agentDir: join(dir, "fastagent"), workspace: dir });
@@ -103,8 +103,8 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
   });
 
   asUser("an unreadable NEIGHBOUR does not fail a scan that found the agent", async () => {
-    // Every machine has directories this process may not enter; `workspaceHint` scans the PARENT of an agent
-    // for a hint, which on a CI runner means scanning /tmp. A decorative hint must not fail the command.
+    // Every machine has directories this process may not enter, and one sitting next to the agent must not fail a
+    // scan that found it.
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-neighbour-"));
     await config(join(dir, "fastagent"));
     await mkdir(join(dir, "locked"));
@@ -126,24 +126,14 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     expect(() => resolvePlacement(plain)).toThrow(/not a fastagent agent/);
   });
 
-  it("pointing AT the agent makes it work on ITSELF — the divergence is the honest answer", async () => {
-    // The same tree answers two ways: targeting the agent directly deliberately narrows its workspace.
+  it("pointing AT the agent or at its parent gives the same placement", async () => {
+    // Where the command runs must not change what the agent works on: `cd fastagent && fastagent dev` and
+    // `fastagent dev` in the project both work on the project.
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-aim-"));
     const agent = join(dir, "fastagent");
     await config(agent);
     expect(resolvePlacement(dir)).toEqual({ agentDir: agent, workspace: dir });
-    expect(resolvePlacement(agent)).toEqual({ agentDir: agent, workspace: agent });
-    // The cost of that (a `cd` drops the project from the agent's view) is carried by a HINT, which may
-    // use the heuristic a rule may not — and stays silent when there is no project to point at.
-    expect(workspaceHint(resolvePlacement(agent))).toBeUndefined();
-    await writeFile(join(dir, "AGENTS.md"), "# project\n");
-    expect(workspaceHint(resolvePlacement(agent))).toMatch(/looks like a project/);
-    expect(workspaceHint(resolvePlacement(dir))).toBeUndefined(); // already working on it
-
-    // A sibling does not silence it while THIS agent is the one `..` would serve (it carries the default
-    // name, so the tie-break points here) — the hint is about what the command would do, not about count.
-    await config(join(dir, "sibling"));
-    expect(workspaceHint(resolvePlacement(agent), {})).toMatch(/looks like a project/);
+    expect(resolvePlacement(agent)).toEqual({ agentDir: agent, workspace: dir });
   });
 
   it("SEVERAL agents on one workspace: FASTAGENT_AGENT picks, the default NAME breaks the tie", async () => {
@@ -168,25 +158,8 @@ describe("paths: resolvePlacement — one marker, and the directory you point at
     expect(pick().agentDir).toBe(join(dir, "fastagent"));
     expect(pick("pm").agentDir).toBe(join(dir, "pm")); // …and the env still outranks it
 
-    // Each is also its own workspace when pointed at — same rule, no special case for siblings.
-    expect(resolvePlacement(join(dir, "pm"))).toEqual({ agentDir: join(dir, "pm"), workspace: join(dir, "pm") });
-  });
-
-  it("the workspace hint stays silent when `..` would not serve THIS agent — no dead-end advice", async () => {
-    // A hint that dead-ends is worse than none. Pointed at `pm` beside `content`, the parent resolves to
-    // neither and refuses, naming them — and that refusal's own advice ("point at the one you want")
-    // points straight back here. Suggesting `..` would walk the reader around that loop, so the hint
-    // RUNS the lookup its advice would run before offering it.
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-hint-"));
-    await writeFile(join(dir, "AGENTS.md"), "# project\n");
-    await config(join(dir, "pm"));
-    const pm = resolvePlacement(join(dir, "pm"));
-    expect(workspaceHint(pm, {})).toMatch(/looks like a project/); // alone: `..` serves it
-
-    await config(join(dir, "content"));
-    expect(workspaceHint(pm, {})).toBeUndefined(); // ambiguous: `..` would refuse
-    expect(workspaceHint(pm, { FASTAGENT_AGENT: "pm" })).toMatch(/looks like a project/); // selected: true again
-    expect(workspaceHint(pm, { FASTAGENT_AGENT: "content" })).toBeUndefined(); // `..` would serve the OTHER one
+    // Pointed at directly, each still works on the shared workspace.
+    expect(resolvePlacement(join(dir, "pm"))).toEqual({ agentDir: join(dir, "pm"), workspace: dir });
   });
 
   it("FASTAGENT_AGENT ASSERTS — a directory without that agent resolves to nothing, even holding one", async () => {

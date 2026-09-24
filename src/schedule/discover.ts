@@ -20,9 +20,8 @@ import type { LoadedRoutine, Routine } from "./routine.ts";
  * agent that still has the old directory boots clean, reports `routines: (none)`, and never fires. That is the
  * one failure shape this repo refuses to ship: an absent capability announced as a ready service.
  *
- * A WARNING, NOT A REFUSAL. In a flat layout the agent dir IS the repo, so an unrelated `schedules/` of the
- * author's own is possible, and a hard stop on a name we used to own would be us breaking their project. The
- * warning names the rename and costs nothing when it is wrong.
+ * A WARNING, NOT A REFUSAL: an unrelated `schedules/` of the author's own is possible, and the warning costs nothing
+ * when it is wrong.
  */
 async function warnAboutStaleSchedulesDir(dir: string): Promise<void> {
   const stale = join(dir, "schedules");

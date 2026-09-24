@@ -10,7 +10,7 @@ import {
   resolveModelSpec,
 } from "../../engines/pi/config.ts";
 import { createPiModelRuntime } from "../../engines/pi/models.ts";
-import { resolveSessionsDir, resolveStateRoot, workspaceHint } from "../../paths.ts";
+import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
@@ -149,8 +149,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
   line("workspace", workspace);
-  const hint = workspaceHint({ agentDir, workspace });
-  if (hint) line("hint", hint);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);

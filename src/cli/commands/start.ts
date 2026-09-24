@@ -182,7 +182,7 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
   await maybeSeedAuth(resolveAuthPath(placement.agentDir));
-  const opened = await createPiAgentFromDir(placement.workspace, {
+  const opened = await createPiAgentFromDir(placement.agentDir, {
     model: opts.model,
     serving: true,
   });

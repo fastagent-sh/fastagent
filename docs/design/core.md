@@ -52,27 +52,24 @@ One agent shape, one marker:
 The other noun is the **workspace** — what the agent works on: its cwd, its coding tools' root,
 deploy's build context, and whose `AGENTS.md` ancestors are ② context.
 
-**The workspace is the directory you point fastagent at.** The same tree therefore answers two ways:
+**The workspace is the agent directory's parent**, wherever the command is pointed:
 
 ```txt
 repo/                       # `fastagent dev` here  → agent = repo/agent, workspace = repo
 ├── AGENTS.md
 ├── src/
-└── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo/agent
+└── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo
     ├── persona.md  skills/  tools/  channels/  routines/
     ├── fastagent.config.ts
     └── .secrets/  .state/
 ```
 
-Point at the project and its agent serves with the project as its workspace (what `init` sets up).
-Point at the agent directory and it works on itself. That shape still RESOLVES (the two directories are
-simply equal), but `init` no longer creates it: a definition written into a directory that already holds
-other files inherits that directory's `package.json`, and a `fastagent.config.ts` under a CommonJS
-manifest does not load.
+An agent is a folder you add to a project, like `.github/`. Where a command runs cannot change what the agent works
+on, and every command that re-opens an agent passes its `agentDir`, which resolves to the same placement.
 
 | `dir` | Result |
 |---|---|
-| holds a `fastagent.config.ts` | `{ agentDir: dir, workspace: dir }` |
+| holds a `fastagent.config.ts` | `{ agentDir: dir, workspace: parent of dir }` |
 | exactly one directory inside it holds one | `{ agentDir: <that dir>, workspace: dir }` |
 | several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
 | none | throws: not a fastagent agent, with the exit that fits the position |
@@ -88,15 +85,11 @@ manifest does not load.
   you point at the package.
 - Resolution never walks up, but the refusal reads the path so each dead end gets its own exit: inside
   an agent → `cd` to it; on a directory holding several → point at one.
-- **The cost of aiming being load-bearing** is that `cd agent && fastagent dev` narrows the workspace.
-  Three things carry it: `dev`/`start`/`info` print `agent:` and `workspace:` on every run; the
-  explicit form (`fastagent dev ..`) is always exact; and a parent carrying an `AGENTS.md` or `.git`
-  adds a `hint:` line. A hint may use that heuristic precisely because a rule may not.
-- **Known boundary:** the workspace is `agentDir` itself or its immediate parent, never further.
+- **An agent directory used as its own project is not supported.** A config at a repository's root makes the
+  repository's parent the workspace; put the definition in `./fastagent/` (what `init` does).
 
 `init` either creates or refuses with the reason. It always writes the complete scaffold into an empty
 direct subdirectory of `dir`; an agent already at `dir` is refused because it would hide that child.
-Existing flat layouts remain supported only by runtime resolution: `init` never creates or adopts one.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a

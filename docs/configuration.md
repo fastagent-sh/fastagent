@@ -312,9 +312,9 @@ Each has its own config, persona, skills, tools, channels, routines, `.state/`, 
 selection is automatic; with several, the one named `fastagent` answers unless `FASTAGENT_AGENT` (shell or
 `.envrc`) names another.
 
-The workspace is the directory passed to the command: `fastagent dev .` works on the project, `fastagent dev
-reviewer` works on `reviewer/` itself. For separate workspaces, run `fastagent init reviewer` and `fastagent init
-releaser`. `init` refuses a placement that would hide another definition.
+The workspace is always the agent directory's parent: `fastagent dev .` and `fastagent dev reviewer` both work on
+the project. For separate workspaces, run `fastagent init reviewer` and `fastagent init releaser` (creating
+`reviewer/fastagent/` and `releaser/fastagent/`). `init` refuses a placement that would hide another definition.
 
 ## Channels
 
