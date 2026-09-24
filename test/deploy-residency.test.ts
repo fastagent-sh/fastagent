@@ -11,7 +11,7 @@ import { CRON_CAN_BE_EXTERNAL, residencyFor } from "../src/deploy/residency.ts";
 const channel = (name: string, ingress: DeclaredChannel["ingress"] = "webhook"): DeclaredChannel =>
   ({ name, ingress }) as DeclaredChannel;
 
-const nothing = { channels: [], hasCron: false, hasWakeups: false };
+const nothing = { channels: [], hasCron: false };
 
 describe("deploy/residency", () => {
   it("is undefined when nothing in the definition needs a machine up", () => {
@@ -22,25 +22,18 @@ describe("deploy/residency", () => {
   it("reports each reason with the cause, not the remedy", () => {
     // The remedy is the host's word (`min_machines_running`, App Sleeping); the CAUSE is this rule's,
     // and it is why two hosts could not drift apart on it again.
-    expect(residencyFor({ ...nothing, hasWakeups: true })).toMatchObject({ reason: "wake-ups" });
     expect(residencyFor({ ...nothing, hasCron: true })).toMatchObject({ reason: "cron" });
     expect(residencyFor({ ...nothing, channels: [channel("socket", "long-connection")] })).toMatchObject({
       reason: "long-connection",
     });
-    for (const facts of [
-      { ...nothing, hasWakeups: true },
-      { ...nothing, hasCron: true },
-    ]) {
+    for (const facts of [{ ...nothing, hasCron: true }]) {
       expect(residencyFor(facts)?.why).not.toMatch(/min_machines_running|App Sleeping/);
     }
   });
 
   it("reports the reason WITHOUT a way out first — the message depends on which one it is", () => {
-    // A cron can be fired by someone else's clock through POST /run; a wake-up is minted by the
-    // agent at runtime, so nothing outside can know to send it. Reporting the cron half of a
-    // definition that has both would offer a way out that drops every wake-up.
-    expect(residencyFor({ ...nothing, hasCron: true, hasWakeups: true })?.reason).toBe("wake-ups");
-    expect(residencyFor({ ...nothing, hasCron: true, hasWakeups: true })?.reason).not.toBe(CRON_CAN_BE_EXTERNAL);
+    // A cron is the one reason with a way out: someone else's clock can call POST /run.
+    expect(residencyFor({ ...nothing, hasCron: true })?.reason).toBe(CRON_CAN_BE_EXTERNAL);
     // A long connection is last only because the others are stronger, not because it is optional.
     expect(residencyFor({ ...nothing, hasCron: true, channels: [channel("socket", "long-connection")] })?.reason).toBe(
       "cron",

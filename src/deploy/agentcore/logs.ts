@@ -85,14 +85,7 @@ export async function tailAgentcoreLogs(
   const groups = "ok" in groupsRead ? groupsRead.ok : [];
   const matches = groups.filter((group) => (exact ? group === exact : group.startsWith(prefix))).sort();
   if (matches.length === 0) {
-    // Absent group = never used, EXCEPT when the stack has no forwarder at all — an invoke-only deployment would
-    // otherwise be told to deliver a webhook it can never receive.
-    if (plan.source === "forwarder" && !outputs.ForwarderUrl) {
-      return {
-        ok: false,
-        gate: `stack ${stack} has neither a forwarder log group nor an ingress URL — this looks like an invoke-only deployment, which has Runtime logs only`,
-      };
-    }
+    // Absent group = never used.
     const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or routine run";
     return {
       ok: false,

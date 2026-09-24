@@ -33,8 +33,6 @@ export interface AgentcorePlanInput extends ContainerInput {
   secrets?: readonly DeploymentSecret[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
   schedules: ScheduleFact[];
-  /** Mirror the wake tool's pending work into EventBridge alarms. */
-  selfSchedule: boolean;
   /**
    * How long an idle session keeps its microVM (config `deploy.agentcore.idleTimeoutSeconds`). The workload decides:
    * a chat agent talked to in bursts wants a longer tail than a schedule-only one. Defaults to
@@ -58,23 +56,10 @@ export interface AgentcorePlan {
 export interface AgentcoreTopology {
   /** A webhook channel: the forwarder relays public Function URL traffic to it. */
   webhooks: boolean;
-  /** The forwarder serves webhooks, scheduled fires or wake alarms. */
-  forwarder: boolean;
-  /** The forwarder mirrors the agent's wake-ups into one-shot EventBridge schedules. */
-  wakeAlarms: boolean;
 }
 
-function agentcoreTopology(
-  input: Pick<AgentcorePlanInput, "channels" | "selfSchedule">,
-  /** Schedules EventBridge CAN express — the ones that become rules. */
-  translatedSchedules: number,
-): AgentcoreTopology {
-  const webhooks = input.channels.some((channel) => channel.ingress === "webhook");
-  return {
-    webhooks,
-    forwarder: webhooks || translatedSchedules > 0 || input.selfSchedule,
-    wakeAlarms: input.selfSchedule,
-  };
+function agentcoreTopology(input: Pick<AgentcorePlanInput, "channels">): AgentcoreTopology {
+  return { webhooks: input.channels.some((channel) => channel.ingress === "webhook") };
 }
 
 /** The platform's managed SessionStorage mount (AgentCore requires exactly `/mnt/<one-level>`). */
@@ -300,7 +285,6 @@ function template(
 ): string {
   const runtimeName = toRuntimeName(input.name);
   const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
-  const needsForwarder = topology.forwarder;
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
   // Secret env vars ride CFN NoEcho parameters.
@@ -309,16 +293,14 @@ function template(
     `    Type: String`,
     `    Description: ECR image URI (linux/arm64) — <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>`,
   ];
-  if (needsForwarder) {
-    params.push(
-      `  ForwarderBucket:`,
-      `    Type: String`,
-      `    Description: S3 bucket holding the forwarder deployment package (created outside this stack)`,
-      `  ForwarderS3Key:`,
-      `    Type: String`,
-      `    Description: content-hashed key of the forwarder .zip in ForwarderBucket`,
-    );
-  }
+  params.push(
+    `  ForwarderBucket:`,
+    `    Type: String`,
+    `    Description: S3 bucket holding the forwarder deployment package (created outside this stack)`,
+    `  ForwarderS3Key:`,
+    `    Type: String`,
+    `    Description: content-hashed key of the forwarder .zip in ForwarderBucket`,
+  );
   const envLines: string[] = [
     `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
     `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
@@ -342,26 +324,22 @@ function template(
       envLines.push(`        ${env}: !Ref ${param}`);
     }
   }
-  if (needsForwarder) {
-    // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
-    params.push(
-      `  FastagentIngressSecret:`,
-      `    Type: String`,
-      `    NoEcho: true`,
-      `    Description: shared secret authenticating forwarder→runtime envelopes (any random string; --run mints one)`,
-    );
-    envLines.push(`        FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret`);
-  }
-  if (input.selfSchedule) {
-    // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder with it.
-    params.push(
-      `  FastagentWakeSecret:`,
-      `    Type: String`,
-      `    NoEcho: true`,
-      `    Description: shared secret between the container and the forwarder's wake-alarm callback (any random string; --run mints one)`,
-    );
-    envLines.push(`        FASTAGENT_WAKE_SECRET: !Ref FastagentWakeSecret`);
-  }
+  // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
+  params.push(
+    `  FastagentIngressSecret:`,
+    `    Type: String`,
+    `    NoEcho: true`,
+    `    Description: shared secret authenticating forwarder→runtime envelopes (any random string; --run mints one)`,
+  );
+  envLines.push(`        FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret`);
+  // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder with it.
+  params.push(
+    `  FastagentWakeSecret:`,
+    `    Type: String`,
+    `    NoEcho: true`,
+    `    Description: shared secret between the container and the forwarder's wake-alarm callback (any random string; --run mints one)`,
+  );
+  envLines.push(`        FASTAGENT_WAKE_SECRET: !Ref FastagentWakeSecret`);
 
   const lines: string[] = [
     `${GENERATED_TEMPLATE_MARKER}. Edit freely — deploy then treats it as hand-written and never gates on drift.`,
@@ -430,139 +408,121 @@ function template(
     ...envLines,
   ];
 
-  if (needsForwarder) {
-    lines.push(
-      ``,
-      `  ForwarderRole:`,
-      `    Type: AWS::IAM::Role`,
-      `    Properties:`,
-      `      AssumeRolePolicyDocument:`,
-      `        Version: "2012-10-17"`,
-      `        Statement:`,
-      `          - Effect: Allow`,
-      `            Principal: { Service: lambda.amazonaws.com }`,
-      `            Action: sts:AssumeRole`,
-      `      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]`,
-      `      Policies:`,
-      `        - PolicyName: invoke-runtime`,
-      `          PolicyDocument:`,
-      `            Version: "2012-10-17"`,
-      `            Statement:`,
-      `              - Effect: Allow`,
-      `                Action: bedrock-agentcore:InvokeAgentRuntime`,
-      `                Resource:`,
-      `                  - !GetAtt Runtime.AgentRuntimeArn`,
-      `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
-      ...(input.selfSchedule
-        ? [
-            `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
-            `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
-            `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
-            `              - Effect: Allow # hand the poke schedules their invoke role`,
-            `                Action: iam:PassRole`,
-            `                Resource: !GetAtt WakeSchedulerRole.Arn`,
-          ]
-        : []),
-      ...(needsForwarder
-        ? [
-            `              - Effect: Allow # self-resolve callback URL for state-URL refresh / wake alarms`,
-            `                Action: lambda:GetFunctionUrlConfig`,
-            `                Resource: ${forwarderFnArn}`,
-          ]
-        : []),
-      ``,
-      `  Forwarder:`,
-      `    Type: AWS::Lambda::Function`,
-      `    Properties:`,
-      `      FunctionName: ${forwarderFunctionName(input.name)}`,
-      `      Runtime: nodejs22.x`,
-      `      Handler: index.handler`,
-      `      # Webhook ACKs are fast, but routine-fire holds the connection for the WHOLE agent turn`,
-      `      # (claim-before-run means a timeout never double-fires; the turn also continues and is`,
-      `      # audited container-side). EventBridge→Lambda is async, so the long timeout costs nothing.`,
-      `      Timeout: 900`,
-      `      MemorySize: 256`,
-      `      Role: !GetAtt ForwarderRole.Arn`,
-      `      Environment:`,
-      `        Variables:`,
-      `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
-      `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
-      ...(topology.webhooks ? [`          WEBHOOKS_ENABLED: "1"`] : []),
-      ...(input.selfSchedule
-        ? [
-            `          WAKE_SECRET: !Ref FastagentWakeSecret`,
-            `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
-            `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
-          ]
-        : []),
-      `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
-      `          MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES}"`,
-      `      # A content-hashed key makes code changes visible to CloudFormation.`,
-      `      Code:`,
-      `        S3Bucket: !Ref ForwarderBucket`,
-      `        S3Key: !Ref ForwarderS3Key`,
-    );
-  }
-  if (needsForwarder) {
-    lines.push(
-      ``,
-      `  ForwarderUrl:`,
-      `    Type: AWS::Lambda::Url`,
-      `    Properties:`,
-      `      TargetFunctionArn: !GetAtt Forwarder.Arn`,
-      `      # NONE is deliberate: webhook callers (Telegram/Feishu) cannot SigV4-sign. Authenticity is`,
-      `      # verified downstream by each channel (secret token / signature), exactly as on every host.`,
-      `      AuthType: NONE`,
-      ``,
-      `  ForwarderUrlPermission:`,
-      `    Type: AWS::Lambda::Permission`,
-      `    Properties:`,
-      `      FunctionName: !Ref Forwarder`,
-      `      Action: lambda:InvokeFunctionUrl`,
-      `      Principal: "*"`,
-      `      FunctionUrlAuthType: NONE`,
-      ``,
-      `  # Function URLs created after Oct 2025 require lambda:InvokeFunction IN ADDITION to`,
-      `  # lambda:InvokeFunctionUrl for public (NONE) access — with only the first, every request 403s`,
-      `  # (found by the first real deploy). InvokedViaFunctionUrl scopes it to URL traffic: without it`,
-      `  # the bare * principal would also let any AWS principal call the Lambda API directly, bypassing`,
-      `  # the Function URL event shape to forge internal events.`,
-      `  ForwarderInvokePermission:`,
-      `    Type: AWS::Lambda::Permission`,
-      `    Properties:`,
-      `      FunctionName: !Ref Forwarder`,
-      `      Action: lambda:InvokeFunction`,
-      `      Principal: "*"`,
-      `      InvokedViaFunctionUrl: true`,
-    );
-    if (input.selfSchedule) {
-      lines.push(
-        ``,
-        `  # The role the wake-poke schedules assume to invoke the forwarder. Its policy names the`,
-        `  # function by CONSTRUCTED arn (not !Ref) — the forwarder's env references this role, so a`,
-        `  # !Ref back would be a circular dependency.`,
-        `  WakeSchedulerRole:`,
-        `    Type: AWS::IAM::Role`,
-        `    Properties:`,
-        `      AssumeRolePolicyDocument:`,
-        `        Version: "2012-10-17"`,
-        `        Statement:`,
-        `          - Effect: Allow`,
-        `            Principal: { Service: scheduler.amazonaws.com }`,
-        `            Action: sts:AssumeRole`,
-        `            Condition:`,
-        `              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }`,
-        `      Policies:`,
-        `        - PolicyName: poke-forwarder`,
-        `          PolicyDocument:`,
-        `            Version: "2012-10-17"`,
-        `            Statement:`,
-        `              - Effect: Allow`,
-        `                Action: lambda:InvokeFunction`,
-        `                Resource: ${forwarderFnArn}`,
-      );
-    }
-  }
+  lines.push(
+    ``,
+    `  ForwarderRole:`,
+    `    Type: AWS::IAM::Role`,
+    `    Properties:`,
+    `      AssumeRolePolicyDocument:`,
+    `        Version: "2012-10-17"`,
+    `        Statement:`,
+    `          - Effect: Allow`,
+    `            Principal: { Service: lambda.amazonaws.com }`,
+    `            Action: sts:AssumeRole`,
+    `      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]`,
+    `      Policies:`,
+    `        - PolicyName: invoke-runtime`,
+    `          PolicyDocument:`,
+    `            Version: "2012-10-17"`,
+    `            Statement:`,
+    `              - Effect: Allow`,
+    `                Action: bedrock-agentcore:InvokeAgentRuntime`,
+    `                Resource:`,
+    `                  - !GetAtt Runtime.AgentRuntimeArn`,
+    `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
+    `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
+    `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
+    `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
+    `              - Effect: Allow # hand the poke schedules their invoke role`,
+    `                Action: iam:PassRole`,
+    `                Resource: !GetAtt WakeSchedulerRole.Arn`,
+    `              - Effect: Allow # self-resolve callback URL for state-URL refresh / wake alarms`,
+    `                Action: lambda:GetFunctionUrlConfig`,
+    `                Resource: ${forwarderFnArn}`,
+    ``,
+    `  Forwarder:`,
+    `    Type: AWS::Lambda::Function`,
+    `    Properties:`,
+    `      FunctionName: ${forwarderFunctionName(input.name)}`,
+    `      Runtime: nodejs22.x`,
+    `      Handler: index.handler`,
+    `      # Webhook ACKs are fast, but routine-fire holds the connection for the WHOLE agent turn`,
+    `      # (claim-before-run means a timeout never double-fires; the turn also continues and is`,
+    `      # audited container-side). EventBridge→Lambda is async, so the long timeout costs nothing.`,
+    `      Timeout: 900`,
+    `      MemorySize: 256`,
+    `      Role: !GetAtt ForwarderRole.Arn`,
+    `      Environment:`,
+    `        Variables:`,
+    `          RUNTIME_ARN: !GetAtt Runtime.AgentRuntimeArn`,
+    `          INGRESS_SESSION_ID: ${ingressSessionId(input.name)}`,
+    ...(topology.webhooks ? [`          WEBHOOKS_ENABLED: "1"`] : []),
+    `          WAKE_SECRET: !Ref FastagentWakeSecret`,
+    `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
+    `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
+    `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
+    `          MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES}"`,
+    `      # A content-hashed key makes code changes visible to CloudFormation.`,
+    `      Code:`,
+    `        S3Bucket: !Ref ForwarderBucket`,
+    `        S3Key: !Ref ForwarderS3Key`,
+  );
+  lines.push(
+    ``,
+    `  ForwarderUrl:`,
+    `    Type: AWS::Lambda::Url`,
+    `    Properties:`,
+    `      TargetFunctionArn: !GetAtt Forwarder.Arn`,
+    `      # NONE is deliberate: webhook callers (Telegram/Feishu) cannot SigV4-sign. Authenticity is`,
+    `      # verified downstream by each channel (secret token / signature), exactly as on every host.`,
+    `      AuthType: NONE`,
+    ``,
+    `  ForwarderUrlPermission:`,
+    `    Type: AWS::Lambda::Permission`,
+    `    Properties:`,
+    `      FunctionName: !Ref Forwarder`,
+    `      Action: lambda:InvokeFunctionUrl`,
+    `      Principal: "*"`,
+    `      FunctionUrlAuthType: NONE`,
+    ``,
+    `  # Function URLs created after Oct 2025 require lambda:InvokeFunction IN ADDITION to`,
+    `  # lambda:InvokeFunctionUrl for public (NONE) access — with only the first, every request 403s`,
+    `  # (found by the first real deploy). InvokedViaFunctionUrl scopes it to URL traffic: without it`,
+    `  # the bare * principal would also let any AWS principal call the Lambda API directly, bypassing`,
+    `  # the Function URL event shape to forge internal events.`,
+    `  ForwarderInvokePermission:`,
+    `    Type: AWS::Lambda::Permission`,
+    `    Properties:`,
+    `      FunctionName: !Ref Forwarder`,
+    `      Action: lambda:InvokeFunction`,
+    `      Principal: "*"`,
+    `      InvokedViaFunctionUrl: true`,
+  );
+  lines.push(
+    ``,
+    `  # The role the wake-poke schedules assume to invoke the forwarder. Its policy names the`,
+    `  # function by CONSTRUCTED arn (not !Ref) — the forwarder's env references this role, so a`,
+    `  # !Ref back would be a circular dependency.`,
+    `  WakeSchedulerRole:`,
+    `    Type: AWS::IAM::Role`,
+    `    Properties:`,
+    `      AssumeRolePolicyDocument:`,
+    `        Version: "2012-10-17"`,
+    `        Statement:`,
+    `          - Effect: Allow`,
+    `            Principal: { Service: scheduler.amazonaws.com }`,
+    `            Action: sts:AssumeRole`,
+    `            Condition:`,
+    `              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }`,
+    `      Policies:`,
+    `        - PolicyName: poke-forwarder`,
+    `          PolicyDocument:`,
+    `            Version: "2012-10-17"`,
+    `            Statement:`,
+    `              - Effect: Allow`,
+    `                Action: lambda:InvokeFunction`,
+    `                Resource: ${forwarderFnArn}`,
+  );
 
   if (translated.length > 0) {
     lines.push(
@@ -612,9 +572,7 @@ function template(
   }
 
   lines.push(``, `Outputs:`, `  RuntimeArn:`, `    Value: !GetAtt Runtime.AgentRuntimeArn`);
-  if (needsForwarder) {
-    lines.push(`  ForwarderUrl:`, `    Value: !GetAtt ForwarderUrl.FunctionUrl`);
-  }
+  lines.push(`  ForwarderUrl:`, `    Value: !GetAtt ForwarderUrl.FunctionUrl`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -649,11 +607,10 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     logicalIds.set(id, fact.name);
   }
 
-  const topology = agentcoreTopology(input, translated.length);
-  const needsForwarder = topology.forwarder;
+  const topology = agentcoreTopology(input);
   const artifacts: Artifact[] = [
     { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated, topology) },
-    ...(needsForwarder ? [{ path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() }] : []),
+    { path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() },
     ...containerArtifacts(input),
   ];
 
@@ -674,15 +631,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws s3api put-public-access-block --bucket ${bucketHint} \\`,
     `  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true`,
     ``,
-    ...(needsForwarder
-      ? [
-          `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
-          `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
-          `(cd ${prefix}lambda && zip -q forwarder.zip index.js)`,
-          `aws s3 cp ${prefix}lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
-          ``,
-        ]
-      : []),
+    `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
+    `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
+    `(cd ${prefix}lambda && zip -q forwarder.zip index.js)`,
+    `aws s3 cp ${prefix}lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
+    ``,
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
@@ -697,46 +650,31 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
     );
   }
-  const wakeSecretHint = input.selfSchedule ? " FastagentWakeSecret=<any random string>" : "";
-  if (input.selfSchedule) {
-    runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
-  }
+  const wakeSecretHint = " FastagentWakeSecret=<any random string>";
+  runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${prefix}${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
-    `  --parameter-overrides ImageUri=${image}${
-      needsForwarder ? ` ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
-    }${secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""}${wakeSecretHint}`,
+    `  --parameter-overrides ImageUri=${image} ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${
+      secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""
+    }${wakeSecretHint}`,
     ``,
-    needsForwarder
-      ? `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`
-      : `# 4. Read the outputs (the runtime ARN — this topology has NO public URL: nothing outside AWS`,
-    ...(needsForwarder
-      ? []
-      : [`#    sends to it, so no Function URL is created and the agent is reachable only via SigV4).`]),
+    `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`,
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
     ``,
     `# 5. Tail the Runtime's application stdout/stderr (same fastagent messages + log level as locally).`,
     `#    Discovery resolves the per-endpoint log group from the stack's RuntimeArn:`,
     `fastagent logs agentcore --follow`,
-    ...(needsForwarder
-      ? [
-          `# The ingress transport is a separate Lambda and therefore a separate log source:`,
-          `fastagent logs agentcore --source forwarder --follow`,
-        ]
-      : []),
+    `# The ingress transport is a separate Lambda and therefore a separate log source:`,
+    `fastagent logs agentcore --source forwarder --follow`,
     ``,
     `# 6. Set a log retention period on EVERY group this stack writes to. Each is created by the service that`,
     `#    writes it, not by this template, and CloudWatch keeps log data indefinitely by default — which is`,
     `#    forever-billed storage, and the logs are where WHY a scheduled turn failed is recorded. Logs are the`,
     `#    ONE state path this host does not reclaim on its own.`,
     `aws logs put-retention-policy --log-group-name <the group \`fastagent logs agentcore\` resolves> --retention-in-days 14`,
-    ...(needsForwarder
-      ? [
-          `# The forwarder is a separate Lambda, so its group is separate and defaults the same way:`,
-          `aws logs put-retention-policy --log-group-name ${forwarderLogGroup(input.name)} --retention-in-days 14`,
-        ]
-      : []),
+    `# The forwarder is a separate Lambda, so its group is separate and defaults the same way:`,
+    `aws logs put-retention-policy --log-group-name ${forwarderLogGroup(input.name)} --retention-in-days 14`,
   );
 
   // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored can't be read at
@@ -771,16 +709,14 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       `#   It will NOT fire on this deployment until you create an equivalent trigger yourself.`,
     );
   }
-  if (input.selfSchedule) {
-    runbook.push(
-      ``,
-      `# selfSchedule: the agent's wake-ups are EventBridge-backed — each pending wake-up is mirrored`,
-      `#   (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
-      `#   schedule (fa-${name}-wk-*) that wakes the container at the right instant. Reliable even when`,
-      `#   the compute is reclaimed. The forwarder supplies the callback URL; use the deployment's`,
-      `#   fixed runtime session id for programmatic calls too.`,
-    );
-  }
+  runbook.push(
+    ``,
+    `# Wake-ups: the agent's own follow-up turns (the wake tool) are EventBridge-backed — each pending wake-up is mirrored`,
+    `#   (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
+    `#   schedule (fa-${name}-wk-*) that wakes the container at the right instant. Reliable even when`,
+    `#   the compute is reclaimed. The forwarder supplies the callback URL; use the deployment's`,
+    `#   fixed runtime session id for programmatic calls too.`,
+  );
 
   runbook.push(
     ``,

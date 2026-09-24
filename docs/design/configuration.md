@@ -47,7 +47,7 @@ Questions 2 and 3 give four boxes, and **only three are inhabited**. Something b
 |---|---|---|---|
 | **A. Builder-local** | The consumer is the `deploy` process itself | **None.** Delivering a value nothing reads only creates drift | `deploy.apt`, `deploy.agentcore.idleTimeoutSeconds`, the declared secret *names*, host location (AWS account/region, fly region) |
 | **B. Derived, non-sensitive** | FastAgent computes it and knows it is not sensitive | **Release manifest.** Rewritten by every deploy (cannot go stale), rides an immutable image (cannot go stale on the platform, cannot interpolate a shell), is JSON (no code-generation syntax to escape) | the resolved model, `releaseId`, the agent directory |
-| **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port`, `selfSchedule`, `sessionControl` |
+| **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port`, `sessionControl` |
 | **D. Operator-supplied environment values** | Differs per deployment, not in git, **sensitivity known only to the author** | **The platform's secret storage.** Must not enter a readable artifact, and must be rotatable on the target without rebuilding the image | channel secrets, provider API keys, anything a `{ secrets: […] }` declaration names, the secrets `deploy` mints (`FASTAGENT_WAKE_SECRET`, `FASTAGENT_INGRESS_SECRET`) |
 | **E. Self-refreshing credentials** | The target rewrites it | Secret storage as a **seed**, the target's volume as the **authority** — the seed is written only when the target has none (`authSeedBytes`), because the target's copy is newer by definition | `auth.json` |
 
@@ -68,7 +68,7 @@ This is the rule §3's question 4 already implied, written as something a review
 ## 4. Files
 
 ```
-fastagent.config.ts               # in git (or .js/.mjs): name / model / http / selfSchedule / deploy.{secrets,apt}
+fastagent.config.ts               # in git (or .js/.mjs): name / model / http / deploy.{secrets,apt}
 persona.md  skills/  tools/  channels/  routines/
 
 .secrets/.env                     # the local (= single-instance deploy) values

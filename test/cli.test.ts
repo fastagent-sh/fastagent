@@ -610,14 +610,13 @@ describe("cli papercuts", () => {
     expect(info.routines[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
     expect(info.routines[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
     expect(JSON.stringify(info.routineFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
-    expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
+    expect(info).not.toHaveProperty("selfSchedule"); // not a switch: every serve mounts the wake tool
     expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
 
     // text mode: next instant on the routines line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);
     expect(text.code).toBe(0);
     expect(text.stdout).toMatch(/routines:\s+good \(next .*T09:00:00\.000Z\)/);
-    expect(text.stdout).toMatch(/selfSchedule: off/);
     expect(text.stderr).toMatch(/bad\.mjs/);
   });
 

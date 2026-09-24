@@ -17,7 +17,7 @@
  * TEARDOWN, which the product offers none of, is {@link destroyAgentcoreDeployment} — shared with the
  * wake probe, and shared deliberately: it is cleanup code, so a second copy drifts unnoticed until it
  * has been leaking. It sweeps more than this fixture creates (wake alarms, an artifact bucket), which
- * is the point: one line here (a channel, a schedule, `selfSchedule`) turns those on.
+ * is the point: one line here (a channel, a schedule) turns those on.
  *
  * COSTS REAL RESOURCES and is the slowest probe here — a stack create plus delete is minutes.
  *

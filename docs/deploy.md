@@ -142,11 +142,11 @@ fastagent deploy fly --run   # idempotent, resumable; carries .secrets/.env's va
 
 Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms) with `min_machines_running = 0`. Both lines are in the generated `fly.toml` and are yours to edit — the artifact is the knob, and `deploy` never regenerates it without `--force`. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
-**Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
+**Declared crons and long-connection channels keep one machine running.** A cron has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
 **One of those reasons has a way out: `routines/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /run`](api-reference.md#post-run) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
 
-`selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a long-connection channel (it cannot reconnect from zero).
+The agent's own wake-ups are **not** a reason to stay up. Every serve mounts the `wake` tool, and the wake-up store is on the volume: a machine that scaled to zero fires what is due when a request next wakes it, late but not lost. A long-connection channel (it cannot reconnect from zero) has no way out.
 
 ## Railway
 
@@ -171,7 +171,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with `selfSchedule` or a long-connection channel; a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with a long-connection channel (with it on, the agent's own wake-ups fire late, when a request wakes the service); a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
 
 ## AWS Bedrock AgentCore
 
@@ -231,12 +231,12 @@ Two boundaries worth knowing before you run it:
   `curl "https://api.telegram.org/bot<token>/deleteWebhook"` — otherwise the platform keeps delivering to a
   URL that no longer answers.
 
-AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed after the configured idle timeout — 3 minutes by default). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
+AgentCore differs from the resident-box hosts in kind — the Runtime has **no public URL** of its own (its ingress is the SigV4 `InvokeAgentRuntime` API) and **no resident process** (compute is per-session microVMs, reclaimed after the configured idle timeout — 3 minutes by default). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
-- a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);
+- a **forwarder Lambda** with a public Function URL, on every stack: it fronts the webhooks when there are any (channels verify signatures exactly as on every host) and owns the wake alarms;
 - **EventBridge Scheduler rules** firing each `routines/*.ts` cron (the container arms no resident timers; the rule carries `<aws.scheduler.scheduled-time>`, which EventBridge repeats unchanged on a redelivery, so the container dedupes on it). A cron EventBridge cannot express is refused at deploy time, never silently dropped;
-- with `selfSchedule: true`, the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
+- the **wake-alarm wiring**: pending wake-ups are mirrored (via the forwarder, authenticated by a minted shared secret) into self-deleting one-shot EventBridge schedules that wake the container at the right instant.
 
 What to know before choosing it:
 
@@ -248,7 +248,7 @@ What to know before choosing it:
 - **Long-connection channels cannot run here** — the connection is the ingress and nothing wakes a reclaimed session; switch the channel to webhook mode (`--run` gates on this).
 - **Programmatic invokes reuse the deployment's fixed `runtimeSessionId`**, printed in the runbook. The envelope's `session` still selects an independent conversation. The workspace lease rejects competing writers.
 - **The webhook body limit is the host's, not the channel's.** A Lambda Function URL request caps at 6 MB, so a webhook body over roughly 4 MiB cannot reach the container at all.
-- **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule, a channel, or `selfSchedule`), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
+- **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule or a channel), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
 
 ## Serving an existing repo (agentDir layout)
 

@@ -6,7 +6,7 @@
  * name alone (`POST /run`). That is why this is not called a "schedule" any more: the file used to be named for the
  * time it carried, and a file carrying no time made the name a lie.
  *
- * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (`selfSchedule`, schedule/wakeups.ts), and
+ * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts), and
  * conceptually that is the same idea — work to be done later. Every operational difference between them follows
  * from ONE root: a routine is written in the DEFINITION (versioned, reviewed, shipped with the image, addressable
  * by name) and a wake-up is written into the STATE by a running agent (minted id, cancellable, aimed back at the

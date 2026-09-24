@@ -45,8 +45,6 @@ export interface FastagentConfig {
    * with the URL can drive it".
    */
   http?: { port?: number; cors?: string[]; invoke?: boolean; run?: boolean };
-  /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling). */
-  selfSchedule?: boolean;
   /**
    * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch — steer/abort/compact +
    * session properties and lifecycle) for remote consumers.
@@ -129,11 +127,10 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       key !== "tools" &&
       key !== "http" &&
       key !== "deploy" &&
-      key !== "selfSchedule" &&
       key !== "sessionControl"
     ) {
       throw new Error(
-        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, tools, http, deploy, selfSchedule, sessionControl)`,
+        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, tools, http, deploy, sessionControl)`,
       );
     }
   }
@@ -145,9 +142,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(c.thinkingLevel as string)) {
     throw new Error(`${path}: "thinkingLevel" must be one of ${[...THINKING_LEVELS].join(", ")}`);
-  }
-  if (c.selfSchedule !== undefined && typeof c.selfSchedule !== "boolean") {
-    throw new Error(`${path}: "selfSchedule" must be a boolean`);
   }
   if (c.tools !== undefined && !Array.isArray(c.tools)) {
     throw new Error(`${path}: "tools" must be an array of AgentTool`);

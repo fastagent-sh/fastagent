@@ -378,7 +378,7 @@ It can still perform real tool side effects and update conversation history; it 
 A serving-time fire records its outcome in the slot it claimed; what it said is in its session, like any other turn.
 `invoke` and `routine run` do not mount the serving-time `wake` tool or prove that a future timer fires.
 
-Enable `selfSchedule: true` in the existing config only when autonomous follow-ups are wanted. Then test
+Every serve mounts the `wake` tool, so the agent can schedule its own follow-ups. Test
 an actual `wake` while serving, including its eventual action and delivery. Cancelling one is the
 agent's own job (`unwake({ id })`, session-scoped): a wake-up only fires while a serve is running, and a
 running serve is one whose session can be spoken to.
@@ -386,7 +386,7 @@ running serve is one whose session can be spoken to.
 | Execution posture | Clock and persistence requirements |
 |---|---|
 | Resident `dev` / `start` or embedded `createAgentService` | The process runs the scheduler. Keep one active scheduler with durable state; a sleeping/stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
-| AgentCore webhook/schedule ingress | EventBridge delivers cron slots and, with `selfSchedule`, external wake alarms. Scale-to-zero is supported on this path; no resident timer is required. |
+| AgentCore webhook/schedule ingress | EventBridge delivers cron slots and external wake alarms. Scale-to-zero is supported on this path; no resident timer is required. |
 | Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and

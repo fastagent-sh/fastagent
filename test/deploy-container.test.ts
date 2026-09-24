@@ -96,7 +96,7 @@ describe("deploy/container: shared Docker context", () => {
       // gone with the definition at the next deployment, which the same sentence has to say.
       expect(piBasePrompt()).toContain("To give yourself a new capability now, write a skill");
       expect(piBasePrompt()).toContain("It lasts until the next deployment replaces that directory");
-      // `wake` is named only when it is mounted (selfSchedule) — a tool the model lacks is one it would call.
+      // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(piBasePrompt()).not.toContain("wake tool");
       expect(piBasePrompt({ tools: [{ name: "wake" } as MountedTool] })).toContain("use the wake tool.");
       // The host whose storage a deploy RESETS must not be told that work outside the definition

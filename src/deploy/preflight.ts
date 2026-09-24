@@ -46,13 +46,10 @@ interface DeployFacts {
   /** Every declared channel with the ingress its module shape says it has, custom ones included. */
   channels: DeclaredChannel[];
   /**
-   * `routines/` declares at least one cron. KEPT APART from {@link hasWakeups} because only this one has an
-   * external substitute: `POST /run` lets someone else's clock run a declared routine, so an operator who
-   * wants scale-to-zero has an option here and none for a wake-up.
+   * `routines/` declares at least one cron — the one residency reason with an external substitute: `POST /run` lets
+   * someone else's clock run a declared routine, so an operator who wants scale-to-zero has an option here.
    */
   hasCron: boolean;
-  /** The agent may schedule ITSELF (`selfSchedule`, the wake tool) — minted at runtime, so nothing can stand in. */
-  hasWakeups: boolean;
   /**
    * The deployed environment's declaration, read ONCE here so the plan side and the run side cannot disagree about
    * what this deployment carries. The environment running `deploy` is deliberately absent from it (§9).
@@ -247,7 +244,6 @@ export async function preflightDeploy(input: {
   // A FAILED file still counts, on the conservative side: it may well declare a cron, and a plan that scaled to
   // zero because the file did not parse would hide that behind silence.
   const hasCron = loadedRoutines.routines.some((r) => r.cron !== undefined) || loadedRoutines.failures.length > 0;
-  const hasWakeups = !!config.selfSchedule;
   if (longConnectionChannels.length > 0 && !externalClock) {
     messages.push({
       level: "note",
@@ -256,17 +252,8 @@ export async function preflightDeploy(input: {
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     });
   }
-  // THE TWO HALVES SAY DIFFERENT THINGS, which is the whole reason they are separate facts. A cron has an external
-  // substitute and an operator who is paying for an idle box should be told so; a wake-up has none, and offering
-  // the same way out would be advice that silently drops turns.
-  if (hasWakeups && !externalClock) {
-    messages.push({
-      level: "note",
-      text:
-        `selfSchedule is on — a GENERATED plan keeps one machine running, and there is no way around it: a wake-up ` +
-        `is minted by the agent at runtime, so no external clock can know to send it.`,
-    });
-  } else if (hasCron && !externalClock) {
+  // A cron has an external substitute, and an operator who is paying for an idle box should be told so.
+  if (hasCron && !externalClock) {
     messages.push({
       level: "note",
       text:
@@ -540,7 +527,6 @@ export async function preflightDeploy(input: {
     messages,
     channels,
     hasCron,
-    hasWakeups,
     values,
     valueFile,
     modelAuth,

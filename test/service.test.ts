@@ -267,12 +267,10 @@ describe("createAgentService", () => {
     }
   });
 
-  it("close() stops the self-scheduling poll timer", async () => {
+  it("every serve polls the agent's own wake-ups — no routine, no switch — and close() stops the poll", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
-    const service = await createAgentService(
-      await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`),
-    );
+    const service = await createAgentService(await agentDir({}, `{ model: "openai-codex/gpt-5.5" }`));
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
       expect(polls).toHaveLength(1);
@@ -588,20 +586,5 @@ describe("createAgentService", () => {
       const service = await createAgentService(dir);
       await service.close();
     }
-  });
-});
-
-describe("the opener feeds the assembly what the assembly reads", () => {
-  it("carries selfSchedule from the config into the mounted service", async () => {
-    // MountableAgent asks for `selfSchedule`; a pi opener that does not answer leaves the wake pump
-    // off while the config says it is on — silently, since nothing else changes.
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", selfSchedule: true }`);
-    const opened = await createPiAgentFromDir(dir, { serving: true });
-    expect(opened.selfSchedule).toBe(true);
-  });
-
-  it("leaves it off when the config does not ask", async () => {
-    const opened = await createPiAgentFromDir(await agentDir(), { serving: true });
-    expect(opened.selfSchedule).toBe(false);
   });
 });

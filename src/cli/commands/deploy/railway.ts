@@ -21,17 +21,7 @@ export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, pre, channels, write } = ctx;
-    const {
-      hasCron,
-      hasWakeups,
-      modelAuth,
-      modelKeyInDefinition,
-      authPath,
-      container,
-      declaredSecrets,
-      values,
-      valueFile,
-    } = pre;
+    const { hasCron, modelAuth, modelKeyInDefinition, authPath, container, declaredSecrets, values, valueFile } = pre;
     const serviceName = toRailwayName(basename(workspace));
     const plan = planRailwayDeploy({
       serviceName,
@@ -39,7 +29,6 @@ export const railwayHost: HostDeploy = {
       channels,
       secrets: pre.secrets,
       hasCron,
-      hasWakeups,
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });

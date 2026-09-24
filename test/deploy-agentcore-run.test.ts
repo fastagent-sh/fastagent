@@ -59,8 +59,8 @@ const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: st
   return {};
 };
 
-const NO_FORWARDER = { webhooks: false, forwarder: false, wakeAlarms: false };
-const FORWARDER = { webhooks: true, forwarder: true, wakeAlarms: false };
+const NO_WEBHOOKS = { webhooks: false };
+const FORWARDER = { webhooks: true };
 const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   name: "my-agent",
   templatePath: "agentcore.template.yaml",
@@ -71,7 +71,7 @@ const plan = (over: Partial<AgentcoreRunPlan> = {}): AgentcoreRunPlan => ({
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
   channels: [],
-  topology: NO_FORWARDER,
+  topology: NO_WEBHOOKS,
   ...over,
 });
 
@@ -154,14 +154,6 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
     expect(out).toMatchObject({ ok: false });
     expect((out as { gate: string }).gate).toContain("forwarder package");
     expect(cmds().join("\n")).not.toContain("cloudformation deploy");
-  });
-
-  it("an invoke-only deployment touches no bucket at all", async () => {
-    const { cli: aws, cmds } = fakeCli(happyAws);
-    writeParams.mockClear();
-    await run(plan({ topology: NO_FORWARDER }), aws, fakeCli().cli);
-    expect(cmds().join("\n")).not.toContain("s3");
-    expect(JSON.parse(writeParams.mock.calls[0]![0] as string).join()).not.toContain("ForwarderBucket");
   });
 });
 
@@ -589,37 +581,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(probe).not.toHaveBeenCalled(); // no probe against a session of unknown vintage
   });
 
-  it("a pure-invoke deployment also stops its fixed writer to activate the new image", async () => {
-    const { cli: aws, cmds } = fakeCli((a) =>
-      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
-        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
-        : happyAws(a),
-    );
-    const out = await run(plan(), aws, fakeCli().cli);
-    expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
-    expect(cmds().some((c) => c.includes("stop-runtime-session"))).toBe(true);
-  });
-
-  it("a stop failure does NOT gate a pure-invoke deployment — it has no probe to protect", async () => {
-    // The gate exists because the probe reaches the same fixed session id. Without a forwarder there
-    // is no probe, so the only cost is immediacy (the platform reclaims the session anyway) and
-    // failing an already-applied deploy would be a false failure a re-run reproduces.
-    const logs: string[] = [];
-    const { cli: aws } = fakeCli((a) =>
-      a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
-        ? { code: 254, stderr: "An error occurred (AccessDeniedException): not authorized" }
-        : a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].Outputs")
-          ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
-          : happyAws(a),
-    );
-    const out = await deployAgentcoreRun(plan(), aws, fakeCli().cli, (m) => logs.push(m), writeParams, writeZip, {
-      telegram: async () => "registered",
-    });
-    expect(out).toMatchObject({ ok: true, runtimeArn: "arn:x" });
-    expect(logs.join("\n")).toContain("AccessDeniedException");
-
-    // The WORDING follows the answer, not the topology: a first deploy has no session to stop, so
-    // "the previous image may keep serving" would name a container that never existed.
+  it("a first deploy has no session to stop, and says so rather than naming a previous image", async () => {
+    // The WORDING follows the answer: "the previous image may keep serving" would name a container that never
+    // existed.
     const first: string[] = [];
     const { cli: awsFirst } = fakeCli((a) =>
       a[0] === "bedrock-agentcore" && a[1] === "stop-runtime-session"
@@ -654,10 +618,20 @@ describe("deploy/agentcore/run: helpers", () => {
   });
 
   it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
+    const FWD = { bucket: "b", key: "k" };
     const params = JSON.parse(
-      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64", FASTAGENT_INGRESS_SECRET: "in" }),
+      paramsFileContent(
+        "img:1",
+        { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64", FASTAGENT_INGRESS_SECRET: "in" },
+        FWD,
+      ),
     ) as string[];
-    expect(params.slice(0, 2)).toEqual(["ImageUri=img:1", "FastagentIngressSecret=in"]);
+    expect(params.slice(0, 4)).toEqual([
+      "ImageUri=img:1",
+      "ForwarderBucket=b",
+      "ForwarderS3Key=k",
+      "FastagentIngressSecret=in",
+    ]);
     expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
       "FastagentAuthSeed=b64",
       "FastagentAuthSeed2=",
@@ -675,7 +649,7 @@ describe("deploy/agentcore/run: helpers", () => {
 
     // A real OAuth-size seed (2756+) rides across the chunks, reassemblable in order.
     const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756);
-    const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed })) as string[];
+    const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed }, FWD)) as string[];
     expect(chunked.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
       `FastagentAuthSeed=${"a".repeat(2000)}`,
       `FastagentAuthSeed2=${"b".repeat(2000)}`,
@@ -685,7 +659,7 @@ describe("deploy/agentcore/run: helpers", () => {
     for (const param of chunked) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
 
     // Switching to an API key clears a previously deployed seed rather than leaving it behind.
-    const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" })) as string[];
+    const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" }, FWD)) as string[];
     expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(CARRIER_MAX_CHUNKS);
     expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed")).every((p) => p.endsWith("="))).toBe(true);
   });
@@ -803,9 +777,9 @@ describe("the post-deploy probe (verify restore + construction before registrati
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("never answered") });
   });
 
-  it("a forwarder topology whose stack LOST the ForwarderUrl output gates — even with no channels", async () => {
-    // schedule-only / selfSchedule-only: a forwarder topology without first-party channels. The probe is
-    // their ONLY construction check, so a missing URL must be a gate, not a silent skip + success.
+  it("a stack that LOST the ForwarderUrl output gates — even with no channels", async () => {
+    // Without first-party channels the probe is the ONLY construction check, so a missing URL must be a gate,
+    // not a silent skip + success.
     const probe = vi.fn();
     vi.stubGlobal("fetch", probe);
     const { cli: aws } = fakeCli((a) =>
@@ -815,19 +789,6 @@ describe("the post-deploy probe (verify restore + construction before registrati
     );
     const out = await run(plan({ topology: FORWARDER }), aws, fakeCli().cli);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("ForwarderUrl") });
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("a pure-invoke deployment (no forwarder) legitimately has no URL and skips the probe", async () => {
-    const probe = vi.fn();
-    vi.stubGlobal("fetch", probe);
-    const { cli: aws } = fakeCli((a) =>
-      a[0] === "cloudformation" && a[1] === "describe-stacks"
-        ? { stdout: JSON.stringify([{ OutputKey: "RuntimeArn", OutputValue: "arn:x" }]) }
-        : happyAws(a),
-    );
-    const out = await run(plan(), aws, fakeCli().cli);
-    expect(out).toMatchObject({ ok: true });
     expect(probe).not.toHaveBeenCalled();
   });
 });

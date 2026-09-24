@@ -198,11 +198,6 @@ export async function createPiAgentFromDir(
   sessionControl?: SessionControl;
   /** Whether that plane is also served as `/control/*` — `config.sessionControl`. */
   publishControl: boolean;
-  /**
-   * Whether the agent schedules its own follow-up turns — read from the config, so a caller assembling a service does
-   * not have to reach back into it (MountableAgent).
-   */
-  selfSchedule: boolean;
   /** The origins a browser may call this serve from; unset answers every one — `http.cors` (MountableAgent). */
   corsOrigins?: readonly string[];
   /** Whether to serve the data plane, `POST /invoke` — `http.invoke` (MountableAgent). */
@@ -229,9 +224,9 @@ export async function createPiAgentFromDir(
     deferredToolNames,
     toolCollisions,
   } = await resolveAgentAssembly(dir, options);
-  // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND the author
-  // opted into self-scheduling (config.selfSchedule).
-  const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
+  // Every serve mounts the built-in `wake` tool: the agent's own follow-up work is a default capability, and a serve
+  // is where the poller that honors it runs. A one-shot `invoke` has no poller, so nothing there would fire it.
+  const mountedTools = withWakeTool(tools, stateRoot, !!options.serving);
   // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
   // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
@@ -295,7 +290,6 @@ export async function createPiAgentFromDir(
     sessions,
     sessionControl: hub?.control,
     publishControl: publish,
-    selfSchedule: config.selfSchedule ?? false,
     ...(config.http?.cors ? { corsOrigins: config.http.cors } : {}),
     ...(config.http?.invoke !== undefined ? { serveInvoke: config.http.invoke } : {}),
     ...(config.http?.run !== undefined ? { serveRun: config.http.run } : {}),

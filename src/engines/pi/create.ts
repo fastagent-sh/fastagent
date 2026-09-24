@@ -196,7 +196,7 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
   // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
   // once per process (machine.ts), so it would not be live.
   const RUNTIME_CHANGES = ` Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
-    // Named only when mounted (`selfSchedule`), like the deferred tools above: naming a tool the model does not
+    // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model does not
     // have invites calls to it.
     mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""
   }`;

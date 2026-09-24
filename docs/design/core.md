@@ -140,8 +140,8 @@ The pi reference prompt has four segments:
 invocation, so persona/context/skill edits take effect on the next turn; code modules are reloaded by
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
-process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool
-(`selfSchedule`). `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
+process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool,
+mounted on every serve. `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
 release. (Reloading them in-process was built and removed — the design is #582, why it went is #600.) A skill the
 agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
 and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
@@ -616,13 +616,14 @@ killed wake-up leaves nothing to reconcile: its claim removes it from the store 
 Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
 deferral and settlement, so the idle notification observes settled state.
 
-With `selfSchedule: true`, the serving path mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
+Every serve mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
 minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot
 wake that hits `session_busy` is deferred because the turn never started; other failures are not
 replayed because tools may already have produced side effects.
 
-Schedules need one continuously running process. Deploy preflight prevents scale-to-zero settings that
-would silently miss clock events.
+A declared cron needs one continuously running process, and deploy preflight prevents scale-to-zero settings
+that would silently miss one. Wake-ups do not pin a machine: the store is on the volume, so a box that slept fires
+what is due when a request next wakes it.
 
 ## 9. State and deployment
 

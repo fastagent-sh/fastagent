@@ -127,7 +127,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      hasWakeups: false,
       modelAuth: undefined,
       channels,
     }).runbook.join("\n");
@@ -142,7 +141,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      hasWakeups: false,
       modelAuth: undefined,
       channels,
     }).runbook.join("\n");
@@ -154,7 +152,6 @@ describe("every host's runbook reads the same answer", () => {
       modelAuth: undefined,
       channels,
       schedules: [],
-      selfSchedule: false,
       hasPackageJson: true,
       runtime: "node",
       hasLockfile: true,

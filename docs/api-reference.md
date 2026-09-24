@@ -247,7 +247,7 @@ interface FastagentConfig {
 
 Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) mounts the
 complete coding set. Conditional built-ins stay independent: deferred tools may add `search_tools`,
-and `selfSchedule` may add `wake` while serving. `createPiAgentFromDefinition` uses the complete coding
+and every serve adds `wake`/`unwake`. `createPiAgentFromDefinition` uses the complete coding
 set unless `tools` replaces it; `createPiAgent` starts from the passed `tools`. In both APIs, omitted
 coding built-ins cannot be reactivated, while deferred tools may add `search_tools`.
 
@@ -508,7 +508,7 @@ export default defineRoutine({ prompt: "Re-read the docs and refresh your notes.
 
 **A routine keeps one continuing conversation.** All of its turns run in `routine:<name>`, so it
 remembers its previous runs and knows nothing about any user's chat. That is also what separates it
-from a **wake-up**: the agent can schedule work for itself (`selfSchedule`), and conceptually that is
+from a **wake-up**: the agent can schedule work for itself (the `wake` tool), and conceptually that is
 the same idea — work to be done later — but every operational difference follows from one root. A
 routine is written in the *definition* (versioned, reviewed, shipped with the image, named by its
 author, reachable by name); a wake-up is written into the *state* by a running agent (minted id,
@@ -632,8 +632,7 @@ publishes none of ours, so `aws bedrock-agentcore invoke-agent-runtime` with
 `{"kind":"routine-run","name":"reindex"}` is the door. It is the same contract as `POST /run` and a
 stricter one — AWS has already said who the caller is.
 
-**Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
-capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
+**Self-scheduling.** Every serve (`dev`/`start`, where the poller runs — not the
 one-shot `invoke`/`routine run`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
 records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes

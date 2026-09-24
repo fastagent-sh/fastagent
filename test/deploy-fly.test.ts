@@ -20,7 +20,6 @@ const base = {
   hasLockfile: true,
   version: "9.9.9",
   hasCron: false,
-  hasWakeups: false,
 } as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
@@ -35,9 +34,7 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("keeps one machine running for a cron, scales to zero otherwise (definition-aware)", () => {
-    expect(
-      flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true, hasWakeups: false })),
-    ).toContain(
+    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true }))).toContain(
       "min_machines_running = 1", // routines/wake need a running machine — no external wake-up for a cron instant
     );
     expect(

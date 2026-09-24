@@ -62,14 +62,11 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     const agentDir = join(dir, "fastagent");
     await mkdir(agentDir);
     await writeFile(join(agentDir, "persona.md"), "You are terse.\n");
-    // selfSchedule AND a schedule file, so the branch that carries the YAML most likely to be wrong is
-    // the one CloudFormation reads: a bare agent emits ~100 lines and NONE of the forwarder Lambda, its
-    // Function URL, the two Lambda permissions, the wake/scheduler IAM roles or an
-    // `AWS::Scheduler::Schedule`. This fixture emits all of them and still creates nothing.
-    await writeFile(
-      join(agentDir, "fastagent.config.ts"),
-      `export default { model: "openai-codex/gpt-5.5", selfSchedule: true };\n`,
-    );
+    // A schedule file, so the branch that carries the YAML most likely to be wrong is the one CloudFormation
+    // reads: the forwarder Lambda, its Function URL, the two Lambda permissions and the wake/scheduler IAM roles
+    // are on every stack, and the schedule adds an `AWS::Scheduler::Schedule`. This fixture emits all of them
+    // and still creates nothing.
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
     // A plain default export, not `defineRoutine(...)`: loadRoutines validates the SHAPE, and this
     // fixture has no node_modules to import the package's helper from.
     await mkdir(join(agentDir, "routines"), { recursive: true });
