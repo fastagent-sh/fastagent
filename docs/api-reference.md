@@ -826,7 +826,7 @@ GET    /routines                           what this agent will run by name
 POST   /run                                {name} — run one of them
 ```
 
-`{id}` is percent-encoded, so a Telegram group is `/control/sessions/tg%3A-1001234567890` — session
+`{id}` is percent-encoded, so a Telegram group is `/control/sessions/telegram%3A-1001234567890` — session
 ids are opaque Caller strings and may contain `:` and `/`.
 
 The client consumes the transport envelope (`epoch`/`seq`): a sequence gap or a mid-stream failure, a server
