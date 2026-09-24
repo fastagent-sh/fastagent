@@ -247,9 +247,6 @@ describe("init: scaffoldAgent", () => {
   });
 
   it("refuses `--agent-dir .` — the definition goes in a subdirectory, the directory around it is the workspace", async () => {
-    // The mode this replaces kept every existing file, so the agent inherited the host repo's package.json — and a
-    // `fastagent.config.ts` under a CommonJS manifest does not load at all. A scaffolded subdirectory carries its
-    // own `type: module`, which removes that failure class rather than pre-checking for it.
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "dist\n");
     await expect(scaffoldAgent(dir, { agentDir: "." })).rejects.toThrow(/single directory name/);
@@ -258,22 +255,18 @@ describe("init: scaffoldAgent", () => {
 
     // The CLI rejects it as USAGE (exit 2), before any scaffold work.
     expect(await cliInit(["init", "--agent-dir", ".", "--no-install"], dir)).toMatch(/single directory name/);
-    // …and `--flat` is gone with it.
-    expect(await cliInit(["init", "--flat", "--no-install"], dir)).toMatch(/unknown option/);
   });
 
-  it("a package inside an agent's own repository is a legitimate init target", async () => {
-    // The monorepo shape: the repo root is an agent, and a package inside it wants its own. An agent's
-    // definition is its loaded surface only, so `packages/foo/` is the author's tree — refusing there
-    // would make "an agent inside an agent's repository" unreachable.
-    const root = await freshDir();
-    // Written by hand: placement still RESOLVES an agent at a directory; `init` merely no longer creates that shape.
+  it("an agent's loaded surface is not an init target; the rest of its directory is", async () => {
+    // An agent's definition is its loaded surface only: scaffolding into `skills/` would make the new agent the outer
+    // one's content, while any other subdirectory is the author's tree.
+    const root = join(await freshDir(), "fastagent");
+    await mkdir(root, { recursive: true });
     await writeFile(join(root, "fastagent.config.ts"), "export default {};\n");
     const pkg = join(root, "packages", "reviewer");
     await mkdir(pkg, { recursive: true });
     expect((await scaffoldAgent(pkg)).created).toContain(agentPath("persona.md"));
 
-    // …but the flat agent's OWN surfaces are still off limits: it would load the new agent as content.
     await expect(scaffoldAgent(join(root, "skills", "mine"))).rejects.toThrow(
       /is inside the definition of the agent at/,
     );

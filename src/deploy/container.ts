@@ -166,8 +166,6 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 
 /** The Dockerfile + ignore artifacts — spread into any host's artifact list. */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
-  if (!input.agentPrefix)
-    throw new Error("deploy requires a nested agent: point deploy at the workspace containing fastagent/");
   const ignore = dockerignore(input);
   const release: DeploymentRelease = {
     version: 1,

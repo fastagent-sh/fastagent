@@ -135,7 +135,7 @@ export async function applyDeploymentRelease(
     throw new Error(`refusing to initialize over an existing unowned workspace: ${workspace}`);
   const definition = join(source, release.agent);
   if (!(await exists(definition)) || !(await lstat(definition)).isDirectory())
-    throw new Error(`the release must contain a nested agent directory: ${definition}`);
+    throw new Error(`the release must contain its agent directory: ${definition}`);
   log.info(
     initial
       ? `[fastagent] seeding the workspace from release ${release.id}`
