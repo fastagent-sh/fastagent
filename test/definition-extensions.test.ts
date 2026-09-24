@@ -1,19 +1,15 @@
 /**
  * The definition carries its own `extensions/`: discovered as entry-point FILES with pi's own rules,
- * refused when they would not survive the trip into a container, and loaded by `fastagent chat`.
- *
- * SERVING does not load them, and warns that it did not — pi's extension runtime is shared across
- * sessions, which a concurrent server cannot use safely. These tests pin both halves: discovery and
- * its refusals apply either way, tools reach the model in chat, and serving stays quiet-free about
- * skipping them.
+ * refused when they would not survive the trip into a container, and loaded both by `fastagent chat`
+ * and by serving — where every bound session gets its own extension instances and no terminal.
  */
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { collect, createPiAgentFromDefinition } from "../src/index.ts";
+import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -104,62 +100,178 @@ describe("definition: extensions/ discovery", () => {
   });
 });
 
-describe("definition: serving does NOT run extensions, and says so", () => {
-  /** Build a served agent on a faux model and report the tool names the model was offered. */
-  async function toolNamesOfferedBy(dir: string): Promise<string[]> {
+describe("definition: serving runs extensions, one instance per session, with no UI", () => {
+  /** Answers every turn with the text of its last user-side message, so a test can see what reached the model. */
+  function echoFaux(offered?: string[][]) {
     const { faux } = makeFaux();
-    let offered: string[] = [];
-    faux.setResponses([
-      (context) => {
-        offered = sentTools(context);
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const { agent } = await createPiAgentFromDefinition(dir, {
-      model: "faux/faux-1",
-      providers: [faux.provider],
-    });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    return offered;
+    faux.setResponses(
+      Array.from({ length: 10 }, () => (context: Parameters<typeof sentTools>[0]) => {
+        offered?.push(sentTools(context));
+        const last = context.messages.filter((m) => m.role === "user").at(-1);
+        return fauxAssistantMessage(`echo ${JSON.stringify(last?.content)}`);
+      }),
+    );
+    return faux;
   }
 
-  it("does not offer an extension-registered tool to the model", async () => {
-    // pi's extension runtime is shared across sessions (its own source calls it "the shared
-    // runtime"), and serving runs concurrent turns for unrelated conversations. Loading them would
-    // let one turn's `pi.sendMessage()` land in another conversation - a silent correctness bug,
-    // which is worse than the missing feature. `chat` runs them fully; see the block below.
-    const dir = await agentDirWith({ "extensions/marker.ts": markerExtension("extension_marker") });
-    const offered = await toolNamesOfferedBy(dir);
-    expect(offered).not.toContain("extension_marker");
-    expect(offered.length).toBeGreaterThan(0); // the agent still serves, with its own tools
-  });
-
-  it("does not let an extension COMMAND swallow a prompt — so `commands()` is the whole `/` menu", async () => {
-    // pi resolves `/name` against registered extension commands BEFORE anything else, and a hit returns from
-    // `prompt()` without running the turn. Serving loads no extensions, so that cannot happen here — which is
-    // what lets a client bind its `/` menu to `commands()` and nothing else: no name runs but goes unlisted.
-    const dir = await agentDirWith({ "extensions/marker.ts": markerExtension("extension_marker") });
-    const { faux } = makeFaux();
-    let sent = "";
-    faux.setResponses([
-      (context) => {
-        sent = JSON.stringify(context.messages.filter((message) => message.role === "user"));
-        return fauxAssistantMessage("ok");
-      },
-    ]);
+  async function servedAgent(files: Record<string, string>, offered?: string[][]) {
+    const dir = await agentDirWith(files);
+    const faux = echoFaux(offered);
     const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-    const { text } = await collect(agent.invoke({ session: "s" }, { text: "/marker do it" }));
+    return agent;
+  }
 
-    expect(sent, "the extension command consumed the prompt").toContain("/marker do it");
-    expect(text).toBe("ok"); // a real turn ran, rather than the silent return a command hit produces
+  /** Every lifecycle moment an extension can observe, recorded under a per-test global. */
+  const probe = (key: string) => `
+const log = (globalThis[${JSON.stringify(key)}] ??= []);
+export default function (pi) {
+  const id = log.filter((l) => l.startsWith("factory")).length + 1;
+  log.push("factory " + id);
+  pi.on("session_start", (_e, ctx) => {
+    ctx.ui.theme.fg("accent", "x"); // pi's global theme must be initialized without a TUI
+    log.push("start " + id + " hasUI=" + ctx.hasUI);
+  });
+  pi.on("session_shutdown", () => log.push("shutdown " + id));
+  pi.registerTool({
+    name: "probe_tool", label: "p", description: "d",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ output: "ok" }),
+  });
+  pi.registerCommand("go", { description: "", handler: async (args) => pi.sendUserMessage("from command " + args) });
+  pi.registerCommand("tag", { description: "", handler: async () => pi.appendEntry("tag", { v: 1 }) });
+  pi.registerCommand("boom", { description: "", handler: async () => { throw new Error("command blew up"); } });
+  pi.registerCommand("new", { description: "", handler: async (_a, ctx) => { await ctx.newSession(); } });
+  pi.registerCommand("provider", { description: "", handler: async () => pi.registerProvider("x", { baseUrl: "https://x.invalid" }) });
+}
+`;
+  const logOf = (key: string) => (globalThis as unknown as Record<string, string[]>)[key] ?? [];
+  let n = 0;
+  const freshKey = () => `__fa_ext_probe_${Date.now()}_${n++}__`;
+
+  it("offers an extension's tool, starts it headless, and shuts it down when the invoke ends", async () => {
+    const key = freshKey();
+    const offered: string[][] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const agent = await servedAgent({ "extensions/probe.ts": probe(key) }, offered);
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+
+    expect(offered[0]).toContain("probe_tool");
+    expect(logOf(key)).toEqual([
+      "factory 1",
+      "start 1 hasUI=false",
+      "shutdown 1",
+      "factory 2",
+      "start 2 hasUI=false",
+      "shutdown 2",
+    ]);
+    expect(warn.mock.calls.flat().join("\n")).not.toMatch(/failed/);
+    warn.mockRestore();
   });
 
-  it("warns that they were skipped, rather than dropping them in silence", async () => {
-    const dir = await agentDirWith({ "extensions/marker.ts": markerExtension("extension_marker") });
+  it("runs the turn a command starts, in the command's own session, even when sessions run concurrently", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    const [a, b] = await Promise.all([
+      collect(agent.invoke({ session: "a" }, { text: "/go A" })),
+      collect(agent.invoke({ session: "b" }, { text: "/go B" })),
+    ]);
+    expect(a.text).toContain("from command A");
+    expect(b.text).toContain("from command B");
+  });
+
+  it("streams a command's turn even when the turn is slow to begin", async () => {
+    // pi returns from the command before the turn it started is running; an async `before_agent_start` widens that
+    // gap past any microtask ordering, so only waiting on the turn itself gets the answer.
+    const agent = await servedAgent({
+      "extensions/slow.ts": `
+import { setTimeout } from "node:timers/promises";
+export default function (pi) {
+  pi.on("before_agent_start", async () => { await setTimeout(20); });
+  pi.registerCommand("go", { description: "", handler: async (args) => pi.sendUserMessage("from command " + args) });
+}
+`,
+    });
+    expect((await collect(agent.invoke({ session: "s" }, { text: "/go slow" }))).text).toContain("from command slow");
+  });
+
+  it("builds a session's loader without rebuilding the model runtime every conversation shares", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    await collect(agent.invoke({ session: "s" }, { text: "first" }));
+    const refresh = vi.spyOn(ModelRuntime.prototype, "refresh");
+    await collect(agent.invoke({ session: "s" }, { text: "second" }));
+    await collect(agent.invoke({ session: "s" }, { text: "third" }));
+    expect(refresh).not.toHaveBeenCalled();
+    refresh.mockRestore();
+  });
+
+  it("completes a command that does its work without a model turn", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    expect(await collect(agent.invoke({ session: "s" }, { text: "/tag" }))).toEqual({ text: "", data: undefined });
+  });
+
+  it("fails the invoke with the error of a command that throws", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    await expect(collect(agent.invoke({ session: "s" }, { text: "/boom" }))).rejects.toThrow(/command blew up/);
+  });
+
+  it("refuses a command's session replacement instead of reporting it done", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    await expect(collect(agent.invoke({ session: "s" }, { text: "/new" }))).rejects.toThrow(
+      /ctx\.newSession\(\) is not available when serving/,
+    );
+  });
+
+  it("refuses a provider registered after loading", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    await expect(collect(agent.invoke({ session: "s" }, { text: "/provider" }))).rejects.toThrow(
+      /cannot register model providers when serving/,
+    );
+  });
+
+  it("leaves out, and names, an extension that registers a provider while loading", async () => {
+    const offered: string[][] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    await toolNamesOfferedBy(dir);
-    expect(warn.mock.calls.flat().join("\n")).toMatch(/NOT loaded when serving/);
+    const agent = await servedAgent(
+      {
+        "extensions/provider.ts": `
+export default function (pi) {
+  pi.registerProvider("acme", { baseUrl: "https://acme.invalid" });
+  pi.registerTool({ name: "acme_tool", label: "a", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: "ok" }) });
+}
+`,
+        "extensions/marker.ts": markerExtension("marker_tool"),
+      },
+      offered,
+    );
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    expect(offered[0]).toContain("marker_tool");
+    expect(offered[0]).not.toContain("acme_tool");
+    expect(warn.mock.calls.flat().join("\n")).toMatch(/provider\.ts failed to load: extensions cannot register/);
     warn.mockRestore();
+  });
+});
+
+describe("definition: the served `/` menu lists what sessions load", () => {
+  it("lists the extensions discovered at startup, not ones added while serving", async () => {
+    // A session loads the assembly's entry points, discovered once; `start` does not restart on an edit. A menu that
+    // rescanned `extensions/` would offer `/late`, and sending it would reach the model as plain text.
+    const dir = await agentDirWith({
+      "fastagent.config.ts": 'export default { model: "mygw/m1" };\n',
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: { baseUrl: "http://gw.invalid/v1", api: "openai-completions", apiKey: "k", models: [{ id: "m1" }] },
+        },
+      }),
+      "extensions/early.ts": 'export default (pi) => pi.registerCommand("early", { handler: async () => {} });\n',
+    });
+    const { sessionControl } = await createPiAgentFromDir(dir, { serving: true });
+    await writeFile(
+      join(dir, "extensions", "late.ts"),
+      'export default (pi) => pi.registerCommand("late", { handler: async () => {} });\n',
+    );
+    const names = (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
+    expect(names).toEqual(["early"]);
   });
 });
 

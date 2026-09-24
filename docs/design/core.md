@@ -255,9 +255,8 @@ deployment, for the same reason nobody is told their local `ffmpeg` is not in th
 machine too, and whatever its builder put in it is that environment's answer
 (`src/engines/pi/machine.ts`).
 
-Extensions stay out of this, for a reason that is not portability: pi's extension runtime is
-process-wide, and serving runs concurrent turns for unrelated conversations
-(`docs/configuration.md#extensions`). So does the system prompt — inheriting
+The machine's extensions stay out of this: they are its owner's setup, and a served agent runs the
+definition's own `extensions/` (`docs/configuration.md#extensions`). So does the system prompt — inheriting
 capability is one thing, inheriting an identity would be the agent becoming someone else's.
 
 Workspace tools merge in this order: all pi coding tools

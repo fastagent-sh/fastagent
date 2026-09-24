@@ -41,7 +41,7 @@ import {
 } from "../src/session.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
-import { makeFaux } from "./faux.ts";
+import { bareSessionParts, makeFaux } from "./faux.ts";
 
 const echoTool: AgentTool = {
   name: "echo",
@@ -703,6 +703,7 @@ describe("session control: run modulation", () => {
       });
       const error = new Error(`boom: ${phase} exploded`);
       const session = {
+        ...bareSessionParts,
         subscribe: () => {
           throw error;
         },
@@ -1894,6 +1895,7 @@ describe("session control: boundary mutations", () => {
         const finish = Promise.withResolvers<void>();
         let disposed = false;
         const session = {
+          ...bareSessionParts,
           sessionManager: record,
           settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
           subscribe: () => {
@@ -1996,6 +1998,7 @@ describe("session control: boundary mutations", () => {
     record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
     let emit!: (event: AgentSessionEvent) => void;
     const session = {
+      ...bareSessionParts,
       sessionManager: record,
       settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
       subscribe: (listener: typeof emit) => {

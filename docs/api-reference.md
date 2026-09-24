@@ -672,17 +672,20 @@ with `run_command_failed`. Both are `retryable: false`; check `state()` first. A
 the race: an `abort` may settle `completed`, and a `steer`/`followUp` may settle unconsumed. The settlement is what
 happened.
 
-`commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills and
-the machine's skills and prompt templates. `source` is `skill` or `prompt`. It is a listing only. To run one, send
-its spelling as prompt text and the server expands it: a skill is `/skill:<name> [args]`, a prompt template is
-`/<name>`. Do not expand names client-side.
+`commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills, the
+commands its `extensions/` register, and the machine's skills and prompt templates. `source` is `skill`, `extension`
+or `prompt`. It is a listing only. To run one, send its spelling as prompt text and the server dispatches it: a skill
+is `/skill:<name> [args]`, an extension command or a prompt template is `/<name> [args]`. Do not expand names
+client-side.
 
 - An unknown name goes through as plain text, so check a name against this list if a typo should be visible. A
   skill whose file cannot be read is dropped from the list (the loader warns `read_failed`).
 - If a file disappears after the list was read (a steer mid-run, a replaced definition), the prompt goes through
   unexpanded and the server logs `skill_expansion failed`.
-- The list is complete for a served agent: `extensions/` do not run when serving. A chat channel's `/stop` is
-  handled by the channel, not listed here.
+- The list is complete for a served agent. Two extensions registering the same command name are listed as
+  `<name>:1`, `<name>:2`, and a prompt template an extension command shadows is left out. Listing loads the
+  extensions (their factories run) without opening a session. A chat channel's `/stop` is handled by the channel,
+  not listed here.
 - It is re-read on every call. `[]` means the agent exposes none. It rejects (with no stable code) when the
   definition cannot be read at all.
 

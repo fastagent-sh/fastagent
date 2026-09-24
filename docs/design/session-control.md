@@ -241,12 +241,14 @@ The CALLER still gets an ordinary turn: the prompt is honest about what was sent
 missing file makes the run itself fail.
 
 COMPLETE for what a data-plane client can invoke, which is what lets it bind its `/` menu to this list
-and nothing else: skills are the only thing the ENGINE expands. The definition's `extensions/` — pi's
-way of registering commands — are discovered but NOT run when serving, for the runtime reason above,
-and prompt templates are off in BOTH assemblies. So no name runs unlisted. Two things sit outside that
-scope: `chat`, which does run `extensions/` (a terminal is one session) but is not served, and a chat
-channel's own `/stop`, which the CHANNEL intercepts and turns into an `abort` before the agent sees it
-(`src/channels/kit/stop-command.ts`) — a platform command, not a definition name.
+and nothing else. Besides skills, the definition's `extensions/` register commands, and a `/name`
+prompt dispatches to one before the model sees it. They are listed with `source: "extension"`, read
+off a loader built exactly like a turn's and resolved by pi's own runner, so a name two extensions
+share appears with the `:N` suffix pi dispatches, and a prompt template an extension command shadows
+is dropped. The cost is that listing runs the extensions' factories; no session opens, so no
+`session_start` fires. A chat channel's own `/stop` sits outside the scope: the CHANNEL intercepts it
+and turns it into an `abort` before the agent sees it (`src/channels/kit/stop-command.ts`), a
+platform command, not a definition name.
 
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
 the list must come from that same read. `source` is free-form because which kinds exist is an engine's

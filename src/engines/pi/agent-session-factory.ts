@@ -9,11 +9,18 @@ import {
   type AgentSession,
   type AgentSessionServices,
   type CreateAgentSessionServicesOptions,
+  type ExtensionCommandContextActions,
+  ExtensionRunner,
+  type LoadExtensionsResult,
+  ModelRegistry,
   type ModelRuntime,
-  type SessionManager,
+  type ResolvedCommand,
+  SessionManager,
   type ToolDefinition,
+  DefaultResourceLoader,
   createAgentSessionFromServices,
-  createAgentSessionServices,
+  getAgentDir,
+  initTheme,
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
@@ -39,10 +46,7 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /**
-   * The definition's own extension entry points, for ANNOUNCING that serving does not run them. pi's extension
-   * machinery is built for one process serving one session.
-   */
+  /** The definition's own extension entry points, loaded fresh for every bound session. */
   extensionPaths?: string[];
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
@@ -195,14 +199,79 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
   return result;
 }
 
+/** Each distinct load failure is said once per process: serving loads the extensions again for every session. */
+const reportedExtensionErrors = new Set<string>();
+
 /**
  * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and carries on with the
  * rest.
  */
 export function reportExtensionErrors(services: AgentSessionServices): void {
   for (const { path, error } of services.resourceLoader.getExtensions().errors) {
+    const key = `${path}\u0000${error}`;
+    if (reportedExtensionErrors.has(key)) continue;
+    reportedExtensionErrors.add(key);
     log.warn(`[fastagent] extension ${path} failed to load: ${error}`);
   }
+}
+
+const PROVIDER_REFUSAL =
+  "extensions cannot register model providers when serving: a provider is process-wide, shared by every " +
+  "conversation, and never unregistered. Declare it in the agent's models.json";
+
+/**
+ * Serving refuses an extension that registers a provider while loading. pi would write it into the ONE `ModelRuntime`
+ * every conversation resolves against, merge a re-registration into the old entry, and never drop one the code stopped
+ * registering. The whole extension is left out, the way a tool file that fails to load is, and the refusal is its
+ * load error.
+ */
+function refuseLoadTimeProviders(base: LoadExtensionsResult): LoadExtensionsResult {
+  const offenders = new Set([
+    ...base.runtime.pendingProviderRegistrations.map((r) => r.extensionPath),
+    ...base.runtime.pendingNativeProviderRegistrations.map((r) => r.extensionPath),
+  ]);
+  if (offenders.size === 0) return base;
+  base.runtime.pendingProviderRegistrations = [];
+  base.runtime.pendingNativeProviderRegistrations = [];
+  return {
+    ...base,
+    extensions: base.extensions.filter((extension) => !offenders.has(extension.path)),
+    errors: [...base.errors, ...[...offenders].map((path) => ({ path, error: PROVIDER_REFUSAL }))],
+  };
+}
+
+/**
+ * ...and a registration made AFTER loading (from an event handler or a command), which pi applies to the shared
+ * runtime directly. Must run after the session is created (pi installs its own actions then) and before
+ * `bindExtensions` (which fires `session_start`).
+ */
+function refuseLateProviders(services: AgentSessionServices): void {
+  const runtime = services.resourceLoader.getExtensions().runtime;
+  const refuse = (): never => {
+    throw new Error(PROVIDER_REFUSAL);
+  };
+  runtime.registerProvider = refuse;
+  runtime.registerNativeProvider = refuse;
+  runtime.unregisterProvider = refuse;
+}
+
+/**
+ * What a command's `ctx` can do to the session when serving. Each turn binds its own session and disposes it, so
+ * there is no current session to replace, fork or reload; pi's unbound default would report `{ cancelled: false }`
+ * for all of them without doing anything.
+ */
+function servingCommandActions(session: AgentSession): ExtensionCommandContextActions {
+  const unavailable = (action: string) => async (): Promise<never> => {
+    throw new Error(`ctx.${action}() is not available when serving: every turn runs on its own session`);
+  };
+  return {
+    waitForIdle: () => session.waitForIdle(),
+    newSession: unavailable("newSession"),
+    fork: unavailable("fork"),
+    navigateTree: unavailable("navigateTree"),
+    switchSession: unavailable("switchSession"),
+    reload: unavailable("reload"),
+  };
 }
 
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
@@ -214,17 +283,10 @@ export function definitionResourceLoaderOptions(source: {
   skills: () => Skill[];
   /** {@link readMachine} for this workspace — resolved by the caller, because this function is synchronous. */
   machine: Machine;
-  /** Omitted by serving, which does not run them. */
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
-    /**
-     * EXTENSIONS ARE THE EXCEPTION, and the reason is concurrency, not portability: pi's extension runtime is
-     * PROCESS-WIDE — every `AgentSession` overwrites the actions on it — while serving runs concurrent turns for
-     * conversations that have nothing to do with each other. One turn's `pi.sendMessage()` would deliver into
-     * another person's chat (docs/configuration.md#why-serving-does-not-run-them). When pi exports its
-     * per-session loader this line goes with the reason.
-     */
+    // The machine's extensions are its owner's setup, not this agent's.
     noExtensions: true,
     // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under noExtensions, which
     // is exactly the split wanted here.
@@ -253,70 +315,92 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
-/** Open-or-create the record, then bind a fresh session to it. */
+/**
+ * The resources ONE served session runs on: a fresh loader, so fresh extension instances.
+ *
+ * Assembled here rather than by pi's `createAgentSessionServices`, which ends by refreshing the model runtime it is
+ * given — re-reading `models.json` and rebuilding every provider on the ONE runtime all conversations share. That is
+ * there to fold in providers extensions registered, which serving refuses; per session it would be a full provider
+ * rebuild per turn.
+ */
+async function servingServices(options: {
+  cwd: string;
+  modelRuntime: ModelRuntime;
+  definition: PiSessionDefinition;
+  extensionPaths: readonly string[];
+}): Promise<AgentSessionServices> {
+  const { cwd, modelRuntime, definition, extensionPaths } = options;
+  const machine = await readMachine(cwd);
+  const agentDir = getAgentDir();
+  // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
+  const settingsManager = machine.settingsManager();
+  const resourceLoader = new DefaultResourceLoader({
+    ...definitionResourceLoaderOptions({
+      systemPrompt: () => definition.systemPrompt,
+      skills: () => definition.skills,
+      machine,
+      extensionPaths,
+    }),
+    extensionsOverride: refuseLoadTimeProviders,
+    cwd,
+    agentDir,
+    settingsManager,
+  });
+  await resourceLoader.reload();
+  const services = { cwd, agentDir, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
+  reportExtensionErrors(services);
+  return services;
+}
+
+/**
+ * The `/name` commands a served session dispatches, named the way pi resolves them (a name two extensions share gets
+ * a `:N` suffix). Loaded through the same {@link servingServices} a turn binds, so the menu and the dispatch cannot
+ * disagree. Loading runs the extensions' factories; no session opens, so `session_start` does not fire, and the
+ * instances are never bound (any action they call throws).
+ */
+export async function servedExtensionCommands(options: {
+  cwd: string;
+  modelRuntime: ModelRuntime;
+  extensionPaths: readonly string[];
+}): Promise<ResolvedCommand[]> {
+  if (options.extensionPaths.length === 0) return [];
+  const services = await servingServices({ ...options, definition: { skills: [] } });
+  const { extensions, runtime } = services.resourceLoader.getExtensions();
+  const runner = new ExtensionRunner(
+    extensions,
+    runtime,
+    options.cwd,
+    SessionManager.inMemory(options.cwd),
+    new ModelRegistry(options.modelRuntime),
+  );
+  return runner.getRegisteredCommands();
+}
+
+/**
+ * Open-or-create the record, then bind a fresh session to it — on a fresh resource loader.
+ *
+ * ONE LOADER PER SESSION, because pi's extension runtime belongs to its loader: a loader shared across concurrent
+ * turns would let one conversation's extension act on another's session. It also makes the definition live with no
+ * bookkeeping: every bind reads the prompt and skills this invoke read. The machine's half is the process's one read
+ * (machine.ts). Extension CODE is imported once per process, so an edit to `extensions/` needs a restart, which is
+ * what `dev` does on one.
+ */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd } = options;
   const extensionPaths = options.extensionPaths ?? [];
   const excludedToolNames = options.excludedToolNames ?? [];
-  if (extensionPaths.length > 0) {
-    log.warn(
-      `[fastagent] ${extensionPaths.length} extension(s) in the definition are NOT loaded when serving ` +
-        "(they run in `fastagent chat`): pi's extension runtime is shared across sessions, and serving " +
-        "runs concurrent turns for different conversations. See docs/configuration.md#extensions.",
-    );
-  }
   const tools = options.tools ?? [];
-  // What the shared ResourceLoader serves, refreshed per turn before the session is built.
-  let definition: PiSessionDefinition;
-  let services: Promise<AgentSessionServices> | undefined;
+  // `ctx.ui.theme` reads pi's global theme, which only pi's own entry points initialize.
+  if (extensionPaths.length > 0) initTheme();
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
-  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> => {
-    const machine = await readMachine(cwd);
-    return createAgentSessionServices({
-      cwd,
-      modelRuntime,
-      // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
-      settingsManager: machine.settingsManager(),
-      // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is the one resource
-      // question the two assemblies answer differently.
-      resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => definition.systemPrompt,
-        skills: () => definition.skills,
-        machine,
-      }),
-    });
-  };
-
   return async (sessionId, inherit) => {
-    const next = await options.readDefinition();
+    const definition = await options.readDefinition();
     engine ??= options.engine();
     const { modelRuntime, model } = await engine;
-    if (services === undefined) {
-      definition = next;
-      services = buildServices(modelRuntime); // assigned before any await: concurrent turns share it
-    } else {
-      // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only reaches the model
-      // after a reload.
-      //
-      // AGAINST THE DEFINITION WE LAST APPLIED, never against the loader's skill list: that list is the merge
-      // (definition + machine), so comparing the definition's half to it made `definitionChanged` true whenever the
-      // machine had any skill at all — a full `reload()` per turn on a loader concurrent turns share, re-scanning
-      // pi's resource directories and clearing its extension cache.
-      //
-      // The MACHINE's half is therefore not live: it is read once, when this process built its services. That is
-      // the same deal as the rest of the environment — a `PATH` entry added after a process started does not reach
-      // it either — while the DEFINITION stays live, which is the property `dev` is built on.
-      const loader = (await services).resourceLoader;
-      const definitionChanged =
-        loader.getSystemPrompt() !== (next.systemPrompt || " ") ||
-        skillSet(definition.skills) !== skillSet(next.skills);
-      if (definitionChanged) {
-        definition = next;
-        await loader.reload();
-      }
-    }
+    // The record first: a control write that races this turn must find the session and be refused busy.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
+    const services = await servingServices({ cwd, modelRuntime, definition, extensionPaths });
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
     const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
@@ -324,7 +408,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
     const { session } = await bindPiSession({
-      services: await services,
+      services,
       sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
@@ -334,31 +418,26 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       sessionId,
       recordActivations: true,
     });
-    // THE ONLY LISTENER for a fault pi reports nowhere else: `/skill:<name>` is expanded by reading `filePath` at
-    // prompt time, and when that read fails pi raises `skill_expansion` on the extension error channel and sends
-    // the line to the model unexpanded. Without this the turn is silent about it — the answer just ignores a skill
-    // the caller named. The list can outlive the file: it is refreshed per invoke (`readDefinition` above), so a
-    // steer or follow-up inside a run, or a definition replaced under a running container
-    // (`src/deploy/workspace.ts`), reaches exactly that state.
+    refuseLateProviders(services);
+    // `onError` is THE ONLY LISTENER for a fault pi reports nowhere else: `/skill:<name>` is expanded by reading
+    // `filePath` at prompt time, and when that read fails pi raises `skill_expansion` on the extension error channel
+    // and sends the line to the model unexpanded. The list can outlive the file: it is refreshed per invoke, so a
+    // steer or follow-up inside a run, or a definition replaced under a running container (`src/deploy/workspace.ts`),
+    // reaches exactly that state. The same channel carries every extension handler's failure.
     //
-    // Serving only. It subscribes on THIS session's `ExtensionRunner` (pi's `onError` adds to a per-runner set),
-    // but `bindExtensions` also re-emits `session_start` — a no-op here, where no extension is loaded at all, and
-    // not something to hand `chat`, whose extensions do run.
+    // No `uiContext`: a served turn has no human at a terminal, and pi's default is what extensions are written to
+    // detect (`ctx.hasUI === false`; dialogs resolve as cancelled). This call fires `session_start`.
     await session.bindExtensions({
       onError: ({ extensionPath, event, error }) =>
         log.warn(`[fastagent] session ${sessionId}: ${event} failed for ${extensionPath}: ${error}`),
+      commandContextActions: servingCommandActions(session),
+      shutdownHandler: () =>
+        log.warn(
+          `[fastagent] session ${sessionId}: an extension called ctx.shutdown(); a served process is stopped by its host, not by a turn`,
+        ),
     });
     return session;
   };
-}
-
-/** What a reload has to notice: the declared set, not the files behind it. */
-function skillSet(
-  skills: readonly { name: string; filePath?: string; description: string; disableModelInvocation?: boolean }[],
-): string {
-  return skills
-    .map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}\u0000${s.disableModelInvocation ?? false}`)
-    .join("\u0001");
 }
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */

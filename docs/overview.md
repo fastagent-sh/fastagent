@@ -22,7 +22,7 @@ project/                    # the workspace: what the agent works on
     ├── tools/              # optional code tools
     ├── channels/           # optional webhook/bot adapters
     ├── routines/           # optional named units of work (a cron, an API call, or both)
-    ├── extensions/         # optional pi extension modules (chat only — see configuration.md)
+    ├── extensions/         # optional pi extension modules (see configuration.md)
     └── reference.md        # optional markdown context (any file layout)
 ```
 

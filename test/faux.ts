@@ -32,3 +32,19 @@ export function makeFaux(options?: RegisterFauxProviderOptions): {
   models.setProvider(faux.provider);
   return { faux, models };
 }
+
+/**
+ * What a fastagent turn touches on a pi `AgentSession` beyond prompt/subscribe/dispose, for a hand-written double:
+ * a session with no extensions loaded that is idle once `prompt()` returns.
+ */
+export const bareSessionParts = {
+  waitForIdle: async () => {},
+  sendUserMessage: async () => {},
+  sendCustomMessage: async () => {},
+  extensionRunner: {
+    onError: () => () => {},
+    emit: async () => undefined,
+    hasHandlers: () => false,
+    getRegisteredCommands: () => [],
+  },
+};
