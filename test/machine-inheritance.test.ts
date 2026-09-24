@@ -114,16 +114,19 @@ it("`commands()` lists every skill the agent has and the machine's prompts, by h
 it("`commands()` lists extension commands as pi dispatches them, and drops a template one shadows", async () => {
   await machine({ prompts: { tag: "A template the command shadows.", review: "Review this: " } });
   const dir = await definition();
-  const command = (name: string) =>
-    `pi.registerCommand(${JSON.stringify(name)}, { description: "d-${name}", handler: async () => {} });`;
-  const key = `__fa_cmd_list_${Date.now()}__`;
   await mkdir(join(dir, "extensions"), { recursive: true });
   await writeFile(
     join(dir, "extensions", "a.ts"),
-    `export default function (pi) { ${command("go")} ${command("tag")}
-  pi.on("session_start", () => { globalThis[${JSON.stringify(key)}] = true; }); }`,
+    `export default function (pi) {
+  pi.registerCommand("go", { description: "d-go", handler: async () => {} });
+  pi.registerCommand("tag", { description: "d-tag", handler: async () => {} });
+  pi.on("session_start", () => { globalThis.__fa_cmd_list_started__ = true; });
+}`,
   );
-  await writeFile(join(dir, "extensions", "b.ts"), `export default function (pi) { ${command("go")} }`);
+  await writeFile(
+    join(dir, "extensions", "b.ts"),
+    `export default function (pi) { pi.registerCommand("go", { description: "d-go", handler: async () => {} }); }`,
+  );
   const modelRuntime = () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 
   expect(await agentCommands(dir, dir, modelRuntime)).toEqual([
@@ -133,7 +136,7 @@ it("`commands()` lists extension commands as pi dispatches them, and drops a tem
     expect.objectContaining({ name: "review", source: "prompt" }),
   ]);
   // Listing loads the extensions; it opens no session.
-  expect((globalThis as Record<string, unknown>)[key]).toBeUndefined();
+  expect((globalThis as Record<string, unknown>).__fa_cmd_list_started__).toBeUndefined();
 });
 
 it("an empty machine contributes nothing — the definition is the whole answer", async () => {
