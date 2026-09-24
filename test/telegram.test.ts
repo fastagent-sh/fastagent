@@ -172,7 +172,7 @@ describe("durable group buffer (single-process restarts)", () => {
       await entered.promise;
       expect(sawDiscussion).toBe(true);
       expect(Object.keys(JSON.parse(readFileSync(join(state, "turns.json"), "utf8")))).toHaveLength(1);
-      expect(await control.sessions.get("-100").update({ name: "while running" })).toMatchObject({
+      expect(await control.sessions.get("telegram:-100").update({ name: "while running" })).toMatchObject({
         ok: false,
         error: { code: "session_busy" },
       });
@@ -185,7 +185,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const buffered = readFileSync(join(state, "buffers.json"), "utf8");
     expect(buffered).toContain("later arrival");
     expect(buffered).not.toContain("earlier discussion");
-    expect(await control.sessions.get("-100").update({ name: "after completion" })).toEqual({ ok: true });
+    expect(await control.sessions.get("telegram:-100").update({ name: "after completion" })).toEqual({ ok: true });
   });
 
   it("the group buffer is persisted BEFORE the ACK and survives a restart", async () => {
@@ -1886,7 +1886,7 @@ describe("telegram /stop command", () => {
     const { control, aborted } = fakeControl({ ok: true });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", control });
     expect((await ch(tgRequest(stopUpdate("/stop")))).status).toBe(200);
-    expect(aborted).toEqual(["42"]);
+    expect(aborted).toEqual(["telegram:42"]); // the default session is branded with the channel kind
     expect(invoked).toEqual([]);
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
@@ -1905,7 +1905,7 @@ describe("telegram /stop command", () => {
     expect(aborted).toEqual([]);
     expect(invoked).toHaveLength(1);
     await ch(tgRequest(stopUpdate("/stop@mybot")));
-    expect(aborted).toEqual(["42"]);
+    expect(aborted).toEqual(["telegram:42"]); // the default session is branded with the channel kind
     const noHub = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT" });
     await noHub(tgRequest(stopUpdate("/stop")));
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
@@ -1953,7 +1953,7 @@ describe("telegram /stop command", () => {
       });
       expect((await ch(tgRequest(groupStop(text, extra)))).status, text).toBe(200);
       await flush();
-      expect(aborted, text).toEqual(["-100123"]);
+      expect(aborted, text).toEqual(["telegram:-100123"]);
       expect(invoked, text).toEqual([]);
       expect(existsSync(join(stateDir, "buffers.json")), text).toBe(false);
       expect(stopFeedback(fetchMock), text).toEqual(["\u23f9 Stopped."]);

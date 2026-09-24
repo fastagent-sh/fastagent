@@ -249,7 +249,8 @@ export function telegramChannel({
         }
         return new Response(null, { status: 200 });
       }
-      const session = r.session ?? placeKey;
+      // Branded with the channel kind: session ids share one namespace across every channel of a deployment.
+      const session = r.session ?? `telegram:${placeKey}`;
       const chatId = r.chatId ?? m.chat.id;
       // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no reply-quote.
       const threadId = r.threadId ?? m.message_thread_id;
