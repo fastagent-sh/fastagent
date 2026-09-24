@@ -54,7 +54,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     // (src/channels/<kind>/scaffold). `add <kind>` for slack/feishu/lark talks to the platform, so
     // the payload is asserted where it lands rather than through an onboarding flow.
     const dist = join(dir, "node_modules", PACKAGE, "dist");
-    for (const kind of ["telegram", "slack", "feishu", "lark", "github"]) {
+    for (const kind of ["telegram", "slack", "feishu", "lark"]) {
       expect(await exists(join(dist, "channels", kind, "scaffold")), `${kind} scaffold missing from the tarball`).toBe(
         true,
       );

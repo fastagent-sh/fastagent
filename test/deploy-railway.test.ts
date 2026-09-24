@@ -169,14 +169,10 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).toMatch(/fastagent deploy railway[\s\S]*railway up/);
   });
 
-  it("states App Sleeping as a manual dashboard step; forbids it for github (no replay)", () => {
+  it("states App Sleeping as a manual dashboard step; forbids it for time triggers", () => {
     expect(
       runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),
     ).toContain("App Sleeping");
-    // github: fire-and-forget reviews have no replay → do NOT sleep (same floor Fly enforces via config).
-    expect(
-      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["github"]) })),
-    ).toContain("do NOT enable App Sleeping");
     // time triggers: cron/wake has no external wake-up — a sleeping service sleeps through them.
     expect(
       runbook(

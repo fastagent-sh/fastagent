@@ -6,7 +6,7 @@ status: current
 
 # Design principles
 
-FastAgent is shaped by a simple product moment: a directory works locally as an agent, and now it needs to become a real service — inside your app, on GitHub, in Telegram, or behind another channel.
+FastAgent is shaped by a simple product moment: a directory works locally as an agent, and now it needs to become a real service — inside your app, in Telegram or Slack, or behind another channel.
 
 The design center is **point at directory → live agent capability**. FastAgent is not trying to be the place where you author every agent from scratch. It is the serving layer that takes a local agent directory out of the terminal. `persona.md` is the optional identity slot; `AGENTS.md` remains project context, not a mandatory rewrite format.
 
@@ -73,7 +73,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 |---|---|---|
 | Existing agent directories | A new framework-only agent format | The fastest path is serving the directory authors already have. |
 | Agent-as-a-feature | Agent-as-a-platform | The common job is adding an agent to a product or channel the user already has, not adopting a second framework. |
-| `invoke` as the neutral contract | HTTP handlers as the only contract | The same agent can run behind an app route, GitHub, Telegram, tests, or future channels. |
+| `invoke` as the neutral contract | HTTP handlers as the only contract | The same agent can run behind an app route, Telegram, Slack, tests, or future channels. |
 | Channel adapters | One-off webhook/bot implementations | Channel code should translate events, not duplicate the agent loop. |
 | The agent's own reasoning as control flow | A bundled workflow/orchestration engine | The agent decides its steps; deterministic multi-step orchestration is the app's job — call `invoke` from your queue or workflow. |
 | Inheriting the machine's skills | Pretending a definition is the whole environment | An agent already inherits the `PATH`; refusing to inherit skills drew the line in the wrong place and cost every author a working `/` menu. `fastagent add skill` vendors one in when it belongs to the agent. |

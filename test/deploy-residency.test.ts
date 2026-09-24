@@ -22,14 +22,12 @@ describe("deploy/residency", () => {
   it("reports each reason with the cause, not the remedy", () => {
     // The remedy is the host's word (`min_machines_running`, App Sleeping); the CAUSE is this rule's,
     // and it is why two hosts could not drift apart on it again.
-    expect(residencyFor({ ...nothing, channels: [channel("github")] })).toMatchObject({ reason: "github" });
     expect(residencyFor({ ...nothing, hasWakeups: true })).toMatchObject({ reason: "wake-ups" });
     expect(residencyFor({ ...nothing, hasCron: true })).toMatchObject({ reason: "cron" });
     expect(residencyFor({ ...nothing, channels: [channel("socket", "long-connection")] })).toMatchObject({
       reason: "long-connection",
     });
     for (const facts of [
-      { ...nothing, channels: [channel("github")] },
       { ...nothing, hasWakeups: true },
       { ...nothing, hasCron: true },
     ]) {
@@ -43,8 +41,6 @@ describe("deploy/residency", () => {
     // definition that has both would offer a way out that drops every wake-up.
     expect(residencyFor({ ...nothing, hasCron: true, hasWakeups: true })?.reason).toBe("wake-ups");
     expect(residencyFor({ ...nothing, hasCron: true, hasWakeups: true })?.reason).not.toBe(CRON_CAN_BE_EXTERNAL);
-    // github outranks both: no replay at all, and a sleep mid-review loses the turn.
-    expect(residencyFor({ channels: [channel("github")], hasCron: true, hasWakeups: true })?.reason).toBe("github");
     // A long connection is last only because the others are stronger, not because it is optional.
     expect(residencyFor({ ...nothing, hasCron: true, channels: [channel("socket", "long-connection")] })?.reason).toBe(
       "cron",

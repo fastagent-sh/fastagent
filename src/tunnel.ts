@@ -1,7 +1,7 @@
 /**
  * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then auto-register the
  * first-party webhook channels against it (Telegram setWebhook; onboarded Slack App Manifest update; Feishu/Lark
- * application-config PATCH; GitHub/manual Slack print URLs).
+ * application-config PATCH; manual Slack prints the URL).
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import type { RegistrationOutcome } from "./channels/registration.ts";

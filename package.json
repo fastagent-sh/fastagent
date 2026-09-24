@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
   "version": "0.21.1",
-  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on GitHub, Telegram, Slack, or behind any channel.",
+  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on Telegram, Slack, Feishu, or behind any channel.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -11,7 +11,6 @@
     "agent-serving",
     "telegram",
     "slack",
-    "github",
     "webhook",
     "sse",
     "pi",
@@ -54,10 +53,6 @@
     "./pi": {
       "types": "./dist/pi.d.ts",
       "default": "./dist/pi.js"
-    },
-    "./github": {
-      "types": "./dist/github.d.ts",
-      "default": "./dist/github.js"
     },
     "./telegram": {
       "types": "./dist/telegram.d.ts",
@@ -111,8 +106,6 @@
     "@earendil-works/pi-coding-agent": "^0.86.0",
     "@hono/node-server": "^2.1.1",
     "@larksuiteoapi/node-sdk": "^1.71.1",
-    "@octokit/webhooks-methods": "^6.0.0",
-    "@octokit/webhooks-types": "^7.6.1",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "croner": "^10.0.1",

@@ -2,7 +2,7 @@
 
 ## What this is
 
-fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`persona.md` identity, `skills/`, tools, and existing `AGENTS.md` project context) into a live service inside an app, on GitHub, in Telegram, or behind a custom channel without a new authoring DSL.
+fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`persona.md` identity, `skills/`, tools, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
 
 The stable design center is the engine-neutral Agent Handler contract (`docs/SPEC.md`); pi (`@earendil-works/pi-*`) is the reference implementation.
 
@@ -46,9 +46,8 @@ src/
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
-├── telegram.ts, github.ts, # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
-│   slack.ts, feishu.ts,
-│   lark.ts
+├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
+│   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── session-remote.ts       # remote clients over /control/*: connectSessionControl + connectAgent
@@ -117,7 +116,6 @@ src/
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
 │   │   └── stop-command.ts # the shared /stop parsing every chat channel accepts
-│   ├── github/             # github channel (+ scaffold/ bundle)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy

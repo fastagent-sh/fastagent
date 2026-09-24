@@ -29,7 +29,7 @@ Most commands take an optional workspace directory (the agent is there, or in it
 | `routine history <name> [dir]` | Print a routine's recent fires (what they said is in the session). |
 | `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus the agent's own pending wake-ups. |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
+| `add telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel --run` starts app+tunnel, reads the ephemeral URL, and auto-registers Telegram, locally onboarded Slack, and Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--force` overwrites artifacts; idle behavior (`auto_stop_machines`, `min_machines_running`) is edited in the generated `fly.toml`. |
@@ -282,10 +282,9 @@ The result goes to stdout as data; stderr reports how much of it the model would
 (`result: 143910 chars ≈ 35978 tokens to the model`). See
 [Output budget](api-reference.md#output-budget) for what to do about a large one.
 
-## `fastagent add github|telegram|slack|feishu|lark`
+## `fastagent add telegram|slack|feishu|lark`
 
 ```bash
-fastagent add github [dir]
 fastagent add telegram [dir]
 fastagent add slack [dir]      # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app (scan-to-create; credentials → .secrets/.env)
@@ -293,7 +292,7 @@ fastagent add lark [dir]     # Lark intl — opens console + collects/validates 
                              # both take --ingress websocket|webhook (asked when omitted)
 ```
 
-Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — they are covered by the `.secrets/.gitignore` written at `init`. Everything (glue, companion tool, secrets) lands in the agent dir (`./fastagent/`) — the same place `dev`/`start` discover channels. The channel file is written once and is yours after that; a companion tool (`tools/slack-send.ts`, `tools/telegram-send.ts`, …) is the package's and is rewritten on every `add`, so after upgrading the package, re-run `add <kind>` (`--no-onboard` skips the app prompts) to refresh it.
+Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.secrets/.env.example` when possible. The channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, a random string the user contributes nothing to) are written to `.secrets/.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps — they are covered by the `.secrets/.gitignore` written at `init`. Everything (glue, companion tool, secrets) lands in the agent dir (`./fastagent/`) — the same place `dev`/`start` discover channels. The channel file is written once and is yours after that; a companion tool (`tools/slack-send.ts`, `tools/telegram-send.ts`, …) is the package's and is rewritten on every `add`, so after upgrading the package, re-run `add <kind>` (`--no-onboard` skips the app prompts) to refresh it.
 
 An enabled `channels/*.ts|*.js|*.mjs` file must load successfully or `dev` / `start` fails. To
 intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; channel files, not config,
@@ -314,7 +313,6 @@ URL manually in the Slack console.
 
 See:
 
-- [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
 - [Slack channel](slack.md)
 - [Feishu channel (Lark compatibility)](feishu.md)

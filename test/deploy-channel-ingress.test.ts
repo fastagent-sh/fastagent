@@ -46,15 +46,15 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
 
 describe("deploy/channel-ingress: which channels have a webhook", () => {
   it("answers in declaration order, whatever order the channels arrive in", () => {
-    expect(webhookKinds(webhook("lark", "github", "telegram"))).toEqual(["telegram", "github", "lark"]);
-    expect(webhookPaths(webhook("slack", "github"))).toEqual(["/webhook", "/slack"]);
+    expect(webhookKinds(webhook("lark", "slack", "telegram"))).toEqual(["telegram", "slack", "lark"]);
+    expect(webhookPaths(webhook("slack", "telegram"))).toEqual(["/telegram", "/slack"]);
   });
 
   it("EVERY long-connection channel is excluded, not just feishu/lark", () => {
     // The rule used to be spelled per host and only reached the feishu/lark branches. A long-connection
     // telegram is the case that made it expensive: setting a webhook makes getUpdates return 409, so a
     // runbook that prints setWebhook stops the channel the operator just deployed.
-    expect(webhookKinds([...longConnection("telegram"), ...webhook("github")])).toEqual(["github"]);
+    expect(webhookKinds([...longConnection("telegram"), ...webhook("slack")])).toEqual(["slack"]);
     expect(webhookRunbook("https://x", longConnection("telegram"))).toEqual([]);
     expect(webhookPaths(longConnection("telegram", "slack"))).toEqual([]);
   });
@@ -80,20 +80,16 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     const said: string[] = [];
     const gate = await registerWebhooks({
       baseUrl: "https://x",
-      // github never has a registrar; slack's and the feishu clouds' are not wired here.
-      channels: webhook("github", "slack", "feishu", "lark"),
+      // slack's and the feishu clouds' registrars are not wired here.
+      channels: webhook("slack", "feishu", "lark"),
       registrars: { telegram: vi.fn(registered) },
       log: (m) => said.push(m),
       retryHint: "re-run",
     });
-    expect(said.filter((m) => m.includes("https://x"))).toHaveLength(4);
-    expect(said.join("\n")).toContain("Settings → Webhooks");
+    expect(said.filter((m) => m.includes("https://x"))).toHaveLength(3);
     expect(said.join("\n")).toContain("Event Subscriptions");
     expect(said.join("\n")).toContain("https://x/feishu");
     expect(said.join("\n")).toContain("https://x/lark");
-    // The env-var name is the part nobody can guess, and `--tunnel` prints this line ALONE — there is
-    // no runbook next to it carrying the detail.
-    expect(said.join("\n")).toContain("GITHUB_WEBHOOK_SECRET");
     // manual never gates: a re-run cannot clear it, and an unclearable gate spins a coding agent.
     expect(gate).toBeUndefined();
   });
@@ -178,10 +174,9 @@ describe("every host's runbook reads the same answer", () => {
   });
 
   it("agentcore: the same steps at the forwarder URL, and generate-only skips a long-connection one", () => {
-    const out = agentcore(webhook("telegram", "github"));
+    const out = agentcore(webhook("telegram", "slack"));
     expect(out).toContain("-d url=<ForwarderUrl>/telegram");
-    expect(out).toContain("Payload URL = <ForwarderUrl>/webhook");
-    expect(out).toContain("8 h compute ceiling"); // AgentCore's own aside stays with AgentCore
+    expect(out).toContain("Request URL = <ForwarderUrl>/slack");
     // `--run` refuses a long-connection channel, but generate-only only warns and still prints this
     // runbook — so the steps filter on ingress rather than on the CLI having gated.
     expect(agentcore(longConnection("telegram"))).not.toContain("setWebhook");

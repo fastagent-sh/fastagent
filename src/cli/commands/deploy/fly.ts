@@ -32,13 +32,6 @@ export const flyHost: HostDeploy = {
       values,
       valueFile,
     } = pre;
-    // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store).
-    if (channels.some((channel) => channel.name === "github")) {
-      console.error(
-        `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
-          `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 in fly.toml to accept that trade.`,
-      );
-    }
     // Two consistent modes.
     const flyTomlPath = join(agentDir, "fly.toml");
     const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
@@ -54,8 +47,7 @@ export const flyHost: HostDeploy = {
     }
     // KEEP mode: the kept fly.toml may still scale to zero — which would sleep through the very thing the
     // GENERATED one keeps a machine up for. Same question, same answer: `residencyFor` decides, here too, so the
-    // kept-file gate and the generated setting cannot disagree (they did — this branch used to ask a different
-    // question from flyToml's and skip the github case entirely).
+    // kept-file gate and the generated setting cannot disagree.
     const residency = residencyFor({ channels, hasCron, hasWakeups });
     if (flyTomlKept && residency) {
       const min = parseFlyMinMachines(flyToml as string);

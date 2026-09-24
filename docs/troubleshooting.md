@@ -167,15 +167,9 @@ Check:
 
 - `cloudflared` is installed,
 - the public URL printed by FastAgent is the one configured in the provider,
-- the route path matches the channel (`/webhook` for GitHub, `/telegram` for Telegram, `/slack` for Slack, `/feishu` for Feishu, `/lark` for Lark),
+- the route path matches the channel (`/telegram` for Telegram, `/slack` for Slack, `/feishu` for Feishu, `/lark` for Lark),
 - the provider secret matches your `.env`,
 - your `.env` is loaded from the agent's `.secrets/` directory.
-
-## GitHub webhook returns 401
-
-The `GITHUB_WEBHOOK_SECRET` in `.env` must match the secret configured in GitHub webhook settings.
-
-Also check that GitHub sends `application/json` or its form-encoded payload format; both are supported by the first-party adapter.
 
 ## Telegram webhook returns 401
 

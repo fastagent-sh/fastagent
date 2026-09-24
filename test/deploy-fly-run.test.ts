@@ -326,14 +326,14 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   });
 
   it("any absent required channel secret — including a scaffold `generate` one — lands in missingSecrets", () => {
-    // github's webhook secret is human-shared: it MUST be operator-provided, not silently minted.
+    // telegram's secret token is scaffold-generated, but a deploy MUST carry the operator's value, not mint one.
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
-      channels: declaredChannels(["github", "telegram"]),
+      channels: declaredChannels(["telegram"]),
       values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
-    expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
+    expect(r.missingSecrets).toEqual(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "k" }); // no minted values
   });
 

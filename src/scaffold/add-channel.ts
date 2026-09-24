@@ -10,7 +10,7 @@ import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.t
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
-export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
+export type ChannelKind = "telegram" | "slack" | "feishu" | "lark";
 
 /** Group-visibility choice shared by the slack/feishu/lark onboarding flows. */
 export type GroupBehavior = "context" | "mentions";
@@ -37,22 +37,6 @@ interface ChannelScaffold {
 }
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
-  github: {
-    env: [
-      {
-        name: "GITHUB_WEBHOOK_SECRET",
-        hint: "any random string; set the same value in the GitHub webhook",
-        required: true,
-        generate: true,
-      },
-    ],
-    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real agent-dir-relative location — the
-    // CLI holds no channel-private filenames.
-    steps: [
-      "edit {channel} — map events to intents in on()",
-      "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",
-    ],
-  },
   telegram: {
     env: [
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },

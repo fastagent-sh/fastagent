@@ -65,7 +65,7 @@ fastagent deploy docker --tunnel --run  # generate + start
 fastagent deploy docker --run           # starts the existing app+tunnel topology
 ```
 
-`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram, locally onboarded Slack, and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; GitHub and scaffold-only/manual Slack print their console URLs. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
+`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram, locally onboarded Slack, and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; scaffold-only/manual Slack prints its console URL. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
@@ -140,13 +140,13 @@ Or let the CLI do all of it:
 fastagent deploy fly --run   # idempotent, resumable; carries .secrets/.env's values to Fly
 ```
 
-Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms) with `min_machines_running = 0`. Both lines are in the generated `fly.toml` and are yours to edit — the artifact is the knob, and `deploy` never regenerates it without `--force`. A GitHub channel forces one machine to stay up because its fire-and-forget turns have no replay. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
+Idle behavior is **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms) with `min_machines_running = 0`. Both lines are in the generated `fly.toml` and are yours to edit — the artifact is the knob, and `deploy` never regenerates it without `--force`. A long-connection channel also forces one machine up because its outbound connection cannot wake a stopped machine.
 
 **Time triggers and long-connection channels keep one machine running.** Cron/wake has no inbound request at its firing instant; an outbound WebSocket similarly cannot wake from zero. Pre-flight detects long connections structurally, including custom channels, and generated Fly config forces `min_machines_running = 1` (Railway forbids App Sleeping). If a kept `fly.toml` still scales to zero, `deploy` warns and `--run` refuses until it is raised — including under `--force`, which does not rewrite a `fly.toml` you own.
 
 **One of those reasons has a way out: `routines/`.** A cron is a TIME, and a time can be kept elsewhere. If you would rather scale to zero than pay for an idle machine, set `min_machines_running = 0` (or enable App Sleeping) and let a scheduler you own call [`POST /run`](api-reference.md#post-run) — Fly's Cron Manager or supercronic, a Railway **cron service** over the private network (which is also what wakes a slept service), GitHub Actions, a crontab. `deploy` prints the host's own form of this next to the setting it applies. Read that route's contract first: it is an API, not a clock, so retries and their idempotency are yours.
 
-`selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a GitHub channel (its turns have no replay) and a long-connection channel (it cannot reconnect from zero).
+`selfSchedule` is different and pre-flight says so: a wake-up is minted by the agent *at runtime*, so no external clock can know to send it. There, one machine staying up is the only option. The same goes for a long-connection channel (it cannot reconnect from zero).
 
 ## Railway
 
@@ -171,7 +171,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries .secrets/.env's values
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with GitHub, `selfSchedule`, or a long-connection channel; a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for. Don't enable it with `selfSchedule` or a long-connection channel; a sleeping service cannot hold an outbound connection. With `routines/` alone you may enable it, provided a **cron service** in the same project calls [`POST /run`](api-reference.md#post-run) over the private network — the runbook prints that form, including why it cannot be this service (a Railway cron job must exit).
 
 ## AWS Bedrock AgentCore
 
@@ -247,7 +247,7 @@ What to know before choosing it:
 - **Redeploys stop the fixed runtime session** so the next call uses the new image. In-flight work is interrupted, and its state is wiped with the mount — replay does not survive a deploy here.
 - **Long-connection channels cannot run here** — the connection is the ingress and nothing wakes a reclaimed session; switch the channel to webhook mode (`--run` gates on this).
 - **Programmatic invokes reuse the deployment's fixed `runtimeSessionId`**, printed in the runbook. The envelope's `session` still selects an independent conversation. The workspace lease rejects competing writers.
-- **The webhook body limit is the host's, not the channel's.** A Lambda Function URL request caps at 6 MB, so a webhook body over roughly 4 MiB cannot reach the container at all — the GitHub channel's own 25 MiB contract is not achievable here, and `deploy agentcore` says so when that channel is present.
+- **The webhook body limit is the host's, not the channel's.** A Lambda Function URL request caps at 6 MB, so a webhook body over roughly 4 MiB cannot reach the container at all.
 - **The template is the topology.** If a kept `agentcore.template.yaml` no longer matches the definition (you added a schedule, a channel, or `selfSchedule`), `--run` stops until you regenerate with `--force` (hand-written templates — marker removed — are always kept and never gated).
 
 ## Serving an existing repo (agentDir layout)

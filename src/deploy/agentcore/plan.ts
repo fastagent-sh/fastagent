@@ -785,12 +785,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       `#   verbatim, so the stack must be deployed when you save the Request URL.`,
     );
   }
-  if (channels.some((channel) => channel.name === "github")) {
-    post.push(
-      `# NOTE: github turns are fire-and-forget with no replay — a compute reclaimed mid-review drops it`,
-      `#   (the ping's HealthyBusy + time_of_last_update holds the session while turns run, but the 8 h compute ceiling is hard).`,
-    );
-  }
   if (post.length > 0) runbook.push(``, ...post);
 
   for (const u of untranslatable) {

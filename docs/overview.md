@@ -6,7 +6,7 @@ status: current
 
 # Overview
 
-**Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, handle GitHub/webhook events, expose it as an API endpoint, or put it behind your own channel.
+**Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, expose it as an API endpoint, or put it behind your own channel.
 
 It does not ask you to rewrite an agent into a framework-specific project. Start with any directory; add `persona.md`, `skills/`, `tools/`, channels, and markdown context as the agent grows. FastAgent serves that directory as a live service.
 
@@ -31,7 +31,7 @@ agent/
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
-5. **Composable adapters**: GitHub, Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
+5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history (`fastagent routine history`).
 
 ## Design choices
@@ -75,7 +75,7 @@ export const POST = createInvokeHandler(agent);
 
 Your app still owns auth, database, routing, and deployment.
 
-### Run it for GitHub, Telegram, or Slack
+### Run it for Telegram, Slack, or Feishu
 
 Use the CLI:
 
@@ -86,10 +86,9 @@ fastagent dev
 fastagent start
 ```
 
-Add GitHub, Telegram, Slack, Feishu, or Lark when the agent should review PRs or help chat users:
+Add Telegram, Slack, Feishu, or Lark when the agent should help chat users:
 
 ```bash
-fastagent add github
 fastagent add telegram
 fastagent add slack
 fastagent add feishu   # 飞书; Lark international: fastagent add lark
@@ -108,7 +107,6 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 | Add webhooks/bots | [Channels](channels.md) |
 | Run the agent on a cron / let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [CLI reference](cli.md) |
 | Ship to Fly, Railway, AWS Bedrock AgentCore, or any Docker host | [Deploy](deploy.md) |
-| Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |
 | Use Slack apps | [Slack channel](slack.md) |
 | Use Feishu bots / Lark compatibility | [Feishu channel (Lark compatibility)](feishu.md) |
@@ -125,7 +123,7 @@ Implemented today:
 - Agent Handler v0.1 reference implementation over pi.
 - Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - HTTP/SSE invoke channel.
-- GitHub, Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
+- Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`routines/` files) and opt-in agent self-scheduling (the `wake` tool), with a bounded fire history.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `routine`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
@@ -133,6 +131,5 @@ Implemented today:
 
 Not implemented yet:
 
-- General durable post-ACK execution for every webhook channel (Telegram, Slack, and Feishu/Lark have an at-least-once intent layer; GitHub does not).
 - Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
 - Additional engine reference bindings beyond pi.

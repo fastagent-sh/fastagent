@@ -207,7 +207,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     runbook.push(
       ``,
       `# Quick Tunnel: \`--run\` starts the Compose tunnel service and reads its ephemeral public URL.`,
-      `# Telegram/Feishu/Lark and locally onboarded Slack auto-register; GitHub/manual Slack print console URLs. Re-run after the`,
+      `# Telegram/Feishu/Lark and locally onboarded Slack auto-register; manual Slack prints its console URL. Re-run after the`,
       `# tunnel container/Docker daemon restarts: a new Quick Tunnel URL must replace the old webhook URL.`,
       `${compose} logs -f tunnel`,
     );

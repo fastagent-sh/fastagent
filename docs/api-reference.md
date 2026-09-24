@@ -435,7 +435,7 @@ interface LongConnectionChannelModule {
 
 An agent channel default-exports either a route `ChannelModule` or a
 `LongConnectionChannelModule`. Bundled webhook adapters (`telegramChannel(opts)`,
-`githubChannel(opts)`, `feishuChannel(opts)`) return `ChannelModule`; `feishuWebSocketChannel(opts)`
+`feishuChannel(opts)`) return `ChannelModule`; `feishuWebSocketChannel(opts)`
 and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. In both forms the channel file
 is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
@@ -999,7 +999,6 @@ unauthenticated remote-control surface — put real authentication and authoriza
 import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
 import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
-import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel, feishuTransport, type FeishuTransport } from "@fastagent-sh/fastagent/feishu";
@@ -1007,5 +1006,5 @@ import { larkChannel, larkTransport, type LarkTransport } from "@fastagent-sh/fa
 ```
 
 `/core` loads no third-party package at all, which is what makes it the right dependency for a
-channel package or a second engine. The root entry remains the supported all-in-one. See [GitHub channel](github.md),
+channel package or a second engine. The root entry remains the supported all-in-one. See
 [Telegram channel](telegram.md), [Slack channel](slack.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

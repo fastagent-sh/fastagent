@@ -93,8 +93,7 @@ export async function runAddChannel(
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
-  // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is the same class
-  // of value as telegram's).
+  // Kind-neutral: every channel's generated secrets get the same treatment.
   const dotEnv = await appendChannelDotEnv(
     target,
     channelKind,
@@ -121,8 +120,7 @@ export async function runAddChannel(
   for (const e of env) {
     if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
     if (dotEnv.written.includes(e.name)) {
-      // Written, but its hint may still carry an action (github: paste the same value into the webhook UI) — keep the
-      // variable visible instead of silently absorbing it.
+      // Written, but its hint may still carry an action — keep the variable visible instead of silently absorbing it.
       console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to ${envLabel}   # ${e.hint}`);
       continue;
     }
@@ -143,8 +141,6 @@ export async function runAddChannel(
     console.error(
       `    fastagent dev --tunnel   # ${opts.onboard === false ? "serve locally + print the URL to paste into the Slack app's Event Subscriptions" : "start the agent — then message it in Slack"}`,
     );
-  } else if (channelKind === "github") {
-    console.error(`    fastagent dev --tunnel   # serve locally + print the URL for manual GitHub webhook setup`);
   } else if (channelKind !== "lark") {
     console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }

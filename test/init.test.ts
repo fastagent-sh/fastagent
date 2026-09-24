@@ -331,7 +331,7 @@ describe("init: scaffoldAgent", () => {
   });
 });
 
-describe("add: fastagent add <channel> (github / telegram)", () => {
+describe("add: fastagent add <channel>", () => {
   // A fastagent-ready AGENT DIR, as `fastagent init` produces it: an ESM package declaring the dep.
   // `add` scaffolds INTO this; it never bootstraps it (that is init's job). The tests run the CLI
   // from the agent dir itself — a supported entry point that resolves to the same placement.
@@ -367,30 +367,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(await readFile(join(root, ".secrets", ".env"), "utf8")).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
   });
 
-  it("scaffolds channels/github.ts into a ready workspace, mutates nothing else, and refuses to clobber", async () => {
-    const dir = await readyWorkspace();
-    const out = await cliInit(["add", "github"], dir);
-    expect(out).toContain("channels/github.ts");
-
-    const src = await readFile(join(dir, "channels", "github.ts"), "utf8");
-    expect(src).toContain('from "@fastagent-sh/fastagent/github"'); // the third-party adapter
-    expect(src).toContain("POST /webhook");
-    expect(src).toContain("on:"); // the app glue stub the user edits
-
-    // add does NOT bootstrap: package.json is untouched and no .npmrc/.gitignore is written.
-    expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
-      type: "module",
-      dependencies: { "@fastagent-sh/fastagent": "^0.4.0" },
-    });
-    expect(await exists(join(dir, ".npmrc"))).toBe(false);
-
-    // A second add must not overwrite authored glue.
-    const out2 = await cliInit(["add", "github"], dir);
-    expect(out2).toMatch(/already exists/);
-    expect(await readFile(join(dir, "channels", "github.ts"), "utf8")).toBe(src);
-  });
-
-  it("scaffolds channels/telegram.ts (a second channel kind) and coexists with github", async () => {
+  it("scaffolds channels/telegram.ts into a ready workspace, mutates nothing else, and keeps authored glue", async () => {
     const dir = await readyWorkspace();
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env.example"), "# env\n"); // add injects channel env vars here
@@ -406,11 +383,16 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
     expect(sendTool).toContain("sendDocument");
     expect(sendTool).toContain("sendMessage"); // text mode too — the delivery path for scheduled/woken turns
-    // next steps carry this channel's env vars (with hints), not github's
+    // next steps carry this channel's env vars (with hints)
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");
     expect(out).toContain("--tunnel");
-    expect(out).not.toContain("GITHUB_WEBHOOK_SECRET");
+    // add does NOT bootstrap: package.json is untouched and no .npmrc is written.
+    expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
+      type: "module",
+      dependencies: { "@fastagent-sh/fastagent": "^0.4.0" },
+    });
+    expect(await exists(join(dir, ".npmrc"))).toBe(false);
 
     // env vars are injected into .secrets/.env.example so a copy-to-.env finds them; the generated
     // secret itself is materialized into .secrets/.env (self-gitignored by construction).
@@ -419,11 +401,6 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
     expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .secrets/.env");
-
-    // two channels coexist in one workspace (the discovery/merge mechanism handles many)
-    await cliInit(["add", "github"], dir);
-    expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
-    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
 
     // Re-running add on an existing channel keeps the authored glue and rewrites the package-owned
     // companion tool — the upgrade path for an agent scaffolded by an earlier release.
@@ -447,15 +424,8 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
 
-    // Kind-neutral: github's generated webhook secret gets the same treatment, and its hint still
-    // prints because it carries an ACTION (paste the same value into the GitHub webhook UI). `add`
-    // says nothing about git — the .gitignore was the scaffold's job at init, once.
-    const gh = await readyWorkspace();
-    const ghOut = await cliInit(["add", "github"], gh);
-    expect(ghOut).toContain("wrote GITHUB_WEBHOOK_SECRET to .secrets/.env");
-    expect(ghOut).toMatch(/GITHUB_WEBHOOK_SECRET — generated and written to \.secrets\/\.env.*set the same value/);
-    expect(ghOut).not.toMatch(/gitignore|committed/i);
-    expect(await readFile(join(gh, ".secrets", ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=[0-9a-f]{48}$/m);
+    // `add` says nothing about git — the .gitignore was the scaffold's job at init, once.
+    expect(out).not.toMatch(/gitignore|committed/i);
 
     // An existing non-empty value is KEPT, and not reported as written.
     const kept = await readyWorkspace();
@@ -530,29 +500,29 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     ];
     for (const [make, msg] of cases) {
       const dir = await make();
-      const out = await cliInit(["add", "github"], dir);
+      const out = await cliInit(["add", "telegram"], dir);
       expect(out).toMatch(msg);
-      expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // nothing scaffolded
+      expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(false); // nothing scaffolded
     }
   });
 
   it("scaffolds through an IN-workspace symlinked channels/, but rejects one that ESCAPES (no outside write)", async () => {
-    // in-workspace symlink (channels → ./real): followed, github.ts written inside the workspace
+    // in-workspace symlink (channels → ./real): followed, telegram.ts written inside the workspace
     const dir = await readyWorkspace();
     await mkdir(join(dir, "real"));
     await symlink(join(dir, "real"), join(dir, "channels"));
-    const out = await cliInit(["add", "github"], dir);
+    const out = await cliInit(["add", "telegram"], dir);
     expect(out).toMatch(/created/);
-    expect(await exists(join(dir, "real", "github.ts"))).toBe(true); // written through the in-workspace symlink
+    expect(await exists(join(dir, "real", "telegram.ts"))).toBe(true); // written through the in-workspace symlink
 
     // escaping symlink (channels → external dir): rejected, nothing written outside the workspace
     const esc = await readyWorkspace();
     const ext = await freshDir();
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(esc, "channels"));
-    const out2 = await cliInit(["add", "github"], esc);
+    const out2 = await cliInit(["add", "telegram"], esc);
     expect(out2).toMatch(/outside the agent dir/);
-    expect(await exists(join(ext, "ch", "github.ts"))).toBe(false); // not written outside
+    expect(await exists(join(ext, "ch", "telegram.ts"))).toBe(false); // not written outside
   });
 });
 

@@ -139,7 +139,7 @@ describe("deploy/docker: planDockerDeploy", () => {
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(
-      planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "github"]) }),
+      planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "slack"]) }),
     );
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
@@ -150,7 +150,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(out).toContain("down -v   # DESTRUCTIVE");
     expect(out).toContain("Public ingress is operator-owned");
     expect(out).toContain("https://<your-domain>/telegram");
-    expect(out).toContain("https://<your-domain>/webhook");
+    expect(out).toContain("https://<your-domain>/slack");
   });
 
   it("sanitizes a stable Compose project name and exposes default webhook paths", () => {
@@ -160,9 +160,8 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
-    expect(webhookPaths(declaredChannels(["telegram", "github", "slack", "feishu", "lark"]))).toEqual([
+    expect(webhookPaths(declaredChannels(["telegram", "slack", "feishu", "lark"]))).toEqual([
       "/telegram",
-      "/webhook",
       "/slack",
       "/feishu",
       "/lark",

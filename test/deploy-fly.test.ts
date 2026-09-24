@@ -34,10 +34,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(toml).toContain("internal_port = 8787");
   });
 
-  it("keeps one machine running for github (no replay), scales to zero otherwise (definition-aware)", () => {
-    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["github"]) }))).toContain(
-      "min_machines_running = 1",
-    );
+  it("keeps one machine running for a cron, scales to zero otherwise (definition-aware)", () => {
     expect(
       flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true, hasWakeups: false })),
     ).toContain(
