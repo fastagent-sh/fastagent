@@ -80,7 +80,7 @@ export function loadDotEnv(agentDir: string): void {
   // A `.env` at the agent's root is the file habit puts there, and nothing reads it.
   const stray = join(agentDir, ".env");
   if (stray === path || !existsSync(stray)) return;
-  const misplaced = [...parseEnvContent(readFileSync(stray, "utf8")).keys()].filter((k) => k.startsWith("FASTAGENT_"));
+  const misplaced = [...parseEnvContent(readFileSync(stray, "utf8")).keys()];
   if (misplaced.length > 0) {
     log.warn(
       `[fastagent] ${stray} is NOT read — it sets ${misplaced.join(", ")}, and this agent's env lives at ` +

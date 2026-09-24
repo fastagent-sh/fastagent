@@ -290,8 +290,7 @@ describe("cli papercuts", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/unknown routine "nope"/);
     expect(stderr).toMatch(/available: daily/); // found in fastagent/routines — the same set dev/start serve
-    // The path is REPORTED, not spelled from the nested default — a flat agent's routines live at its
-    // own root, and pointing at `fastagent/routines` there would invent a directory.
+    // The path is REPORTED from the resolved agent dir, not spelled from the default name.
     expect(stderr).toMatch(/looked in .*fastagent\/routines/);
   });
 

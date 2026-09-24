@@ -682,7 +682,7 @@ persistent-volume wiring, required secret names, and a runbook. Docker adds a us
 ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
 reads the Quick Tunnel URL and registers webhooks.
 
-Deploy requires a nested definition. The image seeds the persistent workspace once; later releases
+The image seeds the persistent workspace once; later releases
 replace only the definition subtree. Artifacts sit under the agent prefix, with the workspace-root
 `.dockerignore` the host context packers require; preflight checks that a kept ignore file ships the
 definition and excludes credentials. Git history ships when the host packer permits it, and the image

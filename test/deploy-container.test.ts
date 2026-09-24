@@ -14,8 +14,7 @@ const input = {
 } as const;
 
 describe("deploy/container: shared Docker context", () => {
-  it("requires a safe nested definition", () => {
-    expect(() => containerArtifacts({ ...input, agentPrefix: "" })).toThrow("nested agent");
+  it("refuses an agent prefix that leaves the workspace", () => {
     expect(() => containerArtifacts({ ...input, agentPrefix: "../agent/" })).toThrow("manifest");
   });
   it("keeps tracked secrets scaffolds without shipping credentials or state", () => {

@@ -64,15 +64,15 @@ directories or the same directory.
 | Situation | Placement |
 |---|---|
 | New agent or an agent for an existing project | `fastagent init [workspace]` creates `workspace/fastagent/`; existing workspace files stay untouched. |
-| A standalone agent repository or an existing package that is itself the agent | Run `fastagent init` in it: that repository is the WORKSPACE and the definition lands in `./fastagent/`. This is also the shape `deploy` requires. |
-| An existing application embeds the agent | Keep the application's layout. A nested definition is convenient; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
+| A standalone agent repository | Run `fastagent init` in it: that repository is the WORKSPACE and the definition lands in `./fastagent/`. |
+| An existing application embeds the agent | Keep the application's layout and put the definition in its `fastagent/`; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Check the workspace itself and its direct
 children for `fastagent.config.ts` before running `init`. Reuse an existing definition.
 `--agent-dir bot` selects another name; multiple sibling agents are selected with `FASTAGENT_AGENT`.
 See [Configuration](configuration.md#more-than-one-agent). Optional directories remain optional.
 
-The example below uses a **fresh, default nested scaffold**. Install the CLI once, then run:
+The example below uses a **fresh, default scaffold**. Install the CLI once, then run:
 
 ```bash
 npm install -g @fastagent-sh/fastagent
@@ -100,10 +100,8 @@ before continuing. `--no-install` defers that install.
 A global CLI installation alone does not make package imports available to authored tools.
 
 **Working-directory convention for the rest of this guide:** stay in `my-agent/`, the workspace.
-Use `npm --prefix fastagent ...` for the nested package. Running `fastagent dev` after `cd fastagent`
-makes the definition its own workspace. `deploy` requires the containing workspace instead.
-For an existing flat agent, omit the `fastagent/` path prefix and npm's `--prefix fastagent`; serving still
-works, but deployment requires moving the definition into a nested agent directory.
+Use `npm --prefix fastagent ...` for the agent's package. Commands give the same result run from `my-agent/` or
+from `my-agent/fastagent/`: the workspace is always the agent directory's parent.
 
 ## 3. Use TypeScript for new authored code
 
@@ -394,8 +392,8 @@ See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 
 ## 8. Embed only what the application needs
 
-Install FastAgent in the application package that imports it as well as in a separate agent package
-that imports it. A flat placement can use one manifest; keep package versions aligned.
+Install FastAgent in the application package that imports it as well as in the agent package
+that imports it; keep package versions aligned.
 
 - For the whole service, use `createAgentService(workspace)`, mount its Fetch `handler`, await `ready`,
   and close the service on application shutdown. This includes discovered channels and scheduling.

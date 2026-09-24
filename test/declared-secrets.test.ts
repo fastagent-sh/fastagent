@@ -12,7 +12,7 @@ import { resolveAgentTools } from "../src/engines/pi/create.ts";
 import { loadRoutines } from "../src/schedule/discover.ts";
 import { resolveAgentAssembly } from "../src/engines/pi/open.ts";
 
-/** An agent dir (nested layout, so `resolveAgentAssembly` reads it as the agent). */
+/** An agent dir: `<host>/fastagent/`. */
 async function agent(files: Record<string, string>): Promise<string> {
   const host = await mkdtemp(join(tmpdir(), "fa-declared-"));
   const dir = join(host, "fastagent");
