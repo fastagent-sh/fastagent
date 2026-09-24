@@ -17,8 +17,9 @@ import {
   type ResolvedCommand,
   SessionManager,
   type ToolDefinition,
+  DefaultResourceLoader,
   createAgentSessionFromServices,
-  createAgentSessionServices,
+  getAgentDir,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
@@ -314,7 +315,14 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
-/** The resources ONE served session runs on: a fresh loader, so fresh extension instances. */
+/**
+ * The resources ONE served session runs on: a fresh loader, so fresh extension instances.
+ *
+ * Assembled here rather than by pi's `createAgentSessionServices`, which ends by refreshing the model runtime it is
+ * given — re-reading `models.json` and rebuilding every provider on the ONE runtime all conversations share. That is
+ * there to fold in providers extensions registered, which serving refuses; per session it would be a full provider
+ * rebuild per turn.
+ */
 async function servingServices(options: {
   cwd: string;
   modelRuntime: ModelRuntime;
@@ -323,21 +331,23 @@ async function servingServices(options: {
 }): Promise<AgentSessionServices> {
   const { cwd, modelRuntime, definition, extensionPaths } = options;
   const machine = await readMachine(cwd);
-  const services = await createAgentSessionServices({
+  const agentDir = getAgentDir();
+  // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
+  const settingsManager = machine.settingsManager();
+  const resourceLoader = new DefaultResourceLoader({
+    ...definitionResourceLoaderOptions({
+      systemPrompt: () => definition.systemPrompt,
+      skills: () => definition.skills,
+      machine,
+      extensionPaths,
+    }),
+    extensionsOverride: refuseLoadTimeProviders,
     cwd,
-    modelRuntime,
-    // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
-    settingsManager: machine.settingsManager(),
-    resourceLoaderOptions: {
-      ...definitionResourceLoaderOptions({
-        systemPrompt: () => definition.systemPrompt,
-        skills: () => definition.skills,
-        machine,
-        extensionPaths,
-      }),
-      extensionsOverride: refuseLoadTimeProviders,
-    },
+    agentDir,
+    settingsManager,
   });
+  await resourceLoader.reload();
+  const services = { cwd, agentDir, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
   reportExtensionErrors(services);
   return services;
 }

@@ -306,7 +306,7 @@ A served command settles the invoke:
   that turn;
 - if it does its work without one, the invoke completes with no text, so write anything the caller should see
   into the session or start a turn;
-- if it throws, the invoke fails with its error.
+- if it throws, or a turn it starts cannot begin (no credentials, for example), the invoke fails with that error.
 
 Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
 Extension code changes need a restart; `dev` restarts on its own.

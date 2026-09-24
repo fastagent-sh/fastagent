@@ -88,6 +88,44 @@ describe("AgentSession L0: the terminal describes THIS turn", () => {
   });
 });
 
+describe("AgentSession L0: extension work the run owes", () => {
+  /** A session whose extension command reports `event` on pi's error channel and starts no model run. */
+  function commandReporting(event: string): AgentSession {
+    let report: (error: { extensionPath: string; event: string; error: string }) => void = () => {};
+    return {
+      ...bareSessionParts,
+      extensionRunner: {
+        ...bareSessionParts.extensionRunner,
+        getRegisteredCommands: () => [{ name: "go" }],
+        onError: (listener: typeof report) => {
+          report = listener;
+          return () => {};
+        },
+      },
+      state: { messages: [] },
+      subscribe: () => () => {},
+      prompt: async () => report({ extensionPath: "<runtime>", event, error: "No API key found for faux" }),
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+  }
+
+  it("fails when a turn the command started could not begin", async () => {
+    for (const event of ["send_user_message", "send_message"]) {
+      const agent = createPiAgentFromSession({ sessionFactory: async () => commandReporting(event) });
+      const events = await drain(agent.invoke({ session: "s" }, { text: "/go" }));
+      expect(events, event).toEqual([
+        { type: "failed", details: `${event} failed (<runtime>): No API key found for faux`, retryable: false },
+      ]);
+    }
+  });
+
+  it("completes a command that started nothing and reported nothing", async () => {
+    const agent = createPiAgentFromSession({ sessionFactory: async () => commandReporting("unrelated_event") });
+    expect(await drain(agent.invoke({ session: "s" }, { text: "/go" }))).toEqual([{ type: "completed" }]);
+  });
+});
+
 describe("AgentSession L0: cancelling before the model call", () => {
   it("never starts the turn when the consumer walks away while the session is being prepared", async () => {
     const { session, prompted } = promptRecordingSession();

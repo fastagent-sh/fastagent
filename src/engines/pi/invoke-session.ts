@@ -104,6 +104,29 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
   }
 }
 
+/** pi's error-channel events for work an invoke owes its caller: the command it ran, and the turns it started. */
+const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]);
+
+/**
+ * The turns extensions start on this session and have not finished. `pi.sendUserMessage` and `pi.sendMessage` reach
+ * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is this run's
+ * alone, so the wrap never outlives the run.
+ */
+function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
+  const pending = new Set<Promise<void>>();
+  const track = (sent: Promise<void>): Promise<void> => {
+    pending.add(sent);
+    const done = () => void pending.delete(sent);
+    sent.then(done, done); // pi's own `.catch` on `sent` reports the failure
+    return sent;
+  };
+  const sendUserMessage = session.sendUserMessage.bind(session);
+  const sendCustomMessage = session.sendCustomMessage.bind(session);
+  session.sendUserMessage = (...args) => track(sendUserMessage(...args));
+  session.sendCustomMessage = (...args) => track(sendCustomMessage(...args));
+  return pending;
+}
+
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
   const { sessionFactory, lease = inProcessLease(), observer } = options;
 
@@ -199,7 +222,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       );
       let finalAssistant: AssistantMessage | undefined;
       let runStarted = false;
-      let commandError: string | undefined;
+      let extensionFailure: string | undefined;
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
       let eventFailure: PortFailure | undefined;
@@ -251,15 +274,18 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }),
         (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
       );
-      // pi swallows a failing extension command into its error channel; this run reports it.
+      // pi swallows a failing extension command, and a turn an extension failed to start, into its error channel;
+      // both are work this run owes its caller, so the run reports them.
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           session.extensionRunner.onError((error) => {
-            if (error.event === "command") commandError ??= `${error.extensionPath} failed: ${error.error}`;
+            if (OWED_BY_THE_RUN.has(error.event))
+              extensionFailure ??= `${error.event} failed (${error.extensionPath}): ${error.error}`;
           }),
         ),
         (unsubscribe) => Effect.sync(unsubscribe),
       );
+      const extensionTurns = trackExtensionTurns(session);
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.
       yield* Deferred.succeed(bound, session);
       const promptOptions = yield* port(() => toPiPromptOptions(prompt));
@@ -272,14 +298,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         "prompt",
         async () => {
           await session.prompt(prompt.text, promptOptions);
-          // An extension command returns from `prompt()` as soon as its handler does; a turn it started
-          // (`pi.sendUserMessage`) is still running, and this run owns it until it settles.
-          await session.waitForIdle();
+          // An extension command returns from `prompt()` as soon as its handler does, and a turn it started may not
+          // have begun yet, so idleness alone proves nothing. This run owns those turns until they settle, and any
+          // turn they start in turn.
+          do {
+            await Promise.allSettled([...extensionTurns]);
+            await session.waitForIdle();
+          } while (extensionTurns.size > 0);
         },
         () => session.abort(),
       );
       if (eventFailure) return yield* Effect.fail(eventFailure);
-      if (commandError !== undefined) return { type: "failed", details: commandError, retryable: false } as const;
+      if (extensionFailure !== undefined)
+        return { type: "failed", details: extensionFailure, retryable: false } as const;
       if (retriedAfterAnswer !== undefined)
         return { type: "failed", details: retriedAfterAnswer, retryable: true } as const;
       if (finalAssistant) return toTerminal(finalAssistant);

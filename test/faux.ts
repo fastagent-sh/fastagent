@@ -39,6 +39,8 @@ export function makeFaux(options?: RegisterFauxProviderOptions): {
  */
 export const bareSessionParts = {
   waitForIdle: async () => {},
+  sendUserMessage: async () => {},
+  sendCustomMessage: async () => {},
   extensionRunner: {
     onError: () => () => {},
     emit: async () => undefined,

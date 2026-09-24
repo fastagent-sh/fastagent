@@ -6,7 +6,7 @@
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
@@ -177,6 +177,31 @@ export default function (pi) {
     ]);
     expect(a.text).toContain("from command A");
     expect(b.text).toContain("from command B");
+  });
+
+  it("streams a command's turn even when the turn is slow to begin", async () => {
+    // pi returns from the command before the turn it started is running; an async `before_agent_start` widens that
+    // gap past any microtask ordering, so only waiting on the turn itself gets the answer.
+    const agent = await servedAgent({
+      "extensions/slow.ts": `
+import { setTimeout } from "node:timers/promises";
+export default function (pi) {
+  pi.on("before_agent_start", async () => { await setTimeout(20); });
+  pi.registerCommand("go", { description: "", handler: async (args) => pi.sendUserMessage("from command " + args) });
+}
+`,
+    });
+    expect((await collect(agent.invoke({ session: "s" }, { text: "/go slow" }))).text).toContain("from command slow");
+  });
+
+  it("builds a session's loader without rebuilding the model runtime every conversation shares", async () => {
+    const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
+    await collect(agent.invoke({ session: "s" }, { text: "first" }));
+    const refresh = vi.spyOn(ModelRuntime.prototype, "refresh");
+    await collect(agent.invoke({ session: "s" }, { text: "second" }));
+    await collect(agent.invoke({ session: "s" }, { text: "third" }));
+    expect(refresh).not.toHaveBeenCalled();
+    refresh.mockRestore();
   });
 
   it("completes a command that does its work without a model turn", async () => {
