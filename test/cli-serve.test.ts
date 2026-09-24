@@ -235,7 +235,7 @@ describe("cli: the assembled serving surface", () => {
     // `http.invoke: false` is the persistent form and travels into a deployed image. The case this
     // flag exists for is `dev --tunnel`: the standard way to register a chat channel's webhook, which
     // publishes the port at a public quick-tunnel URL — and would publish an anonymous, fully-tooled
-    // `POST /invoke` alongside it. Same relationship `--bind` has to `http.host`.
+    // `POST /invoke` alongside it.
     const opened = { serveInvoke: undefined, agentDir: "/x" } as unknown as MountableAgent;
     expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing changed
     expect(withRunOverrides(opened, { invoke: false }).serveInvoke).toBe(false);
@@ -371,54 +371,15 @@ describe("cli: bind address policy", () => {
     expect(exits(() => parseBind("banana"))).toBe(2);
   });
 
-  it("the bind chain: flag > http.host > the command's last rung (dev loopback, start wildcard)", async () => {
-    // Both commands read ONE chain and differ only in where it ends, so both ends are asserted here: `devBindHost`
-    // is dev's whole policy (its call site passes the parsed flag and `http.host` straight through), and start's
-    // end is `resolveBindHost` with no fallback.
-    const { resolveBindHost } = await import("../src/cli/serve.ts");
-    const { devBindHost } = await import("../src/cli/commands/dev.ts");
-    expect(devBindHost("192.168.1.5", "0.0.0.0", false)).toBe("192.168.1.5");
-    expect(devBindHost(undefined, "0.0.0.0", false)).toBe("0.0.0.0"); // a configured bind beats the default
-    expect(devBindHost(undefined, "localhost", false)).toBe("127.0.0.1"); // read as an address
-    expect(devBindHost(undefined, undefined, false)).toBe("127.0.0.1"); // dev ends at loopback
-    expect(devBindHost(undefined, undefined, true)).toBe("127.0.0.1"); // a bind `localhost` resolves to: --tunnel ok
-    expect(resolveBindHost(undefined, undefined, false)).toBeUndefined(); // start: the wildcard a container needs
-  });
-
-  it("assertTunnelBindable: --tunnel refuses a bind localhost cannot reach; the source picks the exit code", async () => {
+  it("assertTunnelBindable: --tunnel refuses a --bind localhost cannot reach, as a usage error", async () => {
     const { assertTunnelBindable } = await import("../src/cli/serve.ts");
-    expect(exits(() => assertTunnelBindable("192.168.1.5", true, "config"))).toBe(1); // startup failure
-    expect(exits(() => assertTunnelBindable("192.168.1.5", false, "flag"))).toBeUndefined(); // no tunnel, no conflict
-    expect(exits(() => assertTunnelBindable("127.0.0.1", true, "flag"))).toBeUndefined();
-    expect(exits(() => assertTunnelBindable("::1", true, "flag"))).toBeUndefined(); // localhost resolves to it
+    expect(exits(() => assertTunnelBindable("192.168.1.5", true))).toBe(2);
+    expect(exits(() => assertTunnelBindable("192.168.1.5", false))).toBeUndefined(); // no tunnel, no conflict
+    expect(exits(() => assertTunnelBindable("127.0.0.1", true))).toBeUndefined();
+    expect(exits(() => assertTunnelBindable("::1", true))).toBeUndefined(); // localhost resolves to it
     // Loopback yet NOT what `localhost` resolves to — the tunnel would 502, so it is refused.
-    expect(exits(() => assertTunnelBindable("127.0.0.2", true, "flag"))).toBe(2); // a flag combination = usage
-    expect(exits(() => assertTunnelBindable(undefined, true, "flag"))).toBeUndefined();
-  });
-
-  it("assertTunnelBindable names the SOURCE, not just the exit code", async () => {
-    const { assertTunnelBindable } = await import("../src/cli/serve.ts");
-    // Same refusal, two audiences: under `config` there is no --bind to change and no flag to drop, so
-    // flag-only wording sends the reader hunting for something they never typed.
-    const said = (source: "flag" | "config") => {
-      const seen: string[] = [];
-      const exit = vi.spyOn(process, "exit").mockImplementation((() => {
-        throw new Error("exit");
-      }) as never);
-      const err = vi.spyOn(console, "error").mockImplementation((m: unknown) => void seen.push(String(m)));
-      try {
-        assertTunnelBindable("192.168.1.5", true, source);
-      } catch {
-        /* the injected exit */
-      } finally {
-        err.mockRestore();
-        exit.mockRestore();
-      }
-      return seen.join("\n");
-    };
-    expect(said("flag")).toMatch(/drop --tunnel/);
-    expect(said("flag")).not.toMatch(/http\.host/);
-    expect(said("config")).toMatch(/http\.host/); // the file the value actually came from
+    expect(exits(() => assertTunnelBindable("127.0.0.2", true))).toBe(2);
+    expect(exits(() => assertTunnelBindable(undefined, true))).toBeUndefined(); // start's wildcard
   });
 
   it("the ready lines all name the SAME dialable address", async () => {
@@ -430,7 +391,7 @@ describe("cli: bind address policy", () => {
     const { bindAddress } = await import("../src/bind.ts");
     // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in
     // these lines, so leaving it out would make the `not.toContain("localhost")` below pass for the
-    // reason that it was never tried. It cannot get here — `parseBind`/`http.host` resolve it to an
+    // reason that it was never tried. It cannot get here — `parseBind` resolves it to an
     // address first (bind.ts `bindAddress`) — and this is what says so.
     for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
       const [bound, tryLine] = readyAddressLines(host, 8899, true);

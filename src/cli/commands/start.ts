@@ -22,9 +22,9 @@ import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup } from "../fail.ts";
 import {
   announceControl,
+  assertTunnelBindable,
   bindLine,
   cliMountOptions,
-  resolveBindHost,
   serveService,
   serve,
   withRunOverrides,
@@ -41,7 +41,7 @@ export interface StartOptions {
   input?: boolean;
 }
 
-type StartedService = AgentService & { stateRoot: string; bindHost?: string; port: number };
+type StartedService = AgentService & { stateRoot: string; port: number };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -79,11 +79,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
   const tunnel = opts.tunnel ?? false;
-  // No fallback: this is the container posture, so an unset bind stays the wildcard a published port needs.
-  const host = resolveBindHost(bindFlag, service.bindHost, tunnel);
+  // An unset bind stays the wildcard: this is the container posture, and a published port needs it.
+  assertTunnelBindable(bindFlag, tunnel);
   serveService(
     service,
-    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host },
+    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host: bindFlag },
     { tunnel, agentDir: service.agentDir, stateRoot: service.stateRoot },
   );
 }
@@ -206,7 +206,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
         mountable,
         cliMountOptions(() => traced),
       ));
-  return { ...service, stateRoot, bindHost: config.http?.host, port: config.http?.port ?? 8787 };
+  return { ...service, stateRoot, port: config.http?.port ?? 8787 };
 }
 
 async function maybeSeedAuth(authPath: string): Promise<void> {

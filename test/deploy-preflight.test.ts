@@ -170,23 +170,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("http.host travels into the image: gates --run, warns in plan mode, wildcard is silent", async () => {
-    const dir = await workspace();
-    const cfg = (host?: string): FastagentConfig => ({ model: "openai/gpt-4o-mini", http: host ? { host } : {} });
-    const gated = await call(dir, cfg("127.0.0.1"), { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/nothing outside the container can reach the serve/);
-    // A one-interface address doesn't even exist in the container — different consequence, same gate.
-    const gatedSpecific = await call(dir, cfg("192.168.1.5"), { run: true });
-    expect(gatedSpecific.ok).toBe(false); // unconditional: a gate that stops firing must fail this
-    if (!gatedSpecific.ok) expect(gatedSpecific.gate).toMatch(/fails to bind at start/);
-    // Plan mode only produces artifacts, so it warns and proceeds.
-    const planned = await call(dir, cfg("127.0.0.1"));
-    expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /http\.host/.test(m.text))).toBe(true);
-    const wildcard = await call(dir, cfg("0.0.0.0"), { run: true });
-    expect(wildcard.ok && wildcard.messages.every((m) => !/http\.host/.test(m.text))).toBe(true);
-  });
-
   it("git is baked iff the baked workspace ships a .git — a non-git dir gets no silent git layer", async () => {
     // No .git: only the author's declared packages reach the image (history without a binary is a
     // dead loop; a binary without history is dead weight — deploy.apt is the explicit escape hatch).

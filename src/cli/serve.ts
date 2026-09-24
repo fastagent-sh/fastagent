@@ -1,6 +1,6 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
 import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
-import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost } from "../bind.ts";
+import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
 import type { AgentService, MountableAgent, MountAgentServiceOptions } from "../service.ts";
@@ -11,34 +11,12 @@ import { declaredChannels } from "../channels/discover.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
-/** Refuse `--tunnel` with a bind that cloudflared cannot reach. */
-export function assertTunnelBindable(host: string | undefined, tunnel: boolean, source: "flag" | "config"): void {
+/** Refuse `--tunnel` with a `--bind` that cloudflared cannot reach. */
+export function assertTunnelBindable(host: string | undefined, tunnel: boolean): void {
   if (!tunnel || answersLocalhost(host)) return;
-  // Name the source, not just the exit code: under `config` there is no `--bind` to change and no flag to drop, so
-  // flag-only wording would send the reader looking for something they never typed.
-  const fix =
-    source === "flag"
-      ? "bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel"
-      : "set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.ts, override it with --bind, or drop --tunnel";
-  const message = `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — ${fix}`;
-  if (source === "flag") failUsage(message);
-  failStartup(new Error(message));
-}
-
-/**
- * The bind address a serve uses: the flag, else `http.host` from the config, else the caller's `fallback` (omitted =
- * the wildcard). Only that last rung differs between the commands; why each ends where it does lives with the
- * command — `devBindHost` in commands/dev.ts, the wildcard `start` needs for a container in commands/start.ts.
- */
-export function resolveBindHost(
-  bindFlag: string | undefined,
-  configured: string | undefined,
-  tunnel: boolean,
-  fallback?: string,
-): string | undefined {
-  const host = bindFlag ?? (configured === undefined ? fallback : bindAddress(configured));
-  assertTunnelBindable(host, tunnel, bindFlag ? "flag" : "config");
-  return host;
+  failUsage(
+    `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel`,
+  );
 }
 
 /**
@@ -47,9 +25,8 @@ export function resolveBindHost(
  * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
  * will not.
  *
- * `--no-invoke` outranks `http.invoke`, for the same reason `--bind` outranks `http.host`: a config value travels
- * into a deployed image, so "do not publish a turn endpoint on this tunnel" has to be sayable without editing the
- * definition.
+ * `--no-invoke` outranks `http.invoke`: a config value travels into a deployed image, so "do not publish a turn
+ * endpoint on this tunnel" has to be sayable without editing the definition.
  *
  * It takes `POST /run` WITH it, including over a definition that said `http.run: true`. Both routes start a
  * turn for an anonymous caller, and the flag's whole reason for existing is the case where the definition cannot be

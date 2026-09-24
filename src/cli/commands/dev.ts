@@ -9,22 +9,14 @@ import { mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import type { ResolvedPlacement } from "../../paths.ts";
 import { failStartup } from "../fail.ts";
-import { assertTunnelBindable, cliMountOptions, resolveBindHost, serveService, withRunOverrides } from "../serve.ts";
+import { assertTunnelBindable, cliMountOptions, serveService, withRunOverrides } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 /**
- * `dev`'s bind chain — the same one `start` reads, ending at loopback instead of the wildcard. The bind is not a
- * security boundary (the built-in `POST /invoke` has no auth either way), but a dev serve carries the agent's full
- * tool authority and lands on networks its author does not own, so reaching the LAN is a choice to make rather than
- * one to inherit: `--bind 0.0.0.0` gives back the reach a container or a phone needs.
+ * `dev` binds loopback unless `--bind` says otherwise: a dev serve carries the agent's full tool authority and lands on
+ * networks its author does not own. `--bind 0.0.0.0` gives back the reach a container or a phone needs.
  */
-export function devBindHost(
-  bindFlag: string | undefined,
-  configured: string | undefined,
-  tunnel: boolean,
-): string | undefined {
-  return resolveBindHost(bindFlag, configured, tunnel, "127.0.0.1");
-}
+const DEV_BIND = "127.0.0.1";
 
 export interface DevOptions {
   port?: string;
@@ -50,22 +42,22 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
   // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a tunnel exist.
-  assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false, "flag");
+  assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false);
   await runDevSupervisor(placement, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
-  const bindFlag = parseBind(opts.bind);
+  const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
+  assertTunnelBindable(host, tunnel);
   const a = await createPiAgentFromDir(placement.workspace, {
     model: opts.model,
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
   await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
-  const host = devBindHost(bindFlag, a.config.http?.host, tunnel);
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
   const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);

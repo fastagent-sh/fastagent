@@ -109,7 +109,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // one.
     // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
     // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says,
-    // the same class as an unreachable `http.host` or a Dockerfile that cannot read the manifest, and gated the
+    // the same class as a Dockerfile that cannot read the manifest, and gated the
     // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
     // line is how an operator takes a path back on purpose.
     write: async (artifacts, options) => {
