@@ -23,6 +23,9 @@ import { makeFaux, sentPrompt } from "./faux.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
+/** For a definition with no `extensions/`, whose command listing never asks for a model runtime. */
+const noModelRuntime = () => Promise.reject(new Error("no extensions, so no model runtime is needed"));
+
 /** A machine with skills and prompt templates of its own, as pi keeps them. Returns pi's directory on it. */
 async function machine(
   files: { skills?: Record<string, string>; prompts?: Record<string, string>; settings?: object } = {},
@@ -101,17 +104,42 @@ it("`commands()` lists every skill the agent has and the machine's prompts, by h
   await machine({ skills: { metar: "Machine skill." }, prompts: { review: "Review this: " } });
   const dir = await definition({ digest: "Definition skill." });
 
-  expect(await agentCommands(dir, dir)).toEqual([
+  expect(await agentCommands(dir, dir, noModelRuntime)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
     { name: "metar", description: "Machine skill.", source: "skill" },
     expect.objectContaining({ name: "review", source: "prompt" }),
   ]);
 });
 
+it("`commands()` lists extension commands as pi dispatches them, and drops a template one shadows", async () => {
+  await machine({ prompts: { tag: "A template the command shadows.", review: "Review this: " } });
+  const dir = await definition();
+  const command = (name: string) =>
+    `pi.registerCommand(${JSON.stringify(name)}, { description: "d-${name}", handler: async () => {} });`;
+  const key = `__fa_cmd_list_${Date.now()}__`;
+  await mkdir(join(dir, "extensions"), { recursive: true });
+  await writeFile(
+    join(dir, "extensions", "a.ts"),
+    `export default function (pi) { ${command("go")} ${command("tag")}
+  pi.on("session_start", () => { globalThis[${JSON.stringify(key)}] = true; }); }`,
+  );
+  await writeFile(join(dir, "extensions", "b.ts"), `export default function (pi) { ${command("go")} }`);
+  const modelRuntime = () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+
+  expect(await agentCommands(dir, dir, modelRuntime)).toEqual([
+    { name: "go:1", description: "d-go", source: "extension" },
+    { name: "tag", description: "d-tag", source: "extension" },
+    { name: "go:2", description: "d-go", source: "extension" },
+    expect.objectContaining({ name: "review", source: "prompt" }),
+  ]);
+  // Listing loads the extensions; it opens no session.
+  expect((globalThis as Record<string, unknown>)[key]).toBeUndefined();
+});
+
 it("an empty machine contributes nothing — the definition is the whole answer", async () => {
   // `test/setup.ts`'s empty HOME is this case, and it is the one a fresh container is in.
   const dir = await definition({ digest: "Definition skill." });
-  expect(await agentCommands(dir, dir)).toEqual([
+  expect(await agentCommands(dir, dir, noModelRuntime)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
   ]);
 });
@@ -167,7 +195,7 @@ it("a broken SKILL.md on the machine says so, once — not once per `GET /contro
 
   let names: string[] = [];
   const warned = await warnings(async () => {
-    for (let i = 0; i < 3; i++) names = (await agentCommands(dir, dir)).map((c) => c.name);
+    for (let i = 0; i < 3; i++) names = (await agentCommands(dir, dir, noModelRuntime)).map((c) => c.name);
   });
 
   expect(names).not.toContain("broken");
@@ -181,12 +209,12 @@ it("the machine is read ONCE, and the listing and a turn read the same one", asy
   // is live: that is what `dev` is built on.
   const agent = await machine({ skills: { early: "Present at boot." } });
   const dir = await definition();
-  expect((await agentCommands(dir, dir)).map((c) => c.name)).toEqual(["early"]);
+  expect((await agentCommands(dir, dir, noModelRuntime)).map((c) => c.name)).toEqual(["early"]);
 
   await skill(join(agent, "skills", "late"), "late", "Installed after boot.");
 
   expect(
-    (await agentCommands(dir, dir)).map((c) => c.name),
+    (await agentCommands(dir, dir, noModelRuntime)).map((c) => c.name),
     "offered a name no turn would expand",
   ).toEqual(["early"]);
   expect(await promptSentBy(dir)).not.toContain("Installed after boot.");

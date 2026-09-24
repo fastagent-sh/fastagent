@@ -10,9 +10,12 @@ import {
   type AgentSessionServices,
   type CreateAgentSessionServicesOptions,
   type ExtensionCommandContextActions,
+  ExtensionRunner,
   type LoadExtensionsResult,
+  ModelRegistry,
   type ModelRuntime,
-  type SessionManager,
+  type ResolvedCommand,
+  SessionManager,
   type ToolDefinition,
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -311,6 +314,58 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
+/** The resources ONE served session runs on: a fresh loader, so fresh extension instances. */
+async function servingServices(options: {
+  cwd: string;
+  modelRuntime: ModelRuntime;
+  definition: PiSessionDefinition;
+  extensionPaths: readonly string[];
+}): Promise<AgentSessionServices> {
+  const { cwd, modelRuntime, definition, extensionPaths } = options;
+  const machine = await readMachine(cwd);
+  const services = await createAgentSessionServices({
+    cwd,
+    modelRuntime,
+    // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
+    settingsManager: machine.settingsManager(),
+    resourceLoaderOptions: {
+      ...definitionResourceLoaderOptions({
+        systemPrompt: () => definition.systemPrompt,
+        skills: () => definition.skills,
+        machine,
+        extensionPaths,
+      }),
+      extensionsOverride: refuseLoadTimeProviders,
+    },
+  });
+  reportExtensionErrors(services);
+  return services;
+}
+
+/**
+ * The `/name` commands a served session dispatches, named the way pi resolves them (a name two extensions share gets
+ * a `:N` suffix). Loaded through the same {@link servingServices} a turn binds, so the menu and the dispatch cannot
+ * disagree. Loading runs the extensions' factories; no session opens, so `session_start` does not fire, and the
+ * instances are never bound (any action they call throws).
+ */
+export async function servedExtensionCommands(options: {
+  cwd: string;
+  modelRuntime: ModelRuntime;
+  extensionPaths: readonly string[];
+}): Promise<ResolvedCommand[]> {
+  if (options.extensionPaths.length === 0) return [];
+  const services = await servingServices({ ...options, definition: { skills: [] } });
+  const { extensions, runtime } = services.resourceLoader.getExtensions();
+  const runner = new ExtensionRunner(
+    extensions,
+    runtime,
+    options.cwd,
+    SessionManager.inMemory(options.cwd),
+    new ModelRegistry(options.modelRuntime),
+  );
+  return runner.getRegisteredCommands();
+}
+
 /**
  * Open-or-create the record, then bind a fresh session to it — on a fresh resource loader.
  *
@@ -335,23 +390,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     const { modelRuntime, model } = await engine;
     // The record first: a control write that races this turn must find the session and be refused busy.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
-    const machine = await readMachine(cwd);
-    const services = await createAgentSessionServices({
-      cwd,
-      modelRuntime,
-      // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
-      settingsManager: machine.settingsManager(),
-      resourceLoaderOptions: {
-        ...definitionResourceLoaderOptions({
-          systemPrompt: () => definition.systemPrompt,
-          skills: () => definition.skills,
-          machine,
-          extensionPaths,
-        }),
-        extensionsOverride: refuseLoadTimeProviders,
-      },
-    });
-    reportExtensionErrors(services);
+    const services = await servingServices({ cwd, modelRuntime, definition, extensionPaths });
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
     const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
