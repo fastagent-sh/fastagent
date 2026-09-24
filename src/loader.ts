@@ -11,8 +11,7 @@ import { log } from "./log.ts";
 const MODULE_EXTS = new Set([".ts", ".js", ".mjs"]);
 
 /** Whether `name` is an importable agent module (a discovery candidate, not a type declaration). */
-/** Does this filename look like a code input? Exported so a caller can ask about a directory it does NOT load. */
-export function isModuleFile(name: string): boolean {
+function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
 
@@ -23,7 +22,7 @@ function moduleName(fileName: string): string {
 
 /** One module file a directory declares. */
 interface InventoryEntry {
-  /** Basename without extension — the authoritative name for tools/channels/schedules. */
+  /** Basename without extension — the authoritative name for tools/channels/routines. */
   name: string;
   /** "tools/foo.ts"-style label for errors and collisions. */
   label: string;
@@ -82,7 +81,7 @@ export interface ModuleLoadFailure {
   message: string;
 }
 
-/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
+/** A module the loader skipped, said once, the same way for tools, channels and routines. */
 export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
   for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
 }

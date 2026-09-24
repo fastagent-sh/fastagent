@@ -2,48 +2,13 @@
  * Routine discovery: an agent declares its named units of work by dropping files in `routines/`, mirroring
  * `tools/` and `channels/`.
  */
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../loader.ts";
+import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
 import { assertInsideAgentDir } from "../paths.ts";
-import { log } from "../log.ts";
 import { cronError } from "./cron.ts";
 import { isSafeScheduleName } from "./state.ts";
 import type { LoadedRoutine, Routine } from "./routine.ts";
-
-/**
- * Say something about a `schedules/` directory, which is what `routines/` used to be called.
- *
- * WITHOUT THIS THE UPGRADE IS SILENT AND THE CRON JUST STOPS. Nothing reads `schedules/` any more —
- * `loadRoutines`, the dev watcher's code inputs and the nested-scaffold surface all name `routines/` — so an
- * agent that still has the old directory boots clean, reports `routines: (none)`, and never fires. That is the
- * one failure shape this repo refuses to ship: an absent capability announced as a ready service.
- *
- * A WARNING, NOT A REFUSAL: an unrelated `schedules/` of the author's own is possible, and the warning costs nothing
- * when it is wrong.
- */
-async function warnAboutStaleSchedulesDir(dir: string): Promise<void> {
-  const stale = join(dir, "schedules");
-  let entries: string[];
-  try {
-    entries = await readdir(stale);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // ENOENT/ENOTDIR is the ordinary case — there is no such directory, which is what an upgraded agent looks
-    // like. Anything else (EACCES on a directory we can see) is rethrown with the path: the caller is about to
-    // read the agent dir anyway, so a permission fault there is not something to swallow here.
-    if (code === "ENOENT" || code === "ENOTDIR" || code === "not_found") return;
-    throw new Error(`cannot read ${stale}: ${(error as Error).message}`, { cause: error });
-  }
-  const files = entries.filter(isModuleFile);
-  if (files.length === 0) return;
-  log.warn(
-    `[fastagent] ${dir}/schedules/ holds ${files.length} code input(s) that NOTHING loads — the directory is ` +
-      `now \`routines/\` (and \`defineSchedule\` is \`defineRoutine\`). Rename it, or those time triggers never fire: ` +
-      files.join(", "),
-  );
-}
 
 /**
  * Discover routines in `<dir>/routines/`: each file default-exports a `defineRoutine({...})`, named from its
@@ -60,7 +25,6 @@ export async function loadRoutines(dir: string): Promise<{
   failures: ModuleLoadFailure[];
 }> {
   await assertInsideAgentDir(dir, "routines");
-  await warnAboutStaleSchedulesDir(dir);
   const { modules, failures } = await loadModuleDir(join(dir, "routines"));
   const byName = new Map<string, LoadedRoutine>();
   const secrets = new Map<string, DeclaredSecret[]>();
