@@ -3,8 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { CRON_CAN_BE_EXTERNAL, type Residency, residencyFor } from "../residency.ts";
-import { deploymentSecrets, isEnvKey } from "../secrets.ts";
-import type { DeclaredSecret } from "../../declared-secrets.ts";
+import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
@@ -15,13 +14,15 @@ export interface FlyPlanInput extends ContainerInput {
   /** What satisfies model auth locally ({@link probeAuthSource}). */
   modelAuth: string | undefined;
   /**
-   * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether a machine
+   * Every declared channel and its ingress — the source of the webhook steps, and whether a machine
    * must stay up for an outbound connection.
    */
   channels: readonly DeclaredChannel[];
-  /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
-   *  attributed to the file that declared it. */
-  extraSecrets?: readonly DeclaredSecret[];
+  /**
+   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
+   * carries.
+   */
+  secrets?: readonly DeploymentSecret[];
   /** `routines/` declares a cron — one of the things that forces a machine up (deploy/residency.ts). */
   hasCron: boolean;
   /** `selfSchedule` is on — the wake tool, which forces a machine up with no external substitute. */
@@ -101,10 +102,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     ...containerArtifacts(input),
   ];
 
-  // The exact secret list the deployed machine needs, computed from the definition (host-neutral).
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
-  const requiredSecrets = secrets.filter((secret) => secret.required);
-  const optionalSecrets = secrets.filter((secret) => !secret.required);
+  const secrets = input.secrets ?? [];
 
   const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile ${input.agentPrefix}Dockerfile --app ${appName}`;
   const runbook: string[] = [
@@ -127,20 +125,12 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `fly ips allocate-v6 --app ${appName}`,
   ];
 
-  if (requiredSecrets.length > 0) {
+  if (secrets.length > 0) {
     runbook.push(
       ``,
-      `# Required secrets (replace each <value>):`,
-      ...requiredSecrets.map((s) => `#   ${s.name}: ${s.hint}`),
-      `fly secrets set --app ${appName} ${requiredSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
-    );
-  }
-  if (optionalSecrets.length > 0) {
-    runbook.push(
-      ``,
-      `# Optional secrets — set only when the matching feature is configured:`,
-      ...optionalSecrets.map((s) => `#   ${s.name}: ${s.hint}`),
-      `# fly secrets set --app ${appName} ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+      `# Secrets (replace each <value>):`,
+      ...secrets.map((s) => `#   ${s.name}: ${s.hint}`),
+      `fly secrets set --app ${appName} ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
   runbook.push(

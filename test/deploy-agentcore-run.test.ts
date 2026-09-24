@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
-import { AUTH_SEED_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
+import { CARRIER_MAX_CHUNKS, ingressSessionId } from "../src/deploy/agentcore/plan.ts";
+import { applyCarriedEnv, encodeCarriedEnv } from "../src/deploy/secrets.ts";
 import {
   type AgentcoreRunPlan,
   deployAgentcoreRun,
@@ -230,12 +231,14 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
         "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
-        "TelegramBotToken=t",
-        "TelegramSecretToken=s",
         "FastagentAuthSeed=",
         "FastagentAuthSeed2=",
         "FastagentAuthSeed3=",
         "FastagentAuthSeed4=",
+        `FastagentEnv=${encodeCarriedEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })}`,
+        "FastagentEnv2=",
+        "FastagentEnv3=",
+        "FastagentEnv4=",
       ])}\n`,
     );
   });
@@ -444,7 +447,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     });
   });
 
-  it("gates an auth seed beyond the chunk ceiling and any other >2048-char secret", async () => {
+  it("gates an auth seed or a value file beyond the chunk ceiling", async () => {
     const tooBigSeed = await run(
       plan({ secrets: { FASTAGENT_AUTH_SEED: "x".repeat(8001) } }),
       fakeCli(happyAws).cli,
@@ -452,12 +455,19 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     );
     expect(tooBigSeed).toMatchObject({ ok: false, gate: expect.stringContaining("auth.json is too large") });
 
-    const tooBigSecret = await run(
+    const tooBigValues = await run(
+      plan({ secrets: { SOME_BLOB: "x".repeat(6000) } }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+    );
+    expect(tooBigValues).toMatchObject({ ok: false, gate: expect.stringContaining("too large to carry") });
+    // One long value is fine on its own: it is chunked with the rest, not capped per variable.
+    const longValue = await run(
       plan({ secrets: { SOME_BLOB: "x".repeat(2049) } }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
     );
-    expect(tooBigSecret).toMatchObject({ ok: false, gate: expect.stringContaining("SOME_BLOB") });
+    expect(longValue).not.toMatchObject({ gate: expect.stringContaining("too large") });
   });
 
   it("announces account/principal/region/image and flags an unavailable region BEFORE any side effect", async () => {
@@ -643,23 +653,30 @@ describe("deploy/agentcore/run: helpers", () => {
     expect(pickStackOutputs([{ OutputKey: "A", OutputValue: "1" }, { OutputKey: 2 }])).toEqual({ A: "1" });
   });
 
-  it("paramsFileContent: maps env names, chunks a long auth seed in order, clears every unused chunk", () => {
-    expect(paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64" })).toBe(
-      `${JSON.stringify([
-        "ImageUri=img:1",
-        "OpenaiApiKey=sk",
-        "FastagentAuthSeed=b64",
-        "FastagentAuthSeed2=",
-        "FastagentAuthSeed3=",
-        "FastagentAuthSeed4=",
-      ])}\n`,
+  it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
+    const params = JSON.parse(
+      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64", FASTAGENT_INGRESS_SECRET: "in" }),
+    ) as string[];
+    expect(params.slice(0, 2)).toEqual(["ImageUri=img:1", "FastagentIngressSecret=in"]);
+    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
+      "FastagentAuthSeed=b64",
+      "FastagentAuthSeed2=",
+      "FastagentAuthSeed3=",
+      "FastagentAuthSeed4=",
+    ]);
+    // Everything else rides FastagentEnv, and reads back as exactly what was carried.
+    const env = Object.fromEntries(
+      params
+        .filter((p) => p.startsWith("FastagentEnv"))
+        .map((p, i) => [i === 0 ? "FASTAGENT_ENV" : `FASTAGENT_ENV_${i + 1}`, p.slice(p.indexOf("=") + 1)]),
     );
+    applyCarriedEnv(env);
+    expect(env).toMatchObject({ OPENAI_API_KEY: "sk" });
 
     // A real OAuth-size seed (2756+) rides across the chunks, reassemblable in order.
     const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756);
     const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed })) as string[];
-    expect(chunked).toEqual([
-      "ImageUri=img:1",
+    expect(chunked.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
       `FastagentAuthSeed=${"a".repeat(2000)}`,
       `FastagentAuthSeed2=${"b".repeat(2000)}`,
       `FastagentAuthSeed3=${"c".repeat(756)}`,
@@ -669,13 +686,8 @@ describe("deploy/agentcore/run: helpers", () => {
 
     // Switching to an API key clears a previously deployed seed rather than leaving it behind.
     const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" })) as string[];
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toEqual([
-      "FastagentAuthSeed=",
-      "FastagentAuthSeed2=",
-      "FastagentAuthSeed3=",
-      "FastagentAuthSeed4=",
-    ]);
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(AUTH_SEED_MAX_CHUNKS);
+    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(CARRIER_MAX_CHUNKS);
+    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed")).every((p) => p.endsWith("="))).toBe(true);
   });
 });
 

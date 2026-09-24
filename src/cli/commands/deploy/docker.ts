@@ -30,7 +30,7 @@ export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
-    const { modelAuth, modelKeyInDefinition, authPath, container, port, extraSecrets, values, valueFile } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, port, declaredSecrets, values, valueFile } = pre;
     // The generated Compose names `<agent>/.secrets/.env` unconditionally, so it has to be there — Compose refuses
     // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
     // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
@@ -71,7 +71,7 @@ export const dockerHost: HostDeploy = {
         modelAuth,
         channels,
         tunnel,
-        extraSecrets,
+        secrets: pre.secrets,
         valueFile,
         ...container,
       });
@@ -104,7 +104,7 @@ export const dockerHost: HostDeploy = {
         modelKeyInDefinition,
         authPath,
         channels,
-        extraSecrets,
+        declaredSecrets,
         values,
         valueFile,
       });
@@ -133,7 +133,7 @@ async function runDeployDocker(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: readonly DeclaredSecret[];
+    declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
     valueFile: string;
   },

@@ -13,8 +13,8 @@ export interface RailwayRunPlan {
    */
   mountPath: string;
   /**
-   * `KEY=value` secrets set one-per-`variable set --stdin`: model key (env auth) or `FASTAGENT_AUTH_SEED` (file auth)
-   * + channel secrets.
+   * `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables + `FASTAGENT_AUTH_SEED` for a
+   * file credential.
    */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
@@ -151,9 +151,8 @@ export async function deployRailwayRun(
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
     `RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`,
   ];
-  // The secret NAMES, not a count: what `--run` uploads is read from the value file and is no longer
-  // only what the author typed in deploy.secrets (a mounted tool/channel/schedule declares its own),
-  // so the operator has to be able to see the list on every host.
+  // The secret NAMES, not a count: `--run` uploads the whole value file, so the operator has to be able to see the
+  // list on every host.
   const secretNames = Object.keys(plan.secrets);
   log(
     `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${secretNames.length} secret(s)` +

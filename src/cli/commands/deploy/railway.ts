@@ -28,7 +28,7 @@ export const railwayHost: HostDeploy = {
       modelKeyInDefinition,
       authPath,
       container,
-      extraSecrets,
+      declaredSecrets,
       values,
       valueFile,
     } = pre;
@@ -37,7 +37,7 @@ export const railwayHost: HostDeploy = {
       serviceName,
       modelAuth,
       channels,
-      extraSecrets,
+      secrets: pre.secrets,
       hasCron,
       hasWakeups,
       ...container,
@@ -61,7 +61,7 @@ export const railwayHost: HostDeploy = {
         modelKeyInDefinition,
         authPath,
         channels,
-        extraSecrets,
+        declaredSecrets,
         values,
         valueFile,
         intoLinked: !!opts.intoLinked,
@@ -81,7 +81,7 @@ async function runDeployRailway(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: readonly DeclaredSecret[];
+    declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
     valueFile: string;
     intoLinked: boolean;

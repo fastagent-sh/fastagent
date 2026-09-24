@@ -97,7 +97,7 @@ describe("the agentcore template (parsed)", () => {
       { schedules: SCHEDULES },
       { selfSchedule: true },
       { ...WEBHOOK_CHANNELS, schedules: SCHEDULES, selfSchedule: true },
-      { ...WEBHOOK_CHANNELS, secrets: ["TELEGRAM_BOT_TOKEN"] } as Partial<AgentcorePlanInput>,
+      { ...WEBHOOK_CHANNELS, secrets: [{ name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" }] },
     ]) {
       const t = parseTemplate(over);
       expect(Object.keys(t.Resources).length).toBeGreaterThan(0);
@@ -175,25 +175,22 @@ describe("the agentcore template (parsed)", () => {
     expect(names).toContain(scheduleResourceName("my-agent", "digest"));
   });
 
-  it("declares secrets as NoEcho parameters AND wires them into the runtime", () => {
-    const t = parseTemplate({ ...WEBHOOK_CHANNELS, secrets: ["TELEGRAM_BOT_TOKEN"] } as Partial<AgentcorePlanInput>);
-    const secretParams = Object.entries(t.Parameters ?? {}).filter(([, p]) => p.NoEcho === true);
-    expect(secretParams.length).toBeGreaterThan(0);
+  it("carries the variables through FIXED NoEcho parameters, whatever names the value file holds", () => {
+    // The template is committed and gated on drift, so a new name in .env must not change it.
+    const plain = parseTemplate(WEBHOOK_CHANNELS);
+    const withVars = parseTemplate({
+      ...WEBHOOK_CHANNELS,
+      secrets: [{ name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" }],
+    });
+    expect(withVars).toEqual(plain);
+    const secretParams = Object.entries(plain.Parameters ?? {}).filter(([, p]) => p.NoEcho === true);
     for (const [, p] of secretParams) expect(p.Type).toBe("String");
-
-    // Declaring the parameter is half the wiring: unless the runtime READS it, the deployment takes
-    // the secret and the agent never sees it.
-    const runtime = Object.values(t.Resources).find((r) => r.Type === "AWS::BedrockAgentCore::Runtime")!;
+    // Declaring a parameter is half the wiring: unless the runtime READS it, the agent never sees the value.
+    const runtime = Object.values(plain.Resources).find((r) => r.Type === "AWS::BedrockAgentCore::Runtime")!;
     const env = (runtime.Properties as { EnvironmentVariables: Record<string, unknown> }).EnvironmentVariables;
-    const [paramName] = secretParams.find(([n]) => n.toLowerCase().includes("telegram"))!;
-    expect(env.TELEGRAM_BOT_TOKEN).toEqual({ Ref: paramName });
-  });
-
-  it("quotes the parameter description — a declaration source carrying `: ` is not a plain scalar", () => {
-    // The source is authored text (a file name, a config.tools key); unquoted it breaks the whole
-    // template, and the parse error names nothing the author can find.
-    const t = parseTemplate({ extraSecrets: [{ name: "FA_X_KEY", source: 'config.tools "a: b"' }] });
-    const param = Object.entries(t.Parameters ?? {}).find(([n]) => n.includes("FaXKey"))!;
-    expect(param[1].Description).toBe('required by config.tools "a: b"');
+    expect(env.FASTAGENT_ENV).toEqual({ Ref: "FastagentEnv" });
+    expect(env.FASTAGENT_ENV_4).toEqual({ Ref: "FastagentEnv4" });
+    expect(env.FASTAGENT_AUTH_SEED).toEqual({ Ref: "FastagentAuthSeed" });
+    expect(env).not.toHaveProperty("TELEGRAM_BOT_TOKEN");
   });
 });

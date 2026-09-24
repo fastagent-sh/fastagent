@@ -428,7 +428,7 @@ an approved region, and local Docker/buildx for its arm64 image. `fastagent depl
 the CloudFormation topology, forwarder, and clock wiring required by the definition; `--run` provisions
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
-Put the model in config and declare extra required secret **names** in `deploy.secrets`. CLI-managed
+Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. AgentCore's public webhook URL belongs to its forwarder; direct runtime invocations use AWS IAM.

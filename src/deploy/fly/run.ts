@@ -6,7 +6,7 @@ import { missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
   appName: string;
-  /** `KEY=value` secrets to set on Fly: model key (env auth) or `FASTAGENT_AUTH_SEED` (file auth) + channel secrets. */
+  /** `KEY=value` secrets to set on Fly: the value file's variables + `FASTAGENT_AUTH_SEED` for a file credential. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];

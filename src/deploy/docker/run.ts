@@ -137,8 +137,7 @@ export async function deployDockerRun(
 
   // Name what the container must find, and WHERE — the generated Compose reads the value file itself, so this run
   // hands Compose nothing but the seed. Saying "passing N secrets to Compose" would be false, and doubly so on a
-  // hand-owned Compose file that has no `env_file` entry at all. The list is no longer only what the author typed
-  // in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  // hand-owned Compose file that has no `env_file` entry at all.
   const secretNames = Object.keys(plan.secrets).filter((name) => name !== "FASTAGENT_AUTH_SEED");
   if (secretNames.length > 0) {
     log(`${secretNames.length} value(s) the container reads from ${plan.valueFile}: ${secretNames.join(", ")}`);

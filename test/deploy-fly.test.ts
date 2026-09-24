@@ -45,7 +45,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     ).toContain("min_machines_running = 0");
   });
 
-  it("keeps one machine running and drops webhook-only secrets/URLs for long-connection Feishu", () => {
+  it("keeps one machine running and drops webhook URLs for long-connection Feishu", () => {
     const plan = planFlyDeploy({
       ...base,
       modelAuth: undefined,
@@ -55,9 +55,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     const out = runbook(plan);
     expect(toml).toContain("min_machines_running = 1");
     expect(toml).toContain("long-connection channel must stay connected"); // residency.ts words it once
-    expect(out).toContain("FEISHU_APP_ID=<value>");
-    expect(out).toContain("FEISHU_APP_SECRET=<value>");
-    expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");
     expect(out).not.toContain("https://bot.fly.dev/feishu");
   });
 
@@ -86,43 +83,30 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).toContain("fly ips allocate-v6 --app bot");
   });
 
-  it("computes the secret list from the model key + discovered channels + config deploy.secrets", () => {
+  it("sets every variable the pre-flight listed, each with where its value comes from", () => {
     const out = runbook(
       planFlyDeploy({
         ...base,
         modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram"]),
-        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
+        secrets: [
+          { name: "OPENAI_API_KEY", hint: "your model provider key" },
+          { name: "GH_TOKEN", hint: "required by tools/gh.ts" },
+        ],
       }),
     );
-    expect(out).toContain("OPENAI_API_KEY=");
-    expect(out).toContain("TELEGRAM_BOT_TOKEN=");
-    expect(out).toContain("TELEGRAM_SECRET_TOKEN=");
-    expect(out).toContain("GH_TOKEN="); // G4: an agent-declared extra secret joins the list
+    expect(out).toContain("#   GH_TOKEN: required by tools/gh.ts");
+    expect(out).toContain("fly secrets set --app bot OPENAI_API_KEY=<value> GH_TOKEN=<value>");
     // the fastagent-only post step: point the webhook at the live URL
     expect(out).toContain("https://bot.fly.dev/telegram");
   });
 
-  it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
-    const out = runbook(
-      planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["feishu", "lark"]) }),
-    );
-    const requiredCommand = out.split("\n").find((line) => line.startsWith("fly secrets set")) ?? "";
-    expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
-    expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
-    expect(requiredCommand).not.toContain("FEISHU_ENCRYPT_KEY");
-    expect(requiredCommand).not.toContain("LARK_ENCRYPT_KEY");
-    expect(out).toContain("# fly secrets set --app bot FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
-  });
-
   // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
-  // is fly's is the base URL those steps are spelled with, and the secrets its own list computes.
-  it("spells every webhook step at the fly URL, alongside that channel's secrets", () => {
+  // is fly's is the base URL those steps are spelled with.
+  it("spells every webhook step at the fly URL", () => {
     const out = runbook(
       planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack", "feishu"]) }),
     );
-    expect(out).toContain("SLACK_BOT_TOKEN=<value>");
-    expect(out).toContain("SLACK_SIGNING_SECRET=<value>");
     expect(out).toContain("https://bot.fly.dev/slack");
     expect(out).toContain("https://bot.fly.dev/feishu");
     expect(out).not.toContain("https://bot.fly.dev/lark"); // only what is mounted

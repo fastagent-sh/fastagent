@@ -7,8 +7,7 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { deploymentSecrets, isEnvKey } from "../secrets.ts";
-import type { DeclaredSecret } from "../../declared-secrets.ts";
+import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
 
 /** The one schedule fact the plan needs (from loadRoutines) — name + cron + tz. */
 export interface ScheduleFact {
@@ -23,12 +22,15 @@ export interface AgentcorePlanInput extends ContainerInput {
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
-   * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether the
+   * Every declared channel and its ingress — the source of the webhook steps, and whether the
    * forwarder is needed at all (ANY webhook channel requires it, customs included).
    */
   channels: readonly DeclaredChannel[];
-  /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
-  extraSecrets?: readonly DeclaredSecret[];
+  /**
+   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
+   * carries.
+   */
+  secrets?: readonly DeploymentSecret[];
   /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
   schedules: ScheduleFact[];
   /** Mirror the wake tool's pending work into EventBridge alarms. */
@@ -105,11 +107,25 @@ export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
 /**
- * AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so the seed is CHUNKED across
- * FASTAGENT_AUTH_SEED + _2… (collectAuthSeed reassembles at boot).
+ * AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so each carrier is CHUNKED across
+ * `<NAME>` + `_2`… (collectChunked reassembles at boot): FASTAGENT_AUTH_SEED for the credential, FASTAGENT_ENV for the
+ * value file's variables.
  */
-export const AUTH_SEED_CHUNK_SIZE = 2000;
-export const AUTH_SEED_MAX_CHUNKS = 4;
+export const CARRIER_CHUNK_SIZE = 2000;
+export const CARRIER_MAX_CHUNKS = 4;
+
+/** The template's two chunked carriers: CloudFormation parameter prefix → container env-var name. */
+export const CARRIERS = [
+  { param: "FastagentAuthSeed", env: "FASTAGENT_AUTH_SEED", what: "base64 auth.json" },
+  { param: "FastagentEnv", env: "FASTAGENT_ENV", what: "base64 JSON of the value file's variables" },
+] as const;
+
+/** Chunk `i` (0-based) of a carrier: its parameter and env-var names. */
+export function carrierChunk(carrier: (typeof CARRIERS)[number], i: number): { param: string; env: string } {
+  return i === 0
+    ? { param: carrier.param, env: carrier.env }
+    : { param: `${carrier.param}${i + 1}`, env: `${carrier.env}_${i + 1}` };
+}
 /** The generated template's filename (namespaced under the kit in the agentDir layout). */
 export const TEMPLATE_FILE = "agentcore.template.yaml";
 
@@ -182,18 +198,6 @@ export function forwarderLogGroup(name: string): string {
 /** The ONE fixed ingress session id (webhooks + routine fires). */
 export function ingressSessionId(name: string): string {
   return `fastagent-ingress-${name}`.padEnd(33, "0").slice(0, 128);
-}
-
-/**
- * CFN parameter logical id for a secret env-var name: TELEGRAM_BOT_TOKEN → TelegramBotToken (parameter names must be
- * alphanumeric).
- */
-export function cfnParamName(envName: string): string {
-  return envName
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("");
 }
 
 /** Remap ONE day-of-week field from standard cron numbering (0–7, 0/7 = Sunday) to EventBridge's (1–7, 1 = Sunday). */
@@ -297,7 +301,6 @@ function template(
   const runtimeName = toRuntimeName(input.name);
   const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
   const needsForwarder = topology.forwarder;
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
 
   // Secret env vars ride CFN NoEcho parameters.
@@ -323,28 +326,21 @@ function template(
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
   ];
-  // The auth seed is chunked (env values max 2048 chars — see AUTH_SEED_CHUNK_SIZE): N parameters, each riding its
-  // own env var; `start` reassembles them (collectAuthSeed).
-  for (let i = 1; i <= AUTH_SEED_MAX_CHUNKS; i++) {
-    const param = i === 1 ? "FastagentAuthSeed" : `FastagentAuthSeed${i}`;
-    const envName = i === 1 ? "FASTAGENT_AUTH_SEED" : `FASTAGENT_AUTH_SEED_${i}`;
-    params.push(
-      `  ${param}:`,
-      `    Type: String`,
-      `    Default: ""`,
-      `    NoEcho: true`,
-      `    Description: base64 auth.json carried by --run, chunk ${i}/${AUTH_SEED_MAX_CHUNKS} (env values cap at 2048 chars); empty = unused`,
-    );
-    envLines.push(`        ${envName}: !Ref ${param}`);
-  }
-  for (const s of secrets) {
-    const p = cfnParamName(s.name);
-    params.push(`  ${p}:`, `    Type: String`);
-    if (!s.required) params.push(`    Default: ""`);
-    // Quoted: the hint carries an authored `source` (a file name, a config.tools key), and a plain
-    // scalar holding `: ` is invalid YAML — the template would fail to parse in `aws cloudformation deploy`.
-    params.push(`    NoEcho: true`, `    Description: ${yamlSingleQuote(s.hint)}`);
-    envLines.push(`        ${s.name}: !Ref ${p}`);
+  // Both carriers are chunked (env values max 2048 chars — see CARRIER_CHUNK_SIZE): N parameters, each riding its
+  // own env var; `start` reassembles them. ONE parameter set for every variable, so the template does not change
+  // when the value file gains a name.
+  for (const carrier of CARRIERS) {
+    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
+      const { param, env } = carrierChunk(carrier, i);
+      params.push(
+        `  ${param}:`,
+        `    Type: String`,
+        `    Default: ""`,
+        `    NoEcho: true`,
+        `    Description: ${carrier.what} carried by --run, chunk ${i + 1}/${CARRIER_MAX_CHUNKS} (env values cap at 2048 chars); empty = unused`,
+      );
+      envLines.push(`        ${env}: !Ref ${param}`);
+    }
   }
   if (needsForwarder) {
     // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
@@ -652,17 +648,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     }
     logicalIds.set(id, fact.name);
   }
-  const paramNames = new Map<string, string>();
-  for (const s of deploymentSecrets(input.modelAuth, channels, input.extraSecrets)) {
-    const p = cfnParamName(s.name);
-    const clash = paramNames.get(p);
-    if (clash !== undefined && clash !== s.name) {
-      throw new Error(
-        `secrets "${clash}" and "${s.name}" collapse to the same CloudFormation parameter (${p}) — rename one`,
-      );
-    }
-    paramNames.set(p, s.name);
-  }
 
   const topology = agentcoreTopology(input, translated.length);
   const needsForwarder = topology.forwarder;
@@ -672,10 +657,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ...containerArtifacts(input),
   ];
 
-  const secrets = deploymentSecrets(input.modelAuth, channels, input.extraSecrets);
-  const requiredSecrets = secrets.filter((s) => s.required);
-  const optionalSecrets = secrets.filter((s) => !s.required);
-  const paramHint = (list: typeof secrets): string => list.map((s) => `${cfnParamName(s.name)}=<value>`).join(" ");
+  const secrets = input.secrets ?? [];
 
   const image = `<account-id>.dkr.ecr.<region>.amazonaws.com/${repo}:<tag>`;
   const bucketHint = deploymentBucketName(name, "<account-id>");
@@ -706,18 +688,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
     `docker buildx build --platform linux/arm64 -f ${prefix}Dockerfile -t ${image} --push .`,
     ``,
-    `# 3. Deploy the stack (runtime + ingress + schedules in one template). Secrets ride NoEcho parameters:`,
+    `# 3. Deploy the stack (runtime + ingress + schedules in one template).`,
   ];
-  if (requiredSecrets.length > 0) {
+  if (secrets.length > 0) {
     runbook.push(
-      `#    Required parameters:`,
-      ...requiredSecrets.map((s) => `#      ${cfnParamName(s.name)}: ${s.hint}`),
-    );
-  }
-  if (optionalSecrets.length > 0) {
-    runbook.push(
-      `#    Optional parameters (set only when the matching feature is configured):`,
-      ...optionalSecrets.map((s) => `#      ${cfnParamName(s.name)}: ${s.hint}`),
+      `#    Variables ride ONE NoEcho parameter, FastagentEnv: base64 of a JSON object {"NAME": "value", …},`,
+      `#    split every ${CARRIER_CHUNK_SIZE} chars across FastagentEnv, FastagentEnv2 … (\`--run\` builds it):`,
+      ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
     );
   }
   const wakeSecretHint = input.selfSchedule ? " FastagentWakeSecret=<any random string>" : "";
@@ -729,7 +706,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `  --capabilities CAPABILITY_IAM \\`,
     `  --parameter-overrides ImageUri=${image}${
       needsForwarder ? ` ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip` : ""
-    }${requiredSecrets.length > 0 ? ` ${paramHint(requiredSecrets)}` : ""}${wakeSecretHint}`,
+    }${secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""}${wakeSecretHint}`,
     ``,
     needsForwarder
       ? `# 4. Read the outputs (the runtime ARN + callback URL; it serves webhooks only when configured):`

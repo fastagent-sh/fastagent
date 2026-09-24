@@ -2,9 +2,8 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { deploymentSecrets, isEnvKey } from "../secrets.ts";
+import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
-import type { DeclaredSecret } from "../../declared-secrets.ts";
 
 export interface DockerPlanInput extends ContainerInput {
   /** Stable Compose project name, sanitized by {@link toDockerProjectName}. */
@@ -13,12 +12,15 @@ export interface DockerPlanInput extends ContainerInput {
   port: number;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Every declared channel and its ingress — the source of the secret list and the ingress note. */
+  /** Every declared channel and its ingress — the source of the ingress note. */
   channels: readonly DeclaredChannel[];
   /** Generate an optional Cloudflare Quick Tunnel service in Compose. */
   tunnel: boolean;
-  /** Everything the definition declared it needs (deploy.secrets + tool/schedule declarations). */
-  extraSecrets?: readonly DeclaredSecret[];
+  /**
+   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
+   * carries.
+   */
+  secrets?: readonly DeploymentSecret[];
   /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
   valueFile: string;
 }
@@ -153,9 +155,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
   // One spelling for every command: the generated file names the value file itself (`env_file`), so no command
   // needs a flag to reach the deployed environment's declaration.
   const compose = `docker compose -f ${composePath}`;
-  const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets);
-  const required = secrets.filter((secret) => secret.required);
-  const optional = secrets.filter((secret) => !secret.required);
+  const secrets = input.secrets ?? [];
   const paths = webhookPaths(input.channels);
 
   const runbook: string[] = [
@@ -164,15 +164,12 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `# Prereqs: Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION} (\`docker compose version\`).`,
   ];
 
-  if (required.length > 0) {
+  if (secrets.length > 0) {
     runbook.push(
-      `# Required environment values. Put them in ${input.valueFile} — that file declares the deployed`,
-      `# environment (in CI, write it before running the command):`,
-      ...required.map((secret) => `#   ${secret.name}: ${secret.hint}`),
+      `# Environment: the container reads ${input.valueFile} whole (Compose \`env_file\`) — that file declares the`,
+      `# deployed environment (in CI, write it before running the command):`,
+      ...secrets.map((secret) => `#   ${secret.name}: ${secret.hint}`),
     );
-  }
-  if (optional.length > 0) {
-    runbook.push(`# Optional environment values:`, ...optional.map((secret) => `#   ${secret.name}: ${secret.hint}`));
   }
   if (!isEnvKey(input.modelAuth)) {
     runbook.push(

@@ -33,7 +33,7 @@ export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
-    const { modelAuth, modelKeyInDefinition, authPath, container, extraSecrets, values, valueFile } = pre;
+    const { modelAuth, modelKeyInDefinition, authPath, container, declaredSecrets, values, valueFile } = pre;
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
     // has nothing to wake it.
     if (longConnectionChannels.length > 0) {
@@ -78,7 +78,7 @@ export const agentcoreHost: HostDeploy = {
       name: acName,
       modelAuth,
       channels,
-      extraSecrets,
+      secrets: pre.secrets,
       // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, through this host's
       // IAM-gated `routine-run` envelope (channels/agentcore.ts) rather than a route — so it needs no rule and
       // loses nothing by not having one.
@@ -127,7 +127,7 @@ export const agentcoreHost: HostDeploy = {
         modelKeyInDefinition,
         authPath,
         channels,
-        extraSecrets,
+        declaredSecrets,
         values,
         valueFile,
         topology: plan.topology,
@@ -147,7 +147,7 @@ async function runDeployAgentcore(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: readonly DeclaredSecret[];
+    declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
     valueFile: string;
     topology: AgentcoreTopology;

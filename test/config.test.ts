@@ -271,24 +271,25 @@ describe("config: loadConfig", () => {
     await expect(load(`export default { thinkingLevel: 3 };`)).rejects.toThrow(/"thinkingLevel" must be one of/);
   });
 
-  it("validates deploy.secrets / deploy.apt shape (env-name / package-name), rejects unknown deploy keys", async () => {
+  it("validates deploy.apt shape (package-name), rejects unknown deploy keys", async () => {
     // A fresh dir per case: ESM caches a module by URL, so re-writing one file wouldn't re-import.
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
       await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
-    const { config } = await load(`export default { deploy: { secrets: ["GH_TOKEN"], apt: ["git", "ripgrep"] } };`);
-    expect(config.deploy).toEqual({ secrets: ["GH_TOKEN"], apt: ["git", "ripgrep"] }); // valid
-    await expect(load(`export default { deploy: { secrets: ["gh token"] } };`)).rejects.toThrow(
-      /"deploy\.secrets\[0\]" must be an UPPER_SNAKE/,
-    ); // not UPPER_SNAKE
+    const { config } = await load(`export default { deploy: { apt: ["git", "ripgrep"] } };`);
+    expect(config.deploy).toEqual({ apt: ["git", "ripgrep"] }); // valid
     await expect(load(`export default { deploy: { apt: ["git; rm -rf /"] } };`)).rejects.toThrow(
       /"deploy\.apt\[0\]" must be a Debian package name/,
     ); // shell-injection shaped
     await expect(load(`export default { deploy: { image: "python" } };`)).rejects.toThrow(
       /unknown key "deploy\.image"/,
     ); // unknown deploy key
+    // `deploy` carries the whole value file, so there is no list of names to keep beside it.
+    await expect(load(`export default { deploy: { secrets: ["GH_TOKEN"] } };`)).rejects.toThrow(
+      /unknown key "deploy\.secrets"/,
+    );
   });
 
   it("validates deploy.agentcore.idleTimeoutSeconds against AWS's own bounds", async () => {

@@ -313,10 +313,13 @@ export default defineTool({
 **This is how agent code gets a credential — not `process.env`.** The declaration buys two things a
 bare read cannot have:
 
-- **`deploy` carries the value** to the host and lists it in the runbook against this file. There is no
-  second list to keep in sync — `config.deploy.secrets` is only for names no code declares.
-- **`dev`/`start` refuse to boot** while a declared name is unset, naming the file. Without the
-  declaration the same mistake surfaces as a failed tool call on the deployed box, days later.
+- **`dev`/`start` refuse to boot**, and `deploy --run` refuses to start, while a declared name has no value,
+  naming the file. Without the declaration the same mistake surfaces as a failed tool call on the deployed
+  box, days later.
+- **The value is typed and handed to your code**, so the declaration cannot drift from the read.
+
+`deploy` carries every variable in `.secrets/.env` whether or not code declares it; a declaration makes one
+required.
 
 `ctx.secrets` reads the process environment on every call, so a value rotated IN THE ENVIRONMENT
 takes effect without a restart — a value rotated in `.secrets/.env` does not, since that file is read
@@ -493,7 +496,7 @@ import { defineRoutine } from "@fastagent-sh/fastagent";
 export default defineRoutine({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — carried by deploy, asserted at start
+  secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — required at start and by deploy --run
   prompt: (secrets) => `Generate today's digest and send it with slack-send to channel ${secrets.SLACK_DIGEST_CHANNEL}.`,
 });
 ```

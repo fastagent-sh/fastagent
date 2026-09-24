@@ -53,7 +53,6 @@ Every key is optional. Supported keys:
 | `http.run` | follows `http.invoke` | Serve `POST /run`, an API that runs one declared unit of work by name (see [api-reference](api-reference.md#post-run)). It is not a clock — occurrence semantics live where fastagent owns the clock (the resident loop, and AgentCore's registered rules). It follows `http.invoke` because that key means "the channels' signature checks are the only way in", and a second anonymous turn-starter appearing behind that choice would reverse it. Set it `true` for the one combination the default gets wrong: no `/invoke`, but an external clock (a crontab, a CI job) driving the schedules. `--no-invoke` still overrides it for a single run, since a flag is what a definition cannot be edited into. On AgentCore the key is inert and says so at startup: schedules fire through the forwarder's ingress-gated envelope, not an anonymous route. No effect where `routines/` declares nothing — there is no route then. |
 | `selfSchedule` | `false` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start` or `createAgentService`). Resident hosts poll locally; [AgentCore ingress](deploy.md#aws-bedrock-agentcore) uses external wake alarms. |
 | `sessionControl` | `false` | Serve the session control plane at `/control/*` (a session's state/entries/live events, its actions — steer/abort/compact — its properties, and the deployment's session list) for remote consumers — a Web panel, a desktop app, a script over `connectSessionControl`. Off by default (it is a remote-control surface); a chat channel's stop command does NOT need it, since a serve holds the hub in-process either way. **It is unauthenticated, like every other route fastagent serves.** `start` binds all interfaces by default, so the routes are reachable by anyone who can reach the port — bind loopback (`--bind 127.0.0.1`), firewall the port, or front it with a gateway (`dev` binds loopback already). On a deployed box (`fastagent deploy`) the routes ride the public host URL, which is what the deploy warning is about. |
-| `deploy.secrets` | `[]` | Secret env-var names **no code declares** — a value read outside `tools/`/`routines/`, or a key used only in a `models.json` header. A tool or schedule that needs a var declares it itself (`defineTool({ secrets: […] })`, see [API reference](api-reference.md#declaring-the-secrets-a-tool-needs)) and `deploy` carries it without it being listed here. Every declared name, from either source, is listed in the runbook against its declaring file and, under `--run`, read from the agent's `.secrets/.env` — the file that declares the deployed environment — and set on the host; a missing value gates the run. Exporting the variable in your shell does not reach the deployment (in CI, write the file before running the command). |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM, 60–1209600 seconds. Default `180`. Memory bills for the whole idle tail and a session past it cold-starts, so the workload picks the trade — raise it for a chat agent talked to in bursts, lower it for a schedule-only one. Changing it changes the generated template, so an existing `agentcore.template.yaml` needs `--force` to pick it up — and `--run` refuses to deploy from the stale one. See [AgentCore](deploy.md#aws-bedrock-agentcore). |
 | `deploy.apt` | `[]` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
@@ -171,17 +170,9 @@ The rule to apply yourself: **literal credentials belong in `.secrets/` or the p
 storage, and every file inside the definition should carry only a reference.** `headers` values are not
 inspected at all (FastAgent cannot tell a credential from an org id there).
 
-`deploy` recognizes the variable backing the selected model and carries its value to the host like any
-provider key, listing it in the runbook and refusing `--run` when it has no local value. You do not
-need to declare it. `deploy.secrets` remains for the variables `deploy` cannot infer — a key used only
-in `headers`, or a value assembled from several variables (`"${A}_${B}"`):
-
-```ts
-export default {
-  model: "mygw/deepseek-v3",
-  deploy: { secrets: ["MYGW_PORTKEY_KEY"] },
-} satisfies FastagentConfig;
-```
+`deploy` carries every variable in `.secrets/.env` to the host, so a key referenced as `"$MYGW_API_KEY"` or used
+only in `headers` travels once it is in that file. The variable backing the selected model is also required:
+`--run` refuses to start when it has no value there.
 
 A key written INTO `models.json` (a literal, or a `!command` resolved on the host) travels with the
 file itself, so there is nothing to carry — and `deploy` does not ask for one.
@@ -460,20 +451,16 @@ import { integrationTools } from "@acme/fastagent-tools";
 
 export default {
   tools: integrationTools(),
-  deploy: { secrets: ["ACME_API_KEY"] }, // only if the package reads it itself
 } satisfies FastagentConfig;
 ```
 
 Package tools receive the same `ToolContext` as definition-local `defineTool` tools, including the
 optional read-only `sessionManager` during serving/chat turns and the `secrets` the package's own
-`defineTool` calls declared. A package that instead reads an env var itself declares nothing, so its
-name belongs in `deploy.secrets` — that is what the list is for.
+`defineTool` calls declared. A package that reads an env var itself declares nothing; the value still travels
+with `.secrets/.env`, it just is not required.
 
-**A mounted package's declarations are treated like your own.** `deploy` will list them in the
-runbook and, under `--run`, read those names from the agent's `.secrets/.env` and set them on the host.
-Every host's `--run` prints the names it carries before setting them, and a name with no value there
-stops the run — but the list is no longer only what you typed, so read a new tool package's `secrets`
-the way you read the rest of its code before mounting it.
+**A mounted package's declarations are treated like your own**: `dev`/`start` refuse to boot and `deploy --run`
+refuses to start while one has no value in `.secrets/.env`.
 
 ## Extensions
 

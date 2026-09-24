@@ -223,7 +223,7 @@ Dropped from the RFC, and from earlier drafts of this document:
 | a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
-| Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0600 files, `secrets-gate`, `deploy.secrets` / `deploy.apt` |
+| Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0600 files, `secrets-gate`, `deploy.apt` (`deploy.secrets` was removed: the value file travels whole) |
 
 | # | Step | Independent value | State |
 |---|---|---|---|

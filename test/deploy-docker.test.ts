@@ -78,17 +78,13 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).toContain("locally onboarded Slack auto-register");
   });
 
-  it("omits webhook-only secrets and public paths for long-connection Feishu", () => {
+  it("omits public paths for long-connection Feishu", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
       channels: [...declaredChannels(["feishu"], "long-connection")],
     });
-    const out = runbook(plan);
-    expect(out).toContain("FEISHU_APP_ID");
-    expect(out).toContain("FEISHU_APP_SECRET");
-    expect(out).not.toContain("FEISHU_VERIFICATION_TOKEN");
-    expect(out).not.toContain("https://<your-domain>/feishu");
+    expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
   });
 
   it("names the value file instead of interpolating each secret, and keeps only the auth-seed seam", () => {
@@ -100,7 +96,7 @@ describe("deploy/docker: planDockerDeploy", () => {
         ...base,
         modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram", "feishu"]),
-        extraSecrets: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
+        secrets: [{ name: "GH_TOKEN", hint: "required by tools/gh.ts" }],
       }),
     );
     expect(yaml).toContain("env_file:\n      - .secrets/.env");

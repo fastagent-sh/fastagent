@@ -1,18 +1,11 @@
-/** The secret set a deployed agent needs, computed from the definition — host-neutral. */
+/**
+ * The environment a deployed agent runs with — host-neutral.
+ *
+ * The value file (`.secrets/.env`) IS the deployed environment: every variable in it travels, on every host. What the
+ * definition declares (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`, plus the model's env key) only says
+ * which of those must have a value, so a missing one stops a deploy before its first side effect instead of a boot.
+ */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
-import type { DeclaredChannel } from "../channels/discover.ts";
-import { CHANNEL_KINDS, type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
-
-/** The declared channels this tool has setup metadata for. */
-function firstPartyChannels(
-  channels: readonly DeclaredChannel[],
-): { kind: ChannelKind; ingress: DeclaredChannel["ingress"] }[] {
-  return channels.flatMap((channel) =>
-    (CHANNEL_KINDS as string[]).includes(channel.name)
-      ? [{ kind: channel.name as ChannelKind, ingress: channel.ingress }]
-      : [],
-  );
-}
 
 /** Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none? */
 export function isEnvKey(source: string | undefined): source is string {
@@ -20,49 +13,69 @@ export function isEnvKey(source: string | undefined): source is string {
 }
 
 /**
- * Secret NAMES + hints for a runbook: the model key (when local auth is an env key), discovered channel secrets, and
- * everything the definition declared (src/declared-secrets.ts) — each hinted by the file that declared it, since the
- * reader is the person who must find the value.
+ * Names a deployment sets on the box itself. The value file's copy of one describes THIS machine (a local state path,
+ * a port) or rides another carrier (the model rides the release manifest), so it never travels.
+ */
+const DEPLOY_OWNED = new Set([
+  "PORT",
+  "FASTAGENT_AGENT",
+  "FASTAGENT_MODEL",
+  "FASTAGENT_STATE_DIR",
+  "FASTAGENT_SECRETS_DIR",
+  "FASTAGENT_AUTH_PATH",
+  "FASTAGENT_RELEASE_FILE",
+  "FASTAGENT_STORAGE_DIR",
+  "FASTAGENT_AGENTCORE",
+  "FASTAGENT_INGRESS_SECRET",
+  "FASTAGENT_WAKE_SECRET",
+  "FASTAGENT_DEV_WORKER",
+]);
+
+/** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */
+function isDeployOwned(name: string): boolean {
+  return DEPLOY_OWNED.has(name) || /^FASTAGENT_(AUTH_SEED|ENV)(_\d+)?$/.test(name);
+}
+
+/** The value-file variables that travel: everything with a value that the deployment does not set itself. */
+function carriedValues(values: ReadonlyMap<string, string>): Record<string, string> {
+  const carried: Record<string, string> = {};
+  for (const [name, value] of values) if (value && !isDeployOwned(name)) carried[name] = value;
+  return carried;
+}
+
+/** One variable a runbook tells the operator to set, and where to look for its value. */
+export interface DeploymentSecret {
+  name: string;
+  hint: string;
+}
+
+/**
+ * What a runbook lists: the names that must have a value (the model's env key, every declaration — hinted by the file
+ * that declared it) and then every other variable the value file carries.
  */
 export function deploymentSecrets(
   modelAuth: string | undefined,
-  channels: readonly DeclaredChannel[],
-  extraSecrets: readonly DeclaredSecret[] = [],
-): { name: string; hint: string; required: boolean }[] {
-  const secrets: { name: string; hint: string; required: boolean }[] = [];
-  if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key", required: true });
-  for (const { kind, ingress } of firstPartyChannels(channels)) {
-    for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {
-      secrets.push({ name: e.name, hint: e.hint, required: e.required });
-    }
-  }
-  // Dedup: a name already covered by the model key / a channel secret must not appear twice in the
-  // runbook, and two tools declaring the same name are one secret.
-  for (const { name, source } of dedupeSecrets(extraSecrets)) {
-    if (!secrets.some((s) => s.name === name)) {
-      secrets.push({
-        name,
-        // The SOURCE, not a fixed sentence: a declared name now comes from wherever it was declared
-        // (a tool, a schedule, the config list), and the runbook's reader is the person who has to
-        // find the value — pointing at the wrong file is worse than pointing at none.
-        hint: `required by ${source}`,
-        required: true,
-      });
-    }
-  }
+  declared: readonly DeclaredSecret[],
+  values: ReadonlyMap<string, string>,
+  valueFile: string,
+): DeploymentSecret[] {
+  const secrets: DeploymentSecret[] = [];
+  const add = (name: string, hint: string) => {
+    if (!secrets.some((s) => s.name === name)) secrets.push({ name, hint });
+  };
+  if (isEnvKey(modelAuth)) add(modelAuth, "your model provider key");
+  for (const { name, source } of dedupeSecrets(declared)) add(name, `required by ${source}`);
+  for (const name of Object.keys(carriedValues(values))) add(name, `from ${valueFile}`);
   return secrets;
 }
 
 /**
- * Assemble the VALUES a `--run` deploy sets on the host, from the deployed environment's declaration + the local
+ * Assemble the VALUES a `--run` deploy sets on the host: every variable the value file carries, plus the local
  * credential. Never minted here.
  *
  * `values` is the selected value file, read as data — **the environment running `deploy` is not a source**. A
  * deployment must be reproducible from what it carries, and a variable that happens to be exported on the builder is
- * written down nowhere. It is the same rule the model already follows, and the same line the industry draws by what
- * a tool configures: dotenv and Compose let the shell win because they configure THIS process, Terraform checks
- * `TF_VAR_*` last because it declares a remote object, and Kamal 2 stopped loading `.env` into the environment
- * altogether. CI supplies values by writing the file before running the command.
+ * written down nowhere. CI supplies values by writing the file before running the command.
  */
 export function assembleSecrets(input: {
   modelAuth: string | undefined;
@@ -72,10 +85,8 @@ export function assembleSecrets(input: {
    */
   modelKeyInDefinition?: boolean;
   authFile: Buffer | undefined;
-  channels: readonly DeclaredChannel[];
-  /** Everything the definition declared it needs — `deploy.secrets` plus every tool/schedule
-   *  declaration — carried like channel secrets. */
-  extraSecrets?: readonly DeclaredSecret[];
+  /** Every name the definition declared it needs — what must have a value. */
+  declared?: readonly DeclaredSecret[];
   /** The selected value file's contents (`loadEnvValues`). The ONLY source of operator-supplied values. */
   values: ReadonlyMap<string, string>;
 }): {
@@ -83,14 +94,12 @@ export function assembleSecrets(input: {
   missingSecrets: string[];
   needsModelCredential: boolean;
 } {
-  const secrets: Record<string, string> = {};
+  const secrets = carriedValues(input.values);
   const missingSecrets: string[] = [];
   let needsModelCredential = false;
 
   if (isEnvKey(input.modelAuth)) {
-    const v = input.values.get(input.modelAuth);
-    if (v) secrets[input.modelAuth] = v;
-    else missingSecrets.push(input.modelAuth); // an env-key name with no value — `.env` remediation fits
+    if (!secrets[input.modelAuth]) missingSecrets.push(input.modelAuth); // `.env` remediation fits
   } else if (input.authFile) {
     secrets.FASTAGENT_AUTH_SEED = input.authFile.toString("base64");
   } else if (input.modelKeyInDefinition) {
@@ -99,30 +108,16 @@ export function assembleSecrets(input: {
   } else {
     needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
   }
-
-  for (const { kind, ingress } of firstPartyChannels(input.channels)) {
-    for (const e of channelSetup(kind, ingress === "long-connection" ? "websocket" : "webhook").env) {
-      const v = input.values.get(e.name);
-      if (v)
-        secrets[e.name] = v; // optional channel values travel when configured
-      else if (e.required) {
-        missingSecrets.push(e.name); // operator-provided (in .env); a human-shared secret can't be minted
-      }
-    }
-  }
-  for (const { name } of dedupeSecrets(input.extraSecrets ?? [])) {
-    if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
-    const v = input.values.get(name);
-    if (v) secrets[name] = v;
-    else missingSecrets.push(name);
+  for (const { name } of dedupeSecrets(input.declared ?? [])) {
+    if (!secrets[name] && !missingSecrets.includes(name)) missingSecrets.push(name);
   }
   return { secrets, missingSecrets, needsModelCredential };
 }
 
 /**
  * The ONE refusal for declared names the deployed environment does not supply a value for — every host reaches it
- * before its first side effect. Host-neutral because the reason is: the value file IS the declaration, so a name
- * missing from it is missing from the deployment, whatever platform receives it.
+ * before its first side effect. Host-neutral because the reason is: the value file IS the deployed environment, so a
+ * name missing from it is missing from the deployment, whatever platform receives it.
  */
 export function missingValuesGate(missing: readonly string[], valueFile: string): string | undefined {
   if (missing.length === 0) return undefined;
@@ -138,17 +133,57 @@ export function authSeedBytes(seed: string | undefined, fileExists: boolean): Bu
 }
 
 /**
- * Collect the (possibly CHUNKED) auth seed from the environment: `FASTAGENT_AUTH_SEED` plus numbered continuations
- * (`_2`, `_3`, …) concatenated in order.
+ * Collect a (possibly CHUNKED) carrier from the environment: `<name>` plus numbered continuations (`_2`, `_3`, …)
+ * concatenated in order. A host whose env values have a length cap splits a long value this way.
  */
-export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
-  const first = env.FASTAGENT_AUTH_SEED;
+function collectChunked(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const first = env[name];
   if (!first) return undefined;
-  let seed = first;
+  let value = first;
   for (let i = 2; ; i++) {
-    const part = env[`FASTAGENT_AUTH_SEED_${i}`];
+    const part = env[`${name}_${i}`];
     if (!part) break;
-    seed += part;
+    value += part;
   }
-  return seed;
+  return value;
+}
+
+/** `FASTAGENT_AUTH_SEED` (+ `_2`, …): the base64 auth.json a deploy carries. */
+export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
+  return collectChunked(env, "FASTAGENT_AUTH_SEED");
+}
+
+/**
+ * `FASTAGENT_ENV` (+ `_2`, …): the carried variables as ONE base64 JSON object, for a host whose deployment artifact
+ * must not depend on which names the value file holds (AgentCore's template is committed and gated on drift). The
+ * inverse of {@link encodeCarriedEnv}.
+ */
+function collectCarriedEnv(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const encoded = collectChunked(env, "FASTAGENT_ENV");
+  if (encoded === undefined) return undefined;
+  const parsed: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("FASTAGENT_ENV is not an object of variables — redeploy to regenerate it");
+  }
+  const carried: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed)) {
+    if (typeof value !== "string")
+      throw new Error(`FASTAGENT_ENV: ${name} is not a string — redeploy to regenerate it`);
+    carried[name] = value;
+  }
+  return carried;
+}
+
+/**
+ * Expand `FASTAGENT_ENV` into the process environment — what `start` does first on a host that carries the value file
+ * that way. The platform's own variables still win, as they do over a value file anywhere.
+ */
+export function applyCarriedEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const carried = collectCarriedEnv(env);
+  if (carried) for (const [name, value] of Object.entries(carried)) if (!(name in env)) env[name] = value;
+}
+
+/** The carried variables as the base64 JSON {@link collectCarriedEnv} reads back; empty when nothing travels. */
+export function encodeCarriedEnv(carried: Readonly<Record<string, string>>): string {
+  return Object.keys(carried).length === 0 ? "" : Buffer.from(JSON.stringify(carried), "utf8").toString("base64");
 }

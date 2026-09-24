@@ -7,19 +7,20 @@ import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
-  AUTH_SEED_CHUNK_SIZE,
-  AUTH_SEED_MAX_CHUNKS,
+  CARRIERS,
+  CARRIER_CHUNK_SIZE,
+  CARRIER_MAX_CHUNKS,
   MOUNT,
   agentcoreRepoName,
   agentcoreStackName,
-  cfnParamName,
+  carrierChunk,
   deploymentBucketName,
   forwarderSource,
   ingressSessionId,
   type AgentcoreTopology,
 } from "./plan.ts";
 import { zipSingleFile } from "./zip.ts";
-import { missingValuesGate } from "../secrets.ts";
+import { encodeCarriedEnv, missingValuesGate } from "../secrets.ts";
 
 export interface AgentcoreRunPlan {
   /** The base name — stack `fastagent-<name>`, ECR repo `fastagent/<name>`. */
@@ -35,7 +36,7 @@ export interface AgentcoreRunPlan {
    * region`.
    */
   region?: string;
-  /** Secret env-var name → value (model key or FASTAGENT_AUTH_SEED + channel secrets). */
+  /** Env-var name → value: the value file's carried variables, plus FASTAGENT_AUTH_SEED for a file credential. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -140,6 +141,19 @@ export function pickStackOutputs(parsed: unknown): Record<string, string> | unde
   }
   return out;
 }
+/** The secrets `--run` mints for this host, each with the template parameter of its own. */
+const MINTED_PARAMS: Record<string, string> = {
+  FASTAGENT_INGRESS_SECRET: "FastagentIngressSecret",
+  FASTAGENT_WAKE_SECRET: "FastagentWakeSecret",
+};
+
+/** What each carrier holds for this deploy: the credential seed, and every other variable as one encoded object. */
+function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS)[number]["env"], string> {
+  const { FASTAGENT_AUTH_SEED: seed = "", ...rest } = secrets;
+  const carried = Object.fromEntries(Object.entries(rest).filter(([name]) => !(name in MINTED_PARAMS)));
+  return { FASTAGENT_AUTH_SEED: seed, FASTAGENT_ENV: encodeCarriedEnv(carried) };
+}
+
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
 export function paramsFileContent(
   imageUri: string,
@@ -148,13 +162,18 @@ export function paramsFileContent(
 ): string {
   const params = [`ImageUri=${imageUri}`];
   if (forwarder) params.push(`ForwarderBucket=${forwarder.bucket}`, `ForwarderS3Key=${forwarder.key}`);
-  for (const [k, v] of Object.entries(secrets)) {
-    if (k !== "FASTAGENT_AUTH_SEED") params.push(`${cfnParamName(k)}=${v}`);
+  for (const [name, param] of Object.entries(MINTED_PARAMS)) {
+    if (secrets[name] !== undefined) params.push(`${param}=${secrets[name]}`);
   }
-  const seed = secrets.FASTAGENT_AUTH_SEED ?? "";
-  for (let i = 0; i < AUTH_SEED_MAX_CHUNKS; i++) {
-    const param = i === 0 ? "FastagentAuthSeed" : `FastagentAuthSeed${i + 1}`;
-    params.push(`${param}=${seed.slice(i * AUTH_SEED_CHUNK_SIZE, (i + 1) * AUTH_SEED_CHUNK_SIZE)}`);
+  // Every chunk is written, empty ones included: an omitted parameter keeps its PREVIOUS value on a stack update.
+  const values = carrierValues(secrets);
+  for (const carrier of CARRIERS) {
+    const value = values[carrier.env];
+    for (let i = 0; i < CARRIER_MAX_CHUNKS; i++) {
+      params.push(
+        `${carrierChunk(carrier, i).param}=${value.slice(i * CARRIER_CHUNK_SIZE, (i + 1) * CARRIER_CHUNK_SIZE)}`,
+      );
+    }
   }
   return `${JSON.stringify(params)}\n`;
 }
@@ -220,20 +239,21 @@ export async function deployAgentcoreRun(
   const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
   if (missingValues) return gate(missingValues);
   // 3b.
-  const seed = plan.secrets.FASTAGENT_AUTH_SEED;
-  if (seed && seed.length > AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS) {
+  const capacity = CARRIER_CHUNK_SIZE * CARRIER_MAX_CHUNKS;
+  const carried = carrierValues(plan.secrets);
+  if (carried.FASTAGENT_AUTH_SEED.length > capacity) {
     return gate(
-      `your auth.json is too large to carry (${seed.length} chars base64 > ${AUTH_SEED_CHUNK_SIZE * AUTH_SEED_MAX_CHUNKS}) — ` +
+      `your auth.json is too large to carry (${carried.FASTAGENT_AUTH_SEED.length} chars base64 > ${capacity}) — ` +
         `slim it (keep only the model's credential), or set a provider API key in .env instead`,
     );
   }
-  for (const [k, v] of Object.entries(plan.secrets)) {
-    if (k !== "FASTAGENT_AUTH_SEED" && v.length > 2048) {
-      return gate(`secret ${k} is ${v.length} chars — AgentCore environment values cap at 2048; shorten it`);
-    }
+  if (carried.FASTAGENT_ENV.length > capacity) {
+    return gate(
+      `the variables in ${plan.valueFile} are too large to carry (${carried.FASTAGENT_ENV.length} chars encoded > ` +
+        `${capacity}) — move what the deployment does not need out of that file`,
+    );
   }
-  // Name what travels from the value file onto the runtime: the list is no longer only what the
-  // author typed in deploy.secrets (a mounted tool/channel/schedule declares its own).
+  // Name what travels from the value file onto the runtime.
   const secretNames = Object.keys(plan.secrets);
   if (secretNames.length > 0) log(`carrying ${secretNames.length} secret(s): ${secretNames.join(", ")}`);
 
@@ -302,7 +322,7 @@ export async function deployAgentcoreRun(
       `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
         `sessions, channel state and pending wake-ups start blank` +
         // Only the carried auth.json is re-seeded; a provider API key deployment has no such step to blame.
-        `${seed ? ", and the model credential is re-seeded from FASTAGENT_AUTH_SEED" : ""}. ` +
+        `${carried.FASTAGENT_AUTH_SEED ? ", and the model credential is re-seeded from FASTAGENT_AUTH_SEED" : ""}. ` +
         `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }
