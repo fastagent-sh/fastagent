@@ -279,14 +279,13 @@ describe("init: scaffoldAgent", () => {
     );
   });
 
-  it("the name `fastagent` is no longer reserved — nothing about it resolves specially", async () => {
-    // It used to be a trap (the NAME was the nested marker, so a flat agent there served with the
-    // parent as its workspace). With the config as the only marker there is nothing to trap.
-    const named = join(await freshDir(), "fastagent");
+  it("the name `fastagent` is not special — the config is the marker, and the parent is the workspace", async () => {
+    const parent = await freshDir();
+    const named = join(parent, "fastagent");
     await mkdir(named);
     await writeFile(join(named, "fastagent.config.ts"), "export default {};\n");
     const a = await createPiAgentFromDir(named, { model: "openai-codex/gpt-5.5" });
-    expect([a.agentDir, a.workspace]).toEqual([named, named]);
+    expect([a.agentDir, a.workspace]).toEqual([named, parent]);
 
     // Already an agent → refuse rather than double-initialize (the config at `named` shadows a nested one).
     await expect(scaffoldAgent(named)).rejects.toThrow(/already resolves to .*never served/s);
@@ -311,11 +310,9 @@ describe("init: scaffoldAgent", () => {
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context"); // ② walked from the workspace
     expect(a.toolNames).toContain("foo"); // discovered from the agent dir, not the workspace
 
-    // Pointing AT the agent makes it work on ITSELF — the workspace is what you aim at, deliberately.
+    // Pointing AT the agent gives the same placement: the workspace is always the agent dir's parent.
     const b = await createPiAgentFromDir(root);
-    expect([b.agentDir, b.workspace]).toEqual([root, root]);
-    // What that costs is the WORKSPACE (the agent's cwd, its coding tools' root, deploy's build
-    // context) — not ② context, which the ancestor walk still reaches from inside the agent dir.
+    expect([b.agentDir, b.workspace]).toEqual([root, host]);
     expect(b.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context");
   });
 

@@ -66,9 +66,8 @@ const init: CommandSpec = {
     "An agent is a directory holding a fastagent.config.ts — never its NAME, so --agent-dir can call it " +
     "anything (the name decides only which agent answers when a workspace holds several: see " +
     "FASTAGENT_AGENT). What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
-    "whatever directory you later point fastagent at: point at the project and the agent inside it " +
-    "serves with the project as its workspace; point at the agent directory and it works on itself. " +
-    "A directory resolves to ONE agent, at it or one level inside.",
+    "the agent directory's parent — the project you ran init in — whether you point fastagent at the " +
+    "project or at the agent directory. A directory resolves to ONE agent, at it or one level inside.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,

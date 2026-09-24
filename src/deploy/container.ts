@@ -69,9 +69,8 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
-  // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent, which deploy
-  // requires to be a SUBDIRECTORY of it (preflight gates a flat layout, containerArtifacts re-asserts it), so the
-  // prefix is never empty.
+  // The whole workspace is baked at /app; deps install (and the local bin lives) under the agent, which is always a
+  // SUBDIRECTORY of it (the workspace is the agent dir's parent), so the prefix is never empty.
   const prefix = input.agentPrefix;
   const dir = prefix.replace(/\/$/, "");
   const into = (p: string): string => `${prefix}${p}`;

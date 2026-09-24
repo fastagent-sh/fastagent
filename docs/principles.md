@@ -20,7 +20,7 @@ The design choices are deliberate:
 
 | Principle | What it means in FastAgent |
 |---|---|
-| **Bring your directory** | Start from a local directory; add `persona.md`, `skills/`, `tools/`, and `channels/` as needed. Existing `AGENTS.md` files remain project context. |
+| **Add a folder, keep your project** | `fastagent init` adds `fastagent/` to a project; add `persona.md`, `skills/`, `tools/`, and `channels/` there as needed. The project is the agent's workspace, and its `AGENTS.md` remains project context. |
 | **Concepts before features** | Define the few primitives authors need to understand — definition, invoke, event, tool, skill, channel, session — before adding knobs. |
 | **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |

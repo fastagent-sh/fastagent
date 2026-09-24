@@ -18,7 +18,7 @@ Applied to the four things a `fastagent.json` at the workspace root would plausi
 
 | Candidate fact | Derivable? |
 |---|---|
-| "this directory is a workspace" | **Yes.** A workspace is not a property, it is a *role*: the directory you pointed fastagent at this time. Point at a parent to use it as the workspace for a nested agent; point at that agent directly and it is both agent and workspace. A marker cannot decide which invocation the author intended |
+| "this directory is a workspace" | **Yes.** The workspace is the agent directory's parent |
 | "these are the agents here" | **Yes.** `agentsAt()` scans one level; `fastagent.config.ts` is the marker. A second list is a second truth, and it drifts |
 | "this one answers by default" | **Already conventional.** The agent named `fastagent` wins; `FASTAGENT_AGENT` overrides |
 | **"this skill/agent came from X at commit Y"** | **No.** `vendorSkill` writes the files and keeps nothing about where they came from |

@@ -13,11 +13,10 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const placement = await enterAgentCommand(dirArg, opts);
-  const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.workspace, {
+  const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.agentDir, {
     model: opts.model,
   }).catch(failStartup);
-  // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you typed, so it
-  // cannot tell you which agent actually ran.
+  // BOTH directories, like dev/start: which agent ran, and what it worked on.
   console.error(`[fastagent] invoke: ${placement.agentDir} (workspace ${placement.workspace}, ${modelSpec})`);
   await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,

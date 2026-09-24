@@ -52,7 +52,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
-  const a = await createPiAgentFromDir(placement.workspace, {
+  const a = await createPiAgentFromDir(placement.agentDir, {
     model: opts.model,
     serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);

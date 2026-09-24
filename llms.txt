@@ -5,7 +5,7 @@
 Key facts:
 
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 22.19 (also runs under Bun).
-- The directory is the agent: optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `schedules/` (cron triggers), `AGENTS.md` (project context, not identity), markdown context, and `fastagent.config.ts`. No framework rewrite, no build step.
+- The agent is a `fastagent/` folder in a project, whose parent is its workspace: optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `routines/` (cron triggers), markdown context, and `fastagent.config.ts`; the project's `AGENTS.md` is context. No framework rewrite, no build step.
 - The contract is `invoke(scope, prompt) => AsyncIterable<AgentEvent>` (the Agent Handler SPEC).
 - Core CLI: `fastagent init | info | models | login | dev | chat | invoke | tool | fire | schedule | start | add | deploy`.
 - Channels: HTTP/SSE (default), Telegram, Slack, Feishu/Lark, plus custom adapters.

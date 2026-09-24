@@ -2,7 +2,7 @@
  * PLACEMENT: which directory holds the agent, and which directory the agent works ON — plus the machinery paths that
  * follow from it.
  */
-import { type Dirent, type Stats, existsSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, type Stats, readdirSync, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -40,7 +40,10 @@ export interface ResolvedPlacement {
    * machinery dirs (`.secrets/`, `.state/`) live.
    */
   agentDir: string;
-  /** The WORKSPACE — what the agent works ON: its cwd, and the start of the ② context walk. */
+  /**
+   * The WORKSPACE — what the agent works ON: its cwd, and the start of the ② context walk. Always the agent
+   * directory's parent, whichever of the two the command was pointed at.
+   */
   workspace: string;
 }
 
@@ -135,23 +138,8 @@ function selectAgent(agents: string[], env: NodeJS.ProcessEnv): string | undefin
 
 /** Resolve `dir` into its placement, or undefined when nothing selects one agent. */
 function findPlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement | undefined {
-  const base = resolve(dir);
-  const agentDir = selectAgent(agentsAt(base), env);
-  return agentDir === undefined ? undefined : { agentDir, workspace: base };
-}
-
-/** The one-line hint for "you pointed at the agent, but the project around it is what you meant" — or undefined. */
-export function workspaceHint(
-  { agentDir, workspace }: ResolvedPlacement,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  if (agentDir !== workspace) return undefined;
-  const parent = dirname(agentDir);
-  if (parent === agentDir) return undefined;
-  // Would `..` actually serve THIS agent?
-  if (findPlacement(parent, env)?.agentDir !== agentDir) return undefined;
-  if (!["AGENTS.md", ".git"].some((name) => existsSync(join(parent, name)))) return undefined;
-  return `${parent} looks like a project — point fastagent at it (\`..\`) to have the agent work ON it`;
+  const agentDir = selectAgent(agentsAt(resolve(dir)), env);
+  return agentDir === undefined ? undefined : { agentDir, workspace: dirname(agentDir) };
 }
 
 /** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair or the throw. */
@@ -200,7 +188,7 @@ export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.e
   if (agents.length > 1) {
     return (
       `${listed} and none of them is named "${DEFAULT_AGENT_DIRNAME}" (the default) — pick one with ` +
-      `FASTAGENT_AGENT=<name>, or point fastagent at the one you want (it then works on ITSELF)`
+      `FASTAGENT_AGENT=<name>, or point fastagent at the one you want`
     );
   }
   return undefined;

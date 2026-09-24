@@ -33,7 +33,7 @@ import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
-import { type ResolvedPlacement, workspaceHint } from "../paths.ts";
+import type { ResolvedPlacement } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -56,11 +56,6 @@ function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
 }
 
-/** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}). */
-function reportWorkspaceHint(hint: string | undefined): void {
-  if (hint) reportLine("hint", hint);
-}
-
 /** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
@@ -79,7 +74,7 @@ export interface ReportableAssembly {
 export async function reportAssembly(
   a: ReportableAssembly,
   extras: {
-    /** Printed between `workspace:`/`hint:` and `model:` (`dev` names the config file here). */
+    /** Printed between `workspace:` and `model:` (`dev` names the config file here). */
     beforeModel?: [label: string, value: string][];
     /** Printed after the tool lines, before findings (`start` names state + sessions here). */
     afterTools?: [label: string, value: string][];
@@ -87,7 +82,6 @@ export async function reportAssembly(
 ): Promise<void> {
   reportLine("agent", a.agentDir);
   reportLine("workspace", a.workspace);
-  reportWorkspaceHint(workspaceHint(a));
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.agentDir, a.modelSpec, a.authPath, a.fallbackAuthPath);

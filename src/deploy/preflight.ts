@@ -125,14 +125,6 @@ export async function preflightDeploy(input: {
     externalClock,
     publicUrl = true,
   } = input;
-  // The ONE derived placement fact every host plan needs: where the agent's files sit relative to the build context
-  // (the workspace).
-  if (agentDir === workspace) {
-    return {
-      ok: false,
-      gate: "deploy requires a nested agent directory; point deploy at the workspace containing fastagent/",
-    };
-  }
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {

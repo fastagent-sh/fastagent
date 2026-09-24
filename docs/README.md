@@ -52,7 +52,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 
 ## Core concepts
 
-- **The directory is the agent.** Runtime behavior comes from the agent directory: optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `routines/`, `AGENTS.md` (project context), and markdown context.
+- **The agent is a folder in your project.** Runtime behavior comes from the agent directory (`fastagent/`, whose parent is the workspace): optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `routines/`, `AGENTS.md` (project context), and markdown context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
