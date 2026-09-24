@@ -474,8 +474,6 @@ export async function assemblePiFromDefinition(
     },
     tools,
     sessions: options.sessions,
-    // Discovered so the serving assembly can WARN that it does not run them (and so the refusals apply to the
-    // artifact either way) — `chat` is where they load.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
     env,

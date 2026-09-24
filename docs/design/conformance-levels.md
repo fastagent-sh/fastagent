@@ -105,12 +105,11 @@ Extensions, slash-command dispatch, branch summaries and fork/clone are `AgentSe
 the serving path is now on `AgentSession` — so they are reachable rather than blocked. What still
 gates them is wiring, not class:
 
-- **Extension loading** is suppressed on purpose (`noExtensions: true` in the binding): a served agent
-  is its definition, not the operator's `~/.pi` setup. Turning it on means deciding where a served
-  agent's extensions come from — the definition directory, presumably — and what an extension dialog
-  (`ExtensionUIContext`'s `select`/`confirm`/`input`/`notify`) means with no human at a terminal. pi
-  exposes an injectable `bindExtensions({ uiContext, mode })` seam for exactly that, the same door its
-  RPC mode uses.
+- **Extensions** come from the definition directory only (`noExtensions: true` keeps the operator's
+  `~/.pi` setup out). pi's extension runtime belongs to its resource loader, so the binding builds one
+  loader per session and each turn gets its own extension instances. Dialogs get pi's no-UI default
+  (`hasUI === false`, answers resolve as cancelled); an `interactions` capability that routes them to
+  the caller is still open (session-control.md).
 - **`commands()` stays a listing**, not a dispatch surface: the data plane takes prompts as text, so
   what typing `/name` means belongs to the client — a deliberate contract line.
 

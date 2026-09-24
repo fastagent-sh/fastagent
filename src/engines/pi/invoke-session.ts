@@ -198,6 +198,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             },
       );
       let finalAssistant: AssistantMessage | undefined;
+      let runStarted = false;
+      let commandError: string | undefined;
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
       let eventFailure: PortFailure | undefined;
@@ -210,6 +212,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             session.subscribe((event) => {
               if (retriedAfterAnswer !== undefined || eventFailure) return;
               try {
+                if (event.type === "agent_start") runStarted = true;
                 // Compaction rewrites session history; the event's assistant message is the turn's fact.
                 if (event.type === "message_end" && event.message.role === "assistant") {
                   finalAssistant = event.message as AssistantMessage;
@@ -248,25 +251,45 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }),
         (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
       );
+      // pi swallows a failing extension command into its error channel; this run reports it.
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          session.extensionRunner.onError((error) => {
+            if (error.event === "command") commandError ??= `${error.extensionPath} failed: ${error.error}`;
+          }),
+        ),
+        (unsubscribe) => Effect.sync(unsubscribe),
+      );
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.
       yield* Deferred.succeed(bound, session);
       const promptOptions = yield* port(() => toPiPromptOptions(prompt));
       if (eventFailure) return yield* Effect.fail(eventFailure);
+      // Whether an extension could take this input instead of the model (a command, or an `input` handler): only
+      // then may a prompt settle with no model run and still have done its job.
+      const extensionMayTakeInput =
+        session.extensionRunner.getRegisteredCommands().length > 0 || session.extensionRunner.hasHandlers("input");
       yield* portAbort(
         "prompt",
-        () => session.prompt(prompt.text, promptOptions),
+        async () => {
+          await session.prompt(prompt.text, promptOptions);
+          // An extension command returns from `prompt()` as soon as its handler does; a turn it started
+          // (`pi.sendUserMessage`) is still running, and this run owns it until it settles.
+          await session.waitForIdle();
+        },
         () => session.abort(),
       );
       if (eventFailure) return yield* Effect.fail(eventFailure);
-      return retriedAfterAnswer !== undefined
-        ? ({ type: "failed", details: retriedAfterAnswer, retryable: true } as const)
-        : finalAssistant
-          ? toTerminal(finalAssistant)
-          : ({
-              type: "failed",
-              details: "the engine settled the run without ending an assistant message",
-              retryable: false,
-            } as const);
+      if (commandError !== undefined) return { type: "failed", details: commandError, retryable: false } as const;
+      if (retriedAfterAnswer !== undefined)
+        return { type: "failed", details: retriedAfterAnswer, retryable: true } as const;
+      if (finalAssistant) return toTerminal(finalAssistant);
+      // No model run at all: an extension took the input (a command, or an `input` handler) and did its work.
+      if (!runStarted && extensionMayTakeInput) return { type: "completed" } as const;
+      return {
+        type: "failed",
+        details: "the engine settled the run without ending an assistant message",
+        retryable: false,
+      } as const;
     }).pipe(Effect.onError((cause) => Deferred.failCause(bound, cause)));
 
     const work = Effect.runFork(

@@ -15,7 +15,7 @@ import { inProcessLease, type RunControls } from "../src/engines/pi/turn-kit.ts"
 import type { SessionEvent } from "../src/session.ts";
 import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
 import { readMachine } from "../src/engines/pi/machine.ts";
-import { makeFaux } from "./faux.ts";
+import { bareSessionParts, makeFaux } from "./faux.ts";
 import { log } from "../src/log.ts";
 
 /** Runs inside prompt-option resolution — the window between "the session exists" and "the model
@@ -40,6 +40,7 @@ function silentSessionAfterHistory(): AgentSession {
     { role: "assistant", content: [{ type: "text", text: "the code is 47" }], stopReason: "stop", timestamp: 2 },
   ];
   return {
+    ...bareSessionParts,
     state: { messages },
     subscribe: () => () => {},
     prompt: async () => {},
@@ -52,6 +53,7 @@ function silentSessionAfterHistory(): AgentSession {
 function promptRecordingSession(): { session: AgentSession; prompted: () => boolean } {
   let prompted = false;
   const session = {
+    ...bareSessionParts,
     state: { messages: [] },
     subscribe: () => () => {},
     prompt: async () => {

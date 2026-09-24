@@ -27,9 +27,16 @@ export function acquireSessionLease(lease: Lease, session: string) {
 
 export function acquireSession(factory: PiAgentSessionFactory, session: string, inherit?: SessionInheritance) {
   // Acquisition stays uninterruptible: a late factory may still publish durable state under the lease.
-  // Disposal must not emit session_shutdown: extension instances belong to the shared assembly.
+  // The extension instances are this session's alone, so their end is its end: pi's `dispose()` does not tell them.
   return Effect.acquireRelease(
     port(() => factory(session, inherit)),
-    (bound) => portCleanup("dispose", () => bound.dispose()),
+    (bound) =>
+      portCleanup("dispose", async () => {
+        try {
+          await bound.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        } finally {
+          bound.dispose();
+        }
+      }),
   );
 }

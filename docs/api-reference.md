@@ -681,8 +681,8 @@ its spelling as prompt text and the server expands it: a skill is `/skill:<name>
   skill whose file cannot be read is dropped from the list (the loader warns `read_failed`).
 - If a file disappears after the list was read (a steer mid-run, a replaced definition), the prompt goes through
   unexpanded and the server logs `skill_expansion failed`.
-- The list is complete for a served agent: `extensions/` do not run when serving. A chat channel's `/stop` is
-  handled by the channel, not listed here.
+- Commands registered by `extensions/` run when sent as `/<name>` but are not listed here. A chat channel's `/stop`
+  is handled by the channel, not listed here either.
 - It is re-read on every call. `[]` means the agent exposes none. It rejects (with no stable code) when the
   definition cannot be read at all.
 

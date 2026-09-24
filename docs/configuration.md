@@ -274,23 +274,42 @@ own: `dev`/`start` refuse to boot, and `deploy --run` refuses to start, while on
 
 ## Extensions
 
-Extension modules under `extensions/` run in `fastagent chat` only. Serving (`dev`, `start`, channels, a container)
-does not load them and warns at startup when a definition ships some: pi's extension runtime is shared per process,
-so with concurrent turns an extension could act on another conversation.
+Extension modules under `extensions/` run in `fastagent chat` and when serving (`dev`, `start`, channels, a
+container).
 
 Discovered shapes: `extensions/notify.ts` and `extensions/audit/index.ts`. A subdirectory whose `package.json`
 declares a `pi` field is not supported and is warned about. A symlinked entry is refused. The machine's `~/.pi`
-extensions are never loaded.
+extensions are never loaded. An npm package an extension imports goes in the agent's `package.json`, like a tool's.
+An extension that fails to load is warned about once and left out; the rest of the agent runs.
 
-| | serving (`dev`, `start`, channels) | `chat` |
+| | serving | `chat` |
 |---|---|---|
-| discovery and its refusals | runs | runs |
-| tools it registers | **not mounted** | offered to the model |
-| event and lifecycle handlers | **not run** | run |
-| commands it registers | not executable | executable |
-| `select` / `confirm` / `input` | — | shown to you |
+| tools it registers | offered to the model | offered to the model |
+| event and lifecycle handlers | run | run |
+| `/name` commands it registers | run when a prompt is `/name [args]` | run |
+| `ctx.hasUI` | `false` | `true` |
+| `select` / `confirm` / `input` / `custom` | resolve as cancelled (`undefined`, `false`) | shown to you |
+| `notify`, status, widgets, shortcuts, renderers | no effect | shown |
+| `ctx.newSession` / `fork` / `navigateTree` / `switchSession` / `reload` | throw | run |
+| `ctx.shutdown()` | logs a warning; the process keeps serving | exits |
+| `pi.registerProvider()` | refused: declare providers in `models.json` | runs |
 
-For model-callable tools you need while served, write `tools/` instead.
+When serving, every session gets its own extension instances: the factory runs and `session_start` fires when a
+turn (or a control-plane write) opens the session, and `session_shutdown` fires when it ends. State kept in
+memory does not survive to the next turn; rebuild it from the session in `session_start`. Stop timers and close
+handles in `session_shutdown`: a stale `pi` or `ctx` throws when used after it, and an exception nobody catches
+ends the process.
+
+A served command settles the invoke:
+
+- if it starts a model turn (`pi.sendUserMessage`, or `pi.sendMessage` with `triggerTurn`), the invoke streams
+  that turn;
+- if it does its work without one, the invoke completes with no text, so write anything the caller should see
+  into the session or start a turn;
+- if it throws, the invoke fails with its error.
+
+Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
+Extension code changes need a restart; `dev` restarts on its own.
 
 ### When the repo already owns `tools/` or `channels/`
 
