@@ -72,7 +72,6 @@ beforeAll(async () => {
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
   workspace = join(tmpdir(), NAME);
-  // Nested, because `deploy` requires a workspace that CONTAINS the agent (preflight.ts).
   const agentDir = join(workspace, "fastagent");
   await mkdir(join(agentDir, "routines"), { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");

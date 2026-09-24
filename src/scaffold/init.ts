@@ -29,9 +29,8 @@ export function agentDirName(raw: string | undefined): string {
  * Why `name` cannot be an agent directory name, or undefined when it can.
  *
  * `"."` is refused along with every path: the definition always lands in a SUBDIRECTORY, and the directory around it
- * is the workspace. Scaffolding into a directory that already holds someone else's files is what made the layout a
- * choice, and it made the agent inherit that directory's `package.json` — under which a `fastagent.config.ts` is
- * only loadable if the host repo happens to be ESM.
+ * is the workspace. The subdirectory also carries its own `package.json`, so a `fastagent.config.ts` never loads under
+ * the host repo's module settings.
  */
 export function agentDirNameError(name: string): string | undefined {
   if (name !== "" && name !== "." && name !== ".." && name === basename(name)) return undefined;

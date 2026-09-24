@@ -91,7 +91,7 @@ export function isGeneratedFlyToml(content: string): boolean {
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const { appName, port, modelAuth, channels } = input;
-  // Artifacts sit under the agent prefix, so a NESTED agent never touches the workspace's own deploy files.
+  // Artifacts sit under the agent prefix, so they never touch the workspace's own deploy files.
   const flyTomlPath = `${input.agentPrefix}fly.toml`;
   const artifacts: Artifact[] = [
     {
