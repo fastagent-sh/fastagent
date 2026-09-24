@@ -40,10 +40,8 @@ Three things, in three places:
 | OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json`; the secret is dropped once the install completes. |
 | `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | `.secrets/.env`, and the deploy's secrets. |
 
-Bot-token rotation is left OFF in the manifest, deliberately: it cannot be turned on and off again, and
-turning it on would ship a refresh token and the client secret to every host beside the access token — the
-same blast radius as one long-lived token, plus a 12-hour refresh lineage that has to stay single and
-durable. Two runtime secrets is the whole of it.
+Bot-token rotation is off in the manifest. Do not turn it on: it cannot be turned off again, and FastAgent does not
+support it.
 
 ## Internal-app onboarding
 

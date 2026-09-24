@@ -66,7 +66,7 @@ const agent = createPiAgent({
 });
 ```
 
-Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported too, so you rarely import from `@earendil-works/*`. Two things stay there on purpose: `createProvider` and a provider's wire-protocol `api` (see §5) — both are pi-ai's own runtime, and forwarding them would make us answerable for an API we do not own.
+Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately installed `zod`: `defineTool` converts schemas with its own copy. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported. Import `createProvider` and a provider's wire-protocol `api` from `@earendil-works/pi-ai` (see §5).
 
 `model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. The directory path instead assembles the pi base (optionally customized by `persona.md`), `AGENTS.md` project context, skills, and environment context. See [core design §2](design/core.md).
 
@@ -113,17 +113,9 @@ await service.close();    // stops long connections and schedules
 bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
 `service.controlPrefix` names the prefix the plane owns (`/control`) so your app can route around it.
 
-**Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the
-handler behind your own middleware; it is a Fetch handler, so your existing auth applies to it the
-same way it applies to any other route you mount. A browser is NOT constrained by default: the
-cross-origin default is `*`, so any page your user visits can call this port and read the reply. Our
-routes do refuse a body that is not `application/json`, which is what stops a no-preflight cross-origin
-write once you have narrowed the origins — pin your real front end's domain in `http.cors` to take the
-default back.
-
-Composing the same thing by hand means assembling routes, mounts, schedules and long connections in
-the right order — and getting it wrong is silent (a control plane that 404s while the startup line
-announces it, a schedule that never fires).
+**Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the handler behind
+your own middleware. The cross-origin default is `*`: any page your users visit can call it and read the reply
+unless you set `http.cors` to your front end's origin.
 
 Pass `{ signal }` to bind its lifetime to something you already own.
 
@@ -131,17 +123,15 @@ Pass `{ signal }` to bind its lifetime to something you already own.
 
 The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it.
 
-> **Mount before your body parser.** Node's request is a one-shot stream, so `app.use(express.json())`
-> registered *ahead* of the mount consumes it and nothing reaches the agent — and webhook channels
-> verify signatures over the RAW body, which a re-serialised one would fail. Order is the whole fix:
+> **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
+> webhook channels verify signatures over the raw body:
 >
 > ```ts
 > app.use("/agent", nodeListener(handler));  // first: fastagent takes these requests
 > app.use(express.json());                   // then: parses everything else as usual
 > ```
 >
-> Scoping the parser (`app.use("/other", express.json())`) works too. Get it wrong and the log says
-> so, naming the fix rather than `Body is unusable`.
+> Scoping the parser (`app.use("/other", express.json())`) works too. Getting it wrong is logged with this fix.
 
 ```ts
 // Next.js App Router — app/api/chat/route.ts
@@ -204,19 +194,23 @@ createPiAgent({
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
-`env` governs definition loading. It does NOT govern the coding tools (`read`/`grep`/`find`/`ls`/
-`bash`/`edit`/`write`), which reach the local process directly using the session's workspace (or their
-construction cwd in a sessionless call); nor author-written `tools/`, which can import anything. Injecting `env` therefore
-does not isolate a directory agent — a sandbox has to constrain the process, and that adapter is
-future work.
+`env` governs definition loading only. The coding tools and your `tools/` use the local process directly, so `env`
+is not a sandbox; to isolate an agent, constrain its whole process.
 
 ## 4. Auth
 
-Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<agent dir>/.secrets/auth.json` (the dir resolves `FASTAGENT_SECRETS_DIR` > `<dir>/.secrets`): the directory opener (`createPiAgentFromDir`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/.secrets/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
+Credentials resolve from a **credentials file**, then **env vars** (e.g. `ANTHROPIC_API_KEY`).
+
+- `createPiAgentFromDir` (what `dev`/`start` use) and `createPiAgentFromDefinition(dir)` read
+  `<agent dir>/.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), and fall back to the global
+  `~/.fastagent/.secrets/auth.json` for any provider the project file lacks.
+- `createPiAgent` and `createPiModels` read the global file.
+- Every opener accepts an explicit `authPath`, which then is the only file read.
 
 To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
 
-Static keys belong in the login file or the environment, not in code — there is no `apiKey` constructor option by design. The only model-source injection point is `providers` (next), for when the endpoint itself is yours.
+There is no `apiKey` option: put keys in the credentials file or the environment. For your own endpoint, see
+`providers` below.
 
 ## 5. Your own model source: `providers`
 
@@ -225,7 +219,8 @@ Static keys belong in the login file or the environment, not in code — there i
 > `invoke`, `chat`, `deploy`, and L2 embedding — picks it up with no wiring. See
 > [Custom model endpoints](configuration.md#custom-model-endpoints).
 
-When your model source needs per-request logic — minting or rotating a token, calling an auth service — register it as a provider; a `model` spec then selects it by id. This is the one case that touches the engine's provider layer — built-in providers cover everything else.
+When your model source needs per-request logic (minting or rotating a token, calling an auth service), register
+it as a provider; a `model` spec selects it by id.
 
 ```ts
 import { createPiAgent } from "@fastagent-sh/fastagent";
@@ -250,23 +245,17 @@ const myGateway = createProvider({
 const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 ```
 
-`providers` are registered on top of the built-ins (a matching id overrides a built-in). Against the agent's own `models.json` the precedence is the other way round: an injected provider is the BASE and a same-id `models.json` entry composes over it, so the file wins. That is deliberate — where a deployed agent's traffic goes is a property of the definition, not of the program that embedded it — but it does mean a same-id entry silently replaces the endpoint you injected. Use a distinct id when you mean both to exist.
-
-An "auth service" is modeled as a provider — its per-request credential logic lives in the provider's `auth.…resolve()`, not as a separate credential option.
+`providers` override built-ins with the same id. A same-id entry in the agent's `models.json` overrides an injected
+provider, so use a distinct id when you want both.
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` wrap the pi reference implementation's `createPiAgentFromDir` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
+`fastagent dev` / `start` are `createPiAgentFromDir` plus process concerns (`.env`, proxy, watch, serve). The agent
+they serve is the one `createPiAgentFromDefinition` returns when embedding.
 
-For contract-only or channel code, import `@fastagent-sh/fastagent/core` — it loads no third-party
-package at all. `@fastagent-sh/fastagent/node` adds what needs a Node runtime (`mountAgentService`,
-`serveNode`, `nodeListener`); `@fastagent-sh/fastagent/session` is the control-plane contract; and
-`@fastagent-sh/fastagent/pi` is the engine-specific assembly. The root entry re-exports every one of
-them, which is what every example above uses.
-
-The resident service manages its lifecycle internally with Effect. Embedders and channel authors
-continue to use the Promise, AsyncIterable, and Fetch APIs above; they do not need to create or
-configure an Effect runtime.
+Subpaths: `/core` (the contract and channel kit, no third-party packages), `/node` (`mountAgentService`,
+`serveNode`, `nodeListener`), `/session` (the control-plane contract), `/pi` (the pi assembly). The root entry
+re-exports all of them.
 
 ## Where next
 

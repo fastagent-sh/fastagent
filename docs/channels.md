@@ -10,7 +10,7 @@ A **channel** is an agent's inbound surface — it turns an external event into 
 
 Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 
-> This page is the USER's view — what channels exist and how to wire them. Building a new channel adapter is a different audience: see [Channel development](channel-development.md).
+> To build a new channel adapter, see [Channel development](channel-development.md).
 
 ## Mental model
 
@@ -75,20 +75,14 @@ contribute route tables to the HTTP server; object exports open long connections
 assembled agent and resolved state root. Long-connection adapters own reconnects, observe shutdown
 through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
 
-**A channel verifies its own caller.** Its route is public on purpose — Telegram has to be able to POST
-to it — so checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`, Feishu's signature) is the channel's half of the boundary, and fastagent does not add one. The two guards it
-puts on its own unauthenticated routes (a JSON content-type requirement, and a cross-origin policy) are
-deliberately NOT applied here, because they would break a platform that posts form-encoded and they are
-redundant against a caller that cannot forge a signature. A custom channel that verifies nothing is
-therefore as drivable from a web page as `POST /invoke` would be without those guards — that is yours
-to close ([design §14](design/session-control.md)).
+**A channel verifies its own caller**, by checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`,
+Feishu's signature). FastAgent adds no authentication to channel routes, and does not apply the JSON content-type
+requirement or CORS policy of its own routes to them. A custom channel that verifies nothing can be driven by
+anyone, including a web page.
 
-FastAgent always serves the HTTP/SSE data plane at `POST /invoke`, beside whatever channels mount.
-That path is RESERVED: a channel declaring it makes `dev` / `start` fail rather than silently
-replacing the one route every client and the startup line name. A channel file is enabled by its
-importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for example, `telegram.ts.disabled` to
-keep it in the agent without mounting it. A declared channel that fails to load, or overlaps another
-channel's route, makes `dev` / `start` fail — it never silently disappears.
+`POST /invoke` is reserved: a channel declaring it makes `dev` / `start` fail (unless `http.invoke: false`). Rename
+a channel file to e.g. `telegram.ts.disabled` to keep it without mounting it. A channel that fails to load, or
+collides with another channel's route, makes `dev` / `start` fail.
 
 ## Routes
 
@@ -99,9 +93,7 @@ Route keys are either:
 METHOD /path       # method-specific
 ```
 
-The path is matched **literally** — `:id` and `*` are ordinary characters, not patterns, so a key
-containing them simply never matches. Startup refuses only what would cost another channel: two keys
-naming the same route, a route inside a mounted prefix, and a path a URL rewrites. Full rules:
+The path is matched **literally**: `:id` and `*` are ordinary characters. Full rules:
 [Channel development](channel-development.md#route-keys).
 
 Examples:
@@ -158,8 +150,6 @@ export default defineChannel({
       signingSecret: secrets.SLACK_SIGNING_SECRET,
       rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
       // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-      // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
-      // and that thread is the session — see docs/design/participant-model.md.
     }),
 });
 ```
@@ -179,17 +169,15 @@ export default defineChannel({
       appSecret: secrets.FEISHU_APP_SECRET,
       verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
       encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-      // No session modes: a chat is one session and a thread is another, and the summon/placement rules
-      // follow from that (docs/design/participant-model.md).
     }),
 });
 ```
 
 A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as
 `feishuWebSocketChannel` returns a `LongConnectionChannelModule`. In either form the glue holds only
-policy (the declared `secrets` and `on`/`route`), while `agent` and the state root flow from the framework to the adapter without transiting your code.
-The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /slack`, `POST /feishu`, `POST /lark`);
-wrap it in your own `ChannelModule` to remap.
+policy (the declared `secrets` and `route`); `agent` and the state root come from the framework. Each adapter has
+a default route (`POST /telegram`, `POST /slack`, `POST /feishu`, `POST /lark`); wrap it in your own
+`ChannelModule` to remap.
 
 ## Adapter + glue
 
@@ -248,15 +236,14 @@ export default defineChannel({
 });
 ```
 
-A custom channel's credentials exist nowhere else in the definition, so `secrets` is the only way
-`deploy` learns to carry them and the only thing that makes an unset value a startup failure.
+Declaring `secrets` makes an unset value a startup failure (and a `deploy --run` refusal).
 
 Read [Channel development](channel-development.md) for adapter design, packaging, and testing guidance.
 
 ## Operational notes
 
 - Channels choose the `session` string. Core same-session concurrency fails fast; a channel such as Telegram may queue before invoking.
-- Post-ACK fire-and-forget work is lost if the process exits unless the channel or host persists intents.
+- Work started after a webhook ACK is lost if the process exits, unless the channel persists it (Telegram, Slack and Feishu/Lark do).
 - Public endpoints should verify signatures/secrets and cap request bodies before parsing untrusted payloads.
 - User-facing error messages should avoid leaking provider or infrastructure details; log full diagnostics for operators.
 

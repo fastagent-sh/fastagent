@@ -39,7 +39,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
-| Clock triggers and deliberate follow-ups | `routines/` and the opt-in `wake` tool | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
+| Clock triggers and follow-ups | `routines/` and the `wake` tool (mounted on every serve) | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
 | Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
 | Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
 | Business notes and decisions | Existing working files or an explicitly chosen durable store | Record sources, approval decisions, outcomes, and pending work. A session journal is not a business database. |
@@ -109,7 +109,7 @@ works, but deployment requires moving the definition into a nested agent directo
 
 Prefer **TypeScript for tools, channels, schedules, library helpers, and tests**. Runtime discovery of
 *your* code also supports JavaScript (`.js` and `.mjs`); existing JavaScript remains valid. The config
-file is the exception with no choice: it is always `fastagent.config.ts`, because fastagent generates it.
+file is always `fastagent.config.ts`.
 Keep the generated Dockerfile, YAML/JSON host configuration, and generated deployment JavaScript in their
 generated formats. Those artifacts do not set the language for business code.
 
