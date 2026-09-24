@@ -152,8 +152,8 @@ export function addWakeup(
  * Remove ONE pending wake-up, and only from the session that made it.
  *
  * SESSION-SCOPED WITH NO WAY AROUND IT, because `unwake` is the only caller: an agent cancels its own alarm, and
- * cancelling another conversation's silently is a cost with no matching benefit. The operator's CLI that used to
- * pass no session is gone — a wake-up only fires while a serve is running, and a running serve is one whose
+ * cancelling another conversation's silently is a cost with no matching benefit. There is no operator command: a
+ * wake-up only fires while a serve is running, and a running serve is one whose
  * session can be spoken to (`POST /invoke`, the control plane's `follow_up`, or the chat thread it lives in), so
  * "the alarm is loose" and "the agent is unreachable" cannot both be true. The last resort is editing
  * `<stateRoot>/schedule/wakeups.json`, which needs no command.

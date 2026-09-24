@@ -331,8 +331,7 @@ export async function deployAgentcoreRun(
   const image = `${registry}/${repo}:${plan.tag}`;
   const described = await cli.present(["ecr", "describe-repositories", "--repository-names", repo]);
   if ("unreadable" in described) {
-    // NOT the create branch. A denial here used to end as "`aws ecr create-repository` failed", naming the step
-    // after the one that actually went wrong.
+    // NOT the create branch: a denial here must name this step, not the create that would follow.
     return gate(`could not read ECR repository ${repo} (${described.unreadable}) — fix that, then re-run`);
   }
   if ("ok" in described) {

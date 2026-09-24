@@ -351,8 +351,7 @@ async function purgeBucket(
   failures: string[],
 ): Promise<void> {
   // RE-READ rather than reusing the inventory: minutes of `stack-delete-complete` sit between the two. And the
-  // same three answers as everywhere — a read that failed used to `return` here, leaving the bucket billing
-  // while the command reported `nothing left to delete`.
+  // same three answers as everywhere — a failed read must not be reported as `nothing left to delete`.
   const listed = await aws.read(
     ["s3api", "list-object-versions", "--bucket", bucket, "--output", "json"],
     parseVersions,

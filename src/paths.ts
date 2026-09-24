@@ -320,10 +320,8 @@ export function isAgentcoreRuntime(): boolean {
  * draws the line here: Rails chmods the `master.key` it generates and leaves `config/` alone
  * (rails/rails@4c6c357), the aws CLI ships a 0600 `~/.aws/config` inside a 0755 `~/.aws`.
  *
- * "Who created the file" is the load-bearing half. Asking instead whether a given WRITE carries a secret has a
- * different answer at every call site and one more with each new writer: three rounds of patches went into
- * chmod-ing an existing `.env`, repairing a directory, following a symlink, and reporting an older agent's mode —
- * all for scenarios with no reported use, and none of it reachable under this rule at all.
+ * "Who created the file" is the load-bearing half: asking instead whether a given WRITE carries a secret has a
+ * different answer at every call site and one more with each new writer.
  *
  * One consequence worth knowing: `writeFileAtomic` sets the mode on the temp file it renames into place, so a
  * file it owns end-to-end (`auth.json`) is 0600 after every write, including one an operator had

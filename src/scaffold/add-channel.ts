@@ -341,10 +341,9 @@ export async function scaffoldChannel(
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  // The long-connection variant is its own template FILE, not a transform of the webhook one: the
-  // surgery that used to produce it (rename the factory, splice a header, delete the credential
-  // lines) had to be re-taught by hand every time the template changed shape, and a missed anchor
-  // scaffolded a channel configured for the wrong ingress with nothing failing.
+  // The long-connection variant is its own template FILE, not a transform of the webhook one: a transform
+  // has to be re-taught every time the template changes shape, and a missed anchor scaffolds a channel
+  // configured for the wrong ingress with nothing failing.
   // Which templates exist is the BUNDLE's fact, asked here rather than assumed from the kind: only
   // feishu/lark ship a long-connection variant today, and a caller asking for one that is missing
   // must get that sentence, not the ENOENT of a path it never named.

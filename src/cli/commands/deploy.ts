@@ -63,8 +63,7 @@ export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
     if (instead === undefined) {
       throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
     }
-    // A colon, not "is": one row names a single flag and the other names a pair, and no verb agrees with both (the
-    // hand-written copies this replaced said "is" and "are" respectively).
+    // A colon, not "is": one row names a single flag and the other names a pair, and no verb agrees with both.
     console.error(`[fastagent] warn: ${rule.flag}: ${rule.owner}-only — ${instead}`);
   }
 }

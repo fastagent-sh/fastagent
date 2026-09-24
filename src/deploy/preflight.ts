@@ -180,8 +180,7 @@ export async function preflightDeploy(input: {
 
   // What the PUBLIC host URL answers with no authentication of ours in front of it — NAMED FROM WHAT WILL ACTUALLY
   // MOUNT, never from the host alone. `POST /invoke` is on by default whatever channels a definition declares (so
-  // this is not conditioned on `sessionControl`, which is how a telegram-only agent used to publish "run a turn with
-  // my tools" in silence), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
+  // this is not conditioned on `sessionControl`), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
   // is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
   //
   // `POST /run` follows the SAME condition the assembly uses, through the same function

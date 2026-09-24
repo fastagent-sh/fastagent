@@ -3,9 +3,7 @@
  * abort, rewrite a session. Running a turn is the DATA plane's (`POST /invoke`), not this prefix's.
  *
  * UNAUTHENTICATED, like every other route this process serves. Authentication is the deployment's: a gateway, a
- * private network, AgentCore's IAM, or an embedder's own middleware. The bearer token this plane used to mint was
- * the only thing in the tree that pretended otherwise, and it protected one prefix while `POST /invoke` next to it
- * was open — a scheme that has to be remembered per route is one that will be forgotten per route.
+ * private network, AgentCore's IAM, or an embedder's own middleware.
  */
 import type { ImageRef, Prompt } from "../agent.ts";
 import {
