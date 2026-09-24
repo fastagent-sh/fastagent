@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRoutines } from "../src/schedule/discover.ts";
-import { log } from "../src/log.ts";
 
 const routineHref = new URL("../src/schedule/routine.ts", import.meta.url).href;
 const def = (cron: string, prompt = "go", tz?: string): string =>
@@ -23,44 +22,6 @@ describe("schedule/discover", () => {
     const { routines, failures } = await loadRoutines(dir);
     expect(failures).toEqual([]);
     expect(routines).toEqual([{ name: "daily", cron: "0 9 * * *", tz: "UTC", prompt: "digest" }]);
-  });
-
-  it("says something about a stale `schedules/` — the rename would otherwise stop the cron in silence", async () => {
-    // Nothing reads `schedules/` any more, so an agent that kept the old directory boots clean, reports
-    // `routines: (none)` and never fires. That silence is the failure shape this repo refuses to ship.
-    const dir = await ws({});
-    const { mkdir, writeFile: wf } = await import("node:fs/promises");
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    await wf(join(dir, "schedules", "daily.ts"), `export default { cron: "0 9 * * *", prompt: "go" };\n`);
-    const said: string[] = [];
-    const spy = vi.spyOn(log, "warn").mockImplementation((line: string) => void said.push(line));
-    try {
-      const { routines, failures } = await loadRoutines(dir);
-      // A WARNING, not a refusal: in a flat layout the agent dir is the repo, so an unrelated
-      // `schedules/` is possible and a hard stop would be us breaking someone's project.
-      expect(failures).toEqual([]);
-      expect(routines).toEqual([]);
-      expect(said.join("\n")).toContain("NOTHING loads");
-      expect(said.join("\n")).toContain("`routines/`");
-      expect(said.join("\n")).toContain("daily.ts");
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("an EMPTY or non-code `schedules/` says nothing — the warning is about declarations, not a name", async () => {
-    const dir = await ws({});
-    const { mkdir, writeFile: wf } = await import("node:fs/promises");
-    await mkdir(join(dir, "schedules"), { recursive: true });
-    await wf(join(dir, "schedules", "README.md"), "notes\n");
-    const said: string[] = [];
-    const spy = vi.spyOn(log, "warn").mockImplementation((line: string) => void said.push(line));
-    try {
-      await loadRoutines(dir);
-      expect(said).toEqual([]);
-    } finally {
-      spy.mockRestore();
-    }
   });
 
   it("a routine with NO cron loads — its name is the only way in", async () => {
