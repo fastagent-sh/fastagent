@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { collect, createPiAgentFromDefinition } from "../src/index.ts";
+import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -249,6 +249,29 @@ export default function (pi) {
     expect(offered[0]).not.toContain("acme_tool");
     expect(warn.mock.calls.flat().join("\n")).toMatch(/provider\.ts failed to load: extensions cannot register/);
     warn.mockRestore();
+  });
+});
+
+describe("definition: the served `/` menu lists what sessions load", () => {
+  it("lists the extensions discovered at startup, not ones added while serving", async () => {
+    // A session loads the assembly's entry points, discovered once; `start` does not restart on an edit. A menu that
+    // rescanned `extensions/` would offer `/late`, and sending it would reach the model as plain text.
+    const dir = await agentDirWith({
+      "fastagent.config.ts": 'export default { model: "mygw/m1" };\n',
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: { baseUrl: "http://gw.invalid/v1", api: "openai-completions", apiKey: "k", models: [{ id: "m1" }] },
+        },
+      }),
+      "extensions/early.ts": 'export default (pi) => pi.registerCommand("early", { handler: async () => {} });\n',
+    });
+    const { sessionControl } = await createPiAgentFromDir(dir, { serving: true });
+    await writeFile(
+      join(dir, "extensions", "late.ts"),
+      'export default (pi) => pi.registerCommand("late", { handler: async () => {} });\n',
+    );
+    const names = (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
+    expect(names).toEqual(["early"]);
   });
 });
 

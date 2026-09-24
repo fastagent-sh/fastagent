@@ -257,6 +257,8 @@ export interface PiAssembly {
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
+  /** The extension entry points every session loads, discovered once with the assembly. */
+  extensionPaths: readonly string[];
 }
 
 /** Shared low-level wiring: resolve the model spec against the collection, default the K ports, build the parts. */
@@ -324,6 +326,7 @@ function assemblePi(opts: {
     sessionFactory,
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+    extensionPaths: opts.extensionPaths ?? [],
   };
 }
 
