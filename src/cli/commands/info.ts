@@ -65,22 +65,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sched = await loadRoutines(agentDir).catch(failStartup);
   // What the definition DECLARED it needs, and which of those have no value here. `info` reports
   // (never asserts): it is the read-only view of the same list `dev`/`start` refuse to boot without
-  // and `deploy` carries to the host.
-  // Split by CONSEQUENCE: a code-input declaration gates the boot (the same list the serving gate
-  // reads), while a config-only name is carried by deploy and never read by `dev` (it exists for
-  // values consumed outside the code inputs, e.g. a models.json header key). One ⚠ for both would
-  // misreport one of them — so the boot list is built ONCE and the full list extends it.
-  const codeInputSecrets: DeclaredSecret[] = [
+  // and `deploy` requires a value for.
+  const declaredSecrets: DeclaredSecret[] = [
     ...tools.secrets,
     ...allSecrets(sched.secrets),
     ...allSecrets(inspected.secrets),
   ];
-  const declaredSecrets: DeclaredSecret[] = [
-    ...codeInputSecrets,
-    ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),
-  ];
   const unsetSecrets = missingSecrets(declaredSecrets);
-  const unsetAtBoot = missingSecrets(codeInputSecrets);
   const routines = sched.routines.map((r) => ({
     name: r.name,
     cron: r.cron ?? null,
@@ -145,7 +136,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           toolFailures: tools.failures,
           declaredSecrets,
           unsetSecrets,
-          unsetAtBoot,
         },
         null,
         2,
@@ -180,15 +170,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   );
   line("selfSchedule", config.selfSchedule ? "on (mounts the wake tool when serving)" : "off");
   line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
-  // Each unset name appears in exactly ONE ⚠, by consequence: the boot-blocking ones say so, and
-  // the rest (config-only names, which `deploy` carries but `dev` never reads) say only that. Listing
-  // a name twice reads as two different problems.
-  const bootNames = new Set(unsetAtBoot.map((s) => s.name));
-  const unsetElsewhere = unsetSecrets.filter((s) => !bootNames.has(s.name));
-  if (unsetAtBoot.length > 0)
-    cont(`⚠ dev/start refuse to boot until set: ${unsetAtBoot.map((s) => s.name).join(", ")}`);
-  if (unsetElsewhere.length > 0)
-    cont(`⚠ no value here (carried by deploy only): ${unsetElsewhere.map((s) => s.name).join(", ")}`);
+  if (unsetSecrets.length > 0)
+    cont(`⚠ dev/start refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
   line("state", stateRoot);
   line("sessions", sessionsDir);
   line("auth", fallbackAuthPath === undefined ? authPath : `${authPath} (then ${fallbackAuthPath})`);

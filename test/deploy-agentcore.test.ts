@@ -15,7 +15,6 @@ import {
   DEFAULT_IDLE_TIMEOUT_SECONDS,
   MAX_LIFETIME_SECONDS,
   agentcoreName,
-  cfnParamName,
   forwarderSource,
   isGeneratedAgentcoreTemplate,
   ingressSessionId,
@@ -60,12 +59,6 @@ describe("deploy agentcore: name/id helpers", () => {
     expect(ingressSessionId("a").length).toBeGreaterThanOrEqual(33);
     expect(ingressSessionId("my-agent")).toContain("fastagent-ingress-my-agent");
     expect(ingressSessionId("x".repeat(200)).length).toBeLessThanOrEqual(128);
-  });
-
-  it("cfnParamName maps env names to alphanumeric parameter ids", () => {
-    expect(cfnParamName("TELEGRAM_BOT_TOKEN")).toBe("TelegramBotToken");
-    expect(cfnParamName("OPENAI_API_KEY")).toBe("OpenaiApiKey");
-    expect(cfnParamName("FASTAGENT_AUTH_SEED")).toBe("FastagentAuthSeed");
   });
 });
 
@@ -170,9 +163,9 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarderSource()).toContain("exports.handler");
     expect(forwarderSource()).not.toMatch(/^import /m);
     expect(template).toContain(`INGRESS_SESSION_ID: ${ingressSessionId("my-agent")}`);
-    // Secrets ride NoEcho parameters, mapped into the runtime environment.
-    expect(template).toContain("TelegramBotToken:");
-    expect(template).toContain("TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken");
+    // Variables ride the fixed FastagentEnv carrier, never a parameter per name.
+    expect(template).toContain("FASTAGENT_ENV: !Ref FastagentEnv");
+    expect(template).not.toContain("TelegramBotToken");
     expect(plan.runbook.join("\n")).toContain("setWebhook");
     // The redeploy-immediacy step is in the manual runbook too (— --run automates it).
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
@@ -232,16 +225,6 @@ describe("deploy agentcore: the plan", () => {
         }),
       ),
     ).toThrow(/same CloudFormation logical id/);
-    expect(() =>
-      planAgentcoreDeploy(
-        baseInput({
-          extraSecrets: [
-            { name: "FOO_BAR", source: "fastagent.config deploy.secrets" },
-            { name: "FOO__BAR", source: "fastagent.config deploy.secrets" },
-          ],
-        }),
-      ),
-    ).toThrow(/same CloudFormation parameter/);
   });
 
   it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {

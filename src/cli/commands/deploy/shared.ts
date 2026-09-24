@@ -70,25 +70,23 @@ export function registrarsFor(agentDir: string): Registrars {
 }
 
 /**
- * The `--run` credential carry, for every host: the local model credential (an env key, or the whole auth.json as a
- * `FASTAGENT_AUTH_SEED`) plus channel secrets.
+ * The `--run` carry, for every host: the value file's variables plus the local model credential (an env key, or the
+ * whole auth.json as a `FASTAGENT_AUTH_SEED`).
  */
 export async function carryCredentials(params: {
   modelAuth: string | undefined;
   modelKeyInDefinition: boolean;
   authPath: string;
-  channels: readonly DeclaredChannel[];
-  extraSecrets: readonly DeclaredSecret[];
+  declaredSecrets: readonly DeclaredSecret[];
   /** The deployed environment's declaration, from the pre-flight's single read. */
   values: ReadonlyMap<string, string>;
 }): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
-  const { modelAuth, modelKeyInDefinition, authPath, channels, extraSecrets, values } = params;
+  const { modelAuth, modelKeyInDefinition, authPath, declaredSecrets, values } = params;
   return assembleSecrets({
     modelAuth,
     modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    channels,
-    extraSecrets,
+    declared: declaredSecrets,
     values,
   });
 }

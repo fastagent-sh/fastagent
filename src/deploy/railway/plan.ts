@@ -3,8 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { CRON_CAN_BE_EXTERNAL, residencyFor } from "../residency.ts";
-import { deploymentSecrets, isEnvKey } from "../secrets.ts";
-import type { DeclaredSecret } from "../../declared-secrets.ts";
+import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's internal_port) —
@@ -19,9 +18,11 @@ export interface RailwayPlanInput extends ContainerInput {
    */
   channels: readonly DeclaredChannel[];
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
-  /** Everything the definition declared it needs (deploy.secrets + tool/schedule/channel declarations),
-   *  attributed to the file that declared it. */
-  extraSecrets?: readonly DeclaredSecret[];
+  /**
+   * The runbook's variable list (`deploymentSecrets`): what must have a value, then everything else the value file
+   * carries.
+   */
+  secrets?: readonly DeploymentSecret[];
   /** `routines/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
   hasCron: boolean;
   /** `selfSchedule` is on — the wake tool, which forbids it with no external substitute. */
@@ -84,9 +85,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...containerArtifacts(input),
   ];
 
-  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
-  const requiredSecrets = secrets.filter((secret) => secret.required);
-  const optionalSecrets = secrets.filter((secret) => !secret.required);
+  const secrets = input.secrets ?? [];
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and variables are
   // service-scoped and `railway up` deploys THE service.
@@ -115,18 +114,11 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets RAILWAY_DOCKERFILE_PATH=${dockerfilePathVar(input.agentPrefix)}`,
   ];
 
-  if (requiredSecrets.length > 0) {
+  if (secrets.length > 0) {
     runbook.push(
-      `# Required secrets:`,
-      `#   ${requiredSecrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
-      `railway variables set ${requiredSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
-    );
-  }
-  if (optionalSecrets.length > 0) {
-    runbook.push(
-      `# Optional secrets — set only when the matching feature is configured:`,
-      `#   ${optionalSecrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
-      `# railway variables set ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+      `# Secrets:`,
+      `#   ${secrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
+      `railway variables set ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
 

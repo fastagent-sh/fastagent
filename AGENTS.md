@@ -62,7 +62,7 @@ src/
 ├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
 │                           # path predicates and the machinery paths that follow (.secrets/.state)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
-│                           # (defineTool/defineChannel/defineRoutine + deploy.secrets): the ONE read of
+│                           # (defineTool/defineChannel/defineRoutine): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
 │                           # them, and what "has no value" means
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load

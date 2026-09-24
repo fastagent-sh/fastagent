@@ -31,7 +31,7 @@ import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
-import { isEnvKey } from "./secrets.ts";
+import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { shouldServeRun } from "../service.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
@@ -68,9 +68,10 @@ interface DeployFacts {
    * gating on it would strand a correctly configured agent.
    */
   modelKeyInDefinition: boolean;
-  /** The declared secrets — config `deploy.secrets`, the control token, and every tool/schedule
-   *  declaration — carried to the host and listed in the runbook by their declaring file. */
-  extraSecrets: DeclaredSecret[];
+  /** Every tool/routine/channel declaration — the names the value file must supply, by declaring file. */
+  declaredSecrets: DeclaredSecret[];
+  /** The runbook's variable list: the declared names, then everything else the value file carries. */
+  secrets: DeploymentSecret[];
   /** The project-level auth file `--run` reads to carry the credential (probed with the same path). */
   authPath: string;
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
@@ -225,18 +226,9 @@ export async function preflightDeploy(input: {
     );
   }
   const channels = inspected.channels;
-  // A custom channel that used `defineChannel({ secrets })` HAS told us its credentials, and they are
-  // carried below with every other declaration — telling its author to configure them by hand would
-  // send them to copy a list into deploy.secrets, which is the duplicate list this replaced.
-  const declaresSecrets = new Set(
-    [...inspected.secrets].flatMap(([owner, declared]) => (declared.length > 0 ? [owner] : [])),
-  );
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
-    const declares = declaresSecrets.has(name);
-    const secretsPart = declares
-      ? `its declared secrets travel with the deploy`
-      : `configure its secrets yourself (declare them with defineChannel to have deploy carry them)`;
+    const secretsPart = `its variables travel from ${valueFile} like every other`;
     messages.push({
       level: "note",
       text:
@@ -487,9 +479,9 @@ export async function preflightDeploy(input: {
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
-  // EVERYTHING the definition declared it needs, from wherever it was declared. `deploy.secrets` is now only the list
-  // for what no code declares. Read through the SAME resolver dev/start mount with, so "which tool declarations
-  // count" has one answer (config.tools declare too; a shadowed file's declaration is dropped in both places).
+  // EVERYTHING the definition declared it needs, from wherever it was declared. Read through the SAME resolver
+  // dev/start mount with, so "which tool declarations count" has one answer (config.tools declare too; a shadowed
+  // file's declaration is dropped in both places).
   const resolvedTools = await resolveAgentTools(config, agentDir, workspace);
   // A code input we could not READ is a code input whose declarations we cannot carry — and the box
   // WILL read it (its deps are installed there), so its gate fires after the deploy reported success:
@@ -503,12 +495,9 @@ export async function preflightDeploy(input: {
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
-  const extraSecrets: DeclaredSecret[] = [
-    ...(config.deploy?.secrets ?? []).map((name) => ({ name, source: "fastagent.config deploy.secrets" })),
+  const declaredSecrets: DeclaredSecret[] = [
     ...allSecrets(resolvedTools.toolSecrets),
     ...allSecrets(loadedRoutines.secrets),
-    // A CUSTOM channel's credentials exist nowhere else: the first-party table can only name the channels fastagent
-    // ships, and guessing a custom one's variables is impossible.
     ...allSecrets(inspected.secrets),
   ];
   // What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
@@ -559,7 +548,8 @@ export async function preflightDeploy(input: {
     authPath,
     container,
     port,
-    extraSecrets,
+    declaredSecrets,
+    secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
   };
 }
 

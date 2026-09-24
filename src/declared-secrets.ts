@@ -1,38 +1,24 @@
 /**
- * WHICH ENV VARS THIS AGENT NEEDS — the one shape the answer travels in, wherever it was declared.
+ * WHICH ENV VARS THIS AGENT'S CODE NEEDS, in ONE shape, wherever it was declared: `defineTool`, `defineChannel` and
+ * `defineRoutine({ secrets })`, each next to the code that reads the value.
  *
- * Before this existed the concept had three homes and one hole: a first-party channel declared its
- * vars in the scaffold table (typed, with hints), `fastagent.config` `deploy.secrets` listed names as
- * bare strings, the model key was inferred by a third mechanism — and a TOOL, the thing authors write
- * most, declared nothing at all. A tool's need lived only inside `process.env.X` in its own body, so
- * `deploy` could not carry it and nothing could check it: the name had to be copied by hand into
- * `deploy.secrets`, and forgetting meant the deployed box read `undefined` on the first real call,
- * days later, with the error only in the host's logs.
+ * One list, two consequences:
+ *  - a serving path ASSERTS the values before it runs, so a missing one is a startup failure naming the file, not a
+ *    401 three days later;
+ *  - `deploy --run` refuses a value file that does not supply one.
  *
- * So the declaration moved next to the code that needs it (`defineTool({ secrets: [...] })`,
- * `defineRoutine({ secrets: [...] })`), and this module is where every source converges. Two things
- * follow from having ONE list, and they are the whole point:
- *
- *  - `deploy` CARRIES a declared name automatically — no second list to keep in sync.
- *  - a serving path ASSERTS the values before it runs, so a missing one is a startup failure naming
- *    the file, not a 401 three days later (the same contract a channel already has: an empty
- *    `botToken` fails `telegramChannel` at mount).
- *
- * Agent code does not read `process.env`: each authoring surface (`defineTool`, `defineChannel`,
- * `defineRoutine`) hands back exactly the values it declared, so the declaration cannot drift from
- * the read, and a typo is a type error rather than an `undefined` at 3am. What this can NOT force is
- * the environment itself — a provider SDK reads its own variable, and the coding tools need `PATH`
- * and `HOME` — so the values still travel through the process env; what changes is that no authored
- * file has a reason to reach into it.
+ * Agent code does not read `process.env`: each authoring surface hands back exactly the values it declared, so the
+ * declaration cannot drift from the read, and a typo is a type error. The values still travel through the process env
+ * (a provider SDK reads its own variable), and `deploy` carries the whole value file (deploy/secrets.ts) — a
+ * declaration makes a value REQUIRED, it does not decide what travels.
  */
 
 /** One env var some part of the definition declared, and where that declaration is. */
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "tools/x-post.ts", "routines/daily-digest.ts", "config.tools",
-   *  "fastagent.config deploy.secrets" — printed in runbooks and failures, so it must name a place
-   *  the author can open. */
+  /** Where it was declared: "tools/x-post.ts", "routines/daily-digest.ts", "config.tools" — printed in
+   *  runbooks and failures, so it must name a place the author can open. */
   source: string;
 }
 

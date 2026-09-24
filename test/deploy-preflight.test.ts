@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import { deploymentSecrets } from "../src/deploy/secrets.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
@@ -87,7 +86,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
     // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
     expect(pre.container.modelSpec).toBe("openai/gpt-4o-mini");
-    expect(pre.extraSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
+    expect(pre.declaredSecrets.map((s) => s.name)).not.toContain("FASTAGENT_MODEL");
   });
 
   it("a config model bakes nothing extra — the config is already in the image", async () => {
@@ -414,7 +413,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("notes a custom channel (its secrets/webhook are the author's to wire)", async () => {
+  it("notes a custom channel (its webhook is the author's to wire; its variables travel like every other)", async () => {
     const dir = await workspace();
     const { mkdir } = await import("node:fs/promises");
     await mkdir(join(dir, "channels"), { recursive: true });
@@ -425,14 +424,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.channels).toEqual([{ name: "discord", ingress: "webhook" }]);
       expect(pre.messages).toContainEqual({
         level: "note",
-        text: expect.stringContaining('route channel "discord" is custom — configure its secrets yourself'),
+        text: expect.stringContaining(
+          'route channel "discord" is custom — its variables travel from fastagent/.secrets/.env like every other',
+        ),
       });
     }
   });
 
-  it("a custom channel that DECLARED its secrets is not told to configure them by hand", async () => {
-    // They are carried with every other declaration below; repeating "configure its secrets yourself"
-    // would send the author to copy the names into deploy.secrets — the duplicate list this replaced.
+  it("a custom channel's declared secrets join the required list", async () => {
     const dir = await workspace();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(
@@ -442,11 +441,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.messages).toContainEqual({
-      level: "note",
-      text: expect.stringContaining('route channel "discord" is custom — its declared secrets travel with the deploy'),
-    });
-    expect(pre.extraSecrets).toContainEqual({ name: "DISCORD_TOKEN", source: "channels/discord.mjs" });
+    expect(pre.declaredSecrets).toContainEqual({ name: "DISCORD_TOKEN", source: "channels/discord.mjs" });
   });
 
   it("recognizes a long-connection module structurally and reports its always-on requirement", async () => {
@@ -646,7 +641,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     }
   });
 
-  it("carries what tools and schedules DECLARED, without a second list to keep in sync", async () => {
+  it("requires what tools and schedules DECLARED, and lists the rest of the value file after them", async () => {
     const dir = await workspace();
     await mkdir(join(dir, "tools"), { recursive: true });
     await mkdir(join(dir, "routines"), { recursive: true });
@@ -659,18 +654,23 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       join(dir, "routines", "digest.mjs"),
       `export default { cron: "0 9 * * *", prompt: "digest", secrets: ["SLACK_DIGEST_CHANNEL"] };\n`,
     );
-    const pre = await call(dir, { model: "openai/gpt-4o-mini", deploy: { secrets: ["GH_TOKEN"] } });
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "GH_TOKEN=ghp\nX_API_KEY=x\n");
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    expect(pre.extraSecrets).toEqual([
-      { name: "GH_TOKEN", source: "fastagent.config deploy.secrets" },
+    expect(pre.declaredSecrets).toEqual([
       { name: "X_API_KEY", source: "tools/x-post.mjs" },
       { name: "X_API_SECRET", source: "tools/x-post.mjs" },
       { name: "SLACK_DIGEST_CHANNEL", source: "routines/digest.mjs" },
     ]);
-    // The runbook names the file to open, not a fixed "declared in fastagent.config" sentence.
-    const listed = deploymentSecrets(undefined, [], pre.extraSecrets);
-    expect(listed.find((s) => s.name === "X_API_KEY")?.hint).toBe("required by tools/x-post.mjs");
+    // The runbook names the file to open for a required one, and the value file for the rest.
+    expect(pre.secrets).toEqual([
+      { name: "X_API_KEY", hint: "required by tools/x-post.mjs" },
+      { name: "X_API_SECRET", hint: "required by tools/x-post.mjs" },
+      { name: "SLACK_DIGEST_CHANNEL", hint: "required by routines/digest.mjs" },
+      { name: "GH_TOKEN", hint: "from fastagent/.secrets/.env" },
+    ]);
   });
 
   it("warns when a code input cannot be loaded, and GATES --run on it", async () => {
@@ -695,7 +695,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   it("sessionControl needs no secret of ours — it warns that the deployed plane is unauthenticated", async () => {
     const dir = await workspace();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(off.ok && off.extraSecrets).toEqual([]);
+    expect(off.ok && off.declaredSecrets).toEqual([]);
     // WITHOUT the control plane the warning still fires, naming `POST /invoke`: it is on every
     // deployment whatever channels are declared, and conditioning this on `sessionControl` left a
     // telegram-only agent publishing "run a turn with my tools" on a public URL in silence.
@@ -747,15 +747,11 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(controlOnly[0]?.text).toContain("/control/*");
     expect(controlOnly[0]?.text).not.toContain("POST /invoke");
 
-    const on = await call(dir, {
-      model: "openai/gpt-4o-mini",
-      sessionControl: true,
-      deploy: { secrets: ["GH_TOKEN"] },
-    });
+    const on = await call(dir, { model: "openai/gpt-4o-mini", sessionControl: true });
     expect(on.ok).toBe(true);
     if (on.ok) {
       // Only what the DEFINITION declared: fastagent mints no credential of its own any more.
-      expect(on.extraSecrets).toEqual([{ name: "GH_TOKEN", source: "fastagent.config deploy.secrets" }]);
+      expect(on.declaredSecrets).toEqual([]);
       // The operator still has to hear it, because the plane rides the PUBLIC host URL.
       expect(on.messages.some((m) => m.level === "warn" && /UNAUTHENTICATED/.test(m.text))).toBe(true);
     }

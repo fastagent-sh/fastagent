@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import * as Effect from "effect/Effect";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
+import { applyCarriedEnv, authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
 import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
@@ -46,6 +46,12 @@ type StartedService = AgentService & { stateRoot: string; port: number };
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
+  // A host that carries the value file as ONE encoded variable (AgentCore): expanded before anything reads the env.
+  try {
+    applyCarriedEnv();
+  } catch (error) {
+    failStartup(error);
+  }
   setLogLevel("info");
   if (isAgentcoreRuntime()) {
     // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.

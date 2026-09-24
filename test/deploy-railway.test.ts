@@ -84,29 +84,23 @@ describe("deploy/railway: planRailwayDeploy", () => {
 
   it("sets the state root as a variable matched to the volume mount, + the secret list", () => {
     const out = runbook(
-      planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) }),
+      planRailwayDeploy({
+        ...base,
+        modelAuth: "OPENAI_API_KEY",
+        channels: declaredChannels(["telegram"]),
+        secrets: [
+          { name: "OPENAI_API_KEY", hint: "your model provider key" },
+          { name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" },
+        ],
+      }),
     );
     expect(out).toContain("railway volume add --mount-path /data");
     // `set` subcommand, NOT the deprecated `--set` legacy flag; secrets space-separated in one command.
     expect(out).toContain(
       "railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets",
     );
-    expect(out).toContain(
-      "railway variables set OPENAI_API_KEY=<value> TELEGRAM_BOT_TOKEN=<value> TELEGRAM_SECRET_TOKEN=<value>",
-    );
+    expect(out).toContain("railway variables set OPENAI_API_KEY=<value> TELEGRAM_BOT_TOKEN=<value>");
     expect(out).not.toContain("--set"); // deprecated form must be gone everywhere
-  });
-
-  it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
-    const out = runbook(
-      planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["feishu", "lark"]) }),
-    );
-    const requiredCommand = out.split("\n").find((line) => line.startsWith("railway variables set OPENAI")) ?? "";
-    expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
-    expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
-    expect(requiredCommand).not.toContain("FEISHU_ENCRYPT_KEY");
-    expect(requiredCommand).not.toContain("LARK_ENCRYPT_KEY");
-    expect(out).toContain("# railway variables set FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
   });
 
   it("forbids App Sleeping and omits webhook-only setup for long-connection Lark", () => {
@@ -117,9 +111,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
         channels: [...declaredChannels(["lark"], "long-connection")],
       }),
     );
-    expect(out).toContain("LARK_APP_ID=<value>");
-    expect(out).toContain("LARK_APP_SECRET=<value>");
-    expect(out).not.toContain("LARK_VERIFICATION_TOKEN");
     expect(out).not.toContain("Request URL = https://<your-domain>/lark");
     expect(out).toContain("do NOT enable App Sleeping — a long-connection channel");
   });
@@ -155,7 +146,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
       planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram", "slack", "feishu"]) }),
     );
     expect(out.match(/railway domain/g)).toHaveLength(1); // minted first, and not once per channel
-    expect(out).toContain("SLACK_BOT_TOKEN=<value>");
     expect(out).toContain("https://<your-domain>/telegram"); // placeholder, not a deterministic guess
     expect(out).toContain("https://<your-domain>/slack");
     expect(out).toContain("https://<your-domain>/feishu");

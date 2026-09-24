@@ -28,7 +28,7 @@ export const flyHost: HostDeploy = {
       authPath,
       container,
       port,
-      extraSecrets,
+      declaredSecrets,
       values,
       valueFile,
     } = pre;
@@ -66,7 +66,7 @@ export const flyHost: HostDeploy = {
       port,
       modelAuth,
       channels,
-      extraSecrets,
+      secrets: pre.secrets,
       hasCron,
       hasWakeups,
       ...container,
@@ -82,7 +82,7 @@ export const flyHost: HostDeploy = {
         modelKeyInDefinition,
         authPath,
         channels,
-        extraSecrets,
+        declaredSecrets,
         values,
         valueFile,
       });
@@ -101,7 +101,7 @@ async function runDeployFly(
     modelKeyInDefinition: boolean;
     authPath: string;
     channels: readonly DeclaredChannel[];
-    extraSecrets: readonly DeclaredSecret[];
+    declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
     valueFile: string;
   },
