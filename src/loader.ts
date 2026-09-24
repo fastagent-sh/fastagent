@@ -22,7 +22,7 @@ function moduleName(fileName: string): string {
 
 /** One module file a directory declares. */
 interface InventoryEntry {
-  /** Basename without extension — the authoritative name for tools/channels/schedules. */
+  /** Basename without extension — the authoritative name for tools/channels/routines. */
   name: string;
   /** "tools/foo.ts"-style label for errors and collisions. */
   label: string;
@@ -81,7 +81,7 @@ export interface ModuleLoadFailure {
   message: string;
 }
 
-/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
+/** A module the loader skipped, said once, the same way for tools, channels and routines. */
 export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
   for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
 }
