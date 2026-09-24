@@ -69,7 +69,7 @@ jobs:
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP/$tarball" --ignore-scripts
-          node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/core"); await import("@fastagent-sh/fastagent/pi"); await import("@fastagent-sh/fastagent/github"); await import("@fastagent-sh/fastagent/telegram")'
+          node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/core"); await import("@fastagent-sh/fastagent/pi"); await import("@fastagent-sh/fastagent/telegram")'
           ./node_modules/.bin/fastagent --version
 
   bun-smoke:
@@ -96,7 +96,7 @@ jobs:
 
       - name: Smoke public imports and CLI
         run: |
-          bun -e 'await import("./dist/index.js"); await import("./dist/core.js"); await import("./dist/pi.js"); await import("./dist/github.js"); await import("./dist/telegram.js")'
+          bun -e 'await import("./dist/index.js"); await import("./dist/core.js"); await import("./dist/pi.js"); await import("./dist/telegram.js")'
           bun dist/cli.js models gpt-5.5
           bun dist/cli.js --version
 
