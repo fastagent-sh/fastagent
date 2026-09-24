@@ -26,9 +26,7 @@ describe("deploy/residency", () => {
     expect(residencyFor({ ...nothing, channels: [channel("socket", "long-connection")] })).toMatchObject({
       reason: "long-connection",
     });
-    for (const facts of [
-      { ...nothing, hasCron: true },
-    ]) {
+    for (const facts of [{ ...nothing, hasCron: true }]) {
       expect(residencyFor(facts)?.why).not.toMatch(/min_machines_running|App Sleeping/);
     }
   });

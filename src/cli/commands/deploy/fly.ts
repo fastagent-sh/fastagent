@@ -20,17 +20,8 @@ export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, pre, write } = ctx;
-    const {
-      hasCron,
-      modelAuth,
-      modelKeyInDefinition,
-      authPath,
-      container,
-      port,
-      declaredSecrets,
-      values,
-      valueFile,
-    } = pre;
+    const { hasCron, modelAuth, modelKeyInDefinition, authPath, container, port, declaredSecrets, values, valueFile } =
+      pre;
     // Two consistent modes.
     const flyTomlPath = join(agentDir, "fly.toml");
     const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
