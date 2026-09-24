@@ -10,7 +10,6 @@
     "src/node.ts",
     "src/session.ts",
     "src/pi.ts",
-    "src/github.ts",
     "src/telegram.ts",
     "src/slack.ts",
     "src/feishu.ts",

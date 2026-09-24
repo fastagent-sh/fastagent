@@ -38,7 +38,7 @@ const TUNNEL: FlagSpec = {
   flags: "--tunnel",
   description:
     "expose a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared) and auto-register " +
-    "webhook channels (telegram, onboarded slack, feishu, lark; github/manual slack print the URL) — for hosting a bot from your " +
+    "webhook channels (telegram, onboarded slack, feishu, lark; manual slack prints the URL) — for hosting a bot from your " +
     "own box without deploying (the quick-tunnel URL is ephemeral, not for production)",
 };
 
@@ -250,7 +250,7 @@ const REPLACE_CONFIG: FlagSpec = {
 };
 
 const channelSub = (
-  kind: "github" | "telegram" | "slack" | "feishu" | "lark",
+  kind: "telegram" | "slack" | "feishu" | "lark",
   summary: string,
   description: string,
   notes?: string,
@@ -278,18 +278,11 @@ const channelSub = (
 
 const add: CommandSpec = {
   name: "add",
-  summary: "connect a channel (github, telegram, slack, feishu, lark) or vendor a skill",
+  summary: "connect a channel (telegram, slack, feishu, lark) or vendor a skill",
   description:
-    "Scaffold channels/<kind>.ts — first-party adapter glue with the policy to edit (github maps " +
-    "events in on(); telegram/slack/feishu/lark route in the optional route()) — or vendor an Agent Skills " +
-    "skill into skills/<name>/.",
+    "Scaffold channels/<kind>.ts — first-party adapter glue with the policy to edit in the optional " +
+    "route() — or vendor an Agent Skills skill into skills/<name>/.",
   subcommands: [
-    channelSub(
-      "github",
-      "scaffold the GitHub webhook channel (issues/PRs → agent turns)",
-      "Scaffold channels/github.ts — webhook adapter glue that maps repository events (issues, PRs, " +
-        "comments) to agent turns in its on() policy.",
-    ),
     channelSub(
       "telegram",
       "scaffold the Telegram bot channel (durable turns, live preview)",

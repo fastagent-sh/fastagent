@@ -16,12 +16,12 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
+A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, Slack, Feishu, an API endpoint, or your own channel.
 
 Leave the terminal. Become a live service.
 
 - **Add it to your app** — one route, your auth, your database, your host.
-- **Run it as a live service** — Telegram support, GitHub PR review, webhook handler, API endpoint, or custom channel.
+- **Run it as a live service** — Telegram, Slack or Feishu bot, webhook handler, API endpoint, or custom channel.
 
 FastAgent is not a new agent-authoring DSL. You bring the existing definition and project layout; FastAgent provides the serving runtime and adapters around it.
 
@@ -38,7 +38,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 ## Features
 
 - **Vibe first — a directory is an agent.** Point FastAgent at the `AGENTS.md` + `skills/` you already vibed in a coding agent. Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite.
-- **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
+- **Channels.** Serve the same agent as a Telegram bot, a Slack app, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler, or call `invoke` like any function from your own code — your auth, your database, your infra. FastAgent composes with your app, never owns it.
 - **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
@@ -150,7 +150,7 @@ const agent = createPiAgent({
 | [Embedding](https://fastagent.sh/docs/embedding/) | Use FastAgent as a library inside your own app |
 | [Channels](https://fastagent.sh/docs/channels/) | Add webhook/bot channels |
 | [Deploy](https://fastagent.sh/docs/deploy/) | Ship the directory to Fly, Railway, or any Docker host |
-| [GitHub](https://fastagent.sh/docs/github/) / [Telegram](https://fastagent.sh/docs/telegram/) / [Slack](https://fastagent.sh/docs/slack/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
+| [Telegram](https://fastagent.sh/docs/telegram/) / [Slack](https://fastagent.sh/docs/slack/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
 | [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
@@ -191,7 +191,6 @@ Subpath entry points (`./package.json` is also exported, for tools that read the
 - `@fastagent-sh/fastagent/node` — the engine-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
 - `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
-- `@fastagent-sh/fastagent/github` — GitHub webhook channel;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
 - `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);

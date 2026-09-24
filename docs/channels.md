@@ -6,7 +6,7 @@ status: current
 
 # Channels
 
-A **channel** is an agent's inbound surface — it turns an external event into invocations: HTTP, GitHub webhooks, Telegram messages, Slack events, even the clock ([schedules](quickstart.md#8-run-on-a-clock)).
+A **channel** is an agent's inbound surface — it turns an external event into invocations: HTTP, Telegram messages, Slack events, even the clock ([schedules](quickstart.md#8-run-on-a-clock)).
 
 Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 
@@ -34,7 +34,6 @@ An agent declares channels with files under `channels/`:
 
 ```txt
 channels/
-├── github.ts     # POST /webhook
 ├── telegram.ts   # POST /telegram
 └── slack.ts      # POST /slack
 ```
@@ -77,8 +76,7 @@ assembled agent and resolved state root. Long-connection adapters own reconnects
 through `AbortSignal`, and report first readiness plus terminal closure through the two promises.
 
 **A channel verifies its own caller.** Its route is public on purpose — Telegram has to be able to POST
-to it — so checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`, Feishu's signature,
-GitHub's HMAC) is the channel's half of the boundary, and fastagent does not add one. The two guards it
+to it — so checking the platform's signature (`X-Telegram-Bot-Api-Secret-Token`, Feishu's signature) is the channel's half of the boundary, and fastagent does not add one. The two guards it
 puts on its own unauthenticated routes (a JSON content-type requirement, and a cross-origin policy) are
 deliberately NOT applied here, because they would break a platform that posts form-encoded and they are
 redundant against a caller that cannot forge a signature. A custom channel that verifies nothing is
@@ -125,30 +123,10 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 
 | Channel | Package import | Docs | Add command |
 |---|---|---|---|
-| GitHub webhook | `@fastagent-sh/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
 | Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
 | Slack app | `@fastagent-sh/fastagent/slack` | [Slack channel](slack.md) | `fastagent add slack` |
 | Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
 | Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
-
-Example GitHub glue:
-
-```ts
-import { githubChannel } from "@fastagent-sh/fastagent/github";
-import { defineChannel } from "@fastagent-sh/fastagent";
-
-export default defineChannel({
-  secrets: ["GITHUB_WEBHOOK_SECRET"],
-  channel: (secrets) =>
-    githubChannel({
-      secret: secrets.GITHUB_WEBHOOK_SECRET,
-      on: (event) =>
-        event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload
-          ? [{ session: event.deliveryId, text: `Review PR #${event.payload.pull_request.number}` }]
-          : [],
-    }),
-});
-```
 
 Example Telegram glue:
 
@@ -219,7 +197,7 @@ A channel usually has two layers:
 
 | Layer | Reusable? | Example |
 |---|---|---|
-| Adapter | yes | verify a GitHub signature, parse a Telegram update, call an SDK |
+| Adapter | yes | verify a platform signature, parse a Telegram update, call an SDK |
 | Glue | agent-specific | map one event to `{ session, text }`, choose routing policy |
 
 Keep transport mechanics in reusable adapters. Keep product/agent policy in the agent's `channels/*.ts` file.
@@ -235,7 +213,6 @@ fastagent dev --tunnel
 When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prints the public URL, and auto-registers first-party webhooks where possible:
 
 - Telegram: calls `setWebhook` using `.env` values.
-- GitHub: prints the Payload URL to paste into repo settings.
 - Slack: for an app created by `add slack`, rotates its owner-local Configuration Token and updates the App Manifest Request URL; scaffold-only/manual apps receive the URL to paste.
 - Feishu: PATCHes the app's event subscription to the tunnel URL via the reference cloud's config API.
 - Lark compatibility: probes the same Feishu mechanism; its lagging config route currently falls back
@@ -285,7 +262,6 @@ Read [Channel development](channel-development.md) for adapter design, packaging
 
 ## Where next
 
-- [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
 - [Slack channel](slack.md)
 - [Feishu channel (Lark compatibility)](feishu.md)

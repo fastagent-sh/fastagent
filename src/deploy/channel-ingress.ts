@@ -14,11 +14,8 @@ export interface Registrars {
 interface ChannelIngress {
   /** The channel's DEFAULT route key. */
   path: string;
-  /**
-   * Runs this channel's registration end-to-end, or undefined when the caller wired no registrar for it. github never
-   * has one.
-   */
-  register?: (registrars: Registrars, baseUrl: string) => Promise<RegistrationOutcome> | undefined;
+  /** Runs this channel's registration end-to-end, or undefined when the caller wired no registrar for it. */
+  register: (registrars: Registrars, baseUrl: string) => Promise<RegistrationOutcome> | undefined;
   /** The one line a driver prints when no registrar runs it. */
   manual: (baseUrl: string) => string;
   /** The runbook block for a plan, which cannot register anything (comment lines + commands). */
@@ -48,18 +45,6 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
       `# remapped it in channels/telegram.ts, use your path. secret_token MUST equal TELEGRAM_SECRET_TOKEN:`,
       `curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \\`,
       `  -d url=${baseUrl}/telegram -d secret_token=<TELEGRAM_SECRET_TOKEN>`,
-    ],
-  },
-  github: {
-    path: "/webhook",
-    // The env-var name is the part a first-time operator cannot guess, and this line is all `--tunnel` prints — there
-    // is no runbook beside it to carry the detail.
-    manual: (baseUrl) =>
-      `github: set the webhook in the repo (Settings → Webhooks) → ${baseUrl}/webhook (content type application/json, secret = GITHUB_WEBHOOK_SECRET)`,
-    runbook: (baseUrl) => [
-      `# Set the GitHub webhook (repo Settings → Webhooks). Default route POST /webhook; if you remapped`,
-      `# it in channels/github.ts, use your path:`,
-      `#   Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     ],
   },
   slack: {
@@ -109,7 +94,7 @@ export async function pointChannelsAt(input: {
   for (const kind of webhookKinds(input.channels)) {
     const ingress = INGRESS[kind];
     // Calling IS the question: a channel whose registrar the caller did not wire returns undefined.
-    const running = ingress.register?.(input.registrars, input.baseUrl);
+    const running = ingress.register(input.registrars, input.baseUrl);
     if (!running) {
       input.log(ingress.manual(input.baseUrl));
       outcomes.push({ kind, outcome: "manual" }); // a human's step — re-surfaced after registrar output

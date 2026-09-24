@@ -5,7 +5,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { MAX_WEBHOOK_BODY_BYTES } from "../../../channels/agentcore-limits.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
   type AgentcoreTopology,
@@ -96,14 +95,6 @@ export const agentcoreHost: HostDeploy = {
       const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
-    }
-    // Host capability limit, stated at plan time.
-    if (channels.some((channel) => channel.name === "github")) {
-      console.error(
-        `[fastagent] note: on AgentCore a webhook body is capped at ~${Math.round(MAX_WEBHOOK_BODY_BYTES / (1 << 20))} MiB ` +
-          `(the forwarder's Function URL limit); the GitHub channel accepts 25 MiB on a resident host, so the largest ` +
-          `payloads are rejected here rather than delivered`,
-      );
     }
     // The template IS the topology (EventBridge rules, wake wiring, secrets).
     const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));

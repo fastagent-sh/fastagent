@@ -242,21 +242,6 @@ describe("tunnel: announceWebhooks", () => {
     expect(errs.some((e) => /set TELEGRAM_BOT_TOKEN/.test(e) && /x\.trycloudflare\.com\/telegram/.test(e))).toBe(true);
   });
 
-  it("prints the github webhook URL to paste into repo settings (no auto-registration)", async () => {
-    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const errs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((m) => {
-      errs.push(String(m));
-    });
-    const dir = await workspace(["github"]);
-
-    await announceWebhooks(dir, "https://x.trycloudflare.com", declaredChannels(["github"]));
-
-    expect(setWebhookCall(fetchMock)).toBeUndefined();
-    expect(errs.some((e) => /github:/.test(e) && /x\.trycloudflare\.com\/webhook/.test(e))).toBe(true);
-  });
-
   it("prints Slack's manual Event Subscriptions URL", async () => {
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((message) => errs.push(String(message)));

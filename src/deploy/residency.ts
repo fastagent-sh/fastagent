@@ -7,13 +7,13 @@
  * phrase its own REMEDY — the setting it owns — never re-derive the reason.
  *
  * ORDER IS THE POINT, not just precedence: the reason reported has to be the one an operator cannot work around,
- * because the message it produces differs. A github turn and a runtime-minted wake-up have no substitute at all; a
+ * because the message it produces differs. A runtime-minted wake-up has no substitute at all; a
  * declared schedule has one, because the clock does not have to be ours — see {@link CRON_CAN_BE_EXTERNAL}.
  */
 import type { DeclaredChannel } from "../channels/discover.ts";
 
 /** Why one machine has to stay up. Also the order they are checked in. */
-export type ResidencyReason = "github" | "wake-ups" | "cron" | "long-connection";
+export type ResidencyReason = "wake-ups" | "cron" | "long-connection";
 
 export interface Residency {
   reason: ResidencyReason;
@@ -24,8 +24,7 @@ export interface Residency {
 /**
  * The ONE reason a caller may offer a way out of: a cron is a TIME, and a time can be kept elsewhere — a platform
  * scheduler, a CI cron, a crontab — which then calls this agent. Nothing else here can be moved out: a wake-up is
- * minted by the agent at runtime inside its own state, so nothing outside can know to send it, and a github turn
- * has no replay to reconstruct.
+ * minted by the agent at runtime inside its own state, so nothing outside can know to send it.
  */
 export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "cron";
 
@@ -37,9 +36,6 @@ export function residencyFor(facts: {
   /** The agent may schedule ITSELF (`selfSchedule`, the wake tool). */
   hasWakeups: boolean;
 }): Residency | undefined {
-  if (facts.channels.some((channel) => channel.name === "github")) {
-    return { reason: "github", why: "github turns have no replay — a sleep mid-review loses one" };
-  }
   if (facts.hasWakeups) {
     return {
       reason: "wake-ups",

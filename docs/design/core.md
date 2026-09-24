@@ -318,7 +318,7 @@ side-effecting tools exactly-once.
 
 The core lease allows one in-flight turn per session. A collision yields
 `{ type: "failed", code: "session_busy", retryable: true, details: "…" }`. Queueing is channel policy:
-Telegram, Slack, and Feishu/Lark serialize their own turns per session; HTTP and GitHub use the
+Telegram, Slack, and Feishu/Lark serialize their own turns per session; HTTP uses the
 fail-fast behavior.
 
 ## 7. Channels and hosting
@@ -404,12 +404,6 @@ its first write synchronously, cancels pending pacing at finish, and joins an is
 terminal update. Preview callbacks capture the turn context when crossing a synchronous API boundary,
 preserving its clock without a global runtime. Snapshot renderers share terminal ownership; formatting,
 continuation, and capability fallback stay platform-specific.
-
-### GitHub
-
-The GitHub adapter verifies the HMAC over the capped raw body, maps a verified delivery through the
-agent's `on(event)` policy, acknowledges with 202, and runs turns in the process. It has no durable
-post-ACK replay; an interrupted review is lost and logged.
 
 ### Telegram
 
@@ -810,7 +804,7 @@ Explicit limits, not implied capabilities:
 
 - pi is the reference implementation; additional engine bindings can implement the same Agent contract;
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
-- GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
+- Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
 - the AgentCore target has no resident process: long-connection channels are unsupported there, and a
   wake-up set in a direct-invoke session fires only while that session's compute is awake;

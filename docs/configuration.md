@@ -574,8 +574,8 @@ enable switch: `.ts` / `.js` / `.mjs` files under `channels/` are enabled; renam
 `<name>.ts.disabled` to disable it without introducing a second config source.
 
 ```txt
-channels/github.ts
 channels/telegram.ts
+channels/slack.ts
 ```
 
 See [Channels](channels.md).

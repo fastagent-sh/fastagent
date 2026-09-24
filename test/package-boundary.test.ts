@@ -47,15 +47,9 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     for (const dep of CLI_ONLY) expect(pkgs).not.toContain(dep);
   });
 
-  it("octokit lives only behind the ./github subpath, not the root entry", () => {
-    expect(staticPackageGraph("index.ts")).not.toContain("@octokit/webhooks-methods");
-    expect(staticPackageGraph("github.ts")).toContain("@octokit/webhooks-methods");
-  });
-
   it("the ./telegram subpath is neutral — no engine, no third-party SDK (it is fetch-only)", () => {
     const pkgs = staticPackageGraph("telegram.ts");
     expect([...pkgs].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
-    expect(pkgs).not.toContain("@octokit/webhooks-methods");
   });
 
   it("every channel subpath pays the explicit channel execution dependency budget", () => {
@@ -102,7 +96,6 @@ describe("engine neutrality: the core subpath + channel spine import no engine p
     "channels/http.ts",
     "channels/body.ts",
     "channels/respond.ts",
-    "channels/github/github.ts",
     "channels/telegram/telegram.ts",
     "channels/feishu/feishu.ts",
     "channels/lark/lark.ts",

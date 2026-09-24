@@ -8,7 +8,7 @@ status: current
 
 The Telegram channel turns a Telegram Bot API webhook update into an agent turn and sends the agent's reply back to the chat.
 
-Unlike the GitHub channel, Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
+Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
 
 ## Add the channel
 

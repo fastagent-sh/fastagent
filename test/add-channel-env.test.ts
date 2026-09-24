@@ -89,14 +89,14 @@ describe("appendChannelDotEnv", () => {
     await chmod(secrets, 0o755); // an existing dir the operator (or a volume mount) left wide open
     process.env.FASTAGENT_SECRETS_DIR = secrets;
     try {
-      const r = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "s" });
-      expect(r.written).toContain("GITHUB_WEBHOOK_SECRET");
-      expect(await readFile(join(secrets, ".env"), "utf8")).toContain("GITHUB_WEBHOOK_SECRET=s");
+      const r = await appendChannelDotEnv(dir, "telegram", { TELEGRAM_SECRET_TOKEN: "s" });
+      expect(r.written).toContain("TELEGRAM_SECRET_TOKEN");
+      expect(await readFile(join(secrets, ".env"), "utf8")).toContain("TELEGRAM_SECRET_TOKEN=s");
       // Nothing lands at the workspace default — the write and the leak protection target ONE dir.
       expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
       // …and the protection travels with the FILE, not the directory: the operator's 0755 dir is left as
       // they set it, while the `.env` this call created is 0600, so the override cannot move
-      // `GITHUB_WEBHOOK_SECRET` out of protection.
+      // `TELEGRAM_SECRET_TOKEN` out of protection.
       expect(((await stat(secrets)).mode & 0o777).toString(8)).toBe("755"); // untouched
       expect(((await stat(join(secrets, ".env"))).mode & 0o777).toString(8)).toBe("600");
     } finally {
@@ -114,9 +114,9 @@ describe("appendChannelDotEnv", () => {
     await writeFile(env, "# copied from .env.example\n");
     await chmod(env, 0o644);
 
-    await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "topsecret" });
+    await appendChannelDotEnv(dir, "telegram", { TELEGRAM_SECRET_TOKEN: "topsecret" });
 
-    expect(await readFile(env, "utf8")).toContain("GITHUB_WEBHOOK_SECRET=topsecret");
+    expect(await readFile(env, "utf8")).toContain("TELEGRAM_SECRET_TOKEN=topsecret");
     expect(((await stat(env)).mode & 0o777).toString(8)).toBe("644");
   });
 

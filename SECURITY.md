@@ -29,7 +29,7 @@ We aim to acknowledge a report within 5 business days and to provide a remediati
 In scope:
 
 - the `@fastagent-sh/fastagent` package (CLI, library API, reference implementation),
-- the first-party channel adapters (`/github`, `/telegram`),
+- the first-party channel adapters (`/telegram`, `/slack`, `/feishu`, `/lark`),
 - credential handling in the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; global `~/.fastagent/auth.json` is opt-in) and the OAuth/env auth resolution path.
 
 Out of scope:
@@ -44,6 +44,6 @@ FastAgent treats credentials and environment as deployment config, never as part
 
 - keep `.env`, provider keys, and the credentials file (`<dir>/.fastagent/auth.json` by default, or `~/.fastagent/auth.json`) out of version control,
 - the scaffolded `.gitignore` excludes `.env`; `fastagent init` warns when a pre-existing `.gitignore` does not,
-- webhook channels require a verification secret (`GITHUB_WEBHOOK_SECRET`, `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
+- webhook channels require a verification secret (e.g. `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
 
 If you find a case where a secret can leak into the agent definition, logs, or the deployable artifact, report it through the process above.

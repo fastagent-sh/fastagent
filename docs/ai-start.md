@@ -38,7 +38,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 | Project facts and conventions | `AGENTS.md` and existing project documents | Keep project context separate from the agent's identity. FastAgent reads the agent's own `AGENTS.md` and walks workspace ancestors for project context. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
-| Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. GitHub is ingress-only. |
+| Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
 | Clock triggers and deliberate follow-ups | `routines/` and the opt-in `wake` tool | State the work and its recipient. A timer triggers a turn; it does not deliver the reply. |
 | Model, serving, and deployment choices | `fastagent.config.ts` | Keep configuration declarative. Use [supported keys](configuration.md#config-file). |
 | Credentials and machine state | `.secrets/`, `.state/`, or their configured roots | Let FastAgent manage auth, journals, channel state, and scheduling records. Preserve them according to the host. |
@@ -302,7 +302,6 @@ webhook servers, token refresh loops, or reply pipelines:
 
 | Channel | Command from the workspace | Owner action and reference |
 |---|---|---|
-| GitHub | `fastagent add github` | Approve repository access and configure its webhook; adapt the event-to-intent mapping. [GitHub](github.md) |
 | Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
 | Slack | `fastagent add slack` | Complete interactive app configuration and OAuth installation. [Slack](slack.md) |
 | Feishu | `fastagent add feishu` | Scan to approve app creation and publish its version in the console. [Feishu](feishu.md) |
@@ -334,8 +333,7 @@ only the builder's App Configuration credentials.
 ### Replies and proactive delivery are different
 
 Telegram, Slack, and Feishu/Lark chat turns already have framework-managed replies. Do not call a send
-tool merely to repeat that reply. GitHub is an [ingress-only adapter](github.md): commenting or reviewing
-requires explicit tools. Sending a generated file or contacting someone outside the current turn is an
+tool merely to repeat that reply. Sending a generated file or contacting someone outside the current turn is an
 outbound action requiring a recipient and the appropriate approval/policy checks.
 
 Schedules and wakes have no channel carrying their plain answer. Use a supported send tool with an
@@ -444,7 +442,7 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 | Business notes, approvals, generated artifacts | Write ongoing work under the volume's `base/`, outside the release-managed definition. Docker, Fly, and Railway preserve it across deploys; AgentCore resets it. Use an external store when the host's retention is insufficient. |
 
 Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,
-so side effects must tolerate repetition. GitHub post-ACK work has no durable replay.
+so side effects must tolerate repetition.
 
 `fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
 deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),

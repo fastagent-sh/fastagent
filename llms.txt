@@ -1,6 +1,6 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Harness-, model-, and infra-neutral (the Agent Handler SPEC calls the harness the *engine* — same seam); the built-in harness is pi.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind a custom channel. Harness-, model-, and infra-neutral (the Agent Handler SPEC calls the harness the *engine* — same seam); the built-in harness is pi.
 
 Key facts:
 
@@ -8,7 +8,7 @@ Key facts:
 - The directory is the agent: optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `schedules/` (cron triggers), `AGENTS.md` (project context, not identity), markdown context, and `fastagent.config.ts`. No framework rewrite, no build step.
 - The contract is `invoke(scope, prompt) => AsyncIterable<AgentEvent>` (the Agent Handler SPEC).
 - Core CLI: `fastagent init | info | models | login | dev | chat | invoke | tool | fire | schedule | start | add | deploy`.
-- Channels: HTTP/SSE (default), GitHub, Telegram, plus custom adapters.
+- Channels: HTTP/SSE (default), Telegram, Slack, Feishu/Lark, plus custom adapters.
 
 ## Start here
 
@@ -24,7 +24,6 @@ Key facts:
 - [CLI reference](https://fastagent.sh/docs/cli/): every command and flag.
 - [Embedding](https://fastagent.sh/docs/embedding/): use FastAgent as a library inside your own app.
 - [Channels](https://fastagent.sh/docs/channels/): add webhook/bot channels.
-- [GitHub channel](https://fastagent.sh/docs/github/): GitHub webhook events.
 - [Telegram channel](https://fastagent.sh/docs/telegram/): Telegram bot.
 - [Channel development](https://fastagent.sh/docs/channel-development/): build a custom channel adapter.
 - [Deploy](https://fastagent.sh/docs/deploy/): ship the directory to Fly, Railway, or any Docker host.
