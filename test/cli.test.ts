@@ -564,6 +564,31 @@ describe("cli papercuts", () => {
     expect(JSON.parse(bad.stdout).modelError).toMatch(/not in registry/);
   });
 
+  it("info names the machine's models.json and says when the model's endpoint comes from it", async () => {
+    const dir = await agentWorkspace("fa-info-machine-models-");
+    const machine = join(dir, "machine-models.json");
+    await writeFile(
+      machine,
+      JSON.stringify({
+        providers: {
+          localgw: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: [{ id: "m" }],
+          },
+        },
+      }),
+    );
+    const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_MODELS_PATH: machine };
+    delete env.FASTAGENT_MODEL;
+
+    const report = JSON.parse((await run(["info", dir, "--json", "--model", "localgw/m"], undefined, env)).stdout);
+    expect(report.modelError).toBeNull();
+    expect(report.modelFromMachine).toBe(true);
+    expect(report.machineModels).toEqual({ path: machine, inherited: ["localgw"], overridden: [] });
+  });
+
   it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
     // The scaffold ships tools/ that import @fastagent-sh/fastagent; before `npm install` the import fails.
     // A broken tool file is ISOLATED (skipped + reported, not thrown) so it can't crash the load — info

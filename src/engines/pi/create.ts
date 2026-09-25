@@ -424,7 +424,8 @@ export interface CreatePiAgentFromDefinitionOptions {
 
 /**
  * THE model registry an agent directory runs on: pi's built-ins, the directory's own `models.json` (custom endpoints
- * are definition data and travel with the artifact), and any injected Provider instance, over the given credentials.
+ * are definition data and travel with the artifact) layered over the machine's `~/.fastagent/models.json` (environment,
+ * which does not travel), and any injected Provider instance, over the given credentials.
  * The directory rung assembles from it and `availableModelsFromDir` lists from it, so a layer added here reaches both.
  */
 export function definitionModelRuntime(

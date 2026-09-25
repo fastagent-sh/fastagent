@@ -218,7 +218,8 @@ src/
     │                       # included — never installed by us) and engine settings, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
     ├── auth.ts, login.ts   # credential store/resolution + the `login` flow
-    ├── models.ts           # Models wiring + the agent's OWN models.json (definition-local, so it travels)
+    ├── models.ts           # Models wiring + the agent's OWN models.json (definition-local, so it travels),
+    │                       # layered over the machine's ~/.fastagent/models.json (environment, never shipped)
     └── report.ts           # startup report (auth/model/skills/tools surface)
 test/                       # vitest; faux models by default + reusable SPEC conformance
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)

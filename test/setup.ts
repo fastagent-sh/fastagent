@@ -19,3 +19,5 @@ process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
 // who has it set would run the whole inheritance suite against their own agent directory — the exact failure
 // this file exists to prevent, one variable over.
 delete process.env.PI_CODING_AGENT_DIR;
+// Same for the machine's own models file, which `FASTAGENT_MODELS_PATH` moves out of HOME.
+delete process.env.FASTAGENT_MODELS_PATH;

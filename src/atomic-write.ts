@@ -1,5 +1,6 @@
 /** One spelling of "a reader sees the whole file or none of it", for every state writer. */
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
 /**
@@ -14,10 +15,15 @@ import { dirname } from "node:path";
  * `mode` is applied to the temp first, so the content is never briefly world-readable, and the `chmod` is not
  * redundant with it: `writeFileSync` honours `mode` only when it CREATES the file, so a temp left behind by a crashed
  * writer would keep its old, possibly looser permissions.
+ *
+ * `sharedWriters` is for a file SEVERAL processes may write at once (the merged models file, content-addressed, so
+ * every writer writes the same bytes): each writes its own temp, and the last rename wins. A fixed temp there would
+ * let one writer's rename take the other's file and fail it with ENOENT. No test exercises that race: it needs two
+ * processes renaming within the same moment, which a test cannot arrange without being flaky.
  */
-export function writeFileAtomic(path: string, data: string | Buffer, mode?: number): void {
+export function writeFileAtomic(path: string, data: string | Buffer, mode?: number, sharedWriters = false): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
+  const tmp = sharedWriters ? `${path}.${process.pid}.${randomUUID()}.tmp` : `${path}.tmp`;
   try {
     writeFileSync(tmp, data, mode === undefined ? undefined : { mode });
     if (mode !== undefined) chmodSync(tmp, mode);

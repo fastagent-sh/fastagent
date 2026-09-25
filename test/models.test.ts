@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import {
   createPiModelRuntime,
   literalKeyProviders,
+  machineModels,
   modelCredentialCarry,
   probeApiKey,
   probeAuthSource,
@@ -264,6 +265,107 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     await mkdir(stateRoot, { recursive: true });
     await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json"), stateRoot });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+  });
+});
+
+describe("the machine's models.json (~/.fastagent/models.json), under the agent's own", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const endpoint = (baseUrl: string, extra: Record<string, unknown> = {}) => ({
+    baseUrl,
+    api: "openai-completions",
+    models: [{ id: "m" }],
+    ...extra,
+  });
+
+  /** A machine file at a temporary path (FASTAGENT_MODELS_PATH), and an agent dir with an optional file of its own. */
+  async function layers(
+    machine: string,
+    own?: string,
+  ): Promise<{ agentDir: string; machinePath: string; authPath: string }> {
+    const root = await mkdtemp(join(tmpdir(), "fa-machine-models-"));
+    const machinePath = join(root, "machine-models.json");
+    await writeFile(machinePath, machine);
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machinePath);
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir);
+    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
+    if (own !== undefined) await writeFile(join(agentDir, "models.json"), own);
+    return { agentDir, machinePath, authPath: join(root, "auth.json") };
+  }
+
+  it("a machine endpoint resolves for an agent with no models.json, its key from a stored credential", async () => {
+    // No apiKey in the file: pi's schema allows that when auth.json provides it, which is how a client stores a key.
+    const { agentDir, authPath } = await layers(
+      JSON.stringify({ providers: { localgw: endpoint("http://127.0.0.1:8000/v1") } }),
+    );
+    await writeFile(authPath, JSON.stringify({ localgw: { type: "api_key", key: "sk-stored" } }));
+
+    const models = await createPiModelRuntime({ agentDir, authPath });
+
+    expect(resolveModel(models, "localgw/m").baseUrl).toBe("http://127.0.0.1:8000/v1");
+    expect(await probeAuthSource(models, "localgw/m")).toBe("stored credential");
+  });
+
+  it("the agent's own models.json wins a provider id; the machine's other providers stay", async () => {
+    const machine = JSON.stringify({
+      providers: {
+        localgw: endpoint("http://machine:8000/v1", { apiKey: "x" }),
+        other: endpoint("http://other/v1", { apiKey: "x" }),
+      },
+    });
+    const own = JSON.stringify({ providers: { localgw: endpoint("https://pinned.example.com/v1", { apiKey: "x" }) } });
+    const { agentDir, authPath } = await layers(machine, own);
+
+    const models = await createPiModelRuntime({ agentDir, authPath });
+
+    expect(resolveModel(models, "localgw/m").baseUrl).toBe("https://pinned.example.com/v1");
+    expect(resolveModel(models, "other/m").baseUrl).toBe("http://other/v1");
+    expect(await machineModels(agentDir)).toMatchObject({ inherited: ["other"], overridden: ["localgw"] });
+  });
+
+  it("serving and the report read the machine file the same way: a file one rejects, both reject", async () => {
+    // A file pi alone would accept (comments) but the merge cannot read must not load for dev while `info` and
+    // `deploy` fail on it: both go through one reader.
+    const commented = `{ // the machine's gateway\n "providers": { "localgw": ${JSON.stringify(endpoint("http://m/v1", { apiKey: "x" }))} } }`;
+    const { agentDir, machinePath, authPath } = await layers(commented);
+    await expect(createPiModelRuntime({ agentDir, authPath })).rejects.toThrow(machinePath);
+    await expect(machineModels(agentDir)).rejects.toThrow(machinePath);
+  });
+
+  it("the merge is a content-addressed snapshot in fastagent's home: shared, never rewritten, never pulled away", async () => {
+    // pi re-reads its models file on every refresh, and several processes open the same agent: a snapshot one of them
+    // rewrote would change what another's refresh reads, and one pruned would silently empty it.
+    const { agentDir, machinePath, authPath } = await layers(
+      JSON.stringify({ providers: { localgw: endpoint("http://m/v1", { apiKey: "x" }) } }),
+    );
+    const cache = join(homedir(), ".fastagent", ".cache", "models");
+    const before = new Set(await readdir(cache).catch(() => []));
+    const snapshots = async () => (await readdir(cache)).filter((name) => !before.has(name));
+
+    await createPiModelRuntime({ agentDir, authPath });
+    const [first] = await snapshots();
+    const created = await stat(join(cache, first as string));
+    expect((created.mode & 0o777).toString(8)).toBe("600");
+
+    await createPiModelRuntime({ agentDir, authPath }); // same content: the same snapshot, untouched
+    expect(await snapshots()).toEqual([first]);
+    expect((await stat(join(cache, first as string))).mtimeMs).toBe(created.mtimeMs);
+
+    await writeFile(
+      machinePath,
+      JSON.stringify({ providers: { localgw: endpoint("http://changed/v1", { apiKey: "x" }) } }),
+    );
+    const changed = await createPiModelRuntime({ agentDir, authPath });
+    expect(resolveModel(changed, "localgw/m").baseUrl).toBe("http://changed/v1");
+    expect(await snapshots()).toHaveLength(2); // a new snapshot; the one a running process reads stays
+  });
+
+  it("a malformed machine file fails startup naming that file, alone or merged", async () => {
+    for (const own of [undefined, JSON.stringify({ providers: {} })]) {
+      const { agentDir, machinePath, authPath } = await layers("{ not json", own);
+      await expect(createPiModelRuntime({ agentDir, authPath })).rejects.toThrow(machinePath);
+    }
   });
 });
 

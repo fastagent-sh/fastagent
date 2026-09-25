@@ -4,12 +4,13 @@ import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
 import {
   loadConfig,
+  providerOf,
   resolveAuthFallback,
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
 } from "../../engines/pi/config.ts";
-import { createPiModelRuntime } from "../../engines/pi/models.ts";
+import { createPiModelRuntime, machineModels } from "../../engines/pi/models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
@@ -104,6 +105,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         .catch((error: unknown) => (error as Error).message)
     : undefined;
 
+  // The machine's own endpoints, which this agent inherits unless its models.json declares the same provider.
+  const machine = await machineModels(agentDir).then(
+    (value) => ({ value, error: undefined }),
+    (error: unknown) => ({ value: undefined, error: (error as Error).message }),
+  );
+  const modelFromMachine = modelSpec !== undefined && machine.value?.inherited.includes(providerOf(modelSpec)) === true;
+
   if (opts.json) {
     console.log(
       JSON.stringify(
@@ -113,6 +121,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
+          modelFromMachine,
+          machineModels: machine.value ?? null,
+          machineModelsError: machine.error ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
           codingTools: [...CODING_TOOL_NAMES],
           context: definition.contextFiles.map((f) => f.path),
@@ -151,6 +162,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
+  if (modelFromMachine) cont(`endpoint from the machine's ${machine.value?.path} (does not ship with a deploy)`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   line("codingTools", CODING_TOOL_NAMES.join(", "));
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
@@ -170,6 +182,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("state", stateRoot);
   line("sessions", sessionsDir);
   line("auth", fallbackAuthPath === undefined ? authPath : `${authPath} (then ${fallbackAuthPath})`);
+  if (machine.error) line("endpoints", `⚠ ${machine.error}`);
+  else if (machine.value) {
+    const { path, inherited, overridden } = machine.value;
+    const parts = [inherited.join(", ") || "(none inherited)"];
+    if (overridden.length > 0) parts.push(`overridden by the agent: ${overridden.join(", ")}`);
+    line("endpoints", `${path}: ${parts.join("; ")}`);
+  }
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);

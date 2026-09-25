@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
+import { createPiModels } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -551,6 +552,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 });
 
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
+  afterEach(() => vi.unstubAllEnvs());
   const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>
     JSON.stringify({
       providers: { mygw: { baseUrl, api: "openai-completions", apiKey, models: [{ id: "m1" }] } },
@@ -622,6 +624,80 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (pre.ok) {
       expect(pre.modelKeyInDefinition).toBe(true);
       expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
+    }
+  });
+
+  it("a model whose endpoint comes only from the machine's models.json is warned about: that file does not ship", async () => {
+    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+    await writeFile(
+      machine,
+      JSON.stringify({
+        providers: {
+          localgw: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: [{ id: "m" }],
+          },
+        },
+      }),
+    );
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+    const pre = await call(await workspace(), { model: "localgw/m" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
+      // Its literal key is the machine's, not the definition's: it reaches no host.
+      expect(pre.modelKeyInDefinition).toBe(false);
+    }
+    // No built-in "localgw" to fall back on, so running the deployment is refused, not warned about.
+    const running = await call(await workspace(), { model: "localgw/m" }, { run: true });
+    expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/unknown model/) });
+
+    // The agent's own entry for the provider is what ships, so nothing is said.
+    const own = await workspace({
+      "models.json": JSON.stringify({
+        providers: {
+          localgw: {
+            baseUrl: "https://gw.example.com/v1",
+            api: "openai-completions",
+            apiKey: "$K",
+            models: [{ id: "m" }],
+          },
+        },
+      }),
+    });
+    const shipped = await call(own, { model: "localgw/m" });
+    expect(shipped.ok).toBe(true);
+    if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
+  });
+
+  it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {
+    const anthropic = createPiModels().getProvider("anthropic")?.getModels()[0]?.id as string;
+    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+    // The company-gateway shape: the machine routes built-in anthropic through a proxy with its own key.
+    await writeFile(
+      machine,
+      JSON.stringify({
+        providers: { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "$CORP_PROXY_KEY" } },
+      }),
+    );
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+    vi.stubEnv("CORP_PROXY_KEY", "proxy");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
+
+    const pre = await call(await workspace(), { model: `anthropic/${anthropic}` }, { run: true });
+
+    expect(pre.ok).toBe(true); // the deployed agent still resolves pi's built-in anthropic
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(/built-in "anthropic" without it/),
+      });
+      // Judged on the deployed registry: the host needs ANTHROPIC_API_KEY, not the machine's proxy key.
+      expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+      expect(pre.modelKeyInDefinition).toBe(false);
+      expect(pre.secrets.map((secret) => secret.name)).toContain("ANTHROPIC_API_KEY");
     }
   });
 

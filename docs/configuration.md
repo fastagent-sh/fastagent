@@ -142,8 +142,27 @@ queued into a running turn uses pi's defaults (2000 by 2000 pixels, 4.5 MiB enco
 The schema is pi's; the full reference is pi's `docs/models.md` (`@earendil-works/pi-coding-agent`). Two FastAgent
 differences:
 
-- pi's machine-global `~/.pi/agent/models.json` is not read.
+- pi's own `~/.pi/agent/models.json` is not read. The machine's endpoints live in `~/.fastagent/models.json`
+  instead (below).
 - A malformed `models.json` fails startup.
+
+### Endpoints for this machine: `~/.fastagent/models.json`
+
+An endpoint set up for the machine rather than for one agent (a local Ollama or LM Studio server, a company
+gateway) goes in `~/.fastagent/models.json`, in the same schema. `FASTAGENT_MODELS_PATH` moves it. Every agent on
+the machine inherits its providers, next to the global credentials file `~/.fastagent/.secrets/auth.json`, where a
+provider's key can be stored instead of written into the file.
+
+- The agent's own `models.json` wins a provider id: an agent that pins an endpoint keeps it.
+- A malformed file fails startup, naming the file.
+- It is plain JSON (no comments), and while it exists so must the agent's own `models.json` be: fastagent merges
+  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. A running process keeps the snapshot it
+  started with, so an edit to either file takes effect on the next start (in `chat`, `/model` does not pick it
+  up). Snapshots are never pruned; delete the directory while no fastagent process runs.
+- It does not ship, and neither does a key written into it. `fastagent info` lists the providers the agent
+  inherits from it and marks a model whose endpoint comes from it. `deploy` refuses a model whose provider exists
+  only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
+  which the deployed agent then runs without that entry.
 
 `fastagent models` lists the built-in catalog only; `fastagent info` shows what an agent resolved.
 
@@ -248,6 +267,7 @@ state root: FASTAGENT_STATE_DIR    > <agent dir>/.state
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets
 sessions:   <state root>/sessions
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
+endpoints:  FASTAGENT_MODELS_PATH  > ~/.fastagent/models.json (under the agent's own models.json)
 ```
 
 A leading `~` is expanded. `auth.json` is written `0600` on every write; `.env` and directories keep the

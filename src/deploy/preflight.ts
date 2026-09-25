@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
-import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
+import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
 import {
   AGENT_MODELS_FILE,
   type ResolvedPlacement,
@@ -23,6 +23,8 @@ import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
   literalKeyProviders,
+  isBuiltinProvider,
+  machineModels,
   modelCredentialCarry,
   probeAuthSource,
 } from "../engines/pi/models.ts";
@@ -254,9 +256,37 @@ export async function preflightDeploy(input: {
     });
   }
 
-  // Probe auth from the SAME project-level file the opener/login use.
+  // The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
+  // absent wherever the agent is deployed. Said in so many words here; the credential probe below already reads the
+  // deployed registry.
+  const machine = await machineModels(agentDir);
+  const provider = modelSpec ? providerOf(modelSpec) : undefined;
+  const fromMachine = provider !== undefined && machine?.inherited.includes(provider) === true;
+  if (fromMachine && provider !== undefined && machine) {
+    if (isBuiltinProvider(provider)) {
+      messages.push({
+        level: "warn",
+        text:
+          `model "${modelSpec}" takes its "${provider}" entry from ${machine.path}, the machine's models.json, which ` +
+          `does not ship — the deployed agent runs pi's built-in "${provider}" without it. Declare the entry in the ` +
+          `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
+      });
+    } else {
+      // No built-in to fall back on: the deployed agent cannot resolve the model at all.
+      const issue =
+        `model "${modelSpec}" exists only in ${machine.path}, the machine's models.json, which does not ship — the ` +
+        `deployed agent would fail with an unknown model. Declare "${provider}" in the agent's own ` +
+        `${AGENT_MODELS_FILE} to deploy it.`;
+      if (run) return { ok: false, gate: issue };
+      messages.push({ level: "warn", text: issue });
+    }
+  }
+
+  // Probe auth from the SAME project-level file the opener/login use, on the registry the DEPLOYED agent has: the
+  // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
+  // how the credential reaches the host.
   const authPath = resolveAuthPath(agentDir);
-  const models = await createPiModelRuntime({ agentDir, authPath });
+  const models = await createPiModelRuntime({ agentDir, authPath, machineLayer: false });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
   let modelKeyInDefinition = false;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
@@ -266,6 +296,7 @@ export async function preflightDeploy(input: {
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
   }
+
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
   // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The
   // `.dockerignore` check next to this one IS a gate because it catches a packing rule putting FastAgent's OWN
