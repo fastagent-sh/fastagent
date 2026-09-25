@@ -257,7 +257,8 @@ export async function preflightDeploy(input: {
   }
 
   // The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
-  // absent wherever the agent is deployed, its key included.
+  // absent wherever the agent is deployed. Said in so many words here; the credential probe below already reads the
+  // deployed registry.
   const machine = await machineModels(agentDir);
   const provider = modelSpec ? providerOf(modelSpec) : undefined;
   const fromMachine = provider !== undefined && machine?.inherited.includes(provider) === true;
@@ -281,14 +282,16 @@ export async function preflightDeploy(input: {
     }
   }
 
-  // Probe auth from the SAME project-level file the opener/login use.
+  // Probe auth from the SAME project-level file the opener/login use, on the registry the DEPLOYED agent has: the
+  // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
+  // how the credential reaches the host.
   const authPath = resolveAuthPath(agentDir);
-  const models = await createPiModelRuntime({ agentDir, authPath });
+  const models = await createPiModelRuntime({ agentDir, authPath, machineLayer: false });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
   let modelKeyInDefinition = false;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
-  // REACH the host"). A key in the machine's file reaches no host, so it is never "in the definition".
-  if (modelSpec && !fromMachine && !isEnvKey(modelAuth)) {
+  // REACH the host").
+  if (modelSpec && !isEnvKey(modelAuth)) {
     const carry = modelCredentialCarry(models, modelSpec);
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;

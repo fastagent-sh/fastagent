@@ -333,23 +333,32 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     await expect(machineModels(agentDir)).rejects.toThrow(machinePath);
   });
 
-  it("the merged file lives in fastagent's home, one per agent, and is rewritten only when it changes", async () => {
-    const { agentDir, authPath } = await layers(
+  it("the merge is a content-addressed snapshot in fastagent's home: shared, never rewritten, never pulled away", async () => {
+    // pi re-reads its models file on every refresh, and several processes open the same agent: a snapshot one of them
+    // rewrote would change what another's refresh reads, and one pruned would silently empty it.
+    const { agentDir, machinePath, authPath } = await layers(
       JSON.stringify({ providers: { localgw: endpoint("http://m/v1", { apiKey: "x" }) } }),
     );
     const cache = join(homedir(), ".fastagent", ".cache", "models");
     const before = new Set(await readdir(cache).catch(() => []));
-    await createPiModelRuntime({ agentDir, authPath });
-    const added = (await readdir(cache)).filter((name) => !before.has(name));
-    expect(added).toHaveLength(1); // this agent's one file
-    const file = join(cache, added[0] as string);
-    const first = await stat(file);
+    const snapshots = async () => (await readdir(cache)).filter((name) => !before.has(name));
 
     await createPiModelRuntime({ agentDir, authPath });
+    const [first] = await snapshots();
+    const created = await stat(join(cache, first as string));
+    expect((created.mode & 0o777).toString(8)).toBe("600");
 
-    expect((await readdir(cache)).filter((name) => !before.has(name))).toEqual(added); // not another copy
-    expect((await stat(file)).mtimeMs).toBe(first.mtimeMs); // unchanged content, no rewrite
-    expect((first.mode & 0o777).toString(8)).toBe("600");
+    await createPiModelRuntime({ agentDir, authPath }); // same content: the same snapshot, untouched
+    expect(await snapshots()).toEqual([first]);
+    expect((await stat(join(cache, first as string))).mtimeMs).toBe(created.mtimeMs);
+
+    await writeFile(
+      machinePath,
+      JSON.stringify({ providers: { localgw: endpoint("http://changed/v1", { apiKey: "x" }) } }),
+    );
+    const changed = await createPiModelRuntime({ agentDir, authPath });
+    expect(resolveModel(changed, "localgw/m").baseUrl).toBe("http://changed/v1");
+    expect(await snapshots()).toHaveLength(2); // a new snapshot; the one a running process reads stays
   });
 
   it("a malformed machine file fails startup naming that file, alone or merged", async () => {

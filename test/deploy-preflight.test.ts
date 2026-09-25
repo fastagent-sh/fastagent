@@ -675,11 +675,16 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {
     const anthropic = createPiModels().getProvider("anthropic")?.getModels()[0]?.id as string;
     const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+    // The company-gateway shape: the machine routes built-in anthropic through a proxy with its own key.
     await writeFile(
       machine,
-      JSON.stringify({ providers: { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "sk-machine" } } }),
+      JSON.stringify({
+        providers: { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "$CORP_PROXY_KEY" } },
+      }),
     );
     vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+    vi.stubEnv("CORP_PROXY_KEY", "proxy");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
 
     const pre = await call(await workspace(), { model: `anthropic/${anthropic}` }, { run: true });
 
@@ -689,7 +694,10 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
         level: "warn",
         text: expect.stringMatching(/built-in "anthropic" without it/),
       });
-      expect(pre.modelKeyInDefinition).toBe(false); // so deploy still asks for a credential the host will have
+      // Judged on the deployed registry: the host needs ANTHROPIC_API_KEY, not the machine's proxy key.
+      expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+      expect(pre.modelKeyInDefinition).toBe(false);
+      expect(pre.secrets.map((secret) => secret.name)).toContain("ANTHROPIC_API_KEY");
     }
   });
 

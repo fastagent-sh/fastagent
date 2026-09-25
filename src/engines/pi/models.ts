@@ -4,9 +4,10 @@
  * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
  */
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -105,9 +106,14 @@ async function modelLayers(
  * The models.json pi loads for an agent: its own file, layered over the machine's. The agent's file wins a provider id
  * outright, as a definition's skill wins a name: an agent that pins an endpoint keeps it.
  *
- * The merged file lives in fastagent's own home, one per agent directory, not in the agent (so `info` writes nothing
- * there) and not in a shared temp dir, which the OS clears while a long `chat` still re-reads it (pi reloads the path on
- * every refresh). It is written only when its content changes, `0600`, since it may carry literal keys.
+ * The merge is a SNAPSHOT named by its content, in fastagent's own home: not in the agent (so `info` writes nothing
+ * there), and not in a shared temp dir, which the OS clears while a long-running process still re-reads it (pi
+ * reloads `modelsPath` on every refresh). Content addressing is what lets every process share the directory: a
+ * snapshot is never rewritten, so no process can change what another's refresh reads. The price is that a running
+ * process keeps the snapshot it started with; an edit to either file takes effect on the next start.
+ *
+ * ponytail: snapshots are never pruned (one per distinct content, a few KB each) because a running process may still
+ * read an old one; delete the directory while no fastagent process runs if it ever matters.
  */
 async function modelsFileFor(
   agentDir: string,
@@ -116,10 +122,10 @@ async function modelsFileFor(
   const layers = await modelLayers(agentDir);
   if (!layers) return { path: definition };
   const content = JSON.stringify({ providers: { ...layers.machine, ...layers.own } }, null, 2);
-  const agentKey = createHash("sha256").update(resolve(agentDir)).digest("hex").slice(0, 16);
-  const path = join(homedir(), GLOBAL_HOME_DIR, ".cache", "models", `${agentKey}.json`);
-  const current = await readFile(path, "utf8").catch(() => undefined);
-  if (current !== content) writeFileAtomic(path, content, 0o600);
+  const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
+  const path = join(homedir(), GLOBAL_HOME_DIR, ".cache", "models", `${hash}.json`);
+  // 0600: it may carry literal keys. Several processes may create the same snapshot at once.
+  if (!existsSync(path)) writeFileAtomic(path, content, 0o600, true);
   return { path, merged: { machine: layers.machinePath, definition } };
 }
 
@@ -153,6 +159,11 @@ export async function createPiModelRuntime(
     fallbackAuthPath?: string;
     /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
     agentDir?: string;
+    /**
+     * Layer the machine's models.json under the agent's (default). Off for the registry a DEPLOYED agent has, which
+     * `deploy` must judge by: the machine's file does not ship.
+     */
+    machineLayer?: boolean;
     /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
     stateRoot?: string;
     /** Extra providers for the ids the built-ins do not cover. */
@@ -160,7 +171,11 @@ export async function createPiModelRuntime(
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
-  const models = agentDir ? await modelsFileFor(agentDir) : undefined;
+  const models = !agentDir
+    ? undefined
+    : options.machineLayer === false
+      ? { path: join(agentDir, AGENT_MODELS_FILE) }
+      : await modelsFileFor(agentDir);
   const runtime = await ModelRuntime.create({
     credentials: fastagentCredentialStore(options.authPath, {
       warn: options.warn,

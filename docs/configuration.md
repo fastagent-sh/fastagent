@@ -156,7 +156,9 @@ provider's key can be stored instead of written into the file.
 - The agent's own `models.json` wins a provider id: an agent that pins an endpoint keeps it.
 - A malformed file fails startup, naming the file.
 - It is plain JSON (no comments), and while it exists so must the agent's own `models.json` be: fastagent merges
-  the two itself, into `~/.fastagent/.cache/models/`.
+  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. A running process keeps the snapshot it
+  started with, so an edit to either file takes effect on the next start (in `chat`, `/model` does not pick it
+  up). Snapshots are never pruned; delete the directory while no fastagent process runs.
 - It does not ship, and neither does a key written into it. `fastagent info` lists the providers the agent
   inherits from it and marks a model whose endpoint comes from it. `deploy` refuses a model whose provider exists
   only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
