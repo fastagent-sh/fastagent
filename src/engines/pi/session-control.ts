@@ -104,6 +104,11 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
     // which is also what keeps the assembled prompt out of everything this plane publishes.
     return { ...base, kind: `message:${(m as { role: string }).role}`, data: {} };
   }
+  // Which transcript entry the model no longer sees as written: `omitted` when pi dropped it (an abandoned retry or
+  // overflow attempt), otherwise pi replaced its content. The target stays in the transcript either way.
+  if (entry.type === "context_edit") {
+    return { ...base, kind: entry.type, data: { targetId: entry.targetId, omitted: entry.replacement === null } };
+  }
   return { ...base, kind: entry.type, data: {} };
 }
 
