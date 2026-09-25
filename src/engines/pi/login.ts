@@ -109,8 +109,21 @@ export function login(request: LoginRequest): Promise<LoginResult> {
   return loginOver(request);
 }
 
-/** {@link login} over pi's built-ins plus `providers` (a same id replaces one). Not public: a test seam. */
-export async function loginOver(request: LoginRequest, providers?: readonly Provider[]): Promise<LoginResult> {
+/** Not public: what the CLI and the tests add to {@link login}. */
+export interface LoginInternals {
+  /** Providers added to pi's built-ins (a same id replaces one): a test seam. */
+  providers?: readonly Provider[];
+  /**
+   * A model spec to verify an entered key with, when login's registry has it as one of this provider's models: the
+   * first-run picker's choice, the request the agent is about to make. Otherwise the provider's first model is used,
+   * which answers the 401 question as well; this only spares a first model that rejects a minimal request.
+   */
+  verifyWith?: string;
+}
+
+/** {@link login}, plus {@link LoginInternals}. */
+export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
+  const { providers, verifyWith } = internals;
   const { method, authPath, interaction } = request;
   const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
@@ -129,7 +142,7 @@ export async function loginOver(request: LoginRequest, providers?: readonly Prov
     let verified: LoginResult["verified"] = "n/a";
     if (method === "api_key") {
       await trial.modify(provider.id, async () => credential);
-      const verdict = await verifyApiKey(models, provider.id, notify, signal);
+      const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal);
       if (signal.aborted) throw new LoginCancelled("cancelled");
       if (verdict === "rejected") continue;
       verified = verdict;
@@ -170,10 +183,14 @@ async function runFlow(
 async function verifyApiKey(
   models: Models,
   providerId: string,
+  verifyWith: string | undefined,
   notify: (event: AuthEvent) => void,
   signal: AbortSignal,
 ): Promise<"ok" | "rejected" | "unknown"> {
-  const model = models.getProvider(providerId)?.getModels()[0];
+  const preferred = verifyWith?.startsWith(`${providerId}/`)
+    ? models.getModel(providerId, verifyWith.slice(providerId.length + 1))
+    : undefined;
+  const model = preferred ?? models.getProvider(providerId)?.getModels()[0];
   if (!model) {
     notify({
       type: "info",
@@ -278,6 +295,8 @@ export async function loginFlow(
     method?: LoginMethod;
     providers?: Provider[];
     signal?: AbortSignal;
+    /** {@link LoginInternals.verifyWith}. */
+    verifyWith?: string;
   },
 ): Promise<LoginResult> {
   const offered = await loginOptionsOver(options.authPath, options.providers);
@@ -316,6 +335,9 @@ export async function loginFlow(
       authPath: options.authPath,
       interaction: terminalInteraction(io, options.signal),
     },
-    options.providers,
+    {
+      ...(options.providers ? { providers: options.providers } : {}),
+      ...(options.verifyWith ? { verifyWith: options.verifyWith } : {}),
+    },
   );
 }

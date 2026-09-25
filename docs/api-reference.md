@@ -563,6 +563,13 @@ function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOpti
 Sign-in, for a client that is not a terminal:
 
 ```ts
+interface LoginOption {
+  provider: string; // "anthropic"
+  method: "oauth" | "api_key";
+  label: string; // the method's own name: "Anthropic (Claude Pro/Max)", "Anthropic API key"
+  subscription: boolean; // an OAuth login backed by a provider subscription
+  stored?: "oauth" | "api_key"; // what the file holds for this provider now
+}
 function loginOptions(authPath: string): Promise<LoginOption[]>;
 function login(request: {
   provider: string;

@@ -268,8 +268,9 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
   function keyedFaux(
     responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0],
     statuses: number[] = [],
+    models?: { id: string }[],
   ): Provider {
-    const faux = fauxProvider({ provider: "keyed" });
+    const faux = fauxProvider({ provider: "keyed", ...(models ? { models } : {}) });
     faux.setResponses(responses);
     type Options = {
       onResponse?: (response: { status: number; headers: Record<string, string> }, model: unknown) => unknown;
@@ -324,13 +325,31 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
         authPath,
         interaction,
       },
-      [keyedFaux([fauxAssistantMessage("pong")])],
+      { providers: [keyedFaux([fauxAssistantMessage("pong")])] },
     );
 
     expect(result).toEqual({ provider: "keyed", method: "api_key", verified: "ok" });
     expect(prompts.map((p) => p.type)).toEqual(["select", "secret"]); // pi-ai's prompt types reach the client as-is
     expect((await readAuth(authPath)).keyed).toEqual({ type: "api_key", key: "sk-good", env: { REGION: "eu" } });
     expect(events.map((e) => e.type)).toEqual(["progress", "info"]);
+  });
+
+  it("the key is verified with the model the picker chose, when login's registry has it; else the first", async () => {
+    const models = [{ id: "a-preview-only" }, { id: "chosen" }];
+    const probed = async (verifyWith: string | undefined) => {
+      const { interaction, events } = client(["eu", "sk"]);
+      await loginOver(
+        { provider: "keyed", method: "api_key", authPath: await tmpAuth(), interaction },
+        { providers: [keyedFaux([fauxAssistantMessage("pong")], [], models)], ...(verifyWith ? { verifyWith } : {}) },
+      );
+      return events.find((e) => e.type === "progress")?.message;
+    };
+
+    expect(await probed("keyed/chosen")).toMatch(/keyed\/chosen/);
+    // Only in the agent's models.json, or another provider's: the provider's own first model answers instead.
+    expect(await probed("keyed/only-in-models-json")).toMatch(/keyed\/a-preview-only/);
+    expect(await probed("anthropic/claude-sonnet-4-5")).toMatch(/keyed\/a-preview-only/);
+    expect(await probed(undefined)).toMatch(/keyed\/a-preview-only/);
   });
 
   it("a key the provider rejects (401) is never stored, and the provider's key flow runs again", async () => {
@@ -348,7 +367,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
         authPath,
         interaction,
       },
-      [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])],
+      { providers: [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])] },
     );
 
     expect(result.verified).toBe("ok");
@@ -372,7 +391,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
         authPath,
         interaction,
       },
-      [keyedFaux([rejected], [401])],
+      { providers: [keyedFaux([rejected], [401])] },
     );
     await vi.waitFor(() => expect(prompts).toHaveLength(3)); // the region again: the retry has begun
 
@@ -400,7 +419,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
         authPath,
         interaction,
       },
-      [keyedFaux([hanging as never])],
+      { providers: [keyedFaux([hanging as never])] },
     );
     await vi.waitFor(() => expect(events.map((e) => e.type)).toContain("progress")); // "verifying the key…"
 
@@ -414,7 +433,10 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, prompts } = client([], abort.signal); // never answers: waits on the prompt's signal
-    const pending = loginOver({ provider: "openai", method: "api_key", authPath, interaction }, PROVIDERS);
+    const pending = loginOver(
+      { provider: "openai", method: "api_key", authPath, interaction },
+      { providers: PROVIDERS },
+    );
     await vi.waitFor(() => expect(prompts).toHaveLength(1));
 
     abort.abort();
@@ -441,7 +463,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     ];
     const { interaction, prompts } = client([]); // the person never types the code
 
-    const result = await loginOver({ provider: "codex", method: "oauth", authPath, interaction }, providers);
+    const result = await loginOver({ provider: "codex", method: "oauth", authPath, interaction }, { providers });
 
     expect(result).toEqual({ provider: "codex", method: "oauth", verified: "n/a" });
     expect(prompts[0]?.type).toBe("manual_code");

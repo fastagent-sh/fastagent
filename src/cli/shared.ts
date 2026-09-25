@@ -216,7 +216,8 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   }
 
   try {
-    await loginFlow(terminalLoginIO(), { provider, authPath });
+    // Verified against the chosen model when login's registry has it: the request the agent is about to make.
+    await loginFlow(terminalLoginIO(), { provider, authPath, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
