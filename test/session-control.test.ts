@@ -5,7 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
@@ -20,7 +20,7 @@ import {
 } from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
@@ -1853,7 +1853,6 @@ describe("session control: boundary mutations", () => {
         const session = {
           ...bareSessionParts,
           sessionManager: record,
-          settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
           subscribe: () => {
             if (defect === "subscribe") throw new Error("subscribe defect");
             return () => {
@@ -1861,6 +1860,7 @@ describe("session control: boundary mutations", () => {
             };
           },
           compact: async () => {
+            admitCompaction(record); // pi announces admission before the model call
             if (defect === "abort") await finish.promise;
             return { summary: "summary" };
           },
@@ -1886,7 +1886,13 @@ describe("session control: boundary mutations", () => {
         const finished = (async () => {
           for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
         })();
-        expect(await handle.compact(), defect).toEqual({ ok: true });
+        if (defect === "subscribe") {
+          // Subscribing precedes pi's admission, so this defect is a pre-acceptance failure: nothing started.
+          expect(await handle.compact(), defect).toMatchObject({
+            ok: false,
+            error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: expect.stringContaining("subscribe defect") },
+          });
+        } else expect(await handle.compact(), defect).toEqual({ ok: true });
         if (defect === "abort")
           expect(await handle.abort(), defect).toMatchObject({
             ok: false,
@@ -1896,9 +1902,7 @@ describe("session control: boundary mutations", () => {
               retryable: false,
             },
           });
-        expect((await finished)?.data, defect).toEqual(
-          defect === "subscribe" ? { error: "Error: subscribe defect" } : { summary: "summary" },
-        );
+        if (defect !== "subscribe") expect((await finished)?.data, defect).toEqual({ summary: "summary" });
         expect(disposed, defect).toBe(true);
         const release = lease.tryAcquire("cleanup");
         expect(release, defect).toBeTypeOf("function");
@@ -1956,12 +1960,12 @@ describe("session control: boundary mutations", () => {
     const session = {
       ...bareSessionParts,
       sessionManager: record,
-      settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
       subscribe: (listener: typeof emit) => {
         emit = listener;
         return () => {};
       },
       compact: async () => {
+        admitCompaction(record); // pi announces admission before the model call
         emit({
           type: "summarization_retry_scheduled",
           attempt: 2,
@@ -2114,8 +2118,8 @@ describe("session control: boundary mutations", () => {
 
   it("compaction admission reads what the model sees: context edits count as pi counts them", async () => {
     // pi 0.87 omits an abandoned retry/overflow attempt with a `context_edit` and computes its cut over the
-    // projection. Admission read the raw journal, so an omitted attempt counted as history: "ok" for work pi then
-    // refused. Both shapes are what pi's own overflow recovery writes; each runs pi's real compaction.
+    // projection. The dispatch must answer what pi then does: refuse where pi finds nothing, accept where it
+    // summarizes. Both shapes are what pi's own overflow recovery writes; each runs pi's real compaction.
     for (const shape of ["omitted-only", "recovery-tail"]) {
       const { control, sessions } = await makeBoundary(
         Array.from({ length: 4 }, () => fauxAssistantMessage("compact summary")),
@@ -2168,44 +2172,6 @@ describe("session control: boundary mutations", () => {
     expect(seen.at(-1)?.data).toEqual({ aborted: true });
     expect((await control.sessions.get("sB10").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
     expect((await control.sessions.get("sB10").state()).status).toBe("idle"); // the lease came back
-  });
-
-  it("keeps cancellation intent until pi creates its compaction controller", async () => {
-    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
-    await withCompactableHistory(agent, "delayed-controller");
-    let entered!: () => void;
-    let resume!: () => void;
-    const waiting = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const abort = vi.spyOn(AgentSession.prototype, "abort").mockImplementationOnce(async () => {
-      entered();
-      await gate;
-    });
-    const handle = control.sessions.get("delayed-controller");
-    const finished = (async () => {
-      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
-    })();
-    try {
-      expect(await handle.compact()).toEqual({ ok: true });
-      await waiting;
-      vi.useFakeTimers();
-      expect(await handle.abort()).toEqual({ ok: true });
-      // The controller can be delayed arbitrarily; no finite polling budget can cover this window.
-      await vi.advanceTimersByTimeAsync(1000);
-      vi.useRealTimers();
-      resume();
-      expect((await finished)?.data).toEqual({ aborted: true });
-      expect((await handle.entries()).entries.some((entry) => entry.kind === "compaction")).toBe(false);
-      expect((await handle.state()).status).toBe("idle");
-    } finally {
-      resume();
-      vi.useRealTimers();
-      abort.mockRestore();
-    }
   });
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {

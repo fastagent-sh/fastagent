@@ -8,8 +8,10 @@ import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
   type AgentSessionServices,
+  type CompactionResult,
   type CreateAgentSessionServicesOptions,
   type ExtensionCommandContextActions,
+  type InlineExtension,
   ExtensionRunner,
   type LoadExtensionsResult,
   ModelRegistry,
@@ -315,6 +317,72 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
+/** Manual compactions waiting for pi's admission, keyed by the session's record (what an extension's `ctx` names). */
+const compactAdmissions = new WeakMap<SessionManager, () => void>();
+
+/**
+ * pi's own admission signal for a manual compaction: `session_before_compact` fires only once `prepareCompaction`
+ * found work, and before the model call. Its only listener outside the definition's own extensions.
+ */
+const compactAdmission: InlineExtension = {
+  name: "fastagent-compact-admission",
+  hidden: true,
+  factory: (pi) => {
+    pi.on("session_before_compact", (event, ctx) => {
+      if (event.reason === "manual") admitCompaction(ctx.sessionManager as SessionManager);
+    });
+  },
+};
+
+/** Tell a waiting {@link startCompaction} that pi admitted the compaction on this record. */
+export function admitCompaction(record: SessionManager): void {
+  compactAdmissions.get(record)?.();
+}
+
+/**
+ * pi's refusals when `prepareCompaction` finds nothing. They are plain Errors, so their text is the only way to tell
+ * them from any other failure before admission (credentials, an extension cancelling). If pi rewords them, the
+ * refusal still fails visibly, as `boundary_command_failed` instead of `nothing_to_compact`, and the admission
+ * tests in session-control.test.ts, which run pi's real refusal, fail with it.
+ */
+const NOTHING_TO_COMPACT = /^(Nothing to compact|Already compacted)\b/;
+
+/**
+ * Start pi's manual compaction on a bound session. `onAdmitted` runs INSIDE pi's admission event, so everything it
+ * publishes precedes anything pi does next (the model call, its retries). `admission` settles before the model call:
+ * "admitted", "nothing_to_compact" when pi finds nothing, or a rejection with pi's error for anything else that stops
+ * it first. `done` is the compaction itself.
+ */
+export function startCompaction(
+  session: AgentSession,
+  instructions: string | undefined,
+  onAdmitted: () => void,
+): { admission: Promise<"admitted" | "nothing_to_compact">; done: Promise<CompactionResult> } {
+  const record = session.sessionManager;
+  const admitted = new Promise<"admitted">((resolve) => {
+    compactAdmissions.set(record, () => {
+      try {
+        onAdmitted();
+      } finally {
+        resolve("admitted");
+      }
+    });
+  });
+  const done = session.compact(instructions);
+  const forget = () => void compactAdmissions.delete(record);
+  done.then(forget, forget);
+  const settledFirst = done.then(
+    () => {
+      throw new Error("pi finished a compaction without announcing its admission (session_before_compact)");
+    },
+    (error: unknown) => {
+      if (error instanceof Error && NOTHING_TO_COMPACT.test(error.message)) return "nothing_to_compact" as const;
+      throw error;
+    },
+  );
+  return { admission: Promise.race([admitted, settledFirst]), done };
+}
+
 /**
  * The resources ONE served session runs on: a fresh loader, so fresh extension instances.
  *
@@ -342,6 +410,7 @@ async function servingServices(options: {
       extensionPaths,
     }),
     extensionsOverride: refuseLoadTimeProviders,
+    extensionFactories: [compactAdmission],
     cwd,
     agentDir,
     settingsManager,

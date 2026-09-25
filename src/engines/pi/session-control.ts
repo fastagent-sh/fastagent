@@ -23,13 +23,7 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import { PortFailure, port, portAbort, portCleanup, portError, portJoin } from "../../effect-port.ts";
 import { type SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
-import {
-  type ProjectedSessionEntry,
-  type SessionEntry as PiSessionEntry,
-  buildSessionProjection,
-  estimateTokens,
-  sessionEntryToContextMessages,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -58,86 +52,15 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance, isEnginePromptMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
+import { startCompaction } from "./agent-session-factory.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
-
-/**
- * Whether pi's `prepareCompaction` would find anything to summarize. It is private, and `compact` is accept-fast:
- * pi decides "nothing to compact" inside `AgentSession.compact()`, after the dispatch has already answered. So this
- * MIRRORS pi 0.87's admission, clause for clause, over the same projection pi reads (`buildSessionProjection`:
- * compaction tail selected, `context_edit` omissions applied). What it needs of `prepareCompaction` is only whether
- * `[start, cut)` holds a non-system message: the split-turn prefix pi summarizes separately lies inside that range.
- * The test that keeps it honest runs pi's real compaction on the shapes where the two used to disagree.
- */
-function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number): boolean {
-  if (path.at(-1)?.type === "compaction") return false;
-  const { entries } = buildSessionProjection(path);
-  // The newest compaction projects first, then its retained tail; an older one inside that tail projects nothing.
-  const start = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
-  const cut = projectedCutIndex(entries, start, keepRecentTokens);
-  return entries
-    .slice(start, cut)
-    .some(
-      (entry) =>
-        entry.sourceEntry.type !== "compaction" && entry.messages.some((message) => !isEnginePromptMessage(message)),
-    );
-}
-
-/** pi's `isCutPointMessage`: where a kept range may start. Never a tool result, which must follow its call. */
-const CUT_POINT_ROLES = new Set(["user", "assistant", "bashExecution", "custom", "branchSummary", "compactionSummary"]);
-
-/**
- * pi's `findProjectedCutPoint`, reduced to the index. Its final step (walking the cut back over entries that project
- * nothing) is left out: it only moves empty entries across the boundary, which cannot change admission.
- */
-function projectedCutIndex(entries: ProjectedSessionEntry[], start: number, keepRecentTokens: number): number {
-  const cutPoints: number[] = [];
-  entries.forEach((entry, i) => {
-    if (i < start || entry.sourceEntry.type === "compaction") return;
-    if (entry.messages.some((message) => CUT_POINT_ROLES.has(message.role))) cutPoints.push(i);
-  });
-  const first = cutPoints[0];
-  if (first === undefined) return start;
-  let cut = first;
-  let exceeded = false;
-  let tokens = 0;
-  for (let i = entries.length - 1; i >= start; i--) {
-    const entryTokens = (entries[i]?.messages ?? []).reduce((sum, message) => sum + estimateTokens(message), 0);
-    if (entryTokens === 0) continue;
-    tokens += entryTokens;
-    if (tokens >= keepRecentTokens) {
-      exceeded = true;
-      cut = cutPoints.find((candidate) => candidate >= i) ?? cutPoints.at(-1) ?? first;
-      break;
-    }
-  }
-  // An abandoned recovery attempt and its omission edits sit after the last visible input. When everything past
-  // the cut is such an attempt, pi moves the cut one entry later, bringing that input into the summarized range.
-  const suffix = entries.slice(cut + 1);
-  const visible = (entry: ProjectedSessionEntry) =>
-    entry.sourceEntry.type !== "context_edit" && sessionEntryToContextMessages(entry.sourceEntry).length > 0;
-  const omitted = (entry: ProjectedSessionEntry) => visible(entry) && entry.messages.length === 0;
-  const omittedIds = new Set(suffix.filter(omitted).map((entry) => entry.sourceEntry.id));
-  const externalReplacement = suffix.some(
-    ({ sourceEntry: source }) =>
-      source.type === "context_edit" && source.replacement !== null && !omittedIds.has(source.targetId),
-  );
-  const recoveryTail =
-    exceeded &&
-    !externalReplacement &&
-    suffix.some(
-      (entry) =>
-        entry.sourceEntry.type === "message" && entry.sourceEntry.message.role === "assistant" && omitted(entry),
-    ) &&
-    suffix.every((entry) => entry.sourceEntry.type !== "compaction" && (!visible(entry) || omitted(entry)));
-  return recoveryTail ? cut + 1 : cut;
-}
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -787,8 +710,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       }),
     );
 
-  /** Admission waits for binding and local preparation, not the model call. Its execution scope
-   *  survives the control response; completion is published only after releasing the shared lease. */
+  /** Admission waits for binding and pi's own admission (credentials, then the cut point), not the model call.
+   *  Its execution scope survives the control response; completion is published only after releasing the shared
+   *  lease. */
   const compactOf = (session: string, instructions?: string): Promise<SessionResult> => {
     const admitted = Deferred.makeUnsafe<SessionResult>();
     let accepted = false;
@@ -805,37 +729,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (!existing) return noSuchSession(session);
         yield* acquireSessionLease(b.lease, session);
         const bound = yield* acquireSession(b.sessionFactory, session);
-        // Use Pi's own thresholds: a different cut point can admit work Pi later refuses.
-        if (
-          !hasCompactableHistory(
-            bound.sessionManager.getBranch(),
-            bound.settingsManager.getCompactionSettings().keepRecentTokens,
-          )
-        ) {
-          return {
-            ok: false,
-            error: {
-              code: NOTHING_TO_COMPACT_CODE,
-              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
-              retryable: false,
-            },
-          } as const;
-        }
-        accepted = true;
-        compacting.set(session, {
-          abort: () => {
-            aborted = true;
-            bound.abortCompaction();
-          },
-        });
-        emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
-        yield* Deferred.succeed(admitted, { ok: true });
         yield* Effect.acquireRelease(
           Effect.try({
             try: () =>
               bound.subscribe((event) => {
-                // Pi creates the controller after an await; retain an early stop until this event.
-                if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
                 if (event.type !== "summarization_retry_scheduled") return;
                 log.warn(
                   `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
@@ -846,9 +743,37 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }),
           (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
         );
+        // Admission is pi's own decision, observed rather than predicted: a prediction has to track pi's private
+        // cut-point rules release by release. It settles before the model call.
+        const compaction = startCompaction(bound, instructions, () => {
+          accepted = true;
+          compacting.set(session, {
+            abort: () => {
+              aborted = true;
+              bound.abortCompaction();
+            },
+          });
+          emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+          Deferred.doneUnsafe(admitted, Effect.succeed({ ok: true }));
+        });
+        const admission = yield* portAbort(
+          "compact admission",
+          () => compaction.admission,
+          () => bound.abortCompaction(),
+        );
+        if (admission === "nothing_to_compact") {
+          return {
+            ok: false,
+            error: {
+              code: NOTHING_TO_COMPACT_CODE,
+              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
+              retryable: false,
+            },
+          } as const;
+        }
         const done = yield* portAbort(
           "compact",
-          () => bound.compact(instructions),
+          () => compaction.done,
           () => bound.abortCompaction(),
         );
         return { summary: done.summary };

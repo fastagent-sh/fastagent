@@ -233,7 +233,9 @@ are logged independently, continue remaining finalizers, and cannot overwrite a 
 
 Control mutations take the same fail-fast lease. Manual compaction owns its own scope: admission
 returns before model work finishes, and `compaction_finished` is published after cleanup and lease
-release. Assembly services are explicitly injected and shared; sessions and subscriptions stay
+release. Admission is pi's own: an internal extension observes `session_before_compact`, which pi
+emits once `prepareCompaction` found work and before the model call. fastagent does not predict
+pi's private cut-point rules. Assembly services are explicitly injected and shared; sessions and subscriptions stay
 per-operation. These scopes do not own channel turns, durable replay policy, or service shutdown.
 
 pi retries a failed assistant request itself. That is free resilience while the turn is silent and
