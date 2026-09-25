@@ -197,12 +197,11 @@ describe("inheritance edges", () => {
     expect(logged.join(" ")).toContain("no branch hint matched"); // …and said so
   });
 
-  it("the window's budget counts the copied compaction's retained tail", async () => {
-    // The tail is a POINTER on pi's compaction entry, not messages on it, so a budget that reads the
-    // entry alone saw only the summary — and admitted a window on top of a tail that can be the
-    // engine's whole `keepRecentTokens` (20K by default), blowing past INHERIT_MAX_TOKENS. Here the
-    // tail is a `custom_message`, which reaches the model exactly like a message and was likewise
-    // uncounted.
+  it("a copied compaction's retained tail counts until the window cuts it; its summary is carried", async () => {
+    // The tail is a POINTER on pi's compaction entry, not messages on it: the entries from `firstKeptEntryId` up to
+    // the compaction still reach the model, so they count against the window (here a ~60K-token `custom_message`,
+    // over INHERIT_MAX_TOKENS). But pi reads only the NEWEST compaction, so the mark this places after it drops that
+    // tail: charging the tail to the kept exchanges as well cut exchanges that fit, and the room's summary went too.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const room = await store.openOrCreate("room");
     room.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
@@ -215,11 +214,29 @@ describe("inheritance edges", () => {
 
     const thread = await store.openOrCreate("thread-budget", { parentSession: "room" });
 
-    // Two compactions: the copied one, plus the inheritance mark the budget now demands.
+    // Two compactions: the copied one, plus the inheritance mark the tail demands.
     expect(thread.getBranch().filter((e) => e.type === "compaction")).toHaveLength(2);
     const context = JSON.stringify(thread.buildSessionContext().messages);
-    expect(context).toContain("answer 2"); // the newest exchange is the window's floor
-    expect(context).not.toContain("question 0"); // …and the older ones are outside it
+    expect(context).not.toContain("TTTT"); // the tail is what the window cut
+    expect(context).toContain("the older part"); // the room's summary survives the cut
+    for (let i = 0; i < 3; i++) expect(context).toContain(`question ${i}`); // every exchange after it fits
+  });
+
+  it("a history that fits keeps the copied compaction and its tail untouched", async () => {
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "summarized away", timestamp: 1 });
+    const anchor = room.appendCustomMessageEntry("ext.dump", "kept tail", true);
+    room.appendCompaction("the older part", anchor, 1000);
+    room.appendMessage({ role: "user", content: "question 0", timestamp: 10 });
+    room.appendMessage(fauxAssistantMessage("answer 0"));
+
+    const thread = await store.openOrCreate("thread-fits", { parentSession: "room" });
+
+    expect(thread.getBranch().filter((e) => e.type === "compaction")).toHaveLength(1); // no mark placed
+    const context = JSON.stringify(thread.buildSessionContext().messages);
+    expect(context).toContain("kept tail");
+    expect(context).toContain("the older part");
   });
 
   it("what pi removed from the room's context stays removed in the thread", async () => {
@@ -240,6 +257,27 @@ describe("inheritance edges", () => {
     expect(context).toContain("final answer");
     expect(context).not.toContain("old answer");
     expect(context).not.toContain("abandoned attempt");
+  });
+
+  it("an attempt pi omitted costs the window nothing: it never reaches the model", async () => {
+    // pi 0.87 keeps an abandoned retry/overflow attempt in the journal and omits it with a `context_edit`. Measured
+    // on the raw journal, one such attempt (~60K tokens here) pushed the room's earlier exchanges out of the window.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "question 0", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("answer 0"));
+    room.appendMessage({ role: "user", content: "question 1", timestamp: 2 });
+    room.appendContextEdit(room.appendMessage(fauxAssistantMessage("X".repeat(240_000))), null);
+    room.appendMessage(fauxAssistantMessage("answer 1"));
+    room.appendMessage({ role: "user", content: "question 2", timestamp: 3 });
+    room.appendMessage(fauxAssistantMessage("answer 2"));
+
+    const thread = await store.openOrCreate("thread-omitted", { parentSession: "room" });
+
+    // Everything the model sees fits, so no inheritance window is cut.
+    const context = JSON.stringify(thread.buildSessionContext().messages);
+    expect(context).toContain("question 0");
+    expect(context).not.toContain("XXXX"); // and the attempt itself stays omitted in the thread
   });
 
   it("a failure while preparing the fork leaves no record under the id", async () => {

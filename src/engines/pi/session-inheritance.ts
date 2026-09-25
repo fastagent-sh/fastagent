@@ -3,7 +3,12 @@
  * the room knew"), on pi's `SessionManager`.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { CompactionEntry, ContextEditEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  type CompactionEntry,
+  type ContextEditEntry,
+  type SessionManager,
+  estimateTokens,
+} from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { isConversationMessage, isPlaneMarker } from "./session-markers.ts";
 
@@ -27,8 +32,6 @@ const INHERIT_MAX_TOKENS = 50_000;
  */
 const MAX_BRANCH_HINTS = 16;
 const MAX_BRANCH_HINT_CHARS = 128;
-/** A vision image is priced FLAT — what a provider bills for a resized image, roughly. */
-const INHERIT_IMAGE_TOKENS = 1_600;
 
 /** A pi session entry, read loosely: this module only needs the tree fields and a message payload. */
 type Entry = {
@@ -36,51 +39,10 @@ type Entry = {
   id: string;
   parentId: string | null;
   message?: AgentMessage;
-  content?: string | unknown[];
-  summary?: string;
-  // Bound to pi's own field so the shape change the compaction reader documents cannot land quietly.
-  firstKeptEntryId?: CompactionEntry["firstKeptEntryId"];
 };
 
 function isUserMessage(entry: Entry | undefined): boolean {
   return entry?.type === "message" && entry.message?.role === "user";
-}
-
-/** Rough token estimate for windowing — text at chars/4, images flat. */
-function estimateContentTokens(content: unknown): number {
-  if (typeof content === "string") return Math.ceil(content.length / 4);
-  if (!Array.isArray(content)) return 0;
-  let tokens = 0;
-  for (const block of content as { type?: string; text?: string }[]) {
-    if (block.type === "image") tokens += INHERIT_IMAGE_TOKENS;
-    else if (typeof block.text === "string") tokens += Math.ceil(block.text.length / 4);
-    else tokens += Math.ceil(JSON.stringify(block).length / 4);
-  }
-  return tokens;
-}
-
-/** Both entry kinds pi projects into model context from a copied path. */
-function estimateEntryTokens(entry: Entry): number {
-  if (entry.type === "message") return estimateContentTokens((entry.message as { content?: unknown })?.content);
-  if (entry.type === "custom_message") return estimateContentTokens(entry.content);
-  return 0;
-}
-
-/**
- * A compaction entry's summary AND its retained tail — the entries from `firstKeptEntryId` up to the compaction — DO
- * reach the model.
- */
-function estimateCompactionTokens(path: Entry[], compactionIdx: number): number {
-  const compaction = path[compactionIdx];
-  if (compaction?.type !== "compaction") return 0;
-  let tokens = Math.ceil((compaction.summary ?? "").length / 4);
-  const firstKept = path.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
-  if (firstKept < 0) return tokens; // an unresolvable pointer keeps nothing — pi's own reading
-  for (let i = firstKept; i < compactionIdx; i++) {
-    const entry = path[i];
-    if (entry) tokens += estimateEntryTokens(entry);
-  }
-  return tokens;
 }
 
 /** Find the fork target on the parent's active path. */
@@ -109,48 +71,64 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
   return undefined;
 }
 
-/** Bound what the child's MODEL CONTEXT starts with. */
+/**
+ * Bound what the child's MODEL CONTEXT starts with. Measured on pi's projection, what the model will actually see:
+ * a `context_edit` omission (an abandoned retry or overflow attempt) costs nothing, and the engine's own `system`
+ * entries are not history. The newest copied compaction (its summary, then the tail it retained) reaches the model
+ * only while no window is cut: pi reads the NEWEST compaction alone, so a mark placed after it drops that tail. Its
+ * summary, a few hundred tokens covering everything older, is carried into the mark instead.
+ */
 function markInheritanceWindow(child: SessionManager): void {
-  const path = child.getBranch() as unknown as Entry[];
-  let scanFrom = 0;
-  for (let i = path.length - 1; i >= 0; i--) {
-    if (path[i]?.type === "compaction") {
-      scanFrom = i + 1;
-      break;
-    }
+  const path = child.getBranch();
+  const position = new Map(path.map((entry, i) => [entry.id, i]));
+  const latest = path.map((entry) => entry.type).lastIndexOf("compaction");
+  const previous = latest >= 0 ? (path[latest] as CompactionEntry) : undefined;
+  let summaryTokens = 0;
+  let tailTokens = 0;
+  let tailExchanges = 0;
+  const scanned: { id: string; tokens: number; startsExchange: boolean }[] = [];
+  for (const { sourceEntry, messages } of child.buildSessionProjection().entries) {
+    const tokens = messages.reduce(
+      (sum, message) => (message.role === "system" ? sum : sum + estimateTokens(message)),
+      0,
+    );
+    const startsExchange = sourceEntry.type === "message" && sourceEntry.message.role === "user" && messages.length > 0;
+    if (sourceEntry.id === previous?.id) summaryTokens += tokens;
+    else if ((position.get(sourceEntry.id) ?? -1) < latest) {
+      // The retained tail: journal entries BEFORE the compaction that pi still projects.
+      tailTokens += tokens;
+      if (startsExchange) tailExchanges++;
+    } else scanned.push({ id: sourceEntry.id, tokens, startsExchange });
   }
-  const scanned = path.slice(scanFrom);
-  // The compaction's own summary + retained tail reach the model regardless of where the window lands, so they charge
-  // the budget as a base cost.
-  const baseTokens = estimateCompactionTokens(path, scanFrom - 1);
   const starts: number[] = [];
   scanned.forEach((entry, i) => {
-    if (isUserMessage(entry)) starts.push(i);
+    if (entry.startsExchange) starts.push(i);
   });
-  if (starts.length <= 1) return; // zero or one visible exchange — nothing to cut
+  if (starts.length === 0) return; // no exchange after the compaction to place a mark at
   const suffixTokens = new Array<number>(scanned.length + 1).fill(0);
   for (let i = scanned.length - 1; i >= 0; i--) {
-    const entry = scanned[i];
-    suffixTokens[i] = (suffixTokens[i + 1] ?? 0) + (entry ? estimateEntryTokens(entry) : 0);
+    suffixTokens[i] = (suffixTokens[i + 1] ?? 0) + (scanned[i]?.tokens ?? 0);
   }
+  const fits = (exchanges: number, tokens: number) =>
+    exchanges <= INHERIT_MAX_EXCHANGES && tokens <= INHERIT_MAX_TOKENS;
+  const everything = summaryTokens + tailTokens + (suffixTokens[0] ?? 0);
+  if (fits(tailExchanges + starts.length, everything)) return; // the whole visible history fits the window
+  // Cut: the tail goes, the summary stays (carried below). The newest exchange is the floor.
   let chosen = starts.length - 1;
   for (let k = starts.length - 2; k >= 0; k--) {
-    const exchanges = starts.length - k;
-    const startIdx = starts[k];
-    if (startIdx === undefined) break;
-    if (exchanges > INHERIT_MAX_EXCHANGES || baseTokens + (suffixTokens[startIdx] ?? 0) > INHERIT_MAX_TOKENS) break;
+    if (!fits(starts.length - k, summaryTokens + (suffixTokens[starts[k] ?? 0] ?? 0))) break;
     chosen = k;
   }
-  if (chosen === 0) return; // the whole visible history fits the window
-  const boundaryIdx = starts[chosen];
-  if (boundaryIdx === undefined) return;
-  const boundary = scanned[boundaryIdx];
+  // Without a compaction, a mark at the first exchange would hide nothing that costs tokens.
+  if (!previous && chosen === 0) return;
+  const boundary = scanned[starts[chosen] ?? 0];
   if (boundary === undefined) return;
-  child.appendCompaction(
-    `Inherited from the parent conversation; ${chosen} earlier exchange(s) are not shown.`,
-    boundary.id,
-    (suffixTokens[0] ?? 0) - (suffixTokens[boundaryIdx] ?? 0),
-  );
+  const hidden = tailExchanges + chosen;
+  const note =
+    hidden > 0
+      ? `Inherited from the parent conversation; ${hidden} earlier exchange(s) are not shown.`
+      : "Inherited from the parent conversation; earlier messages are not shown.";
+  child.appendCompaction(previous ? `${previous.summary}\n\n${note}` : note, boundary.id, everything);
 }
 
 /** The branch point this inheritance should copy up to, and the parent's path. */
@@ -185,6 +163,9 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
   };
   for (const raw of parent.getBranch(at)) {
     const entry = raw as Entry & {
+      summary?: string;
+      // Bound to pi's own field so a shape change there cannot land quietly.
+      firstKeptEntryId?: CompactionEntry["firstKeptEntryId"];
       customType?: string;
       content?: string | unknown[];
       display?: boolean;
