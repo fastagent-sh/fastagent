@@ -866,8 +866,9 @@ tools safe for untrusted users; `ExecutionEnv` is still not a complete sandbox b
   the per-invoke binding all read that same resolution.
 - **`compact` is accept-fast.** A summarization is a full model call, so the dispatch answers on
   admission and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the
-  lease frees. Pre-acceptance failures reject `boundary_command_failed` with nothing durable landed; a
-  session with no compactable history rejects `nothing_to_compact`. An in-flight compaction is
+  lease frees. Pre-acceptance failures reject `boundary_command_failed` with nothing durable landed
+  (not retryable when pi itself refused); a session with no compactable history rejects
+  `nothing_to_compact`. An in-flight compaction is
   abortable and converges as `compaction_finished{aborted}`.
 - **The leaf is movable.** `update({ leafEntryId })` moves it through pi's `SessionManager.branch()`
   under the same lease; an unknown target rejects `invalid_command`; the move rides out as

@@ -8,6 +8,9 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 import { collect } from "../src/collect.ts";
@@ -2151,6 +2154,106 @@ describe("session control: boundary mutations", () => {
       expect(await handle.compact(), shape).toEqual({ ok: true });
       expect((await finished)?.data, shape).toMatchObject({ summary: expect.stringContaining("compact summary") });
     }
+  });
+
+  it("a definition's own session_before_compact runs after admission: the dispatch does not wait for it", async () => {
+    // pi loads path extensions first and dispatches in that order, so a custom summarizer here (pi's supported way
+    // to replace the summary) would otherwise run before admission: the dispatch waiting on its whole model call,
+    // state() idle under a held lease, and abort with nothing to reach.
+    const dir = await mkdtemp(join(tmpdir(), "fa-compact-ext-"));
+    const extension = join(dir, "slow-summarizer.mjs");
+    await writeFile(
+      extension,
+      `export default (pi) => pi.on("session_before_compact", () => globalThis.__fa_compact_gate__);\n`,
+    );
+    const gate = Promise.withResolvers<void>();
+    (globalThis as Record<string, unknown>).__fa_compact_gate__ = gate.promise;
+    try {
+      const { agent, control } = await fauxControlledAgent(
+        Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)),
+        { extensionPaths: [extension] },
+      );
+      await withCompactableHistory(agent, "ext-hook");
+      const handle = control.sessions.get("ext-hook");
+      const finished = (async () => {
+        for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+      })();
+      const answered = await Promise.race([
+        handle.compact(),
+        new Promise((resolve) => setTimeout(() => resolve("still waiting on the extension"), 2000)),
+      ]);
+      expect(answered).toEqual({ ok: true });
+      expect((await handle.state()).status).toBe("compacting");
+      gate.resolve();
+      expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
+    } finally {
+      gate.resolve();
+      delete (globalThis as Record<string, unknown>).__fa_compact_gate__;
+    }
+  });
+
+  it("a credential that does not resolve is the compaction's failure, not the dispatch's", async () => {
+    // pi resolves summarization credentials before admission, but a served session streams through pi's SDK
+    // wrapper, and on that path pi swallows the failure there (`_getSummarizationRequestAuth`) and meets it again
+    // at the model call. So the dispatch is accepted and the reason arrives in compaction_finished.
+    const { control, sessions, faux, models } = await makeBoundary([]);
+    models.registerNativeProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Faux",
+          resolve: async () => {
+            throw new Error("no credentials configured for faux");
+          },
+        },
+      },
+    });
+    const record = await sessions.openOrCreate("no-auth");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    const handle = control.sessions.get("no-auth");
+    const finished = (async () => {
+      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+    })();
+
+    expect(await handle.compact()).toEqual({ ok: true });
+    expect((await finished)?.data).toMatchObject({
+      error: expect.stringContaining("no credentials configured for faux"),
+    });
+  });
+
+  it("pi refusing before admission answers the dispatch, not retryable: the same call would be refused again", async () => {
+    // pi's pre-admission failures other than "nothing to compact" (no model selected, say). A served session
+    // always binds a model, so the double stands in for the shape rather than a reachable configuration.
+    const { faux, models } = makeFaux();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const record = await sessions.openOrCreate("refused");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    const session = {
+      ...bareSessionParts,
+      sessionManager: record,
+      subscribe: () => () => {},
+      compact: async () => {
+        throw new Error("No model selected");
+      },
+      dispose: () => {},
+    } as unknown as AgentSession;
+    const { control } = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: inProcessLease(),
+        models,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        sessionFactory: async () => session,
+      },
+    });
+
+    expect(await control.sessions.get("refused").compact()).toEqual({
+      ok: false,
+      error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: "Error: No model selected", retryable: false },
+    });
   });
 
   it("an abort that lands the instant compaction starts still stops it", async () => {

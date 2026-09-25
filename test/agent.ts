@@ -65,6 +65,8 @@ export interface FauxControlledAgentOptions extends FauxAgentOptions {
   /** Wire the boundary (compact / set_model / set_thinking / navigate). Off to exercise a hub that
    *  serves observation only — where those commands are gated, not rejected per session. */
   boundary?: boolean;
+  /** The definition's own `extensions/` files, loaded into every bound session. */
+  extensionPaths?: string[];
 }
 
 /**
@@ -100,6 +102,7 @@ export async function fauxControlledAgent(
     engine: async () => ({ modelRuntime, model }),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+    ...(options.extensionPaths ? { extensionPaths: options.extensionPaths } : {}),
     readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
     cwd,
   });

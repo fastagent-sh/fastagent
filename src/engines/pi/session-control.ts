@@ -771,6 +771,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             },
           } as const;
         }
+        // pi's own refusal (no model, credentials that do not resolve). Mostly configuration, which the same call
+        // cannot fix: NOT retryable, where a transport or lease failure here is. pi's message says what to fix.
+        if (admission !== "admitted") {
+          return {
+            ok: false,
+            error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(admission.refused), retryable: false },
+          } as const;
+        }
         const done = yield* portAbort(
           "compact",
           () => compaction.done,
