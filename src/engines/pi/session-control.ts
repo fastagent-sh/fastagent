@@ -710,7 +710,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       }),
     );
 
-  /** Admission waits for binding and pi's own admission (credentials, then the cut point), not the model call.
+  /** Admission waits for binding and pi's own admission (its cut point), not the model call.
    *  Its execution scope survives the control response; completion is published only after releasing the shared
    *  lease. */
   const compactOf = (session: string, instructions?: string): Promise<SessionResult> => {
@@ -771,8 +771,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             },
           } as const;
         }
-        // pi's own refusal (no model, credentials that do not resolve). Mostly configuration, which the same call
-        // cannot fix: NOT retryable, where a transport or lease failure here is. pi's message says what to fix.
+        // Any other error pi raises before admission. A served session has no known trigger: it always binds a
+        // model, and pi swallows a credential failure here and meets it at the model call (compaction_finished).
+        // NOT retryable all the same: it is pi's decision on this session, not a transport or lease fault that
+        // clears on its own, so repeating the call would meet it again.
         if (admission !== "admitted") {
           return {
             ok: false,

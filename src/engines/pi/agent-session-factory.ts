@@ -355,9 +355,9 @@ export function admitCompaction(record: SessionManager): void {
 
 /**
  * pi's refusals when `prepareCompaction` finds nothing. They are plain Errors, so their text is the only way to tell
- * them from pi's other failures before admission (no model, credentials that do not resolve). If pi rewords them,
- * the refusal still fails visibly, as `boundary_command_failed` instead of `nothing_to_compact`, and the admission
- * tests in session-control.test.ts, which run pi's real refusal, fail with it.
+ * them from any other error pi raises before admission. If pi rewords them, the refusal still fails visibly, as
+ * `boundary_command_failed` instead of `nothing_to_compact`, and the admission tests in session-control.test.ts,
+ * which run pi's real refusal, fail with it.
  */
 const NOTHING_TO_COMPACT = /^(Nothing to compact|Already compacted)\b/;
 
