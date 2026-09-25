@@ -73,57 +73,62 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
 
 /**
  * Bound what the child's MODEL CONTEXT starts with. Measured on pi's projection, what the model will actually see:
- * a `context_edit` omission (an abandoned retry or overflow attempt) costs nothing, and the newest compaction's
- * summary and retained tail are already selected. The engine's own `system` entries are not history and cost
- * nothing here either.
+ * a `context_edit` omission (an abandoned retry or overflow attempt) costs nothing, and the engine's own `system`
+ * entries are not history. The newest copied compaction (its summary, then the tail it retained) reaches the model
+ * only while no window is cut: pi reads the NEWEST compaction alone, so a mark placed after it drops that tail. Its
+ * summary, a few hundred tokens covering everything older, is carried into the mark instead.
  */
 function markInheritanceWindow(child: SessionManager): void {
   const path = child.getBranch();
   const position = new Map(path.map((entry, i) => [entry.id, i]));
-  const latestCompaction = path.map((entry) => entry.type).lastIndexOf("compaction");
-  let baseTokens = 0;
+  const latest = path.map((entry) => entry.type).lastIndexOf("compaction");
+  const previous = latest >= 0 ? (path[latest] as CompactionEntry) : undefined;
+  let summaryTokens = 0;
+  let tailTokens = 0;
+  let tailExchanges = 0;
   const scanned: { id: string; tokens: number; startsExchange: boolean }[] = [];
   for (const { sourceEntry, messages } of child.buildSessionProjection().entries) {
     const tokens = messages.reduce(
       (sum, message) => (message.role === "system" ? sum : sum + estimateTokens(message)),
       0,
     );
-    // The newest compaction and its retained tail (which lies BEFORE it in the journal) reach the model wherever
-    // the window lands, so they charge the budget as a base cost; the window cuts only what follows them.
-    if ((position.get(sourceEntry.id) ?? -1) <= latestCompaction) {
-      baseTokens += tokens;
-      continue;
-    }
     const startsExchange = sourceEntry.type === "message" && sourceEntry.message.role === "user" && messages.length > 0;
-    scanned.push({ id: sourceEntry.id, tokens, startsExchange });
+    if (sourceEntry.id === previous?.id) summaryTokens += tokens;
+    else if ((position.get(sourceEntry.id) ?? -1) < latest) {
+      // The retained tail: journal entries BEFORE the compaction that pi still projects.
+      tailTokens += tokens;
+      if (startsExchange) tailExchanges++;
+    } else scanned.push({ id: sourceEntry.id, tokens, startsExchange });
   }
   const starts: number[] = [];
   scanned.forEach((entry, i) => {
     if (entry.startsExchange) starts.push(i);
   });
-  if (starts.length <= 1) return; // zero or one visible exchange — nothing to cut
+  if (starts.length === 0) return; // no exchange after the compaction to place a mark at
   const suffixTokens = new Array<number>(scanned.length + 1).fill(0);
   for (let i = scanned.length - 1; i >= 0; i--) {
     suffixTokens[i] = (suffixTokens[i + 1] ?? 0) + (scanned[i]?.tokens ?? 0);
   }
+  const fits = (exchanges: number, tokens: number) =>
+    exchanges <= INHERIT_MAX_EXCHANGES && tokens <= INHERIT_MAX_TOKENS;
+  const everything = summaryTokens + tailTokens + (suffixTokens[0] ?? 0);
+  if (fits(tailExchanges + starts.length, everything)) return; // the whole visible history fits the window
+  // Cut: the tail goes, the summary stays (carried below). The newest exchange is the floor.
   let chosen = starts.length - 1;
   for (let k = starts.length - 2; k >= 0; k--) {
-    const exchanges = starts.length - k;
-    const startIdx = starts[k];
-    if (startIdx === undefined) break;
-    if (exchanges > INHERIT_MAX_EXCHANGES || baseTokens + (suffixTokens[startIdx] ?? 0) > INHERIT_MAX_TOKENS) break;
+    if (!fits(starts.length - k, summaryTokens + (suffixTokens[starts[k] ?? 0] ?? 0))) break;
     chosen = k;
   }
-  if (chosen === 0) return; // the whole visible history fits the window
-  const boundaryIdx = starts[chosen];
-  if (boundaryIdx === undefined) return;
-  const boundary = scanned[boundaryIdx];
+  // Without a compaction, a mark at the first exchange would hide nothing that costs tokens.
+  if (!previous && chosen === 0) return;
+  const boundary = scanned[starts[chosen] ?? 0];
   if (boundary === undefined) return;
-  child.appendCompaction(
-    `Inherited from the parent conversation; ${chosen} earlier exchange(s) are not shown.`,
-    boundary.id,
-    (suffixTokens[0] ?? 0) - (suffixTokens[boundaryIdx] ?? 0),
-  );
+  const hidden = tailExchanges + chosen;
+  const note =
+    hidden > 0
+      ? `Inherited from the parent conversation; ${hidden} earlier exchange(s) are not shown.`
+      : "Inherited from the parent conversation; earlier messages are not shown.";
+  child.appendCompaction(previous ? `${previous.summary}\n\n${note}` : note, boundary.id, everything);
 }
 
 /** The branch point this inheritance should copy up to, and the parent's path. */
