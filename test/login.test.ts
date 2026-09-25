@@ -16,11 +16,11 @@ import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import {
   type IoOption,
   LoginCancelled,
-  canVerifyWith,
   type LoginIO,
-  login,
   loginFlow,
   loginOptions,
+  loginOptionsOver,
+  loginOver,
 } from "../src/engines/pi/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
@@ -317,13 +317,15 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     const authPath = await tmpAuth();
     const { interaction, prompts, events } = client(["eu", "sk-good"]);
 
-    const result = await login({
-      provider: "keyed",
-      method: "api_key",
-      authPath,
-      interaction,
-      providers: [keyedFaux([fauxAssistantMessage("pong")])],
-    });
+    const result = await loginOver(
+      {
+        provider: "keyed",
+        method: "api_key",
+        authPath,
+        interaction,
+      },
+      [keyedFaux([fauxAssistantMessage("pong")])],
+    );
 
     expect(result).toEqual({ provider: "keyed", method: "api_key", verified: "ok" });
     expect(prompts.map((p) => p.type)).toEqual(["select", "secret"]); // pi-ai's prompt types reach the client as-is
@@ -339,13 +341,15 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     });
     const { interaction, prompts } = client(["eu", "sk-bad", "eu", "sk-good"]);
 
-    const result = await login({
-      provider: "keyed",
-      method: "api_key",
-      authPath,
-      interaction,
-      providers: [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])],
-    });
+    const result = await loginOver(
+      {
+        provider: "keyed",
+        method: "api_key",
+        authPath,
+        interaction,
+      },
+      [keyedFaux([rejected, fauxAssistantMessage("pong")], [401, 200])],
+    );
 
     expect(result.verified).toBe("ok");
     expect(prompts.filter((p) => p.type === "secret")).toHaveLength(2);
@@ -361,13 +365,15 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     });
     const abort = new AbortController();
     const { interaction, prompts } = client(["eu", "sk-bad"], abort.signal);
-    const pending = login({
-      provider: "keyed",
-      method: "api_key",
-      authPath,
-      interaction,
-      providers: [keyedFaux([rejected], [401])],
-    });
+    const pending = loginOver(
+      {
+        provider: "keyed",
+        method: "api_key",
+        authPath,
+        interaction,
+      },
+      [keyedFaux([rejected], [401])],
+    );
     await vi.waitFor(() => expect(prompts).toHaveLength(3)); // the region again: the retry has begun
 
     abort.abort();
@@ -387,13 +393,15 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
           resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" })),
         );
       });
-    const pending = login({
-      provider: "keyed",
-      method: "api_key",
-      authPath,
-      interaction,
-      providers: [keyedFaux([hanging as never])],
-    });
+    const pending = loginOver(
+      {
+        provider: "keyed",
+        method: "api_key",
+        authPath,
+        interaction,
+      },
+      [keyedFaux([hanging as never])],
+    );
     await vi.waitFor(() => expect(events.map((e) => e.type)).toContain("progress")); // "verifying the key…"
 
     abort.abort();
@@ -402,26 +410,11 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
   });
 
-  it("a model that cannot verify this provider's key is refused before anything runs or is written", async () => {
-    for (const [model, reason] of [
-      ["keyed/no-such-model", /not in registry|unknown|no-such-model/i],
-      ["anthropic/claude-sonnet-4-5", /belongs to "anthropic", not "keyed"/],
-    ] as const) {
-      const authPath = await tmpAuth();
-      const { interaction, prompts } = client(["eu", "sk"]);
-      await expect(
-        login({ provider: "keyed", method: "api_key", authPath, interaction, model, providers: [keyedFaux([])] }),
-      ).rejects.toThrow(reason);
-      expect(prompts).toHaveLength(0); // the flow never started
-      expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
-    }
-  });
-
   it("aborting the interaction's signal rejects with LoginCancelled and writes nothing", async () => {
     const authPath = await tmpAuth();
     const abort = new AbortController();
     const { interaction, prompts } = client([], abort.signal); // never answers: waits on the prompt's signal
-    const pending = login({ provider: "openai", method: "api_key", authPath, interaction, providers: PROVIDERS });
+    const pending = loginOver({ provider: "openai", method: "api_key", authPath, interaction }, PROVIDERS);
     await vi.waitFor(() => expect(prompts).toHaveLength(1));
 
     abort.abort();
@@ -448,7 +441,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     ];
     const { interaction, prompts } = client([]); // the person never types the code
 
-    const result = await login({ provider: "codex", method: "oauth", authPath, interaction, providers });
+    const result = await loginOver({ provider: "codex", method: "oauth", authPath, interaction }, providers);
 
     expect(result).toEqual({ provider: "codex", method: "oauth", verified: "n/a" });
     expect(prompts[0]?.type).toBe("manual_code");
@@ -458,7 +451,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
   it("loginOptions offers each interactive method, with what the file holds for the provider", async () => {
     const authPath = await tmpAuth(JSON.stringify({ anthropic: { type: "api_key", key: "sk" } }));
 
-    const offered = await loginOptions(authPath, { providers: PROVIDERS });
+    const offered = await loginOptionsOver(authPath, PROVIDERS);
 
     // The built-ins are always offered; the test's providers are added (replacing the built-in of the same id).
     expect(offered.some((o) => o.provider === "openai-codex")).toBe(true);
@@ -469,14 +462,6 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
       { provider: "openai", method: "api_key", label: "openai API key", subscription: false },
       { provider: "codex", method: "oauth", label: "codex (OAuth)", subscription: false },
     ]);
-  });
-
-  it("canVerifyWith: a built-in model, yes; one an agent's models.json added to a built-in provider, no", () => {
-    // The first-run picker lists the AGENT's registry; handing login a spec its registry lacks refused the sign-in
-    // before the key was even asked for.
-    expect(canVerifyWith("anthropic/claude-sonnet-4-5")).toBe(true);
-    expect(canVerifyWith("anthropic/claude-only-in-models-json")).toBe(false);
-    expect(canVerifyWith("no-slash")).toBe(false);
   });
 
   it("loginOptions reads the credentials file once: a corrupt file warns once, not once per provider", async () => {

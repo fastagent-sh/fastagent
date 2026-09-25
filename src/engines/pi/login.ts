@@ -5,18 +5,15 @@
  * one front end ({@link loginFlow}: terminal menus, then {@link login}); a GUI client is another.
  */
 import {
-  type Api,
   type AuthEvent,
   type AuthInteraction,
   type AuthPrompt,
   type Credential,
   InMemoryCredentialStore,
-  type Model,
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
 import { fastagentCredentialStore } from "./auth.ts";
-import { resolveModel } from "./config.ts";
 import { interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
@@ -40,18 +37,22 @@ export interface LoginOption {
 }
 
 /**
- * Every interactive sign-in of pi's built-in providers plus `providers` (a same id replaces a built-in, as in
- * `createPiModels`), with what `authPath` already holds for each. A provider whose key can only come from its env
- * var offers none and is left out.
+ * Every interactive sign-in of pi's built-in providers, with what `authPath` already holds for each. A provider whose
+ * key can only come from its env var offers none and is left out.
  */
-export async function loginOptions(authPath: string, options: { providers?: Provider[] } = {}): Promise<LoginOption[]> {
+export function loginOptions(authPath: string): Promise<LoginOption[]> {
+  return loginOptionsOver(authPath);
+}
+
+/** {@link loginOptions} over pi's built-ins plus `providers` (a same id replaces one). Not public: a test seam. */
+export async function loginOptionsOver(authPath: string, providers?: readonly Provider[]): Promise<LoginOption[]> {
   // ONE read of the file: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
   // every provider.
   const held = new Map(
     (await fastagentCredentialStore(authPath).list()).map((info) => [info.providerId, info.type] as const),
   );
   const offered: LoginOption[] = [];
-  for (const provider of loginProviders(options.providers)) {
+  for (const provider of loginProviders(providers)) {
     const methods = (["oauth", "api_key"] as const).filter((method) => interactiveAuth(provider, method));
     if (methods.length === 0) continue;
     const stored = held.get(provider.id);
@@ -75,10 +76,6 @@ export interface LoginRequest {
   authPath: string;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
   interaction: AuthInteraction;
-  /** The model an entered API key is verified against; default the provider's first. */
-  model?: string;
-  /** Providers added to pi's built-ins (a same id replaces a built-in), as in `createPiModels`. */
-  providers?: Provider[];
 }
 
 export interface LoginResult {
@@ -95,28 +92,33 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
 }
 
 /**
- * Sign in to one provider and persist the credential to `authPath`.
+ * Sign in to one of pi's built-in providers and persist the credential to `authPath`.
  *
- * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), and `model` is resolved
- * before anything runs, so a flow never runs toward a credential that could not be saved or checked. An entered API
- * key is verified with one minimal request BEFORE it is written: a key the provider rejects (HTTP 401) is never
- * stored, and the provider's key flow runs again (the provider and method were not the mistake). Progress and outcome
- * go out through `interaction.notify`.
+ * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), so a flow never runs
+ * toward a credential that could not be saved. An entered API key is verified with one minimal request to the
+ * provider's first model BEFORE it is written. Credentials are provider-scoped, so any model answers the question the
+ * check asks (does the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the
+ * provider's key flow runs again (the provider and method were not the mistake). Progress and outcome go out through
+ * `interaction.notify`.
  *
  * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
  * writes nothing. Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
  * beating a `manual_code` prompt), and when the flow settles with a prompt still pending.
  */
-export async function login(request: LoginRequest): Promise<LoginResult> {
+export function login(request: LoginRequest): Promise<LoginResult> {
+  return loginOver(request);
+}
+
+/** {@link login} over pi's built-ins plus `providers` (a same id replaces one). Not public: a test seam. */
+export async function loginOver(request: LoginRequest, providers?: readonly Provider[]): Promise<LoginResult> {
   const { method, authPath, interaction } = request;
-  const provider = loginProviders(request.providers).find((p) => p.id === request.provider);
+  const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
-  const models = piModelsOver(trial, request.providers);
-  const probe = method === "api_key" ? probeTarget(models, provider.id, request.model) : undefined;
+  const models = piModelsOver(trial, providers);
   const store = fastagentCredentialStore(authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
@@ -127,7 +129,7 @@ export async function login(request: LoginRequest): Promise<LoginResult> {
     let verified: LoginResult["verified"] = "n/a";
     if (method === "api_key") {
       await trial.modify(provider.id, async () => credential);
-      const verdict = await verifyApiKey(models, provider.id, probe, notify, signal);
+      const verdict = await verifyApiKey(models, provider.id, notify, signal);
       if (signal.aborted) throw new LoginCancelled("cancelled");
       if (verdict === "rejected") continue;
       verified = verdict;
@@ -135,30 +137,6 @@ export async function login(request: LoginRequest): Promise<LoginResult> {
     await store.modify(provider.id, async () => credential);
     return { provider: provider.id, method, verified };
   }
-}
-
-/**
- * Whether {@link login} can verify an API key against `spec`: it is one of its provider's models in login's registry
- * (pi's built-ins plus `providers`). A model an agent's models.json added to a built-in provider is not; a caller
- * then leaves `model` out and the key is checked against the provider's own first model.
- */
-export function canVerifyWith(spec: string, providers?: readonly Provider[]): boolean {
-  const slash = spec.indexOf("/");
-  if (slash < 1) return false;
-  return (
-    piModelsOver(new InMemoryCredentialStore(), providers).getModel(spec.slice(0, slash), spec.slice(slash + 1)) !==
-    undefined
-  );
-}
-
-/** The model an entered key is checked against: the one named, which must be this provider's, or its first. */
-function probeTarget(models: Models, providerId: string, spec: string | undefined): Model<Api> | undefined {
-  if (!spec) return models.getProvider(providerId)?.getModels()[0];
-  const model = resolveModel(models, spec);
-  if (model.provider !== providerId) {
-    throw new Error(`model "${spec}" belongs to "${model.provider}", not "${providerId}": it cannot verify its key`);
-  }
-  return model;
 }
 
 async function runFlow(
@@ -192,10 +170,10 @@ async function runFlow(
 async function verifyApiKey(
   models: Models,
   providerId: string,
-  model: Model<Api> | undefined,
   notify: (event: AuthEvent) => void,
   signal: AbortSignal,
 ): Promise<"ok" | "rejected" | "unknown"> {
+  const model = models.getProvider(providerId)?.getModels()[0];
   if (!model) {
     notify({
       type: "info",
@@ -300,10 +278,9 @@ export async function loginFlow(
     method?: LoginMethod;
     providers?: Provider[];
     signal?: AbortSignal;
-    model?: string;
   },
 ): Promise<LoginResult> {
-  const offered = await loginOptions(options.authPath, options.providers ? { providers: options.providers } : {});
+  const offered = await loginOptionsOver(options.authPath, options.providers);
   let provider = options.provider;
   let method = options.method;
   if (provider) {
@@ -332,12 +309,13 @@ export async function loginFlow(
     );
     if (!candidates.some((o) => o.provider === provider)) throw new LoginCancelled("no provider selected");
   }
-  return login({
-    provider: provider as string,
-    method: method as LoginMethod,
-    authPath: options.authPath,
-    interaction: terminalInteraction(io, options.signal),
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.providers ? { providers: options.providers } : {}),
-  });
+  return loginOver(
+    {
+      provider: provider as string,
+      method: method as LoginMethod,
+      authPath: options.authPath,
+      interaction: terminalInteraction(io, options.signal),
+    },
+    options.providers,
+  );
 }
