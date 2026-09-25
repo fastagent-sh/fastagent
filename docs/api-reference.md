@@ -560,6 +560,34 @@ const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
+Sign-in, for a client that is not a terminal:
+
+```ts
+function loginOptions(authPath: string, options?: { providers?: Provider[] }): Promise<LoginOption[]>;
+function login(request: {
+  provider: string;
+  method: "oauth" | "api_key";
+  authPath: string;
+  interaction: AuthInteraction; // pi-ai's: prompt(AuthPrompt) and notify(AuthEvent)
+  model?: string; // what an entered API key is verified against; default the provider's first
+  providers?: Provider[];
+}): Promise<{ provider: string; method: "oauth" | "api_key"; verified: "ok" | "unknown" | "n/a" }>;
+class LoginCancelled extends Error {}
+```
+
+`loginOptions` lists every interactive sign-in of pi's built-in providers, with `stored` naming what the file
+holds for that provider now. The file keeps one credential per provider, so signing in with the other method
+replaces it. `login` checks the file first, runs the provider's flow over your `AuthInteraction`, and writes the
+credential. Prompts arrive with pi-ai's own types (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`,
+`device_code`, `progress`, `info`), so open URLs yourself and race `manual_code` against the provider's callback.
+Every prompt carries a `signal` that aborts when the provider withdraws it, when `interaction.signal` aborts, or
+when the flow ends. An entered API key is verified with one minimal request: a key the provider rejects (HTTP 401)
+is deleted and only the key is asked again. Aborting `interaction.signal` rejects with `LoginCancelled` and writes
+nothing. `fastagent login` runs the same `login`.
+
+For a custom endpoint (`models.json`), store its key with `fastagentCredentialStore(authPath).modify()` instead:
+`login` covers built-in providers.
+
 `fastagent login` writes `<agent dir>/.secrets/auth.json` by default. `createPiModels()` with no `authPath` reads
 `GLOBAL_AUTH_PATH` instead; pass `authPath` to read a project's file (the `createPiAgentFrom*` openers do).
 

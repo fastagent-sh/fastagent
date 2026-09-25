@@ -8,9 +8,9 @@ import { enterAgentEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
-import { LoginCancelled } from "../../engines/pi/login.ts";
+import { LoginCancelled, loginFlow } from "../../engines/pi/login.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { isInteractive, loginWithKeyCheck } from "../shared.ts";
+import { isInteractive, terminalLoginIO } from "../shared.ts";
 
 export interface LoginOptions {
   /** `-g`: store in the user-global file every agent on this machine falls back to. */
@@ -52,15 +52,17 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
-  // loginWithKeyCheck: an entered API key is verified with one minimal request.
-  const result = await loginWithKeyCheck(provider, authPath).catch((error: unknown) => {
-    if (error instanceof LoginCancelled) {
-      // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
-      console.error(`[fastagent] login cancelled`);
-      process.exit(1);
-    }
-    failStartup(error);
-  });
+  // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
+  const result = await loginFlow(terminalLoginIO(), { authPath, ...(provider ? { provider } : {}) }).catch(
+    (error: unknown) => {
+      if (error instanceof LoginCancelled) {
+        // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
+        console.error(`[fastagent] login cancelled`);
+        process.exit(1);
+      }
+      failStartup(error);
+    },
+  );
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }

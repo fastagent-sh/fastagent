@@ -48,6 +48,16 @@ export type { SessionInheritance } from "./engines/pi/session-inheritance.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";
 export { createPiModels, probeAuthSource, type CreatePiModelsOptions } from "./engines/pi/models.ts";
+export {
+  login,
+  loginOptions,
+  LoginCancelled,
+  type LoginMethod,
+  type LoginOption,
+  type LoginRequest,
+  type LoginResult,
+} from "./engines/pi/login.ts";
+export type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 export type { Models } from "@earendil-works/pi-ai";
 // Types only: they appear in our signatures, so a caller must be able to name them.
 export type { Provider, ProviderAuth } from "@earendil-works/pi-ai";

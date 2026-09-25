@@ -14,7 +14,6 @@ import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { providerOf } from "./config.ts";
-import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
@@ -254,6 +253,17 @@ export async function literalKeyProviders(agentDir: string): Promise<string[]> {
 function isLiteralKey(apiKey: unknown): boolean {
   if (typeof apiKey !== "string" || apiKey === "" || apiKey.startsWith("!")) return false;
   return !/\$\{?[A-Za-z_]/.test(apiKey.replaceAll("$$", ""));
+}
+
+/**
+ * What a provider can offer as an interactive login: an OAuth flow, an API-key ENTRY prompt, or nothing ("none" — the
+ * key must come from the provider's env var).
+ */
+export type InteractiveLoginKind = "oauth" | "api_key" | "none";
+
+export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
+  if (p.auth.oauth) return "oauth";
+  return p.auth.apiKey?.login ? "api_key" : "none";
 }
 
 /** Per-provider auth status for the first-run model picker. */
