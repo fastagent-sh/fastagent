@@ -174,7 +174,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     // command would be dropped and still reported as success. Image resizing is exactly such an await, hundreds of
     // milliseconds of dynamic import and Photon work, and doing it here also keeps it overlapping session acquisition.
     const enqueue = async (p: Prompt, kind: "steer" | "followUp"): Promise<void> => {
-      const opts = await toPiPromptOptions(p);
+      const opts = await toPiPromptOptions(p, "queued");
       return command((session) => port(() => session[kind](p.text, opts?.images)));
     };
     const controls: RunControls = {
@@ -288,7 +288,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       const extensionTurns = trackExtensionTurns(session);
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.
       yield* Deferred.succeed(bound, session);
-      const promptOptions = yield* port(() => toPiPromptOptions(prompt));
+      const promptOptions = yield* port(() => toPiPromptOptions(prompt, "prompt"));
       if (eventFailure) return yield* Effect.fail(eventFailure);
       // Whether an extension could take this input instead of the model (a command, or an `input` handler): only
       // then may a prompt settle with no model run and still have done its job.

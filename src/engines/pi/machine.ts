@@ -77,20 +77,27 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
     settingsManager: scopedSettings(settings),
     additionalSkillPaths: fromPackages(packages.skills),
     additionalPromptTemplatePaths: fromPackages(packages.prompts),
-    // Extensions stay off for the concurrency reason serving keeps them off (agent-session-factory.ts);
-    // context files are fastagent's own (segment ②).
+    // The machine's extensions are its owner's setup, not this agent's (agent-session-factory.ts loads only the
+    // definition's own); context files are fastagent's own (segment ②).
     noExtensions: true,
     noContextFiles: true,
   });
   await loader.reload();
-  const { skills, diagnostics } = loader.getSkills();
-  // Said once — this is the process's only read. A `SKILL.md` with no description is otherwise simply absent.
-  for (const diagnostic of diagnostics) {
-    log.warn(
-      `[fastagent] skill ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
-    );
+  const { skills, diagnostics: skillDiagnostics } = loader.getSkills();
+  const { prompts, diagnostics: promptDiagnostics } = loader.getPrompts();
+  // Said once — this is the process's only read. A `SKILL.md` with no description, or a prompt template whose
+  // frontmatter does not parse, is otherwise simply absent.
+  for (const [kind, diagnostics] of [
+    ["skill", skillDiagnostics],
+    ["prompt template", promptDiagnostics],
+  ] as const) {
+    for (const diagnostic of diagnostics) {
+      log.warn(
+        `[fastagent] ${kind} ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
+      );
+    }
   }
-  return { skills, prompts: loader.getPrompts().prompts, settingsManager: () => scopedSettings(settings) };
+  return { skills, prompts, settingsManager: () => scopedSettings(settings) };
 }
 
 /** A package's enabled resources; the loader discovers the top-level ones itself. */

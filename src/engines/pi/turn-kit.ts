@@ -107,19 +107,24 @@ export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "fa
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
 }
 /**
- * Map prompt images to pi ImageContent, resizing each to model-friendly dimensions/size with pi's Photon resizer
- * (reused from pi-coding-agent, lazy-imported so the common no-image headless path never loads the TUI module graph).
+ * Map prompt images to pi ImageContent. `prompt()` normalizes its images itself, with the bound model's resize
+ * profile (`inputLimits.images.resize`) and format conversion, so a `"prompt"` delivery hands them over as-is.
+ * `steer`/`followUp` do not, so a `"queued"` delivery resizes here with pi's default profile: the model is not known
+ * yet when a queued message is prepared. pi's resizer is lazy-imported so the no-image path never loads its module
+ * graph.
  */
-export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
+export async function toPiPromptOptions(
+  prompt: Prompt,
+  delivery: "prompt" | "queued",
+): Promise<{ images?: ImageContent[] } | undefined> {
   if (!prompt.images || prompt.images.length === 0) return undefined;
+  if (delivery === "prompt") {
+    return { images: prompt.images.map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType })) };
+  }
   const { resizeImage } = await import("@earendil-works/pi-coding-agent");
   const images = await Promise.all(
     prompt.images.map(async (img): Promise<ImageContent> => {
-      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType, {
-        maxWidth: 1568,
-        maxHeight: 1568,
-        maxBytes: 5 * 1024 * 1024,
-      }).catch(() => null);
+      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType).catch(() => null);
       return resized
         ? { type: "image", data: resized.data, mimeType: resized.mimeType }
         : { type: "image", data: img.data, mimeType: img.mimeType };

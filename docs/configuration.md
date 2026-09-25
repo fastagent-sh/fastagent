@@ -123,6 +123,22 @@ and existing OAuth / API-key auth keeps working:
 | `supportsMaxOutputTokens: false` | OpenAI Responses: omits `max_output_tokens` for gateways that reject it. |
 | `supportsMidConvoEffort: true` | Anthropic Messages: enables per-turn effort and signed-thinking binding controls. Enable only for a verified Claude model and faithful transport. |
 
+### Image limits
+
+A model's `inputLimits.images.resize` (`maxWidth`, `maxHeight`, `maxBytes`, `jpegQuality`) sets how images are
+resized before they reach it: a turn's prompt images, `read` results, and tool-result images. A message steered or
+queued into a running turn uses pi's defaults (2000 by 2000 pixels, 4.5 MiB encoded) instead.
+
+```json
+{
+  "providers": {
+    "mygw": {
+      "models": [{ "id": "vision-large", "inputLimits": { "images": { "resize": { "maxWidth": 4096, "maxHeight": 4096 } } } }]
+    }
+  }
+}
+```
+
 The schema is pi's; the full reference is pi's `docs/models.md` (`@earendil-works/pi-coding-agent`). Two FastAgent
 differences:
 
