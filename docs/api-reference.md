@@ -540,7 +540,18 @@ function listModels(models: Models): string[];
 function resolveModel(models: Models, spec: string): Model;
 function createPiModels(options?: CreatePiModelsOptions): Models;
 function probeAuthSource(models: Models, spec: string): Promise<string | undefined>;
+function availableModelsFromDir(
+  dir: string,
+  options?: { authPath?: string; warn?: (message: string) => void },
+): Promise<string[]>;
 ```
+
+`availableModelsFromDir` is what a model picker offers for an agent directory: the specs
+`createPiAgentFromDir(dir, { authPath })` could run now. It covers pi's built-ins plus the agent's `models.json`,
+filtered to providers whose credentials are configured, and sorted. The directory needs no model set. It checks
+configuration, not validity: no OAuth token is refreshed and no provider is called. An unreadable or corrupt
+credentials file goes to `warn`, and otherwise reads as "nothing configured"; pass a `warn` that throws to surface
+it instead.
 
 Auth:
 

@@ -24,6 +24,8 @@ import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
+import { createPiModelRuntime } from "./models.ts";
+import type { FastagentAuthOptions } from "./auth.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -185,6 +187,30 @@ export async function resolveAgentAssembly(
     toolCollisions,
     toolSecrets,
   };
+}
+
+/**
+ * The model specs `createPiAgentFromDir(dir, { authPath })` could run now: the agent's registry (pi's built-ins plus
+ * its `models.json`) filtered to the providers whose credentials are configured, sorted. The directory needs no model
+ * set, and the same placement and credential layers as the opener apply, so a listed spec authenticates there.
+ * Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
+ *
+ * `warn` reaches the credential store. An unreadable or corrupt credentials file otherwise reads as "nothing
+ * configured", so a client that must not show that as an empty list passes a sink that throws.
+ */
+export async function availableModelsFromDir(
+  dir: string,
+  options: FastagentAuthOptions & { authPath?: string } = {},
+): Promise<string[]> {
+  const { agentDir } = resolvePlacement(dir);
+  const fallbackAuthPath = resolveAuthFallback(options.authPath);
+  const models = await createPiModelRuntime({
+    agentDir,
+    authPath: resolveAuthPath(agentDir, options.authPath),
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    ...(options.warn ? { warn: options.warn } : {}),
+  });
+  return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
 }
 
 /**
