@@ -245,8 +245,9 @@ first created: the session existing is the record that the decision was taken, s
 to persist and no decision to retry. The fork copies the room's active path up to the branch point (a
 hit is extended to the end of its exchange, so a mid-exchange fork does not inherit a question without
 its answer; a miss falls back to the room's present, with a warn). What the model sees is bounded by
-one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
-flat — generated from real session entries instead of re-serialized prompt text, so images and tool
+one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, measured with
+pi's `estimateTokens` on what the model will see (an attempt pi omitted costs nothing) — generated from
+real session entries instead of re-serialized prompt text, so images and tool
 results come along for free. The newest exchange is a floor, kept whole even when it alone exceeds the
 budget. Every edge (missing parent, oversize journal, torn tail line) fails toward an empty session
 with a warn.
