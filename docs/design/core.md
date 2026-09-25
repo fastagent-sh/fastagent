@@ -43,7 +43,8 @@ One agent shape, one marker:
 ├── skills/  tools/  channels/  routines/
 ├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
-│                           # travels into the image — model endpoints are identity, not environment)
+│                           # travels into the image). The machine's ~/.fastagent/models.json layers
+│                           # under it as environment and does not travel
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # .env + auth.json; only the tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state

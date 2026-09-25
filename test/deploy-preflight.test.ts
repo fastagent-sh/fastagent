@@ -551,6 +551,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 });
 
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
+  afterEach(() => vi.unstubAllEnvs());
   const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>
     JSON.stringify({
       providers: { mygw: { baseUrl, api: "openai-completions", apiKey, models: [{ id: "m1" }] } },
@@ -623,6 +624,46 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       expect(pre.modelKeyInDefinition).toBe(true);
       expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
     }
+  });
+
+  it("a model whose endpoint comes only from the machine's models.json is warned about: that file does not ship", async () => {
+    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+    await writeFile(
+      machine,
+      JSON.stringify({
+        providers: {
+          localgw: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: [{ id: "m" }],
+          },
+        },
+      }),
+    );
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+    const pre = await call(await workspace(), { model: "localgw/m" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
+    }
+
+    // The agent's own entry for the provider is what ships, so nothing is said.
+    const own = await workspace({
+      "models.json": JSON.stringify({
+        providers: {
+          localgw: {
+            baseUrl: "https://gw.example.com/v1",
+            api: "openai-completions",
+            apiKey: "$K",
+            models: [{ id: "m" }],
+          },
+        },
+      }),
+    });
+    const shipped = await call(own, { model: "localgw/m" });
+    expect(shipped.ok).toBe(true);
+    if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
   });
 
   it("requires what tools and schedules DECLARED, and lists the rest of the value file after them", async () => {

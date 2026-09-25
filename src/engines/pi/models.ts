@@ -3,7 +3,10 @@
  * (per-request credential resolution). fastagent builds one per opener and threads it into the engine alongside the
  * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
  */
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
@@ -12,7 +15,8 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { providerOf } from "./config.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
-import { AGENT_MODELS_FILE, resolveStateRoot } from "../../paths.ts";
+import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
+import { writeFileAtomic } from "../../atomic-write.ts";
 
 /** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md). */
 
@@ -50,6 +54,79 @@ export type AnyModel = Model<any>;
 /** The serving default for reasoning effort, pinned to what pi's TUI defaults to (its own DEFAULT_THINKING_LEVEL). */
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
+/**
+ * The MACHINE's custom-endpoint file, in the same schema as an agent's own: endpoints a person set up for this machine
+ * (a local Ollama, a company gateway), which every agent here inherits the way it inherits the machine's skills.
+ * `FASTAGENT_MODELS_PATH` moves it. It never ships: a deployed agent has only its definition's file.
+ */
+export function machineModelsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(env.FASTAGENT_MODELS_PATH) ?? join(homedir(), GLOBAL_HOME_DIR, AGENT_MODELS_FILE);
+}
+
+/** A custom-endpoint file's providers by id, or undefined when there is no file. Strict JSON: see {@link modelsFileFor}. */
+async function readProviders(path: string): Promise<Record<string, unknown> | undefined> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`could not read ${path}: ${(error as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
+  }
+  const providers = (parsed as { providers?: unknown } | null)?.providers;
+  if (typeof providers !== "object" || providers === null || Array.isArray(providers)) {
+    throw new Error(`${path} must hold { "providers": { ... } }`);
+  }
+  return providers as Record<string, unknown>;
+}
+
+/**
+ * The models.json pi loads for an agent: its own file, layered over the machine's. The agent's file wins a provider id
+ * outright, as a definition's skill wins a name: an agent that pins an endpoint keeps it.
+ *
+ * With one file present, pi reads it directly, so its errors name that file. With both, they are merged into a file
+ * outside the agent directory (pi loads exactly one path); both must then be plain JSON, since pi's comment stripping
+ * is not reachable from here. The merged file is named by its content and written `0600`, as it may carry literal
+ * keys.
+ */
+async function modelsFileFor(
+  agentDir: string,
+): Promise<{ path: string; merged?: { machine: string; definition: string } }> {
+  const definition = join(agentDir, AGENT_MODELS_FILE);
+  const machine = machineModelsPath();
+  if (!existsSync(machine)) return { path: definition };
+  if (!existsSync(definition)) return { path: machine };
+  const [machineProviders, definitionProviders] = await Promise.all([
+    readProviders(machine),
+    readProviders(definition),
+  ]);
+  const content = JSON.stringify({ providers: { ...machineProviders, ...definitionProviders } }, null, 2);
+  const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+  const path = join(tmpdir(), `fastagent-models-${hash}.json`);
+  writeFileAtomic(path, content, 0o600);
+  return { path, merged: { machine, definition } };
+}
+
+/**
+ * Where an agent's custom endpoints come from, for a report: the machine file, the providers the agent inherits from
+ * it, and the ones its own file overrides. Undefined when the machine has no file.
+ */
+export async function machineModels(
+  agentDir: string,
+): Promise<{ path: string; inherited: string[]; overridden: string[] } | undefined> {
+  const path = machineModelsPath();
+  const machine = await readProviders(path);
+  if (!machine) return undefined;
+  const own = (await readProviders(join(agentDir, AGENT_MODELS_FILE))) ?? {};
+  const ids = Object.keys(machine).sort();
+  return { path, inherited: ids.filter((id) => !(id in own)), overridden: ids.filter((id) => id in own) };
+}
+
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(
   options: FastagentAuthOptions & {
@@ -65,12 +142,13 @@ export async function createPiModelRuntime(
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
+  const models = agentDir ? await modelsFileFor(agentDir) : undefined;
   const runtime = await ModelRuntime.create({
     credentials: fastagentCredentialStore(options.authPath, {
       warn: options.warn,
       ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
     }),
-    modelsPath: agentDir ? join(agentDir, AGENT_MODELS_FILE) : null,
+    modelsPath: models?.path ?? null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
     // write a generated cache INTO the author's agent dir.
     ...(agentDir
@@ -81,7 +159,12 @@ export async function createPiModelRuntime(
   // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in
   // getError().
   const error = runtime.getError();
-  if (error) throw new Error(error);
+  if (error) {
+    const origin = models?.merged
+      ? `\n\nThat file merges ${models.merged.machine} with ${models.merged.definition} (the agent's own wins a provider id).`
+      : "";
+    throw new Error(`${error}${origin}`);
+  }
   for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
   return runtime;
 }

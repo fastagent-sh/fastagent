@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { type Api, type Model, type Models, createProvider } from "@earendil-wor
 import {
   createPiModelRuntime,
   literalKeyProviders,
+  machineModels,
   modelCredentialCarry,
   probeApiKey,
   probeAuthSource,
@@ -264,6 +265,70 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     await mkdir(stateRoot, { recursive: true });
     await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json"), stateRoot });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+  });
+});
+
+describe("the machine's models.json (~/.fastagent/models.json), under the agent's own", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const endpoint = (baseUrl: string, extra: Record<string, unknown> = {}) => ({
+    baseUrl,
+    api: "openai-completions",
+    models: [{ id: "m" }],
+    ...extra,
+  });
+
+  /** A machine file at a temporary path (FASTAGENT_MODELS_PATH), and an agent dir with an optional file of its own. */
+  async function layers(
+    machine: string,
+    own?: string,
+  ): Promise<{ agentDir: string; machinePath: string; authPath: string }> {
+    const root = await mkdtemp(join(tmpdir(), "fa-machine-models-"));
+    const machinePath = join(root, "machine-models.json");
+    await writeFile(machinePath, machine);
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machinePath);
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir);
+    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
+    if (own !== undefined) await writeFile(join(agentDir, "models.json"), own);
+    return { agentDir, machinePath, authPath: join(root, "auth.json") };
+  }
+
+  it("a machine endpoint resolves for an agent with no models.json, its key from a stored credential", async () => {
+    // No apiKey in the file: pi's schema allows that when auth.json provides it, which is how a client stores a key.
+    const { agentDir, authPath } = await layers(
+      JSON.stringify({ providers: { localgw: endpoint("http://127.0.0.1:8000/v1") } }),
+    );
+    await writeFile(authPath, JSON.stringify({ localgw: { type: "api_key", key: "sk-stored" } }));
+
+    const models = await createPiModelRuntime({ agentDir, authPath });
+
+    expect(resolveModel(models, "localgw/m").baseUrl).toBe("http://127.0.0.1:8000/v1");
+    expect(await probeAuthSource(models, "localgw/m")).toBe("stored credential");
+  });
+
+  it("the agent's own models.json wins a provider id; the machine's other providers stay", async () => {
+    const machine = JSON.stringify({
+      providers: {
+        localgw: endpoint("http://machine:8000/v1", { apiKey: "x" }),
+        other: endpoint("http://other/v1", { apiKey: "x" }),
+      },
+    });
+    const own = JSON.stringify({ providers: { localgw: endpoint("https://pinned.example.com/v1", { apiKey: "x" }) } });
+    const { agentDir, authPath } = await layers(machine, own);
+
+    const models = await createPiModelRuntime({ agentDir, authPath });
+
+    expect(resolveModel(models, "localgw/m").baseUrl).toBe("https://pinned.example.com/v1");
+    expect(resolveModel(models, "other/m").baseUrl).toBe("http://other/v1");
+    expect(await machineModels(agentDir)).toMatchObject({ inherited: ["other"], overridden: ["localgw"] });
+  });
+
+  it("a malformed machine file fails startup naming that file, alone or merged", async () => {
+    for (const own of [undefined, JSON.stringify({ providers: {} })]) {
+      const { agentDir, machinePath, authPath } = await layers("{ not json", own);
+      await expect(createPiModelRuntime({ agentDir, authPath })).rejects.toThrow(machinePath);
+    }
   });
 });
 

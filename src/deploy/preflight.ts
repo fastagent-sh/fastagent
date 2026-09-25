@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
-import { type FastagentConfig, resolveAuthPath } from "../engines/pi/config.ts";
+import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
 import {
   AGENT_MODELS_FILE,
   type ResolvedPlacement,
@@ -23,6 +23,7 @@ import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
   literalKeyProviders,
+  machineModels,
   modelCredentialCarry,
   probeAuthSource,
 } from "../engines/pi/models.ts";
@@ -266,6 +267,19 @@ export async function preflightDeploy(input: {
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
   }
+  // The machine's models.json is this box's environment, not the artifact: an endpoint the model takes from it is
+  // absent wherever the agent is deployed. Said here rather than as a late "unknown model" on the host.
+  const machine = await machineModels(agentDir);
+  if (modelSpec && machine?.inherited.includes(providerOf(modelSpec))) {
+    messages.push({
+      level: "warn",
+      text:
+        `model "${modelSpec}" takes its "${providerOf(modelSpec)}" entry from ${machine.path}, the machine's ` +
+        `models.json, which does not ship — the deployed agent does not have it. Declare the provider in the ` +
+        `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
+    });
+  }
+
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
   // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The
   // `.dockerignore` check next to this one IS a gate because it catches a packing rule putting FastAgent's OWN
