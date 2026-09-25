@@ -384,6 +384,13 @@ where the engine preserves them — `parentId` exists because branches objective
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. Engine-specific kinds may appear beyond the guaranteed minimum and MUST be skippable.
+The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
+model no longer sees as written. `omitted: true` means the target left the model context; `false` means
+its content was replaced (the replacement is not published). pi writes omissions for its own abandoned
+retry and overflow attempts, and an extension may write either kind of edit, so an omitted entry is not
+necessarily a failed one. The target stays in the transcript. An edit applies only while the
+`context_edit` entry itself lies on the path from `leafEntryId`: after a move or fork to a point
+between the target and the edit, the model sees the target as written.
 
 Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
 `entries({ since: cursor })` to backfill → `state()` to learn whether work is active. Reading first

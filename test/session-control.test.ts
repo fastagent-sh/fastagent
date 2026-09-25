@@ -253,6 +253,25 @@ describe("session control: observation plane", () => {
     expect(unknown.entries).toEqual(all.entries);
   });
 
+  it("entries(): a context edit names the entry the model no longer sees as written", async () => {
+    // pi writes an omission (`replacement: null`) for every abandoned retry or overflow attempt, and an extension
+    // may write omissions or replacements. The target stays in the transcript, so without the edit's target a
+    // client cannot tell it from an entry the model still sees as written.
+    const { control, sessions } = await makeObserved([]);
+    const record = await sessions.openOrCreate("sEdit");
+    record.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const attempt = record.appendMessage(fauxAssistantMessage("abandoned attempt"));
+    record.appendContextEdit(attempt, null);
+    const answer = record.appendMessage(fauxAssistantMessage("answer"));
+    record.appendContextEdit(answer, { content: "shortened answer" });
+
+    const edits = (await control.sessions.get("sEdit").entries()).entries.filter((e) => e.kind === "context_edit");
+    expect(edits.map((e) => e.data)).toEqual([
+      { targetId: attempt, omitted: true },
+      { targetId: answer, omitted: false },
+    ]);
+  });
+
   it("events(): multiple observers see the same stream; unsubscribe is per-consumer", async () => {
     const { agent, control } = await makeObserved([fauxAssistantMessage("shared")]);
     const a = watchUntilSettled(control, "sM");

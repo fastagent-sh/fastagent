@@ -69,6 +69,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
  * kind vocabulary (user/assistant/tool) with a minimal render payload; every other engine record
  * keeps its pi type as an open-set kind with an EMPTY payload — present so `parentId` chains and
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
+ * One exception: `context_edit` carries `{ targetId, omitted }`, never the replacement content.
  */
 function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
   const base = {
@@ -103,6 +104,12 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
     // AgentMessage role a channel/extension defined. Open-set kind with an EMPTY payload, skippable by contract —
     // which is also what keeps the assembled prompt out of everything this plane publishes.
     return { ...base, kind: `message:${(m as { role: string }).role}`, data: {} };
+  }
+  // Which transcript entry the model no longer sees as written: `omitted` when it left the model context (pi's own
+  // abandoned retry and overflow attempts, or an extension's edit), otherwise its content was replaced. The target
+  // stays in the transcript either way, and the edit applies only on a path that contains it.
+  if (entry.type === "context_edit") {
+    return { ...base, kind: entry.type, data: { targetId: entry.targetId, omitted: entry.replacement === null } };
   }
   return { ...base, kind: entry.type, data: {} };
 }
