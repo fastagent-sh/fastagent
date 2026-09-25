@@ -24,9 +24,10 @@ import type * as Scope from "effect/Scope";
 import { PortFailure, port, portAbort, portCleanup, portError, portJoin } from "../../effect-port.ts";
 import { type SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
 import {
+  type ProjectedSessionEntry,
   type SessionEntry as PiSessionEntry,
-  findCutPoint,
-  getLatestCompactionEntry,
+  buildSessionProjection,
+  estimateTokens,
   sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -67,33 +68,75 @@ import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
 /**
- * Admission uses coding-agent's cut point and context rules, including a split-turn prefix.
- * Its prepareCompaction is private; agent-core's namesake uses a different journal format.
- *
- * So this is a MIRROR of pi's own refusal, and `compact` being accept-fast is why it has to exist: pi decides
- * "nothing to compact" inside `AgentSession.compact()`, after the dispatch has already answered. Every clause here
- * therefore tracks one of pi's — including the system exclusion below (pi's `getMessageFromEntryForCompaction`:
- * "System messages are prompt state, not conversation"). Mirroring is the cost of the private function; the test
- * that keeps it honest runs a REAL turn, so the next pi release that changes the journal shape fails loudly here
- * instead of answering `ok` for work pi then refuses.
+ * Whether pi's `prepareCompaction` would find anything to summarize. It is private, and `compact` is accept-fast:
+ * pi decides "nothing to compact" inside `AgentSession.compact()`, after the dispatch has already answered. So this
+ * MIRRORS pi 0.87's admission, clause for clause, over the same projection pi reads (`buildSessionProjection`:
+ * compaction tail selected, `context_edit` omissions applied). What it needs of `prepareCompaction` is only whether
+ * `[start, cut)` holds a non-system message: the split-turn prefix pi summarizes separately lies inside that range.
+ * The test that keeps it honest runs pi's real compaction on the shapes where the two used to disagree.
  */
 function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number): boolean {
   if (path.at(-1)?.type === "compaction") return false;
-  const previous = getLatestCompactionEntry(path);
-  let start = 0;
-  if (previous) {
-    const kept = path.findIndex((entry) => entry.id === previous.firstKeptEntryId);
-    start = kept >= 0 ? kept : path.indexOf(previous) + 1;
+  const { entries } = buildSessionProjection(path);
+  // The newest compaction projects first, then its retained tail; an older one inside that tail projects nothing.
+  const start = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
+  const cut = projectedCutIndex(entries, start, keepRecentTokens);
+  return entries
+    .slice(start, cut)
+    .some(
+      (entry) =>
+        entry.sourceEntry.type !== "compaction" && entry.messages.some((message) => !isEnginePromptMessage(message)),
+    );
+}
+
+/** pi's `isCutPointMessage`: where a kept range may start. Never a tool result, which must follow its call. */
+const CUT_POINT_ROLES = new Set(["user", "assistant", "bashExecution", "custom", "branchSummary", "compactionSummary"]);
+
+/**
+ * pi's `findProjectedCutPoint`, reduced to the index. Its final step (walking the cut back over entries that project
+ * nothing) is left out: it only moves empty entries across the boundary, which cannot change admission.
+ */
+function projectedCutIndex(entries: ProjectedSessionEntry[], start: number, keepRecentTokens: number): number {
+  const cutPoints: number[] = [];
+  entries.forEach((entry, i) => {
+    if (i < start || entry.sourceEntry.type === "compaction") return;
+    if (entry.messages.some((message) => CUT_POINT_ROLES.has(message.role))) cutPoints.push(i);
+  });
+  const first = cutPoints[0];
+  if (first === undefined) return start;
+  let cut = first;
+  let exceeded = false;
+  let tokens = 0;
+  for (let i = entries.length - 1; i >= start; i--) {
+    const entryTokens = (entries[i]?.messages ?? []).reduce((sum, message) => sum + estimateTokens(message), 0);
+    if (entryTokens === 0) continue;
+    tokens += entryTokens;
+    if (tokens >= keepRecentTokens) {
+      exceeded = true;
+      cut = cutPoints.find((candidate) => candidate >= i) ?? cutPoints.at(-1) ?? first;
+      break;
+    }
   }
-  const { firstKeptEntryIndex } = findCutPoint(path, start, path.length, keepRecentTokens);
-  return path.slice(start, firstKeptEntryIndex).some(
-    (entry) =>
-      entry.type !== "compaction" &&
-      // `isEnginePromptMessage`, not `isConversationMessage`: this reader works on the CONTEXT MESSAGES pi
-      // projects entries into, and a `custom_message` is model-visible history pi does summarize. Only the
-      // assembled prompt is excluded — it is not a turn anyone can summarize.
-      sessionEntryToContextMessages(entry).some((message) => !isEnginePromptMessage(message)),
+  // An abandoned recovery attempt and its omission edits sit after the last visible input. When everything past
+  // the cut is such an attempt, pi moves the cut one entry later, bringing that input into the summarized range.
+  const suffix = entries.slice(cut + 1);
+  const visible = (entry: ProjectedSessionEntry) =>
+    entry.sourceEntry.type !== "context_edit" && sessionEntryToContextMessages(entry.sourceEntry).length > 0;
+  const omitted = (entry: ProjectedSessionEntry) => visible(entry) && entry.messages.length === 0;
+  const omittedIds = new Set(suffix.filter(omitted).map((entry) => entry.sourceEntry.id));
+  const externalReplacement = suffix.some(
+    ({ sourceEntry: source }) =>
+      source.type === "context_edit" && source.replacement !== null && !omittedIds.has(source.targetId),
   );
+  const recoveryTail =
+    exceeded &&
+    !externalReplacement &&
+    suffix.some(
+      (entry) =>
+        entry.sourceEntry.type === "message" && entry.sourceEntry.message.role === "assistant" && omitted(entry),
+    ) &&
+    suffix.every((entry) => entry.sourceEntry.type !== "compaction" && (!visible(entry) || omitted(entry)));
+  return recoveryTail ? cut + 1 : cut;
 }
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────

@@ -2112,6 +2112,43 @@ describe("session control: boundary mutations", () => {
     }
   });
 
+  it("compaction admission reads what the model sees: context edits count as pi counts them", async () => {
+    // pi 0.87 omits an abandoned retry/overflow attempt with a `context_edit` and computes its cut over the
+    // projection. Admission read the raw journal, so an omitted attempt counted as history: "ok" for work pi then
+    // refused. Both shapes are what pi's own overflow recovery writes; each runs pi's real compaction.
+    for (const shape of ["omitted-only", "recovery-tail"]) {
+      const { control, sessions } = await makeBoundary(
+        Array.from({ length: 4 }, () => fauxAssistantMessage("compact summary")),
+      );
+      const record = await sessions.openOrCreate("edited");
+      record.appendModelChange("faux", "faux-thinker");
+      record.appendMessage({ role: "user", content: "old", timestamp: 1 });
+      record.appendMessage(fauxAssistantMessage("old answer"));
+      record.appendCompaction("previous summary", null, 100); // retains nothing
+      if (shape === "omitted-only") {
+        // Only the omitted attempt is large, so the visible history fits the keep-recent window.
+        record.appendMessage({ role: "user", content: "question", timestamp: 2 });
+        record.appendContextEdit(record.appendMessage(fauxAssistantMessage(LONG_ANSWER.repeat(3))), null);
+        record.appendMessage(fauxAssistantMessage("final"));
+      } else {
+        // An input too large to keep, then only its abandoned attempt: pi moves the cut past the attempt, so the
+        // input is summarized as a turn prefix.
+        record.appendMessage({ role: "user", content: LONG_ANSWER.repeat(3), timestamp: 2 });
+        record.appendContextEdit(record.appendMessage(fauxAssistantMessage("cut off")), null);
+      }
+      const handle = control.sessions.get("edited");
+      if (shape === "omitted-only") {
+        expect(await handle.compact(), shape).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+        continue;
+      }
+      const finished = (async () => {
+        for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+      })();
+      expect(await handle.compact(), shape).toEqual({ ok: true });
+      expect((await finished)?.data, shape).toMatchObject({ summary: expect.stringContaining("compact summary") });
+    }
+  });
+
   it("an abort that lands the instant compaction starts still stops it", async () => {
     // A client cancels as soon as admission is announced.
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
