@@ -361,8 +361,9 @@ inside a run's activity window and reports as `running` — the observation plan
 equals the data plane's lease window, so `state()` never says idle while an invoke would be rejected
 `session_busy`.
 
-`usage` (present where `capabilities().usage` holds) is the newest answer's own numbers: tokens and
-cost as the provider reported them. `contextTokens` is how full the context is, and `contextWindow` is
+`usage` (present where `capabilities().usage` holds) is the newest answer's own numbers, not a running
+total: tokens and cost as the provider reported them for the latest answer on the active path that
+carries usage (an aborted or failed answer does not, so it reports the one before). `contextTokens` is how full the context is, and `contextWindow` is
 the size of the running model's context. `contextTokens` is ABSENT, never zero, when it is unknown: after
 a compaction or a context edit, until the next answer. The pi reference reads all of it from the record
 (the answer's reported usage plus pi's estimate of what followed it), so after a finished run it equals
@@ -453,7 +454,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
 | L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary`, `error`, or `aborted`). Automatic overflow compaction does not emit these. |
 | L2 | `retry_scheduled { operation, attempt, maxAttempts, delayMs, error }` | A transient provider failure scheduled a summarization retry backoff — explains a quiet gap that would read as a hang. No closing event: the next event is the closure. |
-| L2 | `state_changed { name?, model?, thinkingLevel?, leafEntryId?, usage? }` | What an `update` LANDED, read back from the record. `leafEntryId` reports a deliberate move of the branch head, not a general leaf feed. `usage` alone follows each settled run and each finished compaction, so a subscribed client needs no polling. |
+| L2 | `state_changed { name?, model?, thinkingLevel?, leafEntryId?, usage? }` | What an `update` LANDED, read back from the record. `leafEntryId` reports a deliberate move of the branch head, not a general leaf feed. `usage` alone follows each settled run and each finished compaction; an update that moved `leafEntryId` or changed `model` carries the `usage` the session now has (absent there: it has none). A subscribed client needs no polling. |
 
 Consumers MUST forward or ignore unknown event types; the vocabulary is additive. The contract
 excludes editor replacement, themes, widgets, and all other TUI presentation surfaces.

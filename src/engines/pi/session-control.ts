@@ -342,6 +342,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    * described is gone). Read after the fact, so it follows the event that caused it.
    */
   const publishUsage = (session: string): void => {
+    // Every serve runs a hub, most with nobody attached (a chat channel): reading the whole record each turn for an
+    // empty audience would cost a full parse per turn, growing with the conversation.
+    if (!subscribers.get(session)?.size && !options.tap) return;
     reads.state(session).then(
       ({ usage }) => {
         if (usage) emitOwn(session, { type: "state_changed", timestamp: Date.now(), data: { usage } });
@@ -759,6 +762,20 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               log.warn(`[fastagent] session ${session}: updated, settings unresolvable: ${String(error)}`);
             }
           }
+          // A moved head reads a different newest answer, and another model has another window: the event carries
+          // the usage the session now has, and carries none when it has none. Read back through `state()`, the one
+          // derivation; a read failure only costs the field, since the write has already landed.
+          const usage = applied.landed.some((f) => f === "leafEntryId" || f === "model")
+            ? yield* port(() => reads.state(session)).pipe(
+                Effect.map((state) => state.usage),
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => {
+                    log.warn(`[fastagent] session ${session}: updated, usage unreadable: ${String(portError(cause))}`);
+                    return undefined;
+                  }),
+                ),
+              )
+            : undefined;
           emitOwn(session, {
             type: "state_changed",
             timestamp: Date.now(),
@@ -768,6 +785,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 ? { model: `${settings.model.provider}/${settings.model.id}`, thinkingLevel: settings.thinkingLevel }
                 : {}),
               ...(applied.landed.includes("name") && applied.name ? { name: applied.name } : {}),
+              ...(usage ? { usage } : {}),
             },
           });
         }

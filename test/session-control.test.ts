@@ -1396,8 +1396,9 @@ describe("session control: boundary mutations", () => {
     await watching;
     // Both halves, every time: model and thinking level are ONE setting (a new model can change
     // which level executes), so an update to either reports the pair the next turn will run on.
+    // A model change also carries the usage the session now has (another model, another window).
     expect(seen.map((e) => e.data)).toEqual([
-      { model: spec, thinkingLevel: "medium" },
+      { model: spec, thinkingLevel: "medium", usage: expect.objectContaining({ contextWindow: expect.any(Number) }) },
       { model: spec, thinkingLevel: "high" },
     ]);
     // Durable: the overrides live in the session record (open-set kinds on the entries plane).
@@ -2190,6 +2191,51 @@ describe("session control: boundary mutations", () => {
     const { usage } = await control.sessions.get("sTrailing").state();
     expect(expected?.tokens).toBeGreaterThan(15);
     expect(usage?.contextTokens).toBe(expected?.tokens);
+  });
+
+  it("usage: a moved branch head reports the usage its path now has, or none", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sMove");
+    const answered = (tokens: number) =>
+      ({
+        ...fauxAssistantMessage(`answer ${tokens}`),
+        usage: {
+          input: tokens,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens + 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      }) as never;
+    const question = record.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const first = record.appendMessage(answered(100));
+    record.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    record.appendMessage(answered(900));
+    const handle = control.sessions.get("sMove");
+    expect((await handle.state()).usage?.contextTokens).toBe(901);
+
+    const moves = (async () => {
+      const seen: StateChangedEvent[] = [];
+      for await (const event of handle.events()) {
+        if (event.type === "state_changed") seen.push(event as StateChangedEvent);
+        if (seen.length === 2) return seen;
+      }
+    })();
+    expect(await handle.update({ leafEntryId: first })).toEqual({ ok: true });
+    expect(await handle.update({ leafEntryId: question })).toEqual({ ok: true }); // before any answer
+    const [toFirst, toQuestion] = (await moves) ?? [];
+    expect(toFirst?.data).toMatchObject({ leafEntryId: first, usage: { inputTokens: 100, contextTokens: 101 } });
+    expect(toQuestion?.data).toMatchObject({ leafEntryId: question });
+    expect(toQuestion?.data).not.toHaveProperty("usage"); // none on that path: the event says so by omission
+  });
+
+  it("usage: with nobody attached, a settled run does not re-read the record", async () => {
+    const { agent, sessions } = await makeBoundary([fauxAssistantMessage("an answer")]);
+    const reads = vi.spyOn(sessions, "openIfExists");
+    await drain(agent.invoke({ session: "sQuiet" }, { text: "question" }));
+    await new Promise((resolve) => setTimeout(resolve, 20)); // publishing would have started by now
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it("usage: a session with no answer carrying usage reports none", async () => {
