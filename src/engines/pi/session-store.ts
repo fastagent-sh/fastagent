@@ -1,12 +1,17 @@
 /** Session persistence for the `AgentSession` L0. */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import type { SessionSummary, SessionUpdateField } from "../../session.ts";
-import { LEAF_ANCHOR, isConversationMessage, publishedLeaf, stampProvenance } from "./session-markers.ts";
+import {
+  LEAF_ANCHOR,
+  isConversationMessage,
+  isEnginePromptMessage,
+  publishedLeaf,
+  stampProvenance,
+} from "./session-markers.ts";
 import { type OverrideEntryLike, activePath } from "./session-settings.ts";
 import {
   type SessionInheritance,
@@ -415,16 +420,20 @@ const PREVIEW_CHARS = 200;
  * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
  */
 function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
-  // Conversation messages only (`isConversationMessage`), for consistency with the journal's other readers rather
-  // than against an observable failure: a system entry carries no toolCall to pair, and pi writes its prompt
-  // patches only at a request boundary, so the order is always `assistant(toolCall) -> toolResult... ->
-  // system(patch)` and the "unpaired leaf followed by a system entry" this would rule out cannot be constructed.
-  // Untested for that reason. What it does buy is that a future pi writing a system entry mid-batch degrades to
-  // "no repair needed" instead of silently reading the leaf as unrepairable.
-  const messages = record.getBranch().flatMap((raw) => {
-    const entry = raw as { type?: string; message?: AgentMessage };
-    return isConversationMessage(entry) && entry.message ? [entry.message] : [];
-  });
+  // What the PROVIDER will see, not the raw journal: a repair pairs a call the request carries, so a call the
+  // request drops must not get one. Two drops apply. The projection leaves out what a `context_edit` omitted (pi
+  // writes one for every abandoned retry or overflow attempt), and pi-ai drops an `error`/`aborted` assistant from
+  // the wire (`transformMessages`). A result for a call dropped either way reaches the provider with no call before
+  // it, which Anthropic and OpenAI reject, and since the repair is durable every later turn is rejected with it.
+  // System and custom messages are skipped as before: neither carries a toolCall to pair.
+  const messages = record
+    .buildSessionProjection()
+    .messages.filter(
+      (m) =>
+        !isEnginePromptMessage(m) &&
+        m.role !== "custom" &&
+        !(m.role === "assistant" && (m.stopReason === "error" || m.stopReason === "aborted")),
+    );
 
   let leafIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {

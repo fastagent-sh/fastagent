@@ -536,6 +536,34 @@ describe("fork: the copy is a copy", () => {
     expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
   });
 
+  it("a call the request drops gets no repair: its result would reach the provider unpaired", async () => {
+    // pi-ai drops an error/aborted assistant from the wire, and a context_edit drops what it omits. A /stop or a
+    // stream error mid tool-call leaves such an assistant at the leaf; repairing it wrote a result that every later
+    // request carried with no call before it, which the provider rejects.
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-dropped-"));
+    const store = piSessionRecordStore({ dir, cwd: dir });
+    const callOf = (id: string, stopReason: string) =>
+      ({
+        ...fauxAssistantMessage(""),
+        content: [{ type: "toolCall", id, name: "doer", arguments: {} }],
+        stopReason,
+      }) as never;
+
+    for (const stopReason of ["error", "aborted"]) {
+      const record = await store.openOrCreate(stopReason);
+      record.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
+      record.appendMessage(callOf(`call-${stopReason}`, stopReason));
+    }
+    const edited = await store.openOrCreate("edited");
+    edited.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
+    edited.appendContextEdit(edited.appendMessage(callOf("call-edited", "length")), null);
+
+    for (const session of ["error", "aborted", "edited"]) {
+      const reopened = await store.openOrCreate(session);
+      expect(JSON.stringify(reopened.getBranch()), session).not.toContain("interrupted-tool-call");
+    }
+  });
+
   it("the listing is built from the RECORDS, so a moved workspace still has its conversations", async () => {
     // pi's own listing filters by the cwd in each header — right for a TUI showing "this project's
     // sessions", and quietly catastrophic for a repository: renaming the agent directory emptied the
