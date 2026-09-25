@@ -23,7 +23,13 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import { PortFailure, port, portAbort, portCleanup, portError, portJoin } from "../../effect-port.ts";
 import { type SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
-import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  type SessionEntry as PiSessionEntry,
+  type SessionManager,
+  calculateContextTokens,
+  estimateTokens,
+  getLastAssistantUsage,
+} from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -61,6 +67,54 @@ import { toRetryScheduledEvent } from "./retry-event.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
+
+// ── Usage (read from the record) ─────────────────────────────────────────────
+
+/**
+ * What the newest answer cost and how full the context is, from the record rather than a live session (a served
+ * session exists only during its run). The numbers are the provider's own, on the newest assistant pi counts as
+ * carrying usage (`getLastAssistantUsage`). The context size adds pi's estimate of what followed that answer, which
+ * after a finished turn is nothing: then it is exactly pi's `getContextUsage()`.
+ *
+ * `contextTokens` is omitted, never guessed, once a compaction or a context edit follows that answer: the provider's
+ * count no longer describes the context (pi's own rule). pi then estimates from characters; this reports unknown
+ * until the next response.
+ */
+function sessionUsage(
+  path: PiSessionEntry[],
+  record: SessionManager,
+  contextWindow: number | undefined,
+): SessionState["usage"] {
+  const usage = getLastAssistantUsage(path);
+  if (!usage) return undefined;
+  let at = path.length - 1;
+  while (at >= 0) {
+    const entry = path[at];
+    if (entry?.type === "message" && (entry.message as { usage?: unknown }).usage === usage) break;
+    at--;
+  }
+  const answer = path[at];
+  const stale = path.slice(at + 1).some((entry) => entry.type === "compaction" || entry.type === "context_edit");
+  let contextTokens: number | undefined;
+  if (answer && !stale) {
+    let trailing = 0;
+    let after = false;
+    for (const { sourceEntry, messages } of record.buildSessionProjection().entries) {
+      if (after) for (const message of messages) trailing += estimateTokens(message);
+      if (sourceEntry.id === answer.id) after = true;
+    }
+    contextTokens = calculateContextTokens(usage) + trailing;
+  }
+  return {
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    cacheReadTokens: usage.cacheRead,
+    cacheWriteTokens: usage.cacheWrite,
+    cost: usage.cost.total,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}),
+  };
+}
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -280,6 +334,20 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       if (entry) entry.pending = event.data as { steering: number; followUp: number };
     }
     fanOut(session, event);
+    if (event.type === "run_settled") publishUsage(session);
+  };
+
+  /**
+   * Report `usage` as the record now reads it: after a run (a new answer) and after a compaction (the context it
+   * described is gone). Read after the fact, so it follows the event that caused it.
+   */
+  const publishUsage = (session: string): void => {
+    reads.state(session).then(
+      ({ usage }) => {
+        if (usage) emitOwn(session, { type: "state_changed", timestamp: Date.now(), data: { usage } });
+      },
+      (error: unknown) => log.warn(`[fastagent] session ${session}: usage not published: ${String(error)}`),
+    );
   };
 
   // The reads, plus the two sessionless declarations. Bound onto a handle below.
@@ -307,7 +375,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // `state().availableThinkingLevels` — a list here could only answer for one model.
         ...(b ? { allowedModels: listModels(b.models) } : {}),
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
-        usage: false,
+        usage: true, // state().usage, and state_changed{usage} after each run and compaction
       };
     },
 
@@ -324,11 +392,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // `boundary_command_failed`. Here it is a server-side warn.
       const b = boundary;
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
-      if (opened && b) {
+      let usage: SessionState["usage"];
+      if (opened) {
         try {
-          settings = resolveSessionSettings(activePath(opened), b.models, b.defaults);
+          const path = activePath(opened);
+          if (b) settings = resolveSessionSettings(path, b.models, b.defaults);
+          usage = sessionUsage(path as unknown as PiSessionEntry[], opened, settings?.model.contextWindow);
         } catch (error) {
-          log.warn(`[fastagent] session ${session}: settings unreadable (entry chain): ${String(error)}`);
+          log.warn(`[fastagent] session ${session}: state unreadable (entry chain): ${String(error)}`);
         }
       }
       const name = opened?.getSessionName();
@@ -344,6 +415,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             }
           : {}),
         pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
+        ...(usage ? { usage } : {}),
         ...(leafEntryId ? { leafEntryId } : {}),
       };
     },
@@ -807,6 +879,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               timestamp: Date.now(),
               data: "summary" in result ? result : aborted ? { aborted: true } : { error: result.error.message },
             });
+            if ("summary" in result) publishUsage(session);
           }
           Deferred.doneUnsafe(admitted, Effect.succeed("summary" in result ? { ok: true } : result));
         }),

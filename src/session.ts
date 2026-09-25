@@ -302,10 +302,13 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
   runId: string;
 };
 
-/** An {@link Session.update} changed durable session state (L2; no runId — a property is set between runs). */
+/**
+ * Durable session state changed (L2; no runId). An {@link Session.update} reports what it landed; where
+ * `capabilities().usage` holds, a finished run or compaction reports the session's `usage` as it now reads.
+ */
 export type StateChangedEvent = SessionEvent<
   "state_changed",
-  { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string }
+  { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string; usage?: SessionState["usage"] }
 >;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one `compaction_finished`. */
