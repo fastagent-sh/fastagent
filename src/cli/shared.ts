@@ -18,7 +18,7 @@ import {
   resolveModelSpec,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
+import { LoginCancelled, type LoginIO, canVerifyWith, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
 import { createPiModelRuntime, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
@@ -216,8 +216,10 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   }
 
   try {
-    // Verified against the CHOSEN model — the exact request the agent is about to make.
-    await loginFlow(terminalLoginIO(), { provider, authPath, model: chosen });
+    // Verified against the CHOSEN model — the exact request the agent is about to make — when login's registry (pi's
+    // built-ins) has it. A model the agent's models.json added to a built-in provider is not there; the key is then
+    // checked against the provider's own first model rather than refused before it is even asked for.
+    await loginFlow(terminalLoginIO(), { provider, authPath, ...(canVerifyWith(chosen) ? { model: chosen } : {}) });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel

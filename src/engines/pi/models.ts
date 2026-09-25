@@ -12,6 +12,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type Api,
   type CredentialStore,
+  InMemoryCredentialStore,
   type Model,
   type Models,
   type Provider,
@@ -274,8 +275,18 @@ function isLiteralKey(apiKey: unknown): boolean {
 export type InteractiveLoginKind = "oauth" | "api_key" | "none";
 
 export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
-  if (p.auth.oauth) return "oauth";
-  return p.auth.apiKey?.login ? "api_key" : "none";
+  if (interactiveAuth(p, "oauth")) return "oauth";
+  return interactiveAuth(p, "api_key") ? "api_key" : "none";
+}
+
+/** THE rule for "can this method be signed in to interactively": the auth to run for it, or undefined. */
+export function interactiveAuth(provider: Provider, method: Exclude<InteractiveLoginKind, "none">) {
+  return method === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login ? provider.auth.apiKey : undefined;
+}
+
+/** The providers a sign-in can target: pi's built-ins plus `extra`, composed exactly as {@link createPiModels} does. */
+export function loginProviders(extra?: readonly Provider[]): readonly Provider[] {
+  return piModelsOver(new InMemoryCredentialStore(), extra).getProviders();
 }
 
 /** Per-provider auth status for the first-run model picker. */

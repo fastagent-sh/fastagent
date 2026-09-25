@@ -15,10 +15,9 @@ import {
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { fastagentCredentialStore } from "./auth.ts";
 import { resolveModel } from "./config.ts";
-import { piModelsOver, probeApiKey } from "./models.ts";
+import { interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -40,29 +39,22 @@ export interface LoginOption {
   stored?: LoginMethod;
 }
 
-/** pi's built-ins plus `extra`, a same id replacing a built-in: the same composition `createPiModels` applies. */
-function withProviders(extra: readonly Provider[] = []): Provider[] {
-  const ids = new Set(extra.map((provider) => provider.id));
-  return [...builtinProviders().filter((provider) => !ids.has(provider.id)), ...extra];
-}
-
-/** The auth a provider runs for `method`, when it offers that method interactively. */
-function interactiveAuth(provider: Provider, method: LoginMethod) {
-  return method === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login ? provider.auth.apiKey : undefined;
-}
-
 /**
  * Every interactive sign-in of pi's built-in providers plus `providers` (a same id replaces a built-in, as in
  * `createPiModels`), with what `authPath` already holds for each. A provider whose key can only come from its env
  * var offers none and is left out.
  */
 export async function loginOptions(authPath: string, options: { providers?: Provider[] } = {}): Promise<LoginOption[]> {
-  const store = fastagentCredentialStore(authPath);
+  // ONE read of the file: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
+  // every provider.
+  const held = new Map(
+    (await fastagentCredentialStore(authPath).list()).map((info) => [info.providerId, info.type] as const),
+  );
   const offered: LoginOption[] = [];
-  for (const provider of withProviders(options.providers)) {
+  for (const provider of loginProviders(options.providers)) {
     const methods = (["oauth", "api_key"] as const).filter((method) => interactiveAuth(provider, method));
     if (methods.length === 0) continue;
-    const stored = (await store.read(provider.id))?.type;
+    const stored = held.get(provider.id);
     for (const method of methods) {
       offered.push({
         provider: provider.id,
@@ -117,7 +109,7 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
  */
 export async function login(request: LoginRequest): Promise<LoginResult> {
   const { method, authPath, interaction } = request;
-  const provider = withProviders(request.providers).find((p) => p.id === request.provider);
+  const provider = loginProviders(request.providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
@@ -143,6 +135,20 @@ export async function login(request: LoginRequest): Promise<LoginResult> {
     await store.modify(provider.id, async () => credential);
     return { provider: provider.id, method, verified };
   }
+}
+
+/**
+ * Whether {@link login} can verify an API key against `spec`: it is one of its provider's models in login's registry
+ * (pi's built-ins plus `providers`). A model an agent's models.json added to a built-in provider is not; a caller
+ * then leaves `model` out and the key is checked against the provider's own first model.
+ */
+export function canVerifyWith(spec: string, providers?: readonly Provider[]): boolean {
+  const slash = spec.indexOf("/");
+  if (slash < 1) return false;
+  return (
+    piModelsOver(new InMemoryCredentialStore(), providers).getModel(spec.slice(0, slash), spec.slice(slash + 1)) !==
+    undefined
+  );
 }
 
 /** The model an entered key is checked against: the one named, which must be this provider's, or its first. */
@@ -303,7 +309,7 @@ export async function loginFlow(
   if (provider) {
     const methods = offered.filter((o) => o.provider === provider).map((o) => o.method);
     if (methods.length === 0) {
-      const known = withProviders(options.providers).some((p) => p.id === provider);
+      const known = loginProviders(options.providers).some((p) => p.id === provider);
       throw new Error(
         known
           ? `provider "${provider}" has no interactive login — set its API key via the provider's env var`

@@ -10,11 +10,13 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import {
   type IoOption,
   LoginCancelled,
+  canVerifyWith,
   type LoginIO,
   login,
   loginFlow,
@@ -238,6 +240,7 @@ describe("loginFlow", () => {
 });
 
 describe("login (the entry point a GUI client drives with pi-ai's AuthInteraction)", () => {
+  afterEach(() => vi.restoreAllMocks());
   /** A client: answers prompts from a script, records what it was shown and told. */
   function client(answers: string[], signal?: AbortSignal) {
     const prompts: AuthPrompt[] = [];
@@ -466,6 +469,23 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
       { provider: "openai", method: "api_key", label: "openai API key", subscription: false },
       { provider: "codex", method: "oauth", label: "codex (OAuth)", subscription: false },
     ]);
+  });
+
+  it("canVerifyWith: a built-in model, yes; one an agent's models.json added to a built-in provider, no", () => {
+    // The first-run picker lists the AGENT's registry; handing login a spec its registry lacks refused the sign-in
+    // before the key was even asked for.
+    expect(canVerifyWith("anthropic/claude-sonnet-4-5")).toBe(true);
+    expect(canVerifyWith("anthropic/claude-only-in-models-json")).toBe(false);
+    expect(canVerifyWith("no-slash")).toBe(false);
+  });
+
+  it("loginOptions reads the credentials file once: a corrupt file warns once, not once per provider", async () => {
+    const authPath = await tmpAuth("{bad");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    await loginOptions(authPath);
+
+    expect(warn.mock.calls.filter(([m]) => /corrupt auth file/.test(String(m)))).toHaveLength(1);
   });
 
   it("is public from the pi entry point", async () => {
