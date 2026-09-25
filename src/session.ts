@@ -207,6 +207,12 @@ export interface SessionState {
   /** What `update({ thinkingLevel })` accepts for THIS session — re-read after a model change. */
   availableThinkingLevels?: string[];
   pending: { steering: number; followUp: number };
+  /**
+   * The NEWEST ANSWER's own numbers, not a running total: tokens and `cost` as the provider reported them for the
+   * latest answer on the active path that carries usage (an aborted or failed answer does not, so it reports the one
+   * before). `contextTokens` is how full the context is now, ABSENT when unknown (after a compaction or a context
+   * edit, until the next answer); `contextWindow` is the running model's.
+   */
   usage?: {
     inputTokens: number;
     outputTokens: number;
@@ -302,10 +308,14 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
   runId: string;
 };
 
-/** An {@link Session.update} changed durable session state (L2; no runId — a property is set between runs). */
+/**
+ * Durable session state changed (L2; no runId). An {@link Session.update} reports what it landed; where
+ * `capabilities().usage` holds, a finished run or compaction reports the session's `usage` as it now reads, and an
+ * update that moved `leafEntryId` or changed `model` carries it too (absent there: the session now has none).
+ */
 export type StateChangedEvent = SessionEvent<
   "state_changed",
-  { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string }
+  { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string; usage?: SessionState["usage"] }
 >;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one `compaction_finished`. */

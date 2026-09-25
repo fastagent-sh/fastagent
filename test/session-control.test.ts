@@ -5,7 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -39,6 +39,7 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEntry,
   type SessionEvent,
+  type SessionState,
   type StateChangedEvent,
   type SessionControl,
 } from "../src/session.ts";
@@ -1395,8 +1396,9 @@ describe("session control: boundary mutations", () => {
     await watching;
     // Both halves, every time: model and thinking level are ONE setting (a new model can change
     // which level executes), so an update to either reports the pair the next turn will run on.
+    // A model change also carries the usage the session now has (another model, another window).
     expect(seen.map((e) => e.data)).toEqual([
-      { model: spec, thinkingLevel: "medium" },
+      { model: spec, thinkingLevel: "medium", usage: expect.objectContaining({ contextWindow: expect.any(Number) }) },
       { model: spec, thinkingLevel: "high" },
     ]);
     // Durable: the overrides live in the session record (open-set kinds on the entries plane).
@@ -2095,6 +2097,152 @@ describe("session control: boundary mutations", () => {
     await watching;
     // …and the event stream carries ONLY it — no compaction bounds ever fired.
     expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
+  });
+
+  it("usage: after a turn, the context size is exactly pi's own, and a state_changed carries it", async () => {
+    const { agent, control, sessions, faux } = await makeBoundary([fauxAssistantMessage("an answer")]);
+    expect(control.capabilities().usage).toBe(true);
+    const handle = control.sessions.get("sUsage");
+    await sessions.openOrCreate("sUsage");
+    const published = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === "state_changed" && (event.data as { usage?: unknown }).usage) return event;
+      }
+    })();
+    await drain(agent.invoke({ session: "sUsage" }, { text: "question" }));
+
+    const record = (await sessions.openIfExists("sUsage")) as NonNullable<
+      Awaited<ReturnType<typeof sessions.openIfExists>>
+    >;
+    const model = faux.getModel();
+    // pi's own number for the same record and model: what a live session would report.
+    const expected = AgentSession.prototype.getContextUsage.call({ model, sessionManager: record } as never);
+    const { usage } = await handle.state();
+    expect(expected?.tokens).toBeGreaterThan(0);
+    expect(usage).toMatchObject({ contextTokens: expected?.tokens, contextWindow: model.contextWindow });
+    expect(usage?.inputTokens).toBeTypeOf("number");
+    expect((await published)?.data).toEqual({ usage });
+  });
+
+  it("usage: the context size is unknown, not zero, once a compaction or context edit follows the answer", async () => {
+    const { agent, control, sessions } = await makeBoundary([
+      ...Array.from({ length: 3 }, () => fauxAssistantMessage(LONG_ANSWER)),
+      ...Array.from({ length: 2 }, () => fauxAssistantMessage("compact summary")), // history + split-turn prefix
+    ]);
+    await withCompactableHistory(agent, "sUnknown");
+    const handle = control.sessions.get("sUnknown");
+    expect((await handle.state()).usage?.contextTokens).toBeGreaterThan(0);
+    const published = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === "state_changed" && (event.data as { usage?: unknown }).usage) return event;
+      }
+    })();
+    expect(await handle.compact()).toEqual({ ok: true });
+    const after = (await published)?.data as { usage: NonNullable<SessionState["usage"]> };
+    expect(after.usage).not.toHaveProperty("contextTokens"); // pi reports null here too
+    expect(after.usage.outputTokens).toBeTypeOf("number"); // the last answer's own numbers still stand
+
+    const edited = await sessions.openOrCreate("sEdited");
+    edited.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const answer = edited.appendMessage({
+      ...fauxAssistantMessage("answer"),
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } as never);
+    expect((await control.sessions.get("sEdited").state()).usage?.contextTokens).toBe(15);
+    edited.appendContextEdit(answer, null);
+    expect((await control.sessions.get("sEdited").state()).usage).not.toHaveProperty("contextTokens");
+  });
+
+  it("usage: mid-run, what followed the answer is estimated the way pi estimates it", async () => {
+    const { control, sessions, faux } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sTrailing");
+    record.appendMessage({ role: "user", content: "run it", timestamp: 1 });
+    record.appendMessage({
+      ...fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "t1" })),
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } as never);
+    record.appendMessage({
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "echo",
+      content: [{ type: "text", text: "r".repeat(4000) }],
+      isError: false,
+      timestamp: 2,
+    } as never);
+
+    const expected = AgentSession.prototype.getContextUsage.call({
+      model: faux.getModel(),
+      sessionManager: record,
+    } as never);
+    const { usage } = await control.sessions.get("sTrailing").state();
+    expect(expected?.tokens).toBeGreaterThan(15);
+    expect(usage?.contextTokens).toBe(expected?.tokens);
+  });
+
+  it("usage: a moved branch head reports the usage its path now has, or none", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sMove");
+    const answered = (tokens: number) =>
+      ({
+        ...fauxAssistantMessage(`answer ${tokens}`),
+        usage: {
+          input: tokens,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens + 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      }) as never;
+    const question = record.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const first = record.appendMessage(answered(100));
+    record.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    record.appendMessage(answered(900));
+    const handle = control.sessions.get("sMove");
+    expect((await handle.state()).usage?.contextTokens).toBe(901);
+
+    const moves = (async () => {
+      const seen: StateChangedEvent[] = [];
+      for await (const event of handle.events()) {
+        if (event.type === "state_changed") seen.push(event as StateChangedEvent);
+        if (seen.length === 2) return seen;
+      }
+    })();
+    expect(await handle.update({ leafEntryId: first })).toEqual({ ok: true });
+    expect(await handle.update({ leafEntryId: question })).toEqual({ ok: true }); // before any answer
+    const [toFirst, toQuestion] = (await moves) ?? [];
+    expect(toFirst?.data).toMatchObject({ leafEntryId: first, usage: { inputTokens: 100, contextTokens: 101 } });
+    expect(toQuestion?.data).toMatchObject({ leafEntryId: question });
+    expect(toQuestion?.data).not.toHaveProperty("usage"); // none on that path: the event says so by omission
+  });
+
+  it("usage: with nobody attached, a settled run does not re-read the record", async () => {
+    const { agent, sessions } = await makeBoundary([fauxAssistantMessage("an answer")]);
+    const reads = vi.spyOn(sessions, "openIfExists");
+    await drain(agent.invoke({ session: "sQuiet" }, { text: "question" }));
+    await new Promise((resolve) => setTimeout(resolve, 20)); // publishing would have started by now
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("usage: a session with no answer carrying usage reports none", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const record = await sessions.openOrCreate("sNoUsage");
+    record.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    expect(await control.sessions.get("sNoUsage").state()).not.toHaveProperty("usage");
   });
 
   it("compaction admits every history shape using the coding-agent journal", async () => {
