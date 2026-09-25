@@ -248,8 +248,8 @@ its answer; a miss falls back to the room's present, with a warn). What the mode
 one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
 flat — generated from real session entries instead of re-serialized prompt text, so images and tool
 results come along for free. The newest exchange is a floor, kept whole even when it alone exceeds the
-budget. Every edge (missing parent, oversize journal, torn tail line, a dangling tool call from
-forking a mid-turn room) fails toward an empty session with a warn.
+budget. Every edge (missing parent, oversize journal, torn tail line) fails toward an empty session
+with a warn.
 
 **The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's
 session only advances when the agent is summoned, so discussion since its last answered turn sits in

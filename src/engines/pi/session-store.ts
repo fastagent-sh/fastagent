@@ -1,7 +1,6 @@
 /** Session persistence for the `AgentSession` L0. */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
@@ -149,9 +148,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
     try {
-      // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down to the child, whose
-      // very first request the provider then rejects.
-      const parent = reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
+      const parent = SessionManager.open(found.path, found.dir);
       const cut = inheritanceCut(parent, inherit.branchHints);
       if (!cut) return undefined;
       return fillStaged(piSessionId(sessionId), (staged) => copyBranchForInheritance(parent, staged, cut.at));
@@ -184,7 +181,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   return {
     async openOrCreate(sessionId, inherit) {
       const found = locate(sessionId);
-      if (found) return reconcileInterruptedToolCalls(SessionManager.open(found.path, found.dir));
+      if (found) return SessionManager.open(found.path, found.dir);
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which is what makes it
       // one-time by construction.
@@ -244,8 +241,6 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot place.
         if (name) staged.appendSessionInfo(name);
         stampProvenance(staged, provenance);
-        // NOT reconciled: the repair appends at the parent's LEAF, which a copy stopping at `at` can never reach — it
-        // would only write to the record being copied FROM.
         copyBranchInto(parent, staged, at);
       });
     },
@@ -407,78 +402,6 @@ const RECORD_SUFFIX = ".jsonl";
 /** How much of the first message a list row carries. */
 const PREVIEW_CHARS = 200;
 
-/**
- * Crash-safety reconciliation, run on every OPEN of an existing record that is about to be CONTINUED: a dangling
- * `toolCall` with no `toolResult` is what a process killed mid tool-execution leaves behind, and the provider
- * rejects the very first request that carries it.
- *
- * It APPENDS the missing result, so a caller must run it on the record it is allowed to write.
- */
-function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
-  // Conversation messages only (`isConversationMessage`), for consistency with the journal's other readers rather
-  // than against an observable failure: a system entry carries no toolCall to pair, and pi writes its prompt
-  // patches only at a request boundary, so the order is always `assistant(toolCall) -> toolResult... ->
-  // system(patch)` and the "unpaired leaf followed by a system entry" this would rule out cannot be constructed.
-  // Untested for that reason. What it does buy is that a future pi writing a system entry mid-batch degrades to
-  // "no repair needed" instead of silently reading the leaf as unrepairable.
-  const messages = record.getBranch().flatMap((raw) => {
-    const entry = raw as { type?: string; message?: AgentMessage };
-    return isConversationMessage(entry) && entry.message ? [entry.message] : [];
-  });
-
-  let leafIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      leafIdx = i;
-      break;
-    }
-  }
-  if (leafIdx === -1) return record; // no assistant turn yet
-  const leafReparable = messages.slice(leafIdx + 1).every((m) => m.role === "toolResult");
-
-  const toRepair: { id: string; name: string }[] = [];
-  const orphaned: string[] = [];
-  messages.forEach((m, idx) => {
-    if (m.role !== "assistant") return;
-    const paired = new Set<string>();
-    for (let j = idx + 1; j < messages.length; j++) {
-      const next = messages[j];
-      if (next?.role !== "toolResult") break;
-      paired.add(next.toolCallId);
-    }
-    for (const block of m.content) {
-      if (block.type !== "toolCall" || paired.has(block.id)) continue;
-      if (idx === leafIdx && leafReparable) toRepair.push({ id: block.id, name: block.name });
-      else orphaned.push(block.id);
-    }
-  });
-
-  if (orphaned.length > 0) {
-    log.warn(
-      `[fastagent] unmatched tool_use is not at the session leaf; leaving it unreconciled ` +
-        `(an append-only log cannot repair a mid-history gap): toolCallIds=${orphaned.join(",")}`,
-    );
-  }
-
-  for (const { id, name } of toRepair) {
-    record.appendMessage({
-      role: "toolResult",
-      toolCallId: id,
-      toolName: name,
-      content: [
-        {
-          type: "text",
-          text: "This tool call did not complete and its result is unavailable. Re-run it if the result is still needed.",
-        },
-      ],
-      details: { fastagent: "interrupted-tool-call" },
-      isError: true,
-      timestamp: Date.now(),
-    } as unknown as Parameters<SessionManager["appendMessage"]>[0]);
-  }
-  return record;
-}
-
 /** Where the records live, under the sessions directory the store is pointed at. */
 const OWN_RECORDS_DIR = "agent-session";
 
@@ -502,7 +425,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // Keyed by the CALLER's id: the encoding exists to satisfy pi's filename rule, and in memory there are no
       // filenames.
       const existing = live.get(sessionId);
-      if (existing) return reconcileInterruptedToolCalls(existing);
+      if (existing) return existing;
       const fresh = () => SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
       // Same semantics as the durable store, different mechanism: with no file to fork, the parent's path is copied
       // entry by entry.
@@ -516,7 +439,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       if (inherit && parent) {
         try {
           const staged = fresh();
-          const cut = inheritanceCut(reconcileInterruptedToolCalls(parent), inherit.branchHints);
+          const cut = inheritanceCut(parent, inherit.branchHints);
           if (cut) copyBranchForInheritance(parent, staged, cut.at);
           created = staged;
         } catch (error) {

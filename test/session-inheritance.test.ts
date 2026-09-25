@@ -164,25 +164,6 @@ describe("the in-memory backend inherits too — the contract is not the medium"
 });
 
 describe("inheritance edges", () => {
-  it("a parent that crashed mid tool-call does not pass the dangling call to the thread", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-inherit-crash-"));
-    const cwd = process.cwd();
-    const store = piSessionRecordStore({ dir, cwd });
-    const room = await store.openOrCreate("room");
-    room.appendMessage({ role: "user", content: "do the thing", timestamp: 1 });
-    // The shape a crash leaves behind: an assistant tool_use with no result after it.
-    room.appendMessage({
-      ...fauxAssistantMessage(""),
-      content: [{ type: "toolCall", id: "call-1", name: "doer", arguments: {} }],
-      stopReason: "toolUse",
-    } as never);
-
-    const thread = await store.openOrCreate("thread", { parentSession: "room" });
-
-    const repaired = thread.getBranch().filter((e) => JSON.stringify(e).includes("interrupted-tool-call"));
-    expect(repaired).toHaveLength(1); // the thread starts on a transcript a provider will accept
-  });
-
   it("a hint that only appears in the assembled prompt does not cut the thread off from the room", async () => {
     // Since pi 0.86 a served record carries the whole assembled system prompt (persona, project context,
     // skill and tool descriptions) as one system message ahead of the conversation. `branchHints` is caller

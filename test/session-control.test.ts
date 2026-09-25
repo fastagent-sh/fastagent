@@ -260,42 +260,6 @@ describe("session control: observation plane", () => {
     expect(ra.at(-1)?.type).toBe("run_settled");
   });
 
-  it("openIfExists is strictly read-only: no crash reconciliation, no repair entries", async () => {
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    // Simulate a turn that died mid tool-execution: assistant(toolCall) persisted, NO result.
-    const s = await sessions.openOrCreate("crashed");
-    await s.appendMessage({
-      role: "user",
-      content: [{ type: "text", text: "run it" }],
-      timestamp: Date.now(),
-    } as never);
-    await s.appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
-      provider: "faux",
-      model: "faux",
-      stopReason: "toolUse",
-      usage: { input: 0, output: 0 },
-      timestamp: Date.now(),
-    } as never);
-
-    // The READ path must not append the interrupted-tool-call repair (that is a write).
-    const observed = await sessions.openIfExists("crashed");
-    const entriesAfterRead = await observed?.getEntries();
-    const repairIn = (entries: { type: string }[] | undefined) =>
-      (entries ?? []).filter(
-        (e) =>
-          e.type === "message" &&
-          (e as unknown as { message: { details?: { fastagent?: string } } }).message.details?.fastagent ===
-            "interrupted-tool-call",
-      );
-    expect(repairIn(entriesAfterRead)).toHaveLength(0);
-
-    // The WRITE path (openOrCreate) still reconciles — the guarantee lives there, not in the reader.
-    const reopened = await sessions.openOrCreate("crashed");
-    expect(repairIn(await reopened.getEntries())).toHaveLength(1);
-  });
-
   it("a throwing observer never breaks the data plane", async () => {
     const { agent } = fauxAgent([fauxAssistantMessage("resilient")], {
       observer: () => {
@@ -1515,9 +1479,8 @@ describe("session control: boundary mutations", () => {
   });
 
   it("navigating onto an assistant whose tool result is now off-path leaves a transcript the next turn can run", async () => {
-    // A move writes no message, but it can EXPOSE a dangling tool_use pair — the state
-    // reconcileInterruptedToolCalls exists for. It repairs AT THE LEAF, which is exactly where a
-    // move puts the gap, so the next invoke runs instead of handing the provider a rejected pair.
+    // A move writes no message, but it can EXPOSE a dangling tool_use. Nothing here repairs it: pi-ai pairs it at
+    // request time (pinned in session-store.test.ts), so the next invoke only has to run.
     const { agent, control } = await makeBoundary(
       [
         fauxAssistantMessage(fauxToolCall("echo", { value: "hi" }, { id: "e1" })),
@@ -1532,13 +1495,6 @@ describe("session control: boundary mutations", () => {
     ) as SessionEntry;
     expect(await control.sessions.get("sNavDangle").update({ leafEntryId: callEntry.id })).toEqual({ ok: true });
     const events = await drain(agent.invoke({ session: "sNavDangle" }, { text: "continue" }));
-    // The repair itself, not just a green run: the new branch carries a synthetic result for the
-    // call whose real one is off-path — without it a real provider rejects the transcript.
-    const path = (await control.sessions.get("sNavDangle").entries()).entries;
-    const repaired = path.filter(
-      (e) => e.kind === "tool" && (e.data as { toolCallId?: string; isError?: boolean }).toolCallId === "e1",
-    );
-    expect(repaired.some((e) => (e.data as { isError?: boolean }).isError)).toBe(true);
     expect(events.some((e) => e.type === "failed")).toBe(false);
     expect(events.at(-1)?.type).toBe("completed");
     const text = events
