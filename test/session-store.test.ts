@@ -7,6 +7,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/prom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -430,8 +431,8 @@ describe("fork: the copy is a copy", () => {
     // The copied compaction's `firstKeptEntryId` used to be pinned to the child's leaf, keeping ONE
     // entry of the retained tail. A compaction lands wherever the turn ended, so that entry is
     // routinely a toolResult — and the child's first request then opened with a tool result whose
-    // tool_use had been summarized away, which every provider rejects. Same poison class as an
-    // interrupted tool call, reached by forking instead of by crashing.
+    // tool_use had been summarized away, which every provider rejects. pi-ai pairs a call that lost its result,
+    // never a result that lost its call, so nothing downstream would have repaired this.
     for (const store of [
       piInMemorySessionRecordStore(),
       piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "fa-store-forkcmp-")), cwd: process.cwd() }),
@@ -509,58 +510,6 @@ describe("fork: the copy is a copy", () => {
       const roles = (child?.buildSessionContext().messages ?? []).map((m) => m.role);
       expect(roles).toEqual(["compactionSummary", "user", "assistant", "assistant"]);
       expect(JSON.stringify(child?.buildSessionContext().messages)).toContain("kept question");
-    }
-  });
-
-  it("never writes to the record it copies FROM", async () => {
-    // The reconcile this used to run appends at the parent's LEAF — unreachable from a copy that
-    // stops at `at`, so it repaired nothing and durably mutated the source: a "copy" bumping the
-    // original's updatedAt and message count.
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-forkpure-"));
-    const store = piSessionRecordStore({ dir, cwd: dir });
-    const parent = await store.openOrCreate("room");
-    parent.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
-    const at = parent.appendMessage({
-      ...fauxAssistantMessage(""),
-      content: [{ type: "toolCall", id: "call-1", name: "doer", arguments: {} }],
-      stopReason: "toolUse",
-    } as never);
-
-    const before = (await store.list()).find((r) => r.session === "room");
-    await store.fork("room", at, "copy", "test-provenance");
-    const after = (await store.list()).find((r) => r.session === "room");
-    expect(after?.messageCount).toBe(before?.messageCount); // the source is untouched by its own fork
-
-    // The child's dangling tool call is repaired on its own first open, like any other record.
-    const child = await store.openOrCreate("copy");
-    expect(JSON.stringify(child.getBranch())).toContain("interrupted-tool-call");
-  });
-
-  it("a call the request drops gets no repair: its result would reach the provider unpaired", async () => {
-    // pi-ai drops an error/aborted assistant from the wire, and a context_edit drops what it omits. A /stop or a
-    // stream error mid tool-call leaves such an assistant at the leaf; repairing it wrote a result that every later
-    // request carried with no call before it, which the provider rejects.
-    const dir = await mkdtemp(join(tmpdir(), "fa-store-dropped-"));
-    const store = piSessionRecordStore({ dir, cwd: dir });
-    const callOf = (id: string, stopReason: string) =>
-      ({
-        ...fauxAssistantMessage(""),
-        content: [{ type: "toolCall", id, name: "doer", arguments: {} }],
-        stopReason,
-      }) as never;
-
-    for (const stopReason of ["error", "aborted"]) {
-      const record = await store.openOrCreate(stopReason);
-      record.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
-      record.appendMessage(callOf(`call-${stopReason}`, stopReason));
-    }
-    const edited = await store.openOrCreate("edited");
-    edited.appendMessage({ role: "user", content: "run the tool", timestamp: 1 });
-    edited.appendContextEdit(edited.appendMessage(callOf("call-edited", "length")), null);
-
-    for (const session of ["error", "aborted", "edited"]) {
-      const reopened = await store.openOrCreate(session);
-      expect(JSON.stringify(reopened.getBranch()), session).not.toContain("interrupted-tool-call");
     }
   });
 
@@ -730,5 +679,31 @@ describe("list rows are safe to render", () => {
     expect(preview).toHaveLength(201); // 199 + the pair, as ONE code point sliced whole
     expect(preview.endsWith("🌤")).toBe(true);
     expect(preview).not.toMatch(/[\uD800-\uDBFF]$/); // no dangling HIGH surrogate — a whole pair ends on a low one
+  });
+});
+
+describe("a tool call left without a result", () => {
+  it("reaches the provider paired by pi-ai, so the record is not repaired", () => {
+    // The store writes no repair for an interrupted process, a move onto an off-path result, or an inherited mid-turn
+    // room: pi-ai pairs every call the request carries, and drops error/aborted assistants first. A durable repair
+    // duplicated that rule and drifted from it: it paired calls pi-ai then dropped, leaving a result with no call
+    // before it that the provider rejected on every later turn. This pins the pi-ai behavior the store relies on.
+    const call = (id: string, stopReason: string) =>
+      ({
+        ...fauxAssistantMessage(""),
+        content: [{ type: "toolCall", id, name: "doer", arguments: {} }],
+        stopReason,
+      }) as never;
+    const user = { role: "user", content: "go", timestamp: 1 } as const;
+    const model = { api: "anthropic-messages", provider: "anthropic", id: "m", input: ["text"] } as never;
+    const wire = (messages: unknown[]) =>
+      transformMessages(messages as never, model).map((m) =>
+        m.role === "toolResult" ? `toolResult:${m.toolCallId}:${m.isError}` : m.role,
+      );
+
+    expect(wire([user, call("leaf", "toolUse")])).toEqual(["user", "assistant", "toolResult:leaf:true"]);
+    expect(wire([user, call("mid", "toolUse"), user])).toEqual(["user", "assistant", "toolResult:mid:true", "user"]);
+    expect(wire([user, call("failed", "error"), user])).toEqual(["user", "user"]);
+    expect(wire([user, call("stopped", "aborted"), user])).toEqual(["user", "user"]);
   });
 });

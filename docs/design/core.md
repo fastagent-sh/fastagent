@@ -304,11 +304,13 @@ the process it runs in.
 The reference stores are `piInMemorySessionRecordStore()` for embedding/tests and
 `piSessionRecordStore({ dir })` for restart-surviving local continuity.
 
-Opening an existing session reconciles a dangling leaf tool call left by an interrupted process by
-appending an explicit interrupted error result. Only a call the provider request will carry is
-repaired: an `error`/`aborted` assistant (dropped by pi-ai) or one a `context_edit` omitted gets no
-result, since that result would reach the provider unpaired. This restores transcript validity; it
-does not make side-effecting tools exactly-once.
+A tool call left without a result (an interrupted process, a move onto an assistant whose result
+is off-path, an inherited mid-turn room) is not repaired in the record. pi-ai pairs it at request
+time with a synthetic error result (`transformMessages`), after dropping `error`/`aborted`
+assistants, so the provider always receives a valid transcript. A durable repair written here
+would duplicate that rule and drift from it: a result for a call pi-ai later drops reaches the
+provider unpaired, and every later turn is rejected. Replay does not make side-effecting tools
+exactly-once.
 
 The core lease allows one in-flight turn per session. A collision yields
 `{ type: "failed", code: "session_busy", retryable: true, details: "…" }`. Queueing is channel policy:

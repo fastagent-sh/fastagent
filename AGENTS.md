@@ -198,7 +198,7 @@ src/
     ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
     ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
     ├── agent-session-factory.ts # the engine binding: assembly → one record per invoke (bindPiSession)
-    ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create, crash repair
+    ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
     ├── session-control.ts  # the pi control hub: observation projections + dispatch
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
