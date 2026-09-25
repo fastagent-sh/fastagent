@@ -95,11 +95,11 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
  * Sign in to one of pi's built-in providers and persist the credential to `authPath`.
  *
  * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), so a flow never runs
- * toward a credential that could not be saved. An entered API key is verified with one minimal request to the
- * provider's first model BEFORE it is written. Credentials are provider-scoped, so any model answers the question the
- * check asks (does the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the
- * provider's key flow runs again (the provider and method were not the mistake). Progress and outcome go out through
- * `interaction.notify`.
+ * toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
+ * default model for the provider (its first model when pi names none) BEFORE it is written. Credentials are
+ * provider-scoped, so any model answers the question the check asks (does the provider refuse the key, HTTP 401); a
+ * key the provider rejects is never stored, and the provider's key flow runs again (the provider and method were not
+ * the mistake). Progress and outcome go out through `interaction.notify`.
  *
  * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
  * writes nothing. Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
@@ -115,8 +115,8 @@ export interface LoginInternals {
   providers?: readonly Provider[];
   /**
    * A model spec to verify an entered key with, when login's registry has it as one of this provider's models: the
-   * first-run picker's choice, the request the agent is about to make. Otherwise the provider's first model is used,
-   * which answers the 401 question as well; this only spares a first model that rejects a minimal request.
+   * first-run picker's choice, the request the agent is about to make. Otherwise pi's default model for the provider
+   * is used, then its first; any of them answers the 401 question.
    */
   verifyWith?: string;
 }
@@ -179,6 +179,55 @@ async function runFlow(
   return credential;
 }
 
+/**
+ * pi's default model per provider (`defaultModelPerProvider` in pi-coding-agent's model-resolver): the general-purpose
+ * model pi itself starts on, so the likeliest to answer a minimal request. COPIED, because pi does not export it;
+ * `test/login.test.ts` compares this against pi's own table, so a pi release that changes a default fails there.
+ */
+export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
+  "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
+  "ant-ling": "Ring-2.6-1T",
+  anthropic: "claude-opus-4-8",
+  openai: "gpt-5.5",
+  "azure-openai-responses": "gpt-5.4",
+  "openai-codex": "gpt-5.5",
+  radius: "balanced",
+  nvidia: "nvidia/nemotron-3-super-120b-a12b",
+  deepseek: "deepseek-v4-pro",
+  google: "gemini-3.1-pro-preview",
+  "google-vertex": "gemini-3.1-pro-preview",
+  "github-copilot": "gpt-5.4",
+  openrouter: "moonshotai/kimi-k2.6",
+  "vercel-ai-gateway": "zai/glm-5.1",
+  xai: "grok-4.7",
+  groq: "openai/gpt-oss-120b",
+  cerebras: "gpt-oss-120b",
+  zai: "glm-5.3",
+  "zai-coding-cn": "glm-5.3",
+  mistral: "devstral-medium-latest",
+  minimax: "MiniMax-M2.7",
+  "minimax-cn": "MiniMax-M2.7",
+  moonshotai: "kimi-k2.6",
+  "moonshotai-cn": "kimi-k2.6",
+  huggingface: "moonshotai/Kimi-K2.6",
+  fireworks: "accounts/fireworks/models/kimi-k2p6",
+  together: "moonshotai/Kimi-K2.6",
+  baseten: "zai-org/GLM-5.2",
+  opencode: "kimi-k2.6",
+  "opencode-go": "kimi-k2.6",
+  "kimi-coding": "kimi-for-coding",
+  meta: "muse-spark-1.3",
+  "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
+  "cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
+  "qwen-token-plan": "qwen3.7-max",
+  "qwen-token-plan-cn": "qwen3.7-max",
+  "qwen-token-plan-individual": "qwen3.8-max",
+  xiaomi: "mimo-v2.5-pro",
+  "xiaomi-token-plan-cn": "mimo-v2.5-pro",
+  "xiaomi-token-plan-ams": "mimo-v2.5-pro",
+  "xiaomi-token-plan-sgp": "mimo-v2.5-pro",
+};
+
 /** One minimal request with the key under test. */
 async function verifyApiKey(
   models: Models,
@@ -187,10 +236,16 @@ async function verifyApiKey(
   notify: (event: AuthEvent) => void,
   signal: AbortSignal,
 ): Promise<"ok" | "rejected" | "unknown"> {
-  const preferred = verifyWith?.startsWith(`${providerId}/`)
+  const chosen = verifyWith?.startsWith(`${providerId}/`)
     ? models.getModel(providerId, verifyWith.slice(providerId.length + 1))
     : undefined;
-  const model = preferred ?? models.getProvider(providerId)?.getModels()[0];
+  const piDefault = PI_DEFAULT_MODELS[providerId];
+  // The provider's first model is the last resort only: catalogs are alphabetical, and a first model can be a
+  // special-purpose one that rejects a minimal request (which still answers the 401 question).
+  const model =
+    chosen ??
+    (piDefault ? models.getModel(providerId, piDefault) : undefined) ??
+    models.getProvider(providerId)?.getModels()[0];
   if (!model) {
     notify({
       type: "info",

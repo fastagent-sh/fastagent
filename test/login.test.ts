@@ -12,11 +12,14 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
+import * as models from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import {
   type IoOption,
   LoginCancelled,
   type LoginIO,
+  PI_DEFAULT_MODELS,
+  login,
   loginFlow,
   loginOptions,
   loginOptionsOver,
@@ -332,6 +335,22 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect(prompts.map((p) => p.type)).toEqual(["select", "secret"]); // pi-ai's prompt types reach the client as-is
     expect((await readAuth(authPath)).keyed).toEqual({ type: "api_key", key: "sk-good", env: { REGION: "eu" } });
     expect(events.map((e) => e.type)).toEqual(["progress", "info"]);
+  });
+
+  it("the copied default-model table is pi's own: a pi release that changes a default fails here", async () => {
+    // pi does not export `defaultModelPerProvider`, so login.ts copies it. Its file, read by path, is the check.
+    const url = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js", import.meta.url);
+    const pi = (await import(url.href)) as { defaultModelPerProvider: Record<string, string> };
+    expect(PI_DEFAULT_MODELS).toEqual(pi.defaultModelPerProvider);
+  });
+
+  it("a built-in provider's key is verified with pi's default model, not the alphabetically first", async () => {
+    // google's catalog opens with a Deep Research preview model, which a minimal request may not reach.
+    const { interaction, events } = client(["sk-google"]);
+    const probe = vi.spyOn(models, "probeApiKey").mockResolvedValue({ state: "ok" });
+    await login({ provider: "google", method: "api_key", authPath: await tmpAuth(), interaction });
+    expect(probe.mock.calls[0]?.[1]).toMatchObject({ provider: "google", id: PI_DEFAULT_MODELS.google });
+    expect(events.find((e) => e.type === "progress")?.message).toContain(`google/${PI_DEFAULT_MODELS.google}`);
   });
 
   it("the key is verified with the model the picker chose, when login's registry has it; else the first", async () => {

@@ -586,8 +586,8 @@ replaces it. `login` checks the file first, runs the provider's flow over your `
 credential. Prompts arrive with pi-ai's own types (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`,
 `device_code`, `progress`, `info`), so open URLs yourself and race `manual_code` against the provider's callback.
 Every prompt carries a `signal` that aborts when the provider withdraws it, when `interaction.signal` aborts, or
-when the flow ends. An entered API key is verified with one minimal request to the provider's first model before
-it is written (credentials are per provider, so any of its models tells whether the key is refused). A key the
+when the flow ends. An entered API key is verified with one minimal request to pi's default model for the provider
+before it is written (credentials are per provider, so any of its models tells whether the key is refused). A key the
 provider rejects (HTTP 401) is never stored, and the provider's key flow runs again with the same provider and
 method (a flow that asks more than the key asks it again too). Aborting `interaction.signal` at any point, the
 verification included, rejects with `LoginCancelled` and writes nothing. `fastagent login` runs the same `login`.
