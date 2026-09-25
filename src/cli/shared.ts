@@ -177,14 +177,14 @@ async function resolveFirstRunModel(
     authPath,
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
   }).catch(failStartup);
-  const chosen = await pickWithCredentials(models, authPath);
+  const chosen = await pickWithCredentials(models, authPath, agentDir);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(agentDir, configPath, chosen);
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */
-async function pickWithCredentials(models: Models, authPath: string): Promise<string | undefined> {
+async function pickWithCredentials(models: Models, authPath: string, agentDir: string): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -216,8 +216,8 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   }
 
   try {
-    // Verified against the chosen model when login's registry has it: the request the agent is about to make.
-    await loginFlow(terminalLoginIO(), { provider, authPath, verifyWith: chosen });
+    // Verified on this agent's registry, against the chosen model: the request the agent is about to make.
+    await loginFlow(terminalLoginIO(), { provider, authPath, agentDir, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel

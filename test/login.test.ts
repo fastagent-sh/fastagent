@@ -353,6 +353,41 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect(events.find((e) => e.type === "progress")?.message).toContain(`google/${PI_DEFAULT_MODELS.google}`);
   });
 
+  it("for an agent, the key is checked where its turns will go: a models.json gateway, not the provider's endpoint", async () => {
+    // The agent points built-in openai at a company gateway and declares a model only the gateway serves. Checked at
+    // api.openai.com, the gateway's key was refused (401) and the person was asked for it again, forever.
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-login-agent-"));
+    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
+    await writeFile(
+      join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          openai: {
+            baseUrl: "https://gateway.example/v1",
+            models: [{ id: "gateway-only", api: "openai-completions", contextWindow: 8192, maxTokens: 1024 }],
+          },
+        },
+      }),
+    );
+    const probe = vi.spyOn(models, "probeApiKey").mockResolvedValue({ state: "ok" });
+    const probed = async (internals: { verifyWith?: string }) => {
+      const { interaction } = client(["sk-gateway"]);
+      await loginOver(
+        { provider: "openai", method: "api_key", authPath: await tmpAuth(), interaction },
+        { agentDir, ...internals },
+      );
+      return probe.mock.calls.at(-1)?.[1];
+    };
+
+    // The first-run picker's choice, which only this agent's registry knows.
+    expect(await probed({ verifyWith: "openai/gateway-only" })).toMatchObject({
+      id: "gateway-only",
+      baseUrl: "https://gateway.example/v1",
+    });
+    // `fastagent login openai` inside the agent: pi's default model, routed through the same gateway.
+    expect(await probed({})).toMatchObject({ id: PI_DEFAULT_MODELS.openai, baseUrl: "https://gateway.example/v1" });
+  });
+
   it("the key is verified with the model the picker chose, when login's registry has it; else the first", async () => {
     const models = [{ id: "a-preview-only" }, { id: "chosen" }];
     const probed = async (verifyWith: string | undefined) => {

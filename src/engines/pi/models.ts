@@ -180,6 +180,8 @@ export async function createPiModelRuntime(
     stateRoot?: string;
     /** Extra providers for the ids the built-ins do not cover. */
     providers?: Provider[];
+    /** A credential store to use instead of the files (login verifies an entered key from memory). */
+    credentials?: CredentialStore;
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
@@ -189,10 +191,12 @@ export async function createPiModelRuntime(
       ? { path: join(agentDir, AGENT_MODELS_FILE) }
       : await modelsFileFor(agentDir);
   const runtime = await ModelRuntime.create({
-    credentials: fastagentCredentialStore(options.authPath, {
-      warn: options.warn,
-      ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
-    }),
+    credentials:
+      options.credentials ??
+      fastagentCredentialStore(options.authPath, {
+        warn: options.warn,
+        ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
+      }),
     modelsPath: models?.path ?? null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
     // write a generated cache INTO the author's agent dir.

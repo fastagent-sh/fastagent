@@ -586,14 +586,17 @@ replaces it. `login` checks the file first, runs the provider's flow over your `
 credential. Prompts arrive with pi-ai's own types (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`,
 `device_code`, `progress`, `info`), so open URLs yourself and race `manual_code` against the provider's callback.
 Every prompt carries a `signal` that aborts when the provider withdraws it, when `interaction.signal` aborts, or
-when the flow ends. An entered API key is verified with one minimal request to pi's default model for the provider
-before it is written (credentials are per provider, so any of its models tells whether the key is refused). A key the
+when the flow ends. An entered API key is verified with one minimal request to pi's default model for the provider,
+at pi's built-in endpoint, before it is written (credentials are per provider, so any of its models tells whether
+the key is refused). A key the
 provider rejects (HTTP 401) is never stored, and the provider's key flow runs again with the same provider and
 method (a flow that asks more than the key asks it again too). Aborting `interaction.signal` at any point, the
 verification included, rejects with `LoginCancelled` and writes nothing. `fastagent login` runs the same `login`.
 
 For a custom endpoint (`models.json`), store its key with `fastagentCredentialStore(authPath).modify()` instead:
-`login` covers built-in providers.
+`login` covers built-in providers at their own endpoints. That includes a built-in provider an agent's `models.json`
+points at a gateway: `login` would check the gateway's key at the provider's endpoint and refuse it. `fastagent
+login`, run inside the agent, checks it at the gateway.
 
 `fastagent login` writes `<agent dir>/.secrets/auth.json` by default. `createPiModels()` with no `authPath` reads
 `GLOBAL_AUTH_PATH` instead; pass `authPath` to read a project's file (the `createPiAgentFrom*` openers do).

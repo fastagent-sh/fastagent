@@ -53,16 +53,19 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     );
   }
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
-  const result = await loginFlow(terminalLoginIO(), { authPath, ...(provider ? { provider } : {}) }).catch(
-    (error: unknown) => {
-      if (error instanceof LoginCancelled) {
-        // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
-        console.error(`[fastagent] login cancelled`);
-        process.exit(1);
-      }
-      failStartup(error);
-    },
-  );
+  // Inside an agent, the key is checked on that agent's registry: its models.json may point a provider at a gateway.
+  const result = await loginFlow(terminalLoginIO(), {
+    authPath,
+    ...(provider ? { provider } : {}),
+    ...(agentDir ? { agentDir } : {}),
+  }).catch((error: unknown) => {
+    if (error instanceof LoginCancelled) {
+      // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
+      console.error(`[fastagent] login cancelled`);
+      process.exit(1);
+    }
+    failStartup(error);
+  });
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }

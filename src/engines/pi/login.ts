@@ -14,7 +14,7 @@ import {
   type Provider,
 } from "@earendil-works/pi-ai";
 import { fastagentCredentialStore } from "./auth.ts";
-import { interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
+import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -96,10 +96,11 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
  *
  * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), so a flow never runs
  * toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
- * default model for the provider (its first model when pi names none) BEFORE it is written. Credentials are
- * provider-scoped, so any model answers the question the check asks (does the provider refuse the key, HTTP 401); a
- * key the provider rejects is never stored, and the provider's key flow runs again (the provider and method were not
- * the mistake). Progress and outcome go out through `interaction.notify`.
+ * default model for the provider (its first model when pi names none), at pi's built-in endpoint, BEFORE it is
+ * written. Credentials are provider-scoped, so any of the provider's models answers the question the check asks (does
+ * the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the provider's key flow runs
+ * again (the provider and method were not the mistake). Progress and outcome go out through `interaction.notify`.
+ * A provider an agent's models.json points elsewhere is not this call's: store that key with `fastagentCredentialStore`.
  *
  * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
  * writes nothing. Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
@@ -114,16 +115,22 @@ export interface LoginInternals {
   /** Providers added to pi's built-ins (a same id replaces one): a test seam. */
   providers?: readonly Provider[];
   /**
-   * A model spec to verify an entered key with, when login's registry has it as one of this provider's models: the
+   * The agent the key is for. Verification then runs on THAT agent's registry (its models.json and the machine's over
+   * the built-ins), so the check reaches the endpoint its turns will: a models.json can point a built-in provider at a
+   * gateway, where the provider's own endpoint would refuse the gateway's key and loop the person through re-entry.
+   */
+  agentDir?: string;
+  /**
+   * A model spec to verify an entered key with, when the registry has it as one of this provider's models: the
    * first-run picker's choice, the request the agent is about to make. Otherwise pi's default model for the provider
-   * is used, then its first; any of them answers the 401 question.
+   * is used, then its first. On one registry, any of a provider's models answers the 401 question.
    */
   verifyWith?: string;
 }
 
 /** {@link login}, plus {@link LoginInternals}. */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
-  const { providers, verifyWith } = internals;
+  const { providers, verifyWith, agentDir } = internals;
   const { method, authPath, interaction } = request;
   const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
@@ -131,7 +138,9 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
-  const models = piModelsOver(trial, providers);
+  const models: Models = agentDir
+    ? await createPiModelRuntime({ agentDir, credentials: trial, ...(providers ? { providers: [...providers] } : {}) })
+    : piModelsOver(trial, providers);
   const store = fastagentCredentialStore(authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
@@ -352,6 +361,8 @@ export async function loginFlow(
     signal?: AbortSignal;
     /** {@link LoginInternals.verifyWith}. */
     verifyWith?: string;
+    /** {@link LoginInternals.agentDir}. */
+    agentDir?: string;
   },
 ): Promise<LoginResult> {
   const offered = await loginOptionsOver(options.authPath, options.providers);
@@ -393,6 +404,7 @@ export async function loginFlow(
     {
       ...(options.providers ? { providers: options.providers } : {}),
       ...(options.verifyWith ? { verifyWith: options.verifyWith } : {}),
+      ...(options.agentDir ? { agentDir: options.agentDir } : {}),
     },
   );
 }
