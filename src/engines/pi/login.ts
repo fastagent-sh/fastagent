@@ -4,11 +4,21 @@
  * (one writer, one lock/corruption semantics); {@link loginOptions} is the list a picker offers. `fastagent login` is
  * one front end ({@link loginFlow}: terminal menus, then {@link login}); a GUI client is another.
  */
-import type { AuthEvent, AuthInteraction, AuthPrompt, Credential, Provider } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type AuthEvent,
+  type AuthInteraction,
+  type AuthPrompt,
+  type Credential,
+  InMemoryCredentialStore,
+  type Model,
+  type Models,
+  type Provider,
+} from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { fastagentCredentialStore } from "./auth.ts";
 import { resolveModel } from "./config.ts";
-import { createPiModels, probeApiKey } from "./models.ts";
+import { piModelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -30,19 +40,26 @@ export interface LoginOption {
   stored?: LoginMethod;
 }
 
+/** pi's built-ins plus `extra`, a same id replacing a built-in: the same composition `createPiModels` applies. */
+function withProviders(extra: readonly Provider[] = []): Provider[] {
+  const ids = new Set(extra.map((provider) => provider.id));
+  return [...builtinProviders().filter((provider) => !ids.has(provider.id)), ...extra];
+}
+
 /** The auth a provider runs for `method`, when it offers that method interactively. */
 function interactiveAuth(provider: Provider, method: LoginMethod) {
   return method === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login ? provider.auth.apiKey : undefined;
 }
 
 /**
- * Every interactive sign-in the providers offer (pi's built-ins unless `providers` is given), with what `authPath`
- * already holds for each. A provider whose key can only come from its env var offers none and is left out.
+ * Every interactive sign-in of pi's built-in providers plus `providers` (a same id replaces a built-in, as in
+ * `createPiModels`), with what `authPath` already holds for each. A provider whose key can only come from its env
+ * var offers none and is left out.
  */
 export async function loginOptions(authPath: string, options: { providers?: Provider[] } = {}): Promise<LoginOption[]> {
   const store = fastagentCredentialStore(authPath);
   const offered: LoginOption[] = [];
-  for (const provider of options.providers ?? builtinProviders()) {
+  for (const provider of withProviders(options.providers)) {
     const methods = (["oauth", "api_key"] as const).filter((method) => interactiveAuth(provider, method));
     if (methods.length === 0) continue;
     const stored = (await store.read(provider.id))?.type;
@@ -68,7 +85,7 @@ export interface LoginRequest {
   interaction: AuthInteraction;
   /** The model an entered API key is verified against; default the provider's first. */
   model?: string;
-  /** The providers to sign in to; default pi's built-ins. */
+  /** Providers added to pi's built-ins (a same id replaces a built-in), as in `createPiModels`. */
   providers?: Provider[];
 }
 
@@ -88,42 +105,66 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
 /**
  * Sign in to one provider and persist the credential to `authPath`.
  *
- * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), so a flow never runs
- * toward a credential that could not be saved. An entered API key is then verified with one minimal request: a key
- * the provider rejects (HTTP 401) is deleted and ONLY the key is asked again, since the provider and method were not
- * the mistake. Progress and outcome go out through `interaction.notify`.
+ * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), and `model` is resolved
+ * before anything runs, so a flow never runs toward a credential that could not be saved or checked. An entered API
+ * key is verified with one minimal request BEFORE it is written: a key the provider rejects (HTTP 401) is never
+ * stored, and the provider's key flow runs again (the provider and method were not the mistake). Progress and outcome
+ * go out through `interaction.notify`.
  *
- * Aborting `interaction.signal` rejects with {@link LoginCancelled} and writes nothing. Every prompt carries a signal
- * that aborts on it, on the prompt's own signal (a callback server beating a `manual_code` prompt), and when the flow
- * settles with a prompt still pending.
+ * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
+ * writes nothing. Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
+ * beating a `manual_code` prompt), and when the flow settles with a prompt still pending.
  */
 export async function login(request: LoginRequest): Promise<LoginResult> {
   const { method, authPath, interaction } = request;
-  const provider = (request.providers ?? builtinProviders()).find((p) => p.id === request.provider);
+  const provider = withProviders(request.providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
+  // The key under test lives here, not in the file, until it passes.
+  const trial = new InMemoryCredentialStore();
+  const models = piModelsOver(trial, request.providers);
+  const probe = method === "api_key" ? probeTarget(models, provider.id, request.model) : undefined;
   const store = fastagentCredentialStore(authPath);
   await store.modify(provider.id, async () => undefined);
+  const signal = interaction.signal ?? new AbortController().signal;
+  const notify = (event: AuthEvent) => interaction.notify(event);
 
   for (;;) {
-    const credential = await runFlow(auth.login.bind(auth), interaction);
+    const credential = await runFlow(auth.login.bind(auth), interaction, signal);
+    let verified: LoginResult["verified"] = "n/a";
+    if (method === "api_key") {
+      await trial.modify(provider.id, async () => credential);
+      const verdict = await verifyApiKey(models, provider.id, probe, notify, signal);
+      if (signal.aborted) throw new LoginCancelled("cancelled");
+      if (verdict === "rejected") continue;
+      verified = verdict;
+    }
     await store.modify(provider.id, async () => credential);
-    if (method === "oauth") return { provider: provider.id, method, verified: "n/a" };
-    const verdict = await verifyApiKey(provider.id, request, (event) => interaction.notify(event));
-    if (verdict !== "rejected") return { provider: provider.id, method, verified: verdict };
+    return { provider: provider.id, method, verified };
   }
+}
+
+/** The model an entered key is checked against: the one named, which must be this provider's, or its first. */
+function probeTarget(models: Models, providerId: string, spec: string | undefined): Model<Api> | undefined {
+  if (!spec) return models.getProvider(providerId)?.getModels()[0];
+  const model = resolveModel(models, spec);
+  if (model.provider !== providerId) {
+    throw new Error(`model "${spec}" belongs to "${model.provider}", not "${providerId}": it cannot verify its key`);
+  }
+  return model;
 }
 
 async function runFlow(
   flow: (interaction: AuthInteraction & { signal: AbortSignal }) => Promise<Credential>,
   interaction: AuthInteraction,
+  signal: AbortSignal,
 ): Promise<Credential> {
-  const signal = interaction.signal ?? new AbortController().signal;
   if (signal.aborted) throw new LoginCancelled("cancelled");
   const done = new AbortController();
+  let credential: Credential;
   try {
-    return await flow({
+    credential = await flow({
       signal,
       prompt: (prompt: AuthPrompt) =>
         interaction.prompt({ ...prompt, signal: anySignal(prompt.signal, signal, done.signal) } as AuthPrompt),
@@ -136,35 +177,33 @@ async function runFlow(
   } finally {
     done.abort();
   }
+  // A provider that ignored the abort and finished anyway: the caller still cancelled.
+  if (signal.aborted) throw new LoginCancelled("cancelled");
+  return credential;
 }
 
-/** One minimal request with the stored key. A rejection deletes the key, so the caller asks for it again. */
+/** One minimal request with the key under test. */
 async function verifyApiKey(
+  models: Models,
   providerId: string,
-  request: LoginRequest,
+  model: Model<Api> | undefined,
   notify: (event: AuthEvent) => void,
+  signal: AbortSignal,
 ): Promise<"ok" | "rejected" | "unknown"> {
-  // Built-in (or given) providers only: a models.json endpoint authenticates from its own `apiKey`, so there is no
-  // stored credential of its to verify here.
-  const models = createPiModels({
-    authPath: request.authPath,
-    ...(request.providers ? { providers: request.providers } : {}),
-  });
-  const model = request.model ? resolveModel(models, request.model) : models.getProvider(providerId)?.getModels()[0];
   if (!model) {
     notify({
       type: "info",
-      message: `cannot verify the key: provider "${providerId}" lists no models — kept as stored`,
+      message: `cannot verify the key: provider "${providerId}" lists no models — kept as entered`,
     });
     return "unknown";
   }
   const label = `${model.provider}/${model.id}`;
   notify({ type: "progress", message: `verifying the key with ${label}…` });
-  const probe = await probeApiKey(models, model);
+  const probe = await probeApiKey(models, model, signal);
+  if (signal.aborted) return "unknown"; // the caller reports the cancel, not a verdict on the key
   if (probe.state === "ok") {
     notify({ type: "info", message: `key verified — ${label} responded` });
   } else if (probe.state === "rejected") {
-    await fastagentCredentialStore(request.authPath).delete(providerId);
     notify({
       type: "info",
       message: `${providerId} rejected the API key (HTTP 401): ${probe.message} — enter it again (or cancel)`,
@@ -264,7 +303,7 @@ export async function loginFlow(
   if (provider) {
     const methods = offered.filter((o) => o.provider === provider).map((o) => o.method);
     if (methods.length === 0) {
-      const known = (options.providers ?? builtinProviders()).some((p) => p.id === provider);
+      const known = withProviders(options.providers).some((p) => p.id === provider);
       throw new Error(
         known
           ? `provider "${provider}" has no interactive login — set its API key via the provider's env var`

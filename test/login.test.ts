@@ -120,8 +120,14 @@ describe("loginFlow", () => {
     const { io, shown } = fakeIO({ select: ["oauth", "anthropic"] });
     const res = await loginFlow(io, { providers: PROVIDERS, authPath: path });
     expect(res).toEqual({ provider: "anthropic", method: "oauth", verified: "n/a" });
-    // the provider picker listed only oauth-capable providers (anthropic, codex), NOT the key-only openai
-    expect(shown[1]?.map((o) => o.value).sort()).toEqual(["anthropic", "codex"]);
+    // of the test's providers, the picker listed only the oauth-capable ones (anthropic, codex), NOT key-only openai
+    const ours = new Set(PROVIDERS.map((p) => p.id));
+    expect(
+      shown[1]
+        ?.map((o) => o.value)
+        .filter((id) => ours.has(id))
+        .sort(),
+    ).toEqual(["anthropic", "codex"]);
   });
 
   it("the provider picker shows configured status from the store", async () => {
@@ -322,7 +328,7 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect(events.map((e) => e.type)).toEqual(["progress", "info"]);
   });
 
-  it("a key the provider rejects (401) is deleted and ONLY the key is asked again", async () => {
+  it("a key the provider rejects (401) is never stored, and the provider's key flow runs again", async () => {
     const authPath = await tmpAuth();
     const rejected = fauxAssistantMessage("", {
       stopReason: "error",
@@ -343,8 +349,9 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect((await readAuth(authPath)).keyed.key).toBe("sk-good"); // the rejected key is not left behind
   });
 
-  it("a rejected key is gone even when the person cancels instead of entering another", async () => {
-    const authPath = await tmpAuth();
+  it("a rejected key never replaces what the file held, even when the person then cancels", async () => {
+    const previous = { type: "api_key", key: "sk-previous" };
+    const authPath = await tmpAuth(JSON.stringify({ keyed: previous }));
     const rejected = fauxAssistantMessage("", {
       stopReason: "error",
       errorMessage: "401 Unauthorized: invalid x-api-key",
@@ -363,7 +370,48 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     abort.abort();
 
     await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
-    expect((await readAuth(authPath)).keyed).toBeUndefined();
+    expect((await readAuth(authPath)).keyed).toEqual(previous);
+  });
+
+  it("aborting while the key is being verified rejects with LoginCancelled and writes nothing", async () => {
+    const authPath = await tmpAuth();
+    const abort = new AbortController();
+    const { interaction, events } = client(["eu", "sk-good"], abort.signal);
+    // The verification request hangs until it is aborted, as a slow provider would.
+    const hanging = (_context: unknown, options: { signal?: AbortSignal } | undefined) =>
+      new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => {
+        options?.signal?.addEventListener("abort", () =>
+          resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" })),
+        );
+      });
+    const pending = login({
+      provider: "keyed",
+      method: "api_key",
+      authPath,
+      interaction,
+      providers: [keyedFaux([hanging as never])],
+    });
+    await vi.waitFor(() => expect(events.map((e) => e.type)).toContain("progress")); // "verifying the key…"
+
+    abort.abort();
+
+    await expect(pending).rejects.toBeInstanceOf(LoginCancelled);
+    expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
+  });
+
+  it("a model that cannot verify this provider's key is refused before anything runs or is written", async () => {
+    for (const [model, reason] of [
+      ["keyed/no-such-model", /not in registry|unknown|no-such-model/i],
+      ["anthropic/claude-sonnet-4-5", /belongs to "anthropic", not "keyed"/],
+    ] as const) {
+      const authPath = await tmpAuth();
+      const { interaction, prompts } = client(["eu", "sk"]);
+      await expect(
+        login({ provider: "keyed", method: "api_key", authPath, interaction, model, providers: [keyedFaux([])] }),
+      ).rejects.toThrow(reason);
+      expect(prompts).toHaveLength(0); // the flow never started
+      expect((await readAuth(authPath).catch(() => ({}))).keyed).toBeUndefined();
+    }
   });
 
   it("aborting the interaction's signal rejects with LoginCancelled and writes nothing", async () => {
@@ -409,7 +457,10 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
 
     const offered = await loginOptions(authPath, { providers: PROVIDERS });
 
-    expect(offered).toEqual([
+    // The built-ins are always offered; the test's providers are added (replacing the built-in of the same id).
+    expect(offered.some((o) => o.provider === "openai-codex")).toBe(true);
+    const ours = new Set(PROVIDERS.map((p) => p.id));
+    expect(offered.filter((o) => ours.has(o.provider))).toEqual([
       { provider: "anthropic", method: "oauth", label: "anthropic (OAuth)", subscription: false, stored: "api_key" },
       { provider: "anthropic", method: "api_key", label: "anthropic API key", subscription: false, stored: "api_key" },
       { provider: "openai", method: "api_key", label: "openai API key", subscription: false },

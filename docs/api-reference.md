@@ -569,21 +569,23 @@ function login(request: {
   method: "oauth" | "api_key";
   authPath: string;
   interaction: AuthInteraction; // pi-ai's: prompt(AuthPrompt) and notify(AuthEvent)
-  model?: string; // what an entered API key is verified against; default the provider's first
-  providers?: Provider[];
+  model?: string; // what an entered API key is verified against: this provider's; default its first
+  providers?: Provider[]; // added to pi's built-ins (a same id replaces one), as in createPiModels
 }): Promise<{ provider: string; method: "oauth" | "api_key"; verified: "ok" | "unknown" | "n/a" }>;
 class LoginCancelled extends Error {}
 ```
 
-`loginOptions` lists every interactive sign-in of pi's built-in providers, with `stored` naming what the file
-holds for that provider now. The file keeps one credential per provider, so signing in with the other method
+`loginOptions` lists every interactive sign-in of pi's built-in providers (plus any `providers` you add), with
+`stored` naming what the file holds for that provider now. The file keeps one credential per provider, so signing in with the other method
 replaces it. `login` checks the file first, runs the provider's flow over your `AuthInteraction`, and writes the
 credential. Prompts arrive with pi-ai's own types (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`,
 `device_code`, `progress`, `info`), so open URLs yourself and race `manual_code` against the provider's callback.
 Every prompt carries a `signal` that aborts when the provider withdraws it, when `interaction.signal` aborts, or
-when the flow ends. An entered API key is verified with one minimal request: a key the provider rejects (HTTP 401)
-is deleted and only the key is asked again. Aborting `interaction.signal` rejects with `LoginCancelled` and writes
-nothing. `fastagent login` runs the same `login`.
+when the flow ends. `model` is resolved before the flow runs, and must belong to `provider`. An entered API key is
+verified with one minimal request before it is written: a key the provider rejects (HTTP 401) is never stored, and
+the provider's key flow runs again with the same provider and method (a flow that asks more than the key asks it
+again too). Aborting `interaction.signal` at any point, the verification included, rejects with `LoginCancelled` and
+writes nothing. `fastagent login` runs the same `login`.
 
 For a custom endpoint (`models.json`), store its key with `fastagentCredentialStore(authPath).modify()` instead:
 `login` covers built-in providers.

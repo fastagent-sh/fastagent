@@ -9,7 +9,14 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type CredentialStore,
+  type Model,
+  type Models,
+  type Provider,
+  defaultProviderAuthContext,
+} from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
@@ -32,14 +39,19 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
 
 /** A `Models` with every built-in pi provider, wired to fastagent's auth. */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  const models = builtinModels({
-    credentials: fastagentCredentialStore(options.authPath, {
+  return piModelsOver(
+    fastagentCredentialStore(options.authPath, {
       warn: options.warn,
       ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
     }),
-    authContext: defaultProviderAuthContext(),
-  });
-  for (const provider of options.providers ?? []) models.setProvider(provider);
+    options.providers,
+  );
+}
+
+/** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
+export function piModelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
+  const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
+  for (const provider of providers) models.setProvider(provider);
   return models;
 }
 
@@ -306,7 +318,7 @@ export async function probeAuthSource(models: Models, spec: string): Promise<str
 export type KeyProbe = { state: "ok" } | { state: "rejected" | "unknown"; message: string };
 
 /** Quick-fail probe for a just-stored API key. */
-export async function probeApiKey(models: Models, model: Model<Api>): Promise<KeyProbe> {
+export async function probeApiKey(models: Models, model: Model<Api>, signal?: AbortSignal): Promise<KeyProbe> {
   let status: number | undefined;
   let reply: Awaited<ReturnType<Models["complete"]>>;
   try {
@@ -317,6 +329,7 @@ export async function probeApiKey(models: Models, model: Model<Api>): Promise<Ke
         maxTokens: 16,
         timeoutMs: 15_000,
         maxRetries: 0,
+        ...(signal ? { signal } : {}),
         onResponse: (r) => {
           status = r.status;
         },
