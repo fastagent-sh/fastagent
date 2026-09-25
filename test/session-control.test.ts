@@ -5,9 +5,12 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent, SESSION_BUSY_CODE } from "../src/agent.ts";
 import { collect } from "../src/collect.ts";
@@ -20,7 +23,7 @@ import {
 } from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
@@ -1853,7 +1856,6 @@ describe("session control: boundary mutations", () => {
         const session = {
           ...bareSessionParts,
           sessionManager: record,
-          settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
           subscribe: () => {
             if (defect === "subscribe") throw new Error("subscribe defect");
             return () => {
@@ -1861,6 +1863,7 @@ describe("session control: boundary mutations", () => {
             };
           },
           compact: async () => {
+            admitCompaction(record); // pi announces admission before the model call
             if (defect === "abort") await finish.promise;
             return { summary: "summary" };
           },
@@ -1886,7 +1889,13 @@ describe("session control: boundary mutations", () => {
         const finished = (async () => {
           for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
         })();
-        expect(await handle.compact(), defect).toEqual({ ok: true });
+        if (defect === "subscribe") {
+          // Subscribing precedes pi's admission, so this defect is a pre-acceptance failure: nothing started.
+          expect(await handle.compact(), defect).toMatchObject({
+            ok: false,
+            error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: expect.stringContaining("subscribe defect") },
+          });
+        } else expect(await handle.compact(), defect).toEqual({ ok: true });
         if (defect === "abort")
           expect(await handle.abort(), defect).toMatchObject({
             ok: false,
@@ -1896,9 +1905,7 @@ describe("session control: boundary mutations", () => {
               retryable: false,
             },
           });
-        expect((await finished)?.data, defect).toEqual(
-          defect === "subscribe" ? { error: "Error: subscribe defect" } : { summary: "summary" },
-        );
+        if (defect !== "subscribe") expect((await finished)?.data, defect).toEqual({ summary: "summary" });
         expect(disposed, defect).toBe(true);
         const release = lease.tryAcquire("cleanup");
         expect(release, defect).toBeTypeOf("function");
@@ -1956,12 +1963,12 @@ describe("session control: boundary mutations", () => {
     const session = {
       ...bareSessionParts,
       sessionManager: record,
-      settingsManager: { getCompactionSettings: () => ({ keepRecentTokens: 0 }) },
       subscribe: (listener: typeof emit) => {
         emit = listener;
         return () => {};
       },
       compact: async () => {
+        admitCompaction(record); // pi announces admission before the model call
         emit({
           type: "summarization_retry_scheduled",
           attempt: 2,
@@ -2112,6 +2119,143 @@ describe("session control: boundary mutations", () => {
     }
   });
 
+  it("compaction admission reads what the model sees: context edits count as pi counts them", async () => {
+    // pi 0.87 omits an abandoned retry/overflow attempt with a `context_edit` and computes its cut over the
+    // projection. The dispatch must answer what pi then does: refuse where pi finds nothing, accept where it
+    // summarizes. Both shapes are what pi's own overflow recovery writes; each runs pi's real compaction.
+    for (const shape of ["omitted-only", "recovery-tail"]) {
+      const { control, sessions } = await makeBoundary(
+        Array.from({ length: 4 }, () => fauxAssistantMessage("compact summary")),
+      );
+      const record = await sessions.openOrCreate("edited");
+      record.appendModelChange("faux", "faux-thinker");
+      record.appendMessage({ role: "user", content: "old", timestamp: 1 });
+      record.appendMessage(fauxAssistantMessage("old answer"));
+      record.appendCompaction("previous summary", null, 100); // retains nothing
+      if (shape === "omitted-only") {
+        // Only the omitted attempt is large, so the visible history fits the keep-recent window.
+        record.appendMessage({ role: "user", content: "question", timestamp: 2 });
+        record.appendContextEdit(record.appendMessage(fauxAssistantMessage(LONG_ANSWER.repeat(3))), null);
+        record.appendMessage(fauxAssistantMessage("final"));
+      } else {
+        // An input too large to keep, then only its abandoned attempt: pi moves the cut past the attempt, so the
+        // input is summarized as a turn prefix.
+        record.appendMessage({ role: "user", content: LONG_ANSWER.repeat(3), timestamp: 2 });
+        record.appendContextEdit(record.appendMessage(fauxAssistantMessage("cut off")), null);
+      }
+      const handle = control.sessions.get("edited");
+      if (shape === "omitted-only") {
+        expect(await handle.compact(), shape).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+        continue;
+      }
+      const finished = (async () => {
+        for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+      })();
+      expect(await handle.compact(), shape).toEqual({ ok: true });
+      expect((await finished)?.data, shape).toMatchObject({ summary: expect.stringContaining("compact summary") });
+    }
+  });
+
+  it("a definition's own session_before_compact runs after admission: the dispatch does not wait for it", async () => {
+    // pi loads path extensions first and dispatches in that order, so a custom summarizer here (pi's supported way
+    // to replace the summary) would otherwise run before admission: the dispatch waiting on its whole model call,
+    // state() idle under a held lease, and abort with nothing to reach.
+    const dir = await mkdtemp(join(tmpdir(), "fa-compact-ext-"));
+    const extension = join(dir, "slow-summarizer.mjs");
+    await writeFile(
+      extension,
+      `export default (pi) => pi.on("session_before_compact", () => globalThis.__fa_compact_gate__);\n`,
+    );
+    const gate = Promise.withResolvers<void>();
+    (globalThis as Record<string, unknown>).__fa_compact_gate__ = gate.promise;
+    try {
+      const { agent, control } = await fauxControlledAgent(
+        Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)),
+        { extensionPaths: [extension] },
+      );
+      await withCompactableHistory(agent, "ext-hook");
+      const handle = control.sessions.get("ext-hook");
+      const finished = (async () => {
+        for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+      })();
+      const answered = await Promise.race([
+        handle.compact(),
+        new Promise((resolve) => setTimeout(() => resolve("still waiting on the extension"), 2000)),
+      ]);
+      expect(answered).toEqual({ ok: true });
+      expect((await handle.state()).status).toBe("compacting");
+      gate.resolve();
+      expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
+    } finally {
+      gate.resolve();
+      delete (globalThis as Record<string, unknown>).__fa_compact_gate__;
+    }
+  });
+
+  it("a credential that does not resolve is the compaction's failure, not the dispatch's", async () => {
+    // pi resolves summarization credentials before admission, but a served session streams through pi's SDK
+    // wrapper, and on that path pi swallows the failure there (`_getSummarizationRequestAuth`) and meets it again
+    // at the model call. So the dispatch is accepted and the reason arrives in compaction_finished.
+    const { control, sessions, faux, models } = await makeBoundary([]);
+    models.registerNativeProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Faux",
+          resolve: async () => {
+            throw new Error("no credentials configured for faux");
+          },
+        },
+      },
+    });
+    const record = await sessions.openOrCreate("no-auth");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    record.appendMessage({ role: "user", content: "recent", timestamp: 2 });
+    record.appendMessage(fauxAssistantMessage(LONG_ANSWER));
+    const handle = control.sessions.get("no-auth");
+    const finished = (async () => {
+      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
+    })();
+
+    expect(await handle.compact()).toEqual({ ok: true });
+    expect((await finished)?.data).toMatchObject({
+      error: expect.stringContaining("no credentials configured for faux"),
+    });
+  });
+
+  it("pi refusing before admission answers the dispatch, not retryable: the same call would be refused again", async () => {
+    // pi's pre-admission failures other than "nothing to compact" (no model selected, say). A served session
+    // always binds a model, so the double stands in for the shape rather than a reachable configuration.
+    const { faux, models } = makeFaux();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const record = await sessions.openOrCreate("refused");
+    record.appendMessage({ role: "user", content: "earlier", timestamp: 1 });
+    const session = {
+      ...bareSessionParts,
+      sessionManager: record,
+      subscribe: () => () => {},
+      compact: async () => {
+        throw new Error("No model selected");
+      },
+      dispose: () => {},
+    } as unknown as AgentSession;
+    const { control } = createPiSessionControl({
+      sessions,
+      boundary: {
+        lease: inProcessLease(),
+        models,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        sessionFactory: async () => session,
+      },
+    });
+
+    expect(await control.sessions.get("refused").compact()).toEqual({
+      ok: false,
+      error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: "Error: No model selected", retryable: false },
+    });
+  });
+
   it("an abort that lands the instant compaction starts still stops it", async () => {
     // A client cancels as soon as admission is announced.
     const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
@@ -2131,44 +2275,6 @@ describe("session control: boundary mutations", () => {
     expect(seen.at(-1)?.data).toEqual({ aborted: true });
     expect((await control.sessions.get("sB10").entries()).entries.map((e) => e.kind)).not.toContain("compaction");
     expect((await control.sessions.get("sB10").state()).status).toBe("idle"); // the lease came back
-  });
-
-  it("keeps cancellation intent until pi creates its compaction controller", async () => {
-    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
-    await withCompactableHistory(agent, "delayed-controller");
-    let entered!: () => void;
-    let resume!: () => void;
-    const waiting = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const abort = vi.spyOn(AgentSession.prototype, "abort").mockImplementationOnce(async () => {
-      entered();
-      await gate;
-    });
-    const handle = control.sessions.get("delayed-controller");
-    const finished = (async () => {
-      for await (const event of handle.events()) if (event.type === "compaction_finished") return event;
-    })();
-    try {
-      expect(await handle.compact()).toEqual({ ok: true });
-      await waiting;
-      vi.useFakeTimers();
-      expect(await handle.abort()).toEqual({ ok: true });
-      // The controller can be delayed arbitrarily; no finite polling budget can cover this window.
-      await vi.advanceTimersByTimeAsync(1000);
-      vi.useRealTimers();
-      resume();
-      expect((await finished)?.data).toEqual({ aborted: true });
-      expect((await handle.entries()).entries.some((entry) => entry.kind === "compaction")).toBe(false);
-      expect((await handle.state()).status).toBe("idle");
-    } finally {
-      resume();
-      vi.useRealTimers();
-      abort.mockRestore();
-    }
   });
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {

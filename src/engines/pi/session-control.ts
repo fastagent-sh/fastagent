@@ -23,12 +23,7 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import { PortFailure, port, portAbort, portCleanup, portError, portJoin } from "../../effect-port.ts";
 import { type SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
-import {
-  type SessionEntry as PiSessionEntry,
-  findCutPoint,
-  getLatestCompactionEntry,
-  sessionEntryToContextMessages,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -57,44 +52,15 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance, isEnginePromptMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
+import { startCompaction } from "./agent-session-factory.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
 import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
-
-/**
- * Admission uses coding-agent's cut point and context rules, including a split-turn prefix.
- * Its prepareCompaction is private; agent-core's namesake uses a different journal format.
- *
- * So this is a MIRROR of pi's own refusal, and `compact` being accept-fast is why it has to exist: pi decides
- * "nothing to compact" inside `AgentSession.compact()`, after the dispatch has already answered. Every clause here
- * therefore tracks one of pi's — including the system exclusion below (pi's `getMessageFromEntryForCompaction`:
- * "System messages are prompt state, not conversation"). Mirroring is the cost of the private function; the test
- * that keeps it honest runs a REAL turn, so the next pi release that changes the journal shape fails loudly here
- * instead of answering `ok` for work pi then refuses.
- */
-function hasCompactableHistory(path: PiSessionEntry[], keepRecentTokens: number): boolean {
-  if (path.at(-1)?.type === "compaction") return false;
-  const previous = getLatestCompactionEntry(path);
-  let start = 0;
-  if (previous) {
-    const kept = path.findIndex((entry) => entry.id === previous.firstKeptEntryId);
-    start = kept >= 0 ? kept : path.indexOf(previous) + 1;
-  }
-  const { firstKeptEntryIndex } = findCutPoint(path, start, path.length, keepRecentTokens);
-  return path.slice(start, firstKeptEntryIndex).some(
-    (entry) =>
-      entry.type !== "compaction" &&
-      // `isEnginePromptMessage`, not `isConversationMessage`: this reader works on the CONTEXT MESSAGES pi
-      // projects entries into, and a `custom_message` is model-visible history pi does summarize. Only the
-      // assembled prompt is excluded — it is not a turn anyone can summarize.
-      sessionEntryToContextMessages(entry).some((message) => !isEnginePromptMessage(message)),
-  );
-}
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -744,8 +710,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       }),
     );
 
-  /** Admission waits for binding and local preparation, not the model call. Its execution scope
-   *  survives the control response; completion is published only after releasing the shared lease. */
+  /** Admission waits for binding and pi's own admission (its cut point), not the model call.
+   *  Its execution scope survives the control response; completion is published only after releasing the shared
+   *  lease. */
   const compactOf = (session: string, instructions?: string): Promise<SessionResult> => {
     const admitted = Deferred.makeUnsafe<SessionResult>();
     let accepted = false;
@@ -762,37 +729,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (!existing) return noSuchSession(session);
         yield* acquireSessionLease(b.lease, session);
         const bound = yield* acquireSession(b.sessionFactory, session);
-        // Use Pi's own thresholds: a different cut point can admit work Pi later refuses.
-        if (
-          !hasCompactableHistory(
-            bound.sessionManager.getBranch(),
-            bound.settingsManager.getCompactionSettings().keepRecentTokens,
-          )
-        ) {
-          return {
-            ok: false,
-            error: {
-              code: NOTHING_TO_COMPACT_CODE,
-              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
-              retryable: false,
-            },
-          } as const;
-        }
-        accepted = true;
-        compacting.set(session, {
-          abort: () => {
-            aborted = true;
-            bound.abortCompaction();
-          },
-        });
-        emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
-        yield* Deferred.succeed(admitted, { ok: true });
         yield* Effect.acquireRelease(
           Effect.try({
             try: () =>
               bound.subscribe((event) => {
-                // Pi creates the controller after an await; retain an early stop until this event.
-                if (event.type === "compaction_start" && event.reason === "manual" && aborted) bound.abortCompaction();
                 if (event.type !== "summarization_retry_scheduled") return;
                 log.warn(
                   `[fastagent] compaction retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms (session ${session}): ${event.errorMessage}`,
@@ -803,9 +743,47 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }),
           (unsubscribe) => portCleanup("unsubscribe", unsubscribe),
         );
+        // Admission is pi's own decision, observed rather than predicted: a prediction has to track pi's private
+        // cut-point rules release by release. It settles before the model call.
+        const compaction = startCompaction(bound, instructions, () => {
+          accepted = true;
+          compacting.set(session, {
+            abort: () => {
+              aborted = true;
+              bound.abortCompaction();
+            },
+          });
+          emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+          Deferred.doneUnsafe(admitted, Effect.succeed({ ok: true }));
+        });
+        const admission = yield* portAbort(
+          "compact admission",
+          () => compaction.admission,
+          () => bound.abortCompaction(),
+        );
+        if (admission === "nothing_to_compact") {
+          return {
+            ok: false,
+            error: {
+              code: NOTHING_TO_COMPACT_CODE,
+              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
+              retryable: false,
+            },
+          } as const;
+        }
+        // Any other error pi raises before admission. A served session has no known trigger: it always binds a
+        // model, and pi swallows a credential failure here and meets it at the model call (compaction_finished).
+        // NOT retryable all the same: it is pi's decision on this session, not a transport or lease fault that
+        // clears on its own, so repeating the call would meet it again.
+        if (admission !== "admitted") {
+          return {
+            ok: false,
+            error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(admission.refused), retryable: false },
+          } as const;
+        }
         const done = yield* portAbort(
           "compact",
-          () => bound.compact(instructions),
+          () => compaction.done,
           () => bound.abortCompaction(),
         );
         return { summary: done.summary };

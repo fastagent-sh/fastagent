@@ -8,8 +8,10 @@ import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
   type AgentSessionServices,
+  type CompactionResult,
   type CreateAgentSessionServicesOptions,
   type ExtensionCommandContextActions,
+  type InlineExtension,
   ExtensionRunner,
   type LoadExtensionsResult,
   ModelRegistry,
@@ -315,6 +317,87 @@ export function definitionResourceLoaderOptions(source: {
   };
 }
 
+/** Manual compactions waiting for pi's admission, keyed by the session's record (what an extension's `ctx` names). */
+const compactAdmissions = new WeakMap<SessionManager, () => void>();
+
+const COMPACT_ADMISSION = "fastagent-compact-admission";
+
+/**
+ * pi's own admission signal for a manual compaction: `session_before_compact` fires only once `prepareCompaction`
+ * found work, and before the model call. It must be the FIRST listener ({@link admissionFirst}): pi awaits each
+ * handler in turn, and a definition's own handler (a custom summarizer, a cancel) runs after admission, like the
+ * model call it may replace.
+ */
+const compactAdmission: InlineExtension = {
+  name: COMPACT_ADMISSION,
+  hidden: true,
+  factory: (pi) => {
+    pi.on("session_before_compact", (event, ctx) => {
+      if (event.reason === "manual") admitCompaction(ctx.sessionManager as SessionManager);
+    });
+  },
+};
+
+/**
+ * pi loads path extensions first and appends inline factories after them, so {@link compactAdmission} arrives last.
+ * Moved to the front here, since pi dispatches handlers in extension order.
+ */
+function admissionFirst(base: LoadExtensionsResult): LoadExtensionsResult {
+  const path = `<inline:${COMPACT_ADMISSION}>`;
+  const admission = base.extensions.filter((extension) => extension.path === path);
+  return { ...base, extensions: [...admission, ...base.extensions.filter((extension) => extension.path !== path)] };
+}
+
+/** Tell a waiting {@link startCompaction} that pi admitted the compaction on this record. */
+export function admitCompaction(record: SessionManager): void {
+  compactAdmissions.get(record)?.();
+}
+
+/**
+ * pi's refusals when `prepareCompaction` finds nothing. They are plain Errors, so their text is the only way to tell
+ * them from any other error pi raises before admission. If pi rewords them, the refusal still fails visibly, as
+ * `boundary_command_failed` instead of `nothing_to_compact`, and the admission tests in session-control.test.ts,
+ * which run pi's real refusal, fail with it.
+ */
+const NOTHING_TO_COMPACT = /^(Nothing to compact|Already compacted)\b/;
+
+/** What pi decided before its model call: go ahead, nothing to do, or a failure of its own (in `refused`). */
+export type CompactAdmission = "admitted" | "nothing_to_compact" | { refused: unknown };
+
+/**
+ * Start pi's manual compaction on a bound session. `onAdmitted` runs INSIDE pi's admission event, so everything it
+ * publishes precedes anything pi does next (the model call, its retries). `admission` settles before the model call.
+ * pi's own pre-admission failures come back as `refused` rather than a rejection: the caller answers them to its
+ * Caller as a result. `done` is the compaction itself.
+ */
+export function startCompaction(
+  session: AgentSession,
+  instructions: string | undefined,
+  onAdmitted: () => void,
+): { admission: Promise<CompactAdmission>; done: Promise<CompactionResult> } {
+  const record = session.sessionManager;
+  const admitted = new Promise<"admitted">((resolve) => {
+    compactAdmissions.set(record, () => {
+      try {
+        onAdmitted();
+      } finally {
+        resolve("admitted");
+      }
+    });
+  });
+  const done = session.compact(instructions);
+  const forget = () => void compactAdmissions.delete(record);
+  done.then(forget, forget);
+  const settledFirst = done.then(
+    () => {
+      throw new Error("pi finished a compaction without announcing its admission (session_before_compact)");
+    },
+    (error: unknown): CompactAdmission =>
+      error instanceof Error && NOTHING_TO_COMPACT.test(error.message) ? "nothing_to_compact" : { refused: error },
+  );
+  return { admission: Promise.race([admitted, settledFirst]), done };
+}
+
 /**
  * The resources ONE served session runs on: a fresh loader, so fresh extension instances.
  *
@@ -341,7 +424,8 @@ async function servingServices(options: {
       machine,
       extensionPaths,
     }),
-    extensionsOverride: refuseLoadTimeProviders,
+    extensionsOverride: (base) => admissionFirst(refuseLoadTimeProviders(base)),
+    extensionFactories: [compactAdmission],
     cwd,
     agentDir,
     settingsManager,
