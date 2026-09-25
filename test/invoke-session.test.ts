@@ -26,9 +26,9 @@ vi.mock("../src/engines/pi/turn-kit.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/engines/pi/turn-kit.ts")>();
   return {
     ...actual,
-    toPiPromptOptions: async (prompt: Parameters<typeof actual.toPiPromptOptions>[0]) => {
+    toPiPromptOptions: async (...args: Parameters<typeof actual.toPiPromptOptions>) => {
       await duringPromptPrep.value?.();
-      return actual.toPiPromptOptions(prompt);
+      return actual.toPiPromptOptions(...args);
     },
   };
 });
@@ -139,7 +139,7 @@ describe("AgentSession L0: cancelling before the model call", () => {
     expect(settled.done).toBe(true); // cancellation has no terminal event (SPEC MUST 3)
   });
 
-  it("never starts the turn when the consumer walks away while the prompt's images are resized", async () => {
+  it("never starts the turn when the consumer walks away while the prompt's images are prepared", async () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
     // The session is idle while images are prepared. Cancellation must prevent the model call.

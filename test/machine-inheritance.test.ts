@@ -152,6 +152,25 @@ it("an empty machine contributes nothing — the definition is the whole answer"
   ]);
 });
 
+it("a machine prompt template whose frontmatter does not parse is said, not silently absent", async () => {
+  await machine({
+    prompts: {
+      review: "---\ndescription: Review the diff.\n---\nReview it.\n",
+      broken: "---\ndescription: [unclosed\n---\nNever listed.\n",
+    },
+  });
+  const dir = await definition();
+
+  let names: string[] = [];
+  const warned = await warnings(async () => {
+    names = (await agentCommands(dir, dir, noExtensions)).map((command) => command.name);
+  });
+
+  expect(names).toContain("review");
+  expect(names).not.toContain("broken");
+  expect(warned).toMatch(/prompt template warning: [\s\S]*broken\.md/);
+});
+
 it("an INSTALLED pi package's skills are inherited like any other", async () => {
   // A package lives where pi's package manager put it (`~/.pi/agent/git/…`), not under `~/.pi/agent/skills`, so
   // only resolving `packages` finds it — the only thing fastagent never does is install one.
