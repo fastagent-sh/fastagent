@@ -217,7 +217,9 @@ const start: CommandSpec = {
     "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
-    "            share one credential across projects)",
+    "            share one credential across projects)\n" +
+    "  endpoints: FASTAGENT_MODELS_PATH > ~/.fastagent/models.json, under the agent's\n" +
+    "            own models.json (the machine's; it does not ship with a deploy)",
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import {
@@ -322,6 +322,34 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     expect(resolveModel(models, "localgw/m").baseUrl).toBe("https://pinned.example.com/v1");
     expect(resolveModel(models, "other/m").baseUrl).toBe("http://other/v1");
     expect(await machineModels(agentDir)).toMatchObject({ inherited: ["other"], overridden: ["localgw"] });
+  });
+
+  it("serving and the report read the machine file the same way: a file one rejects, both reject", async () => {
+    // A file pi alone would accept (comments) but the merge cannot read must not load for dev while `info` and
+    // `deploy` fail on it: both go through one reader.
+    const commented = `{ // the machine's gateway\n "providers": { "localgw": ${JSON.stringify(endpoint("http://m/v1", { apiKey: "x" }))} } }`;
+    const { agentDir, machinePath, authPath } = await layers(commented);
+    await expect(createPiModelRuntime({ agentDir, authPath })).rejects.toThrow(machinePath);
+    await expect(machineModels(agentDir)).rejects.toThrow(machinePath);
+  });
+
+  it("the merged file lives in fastagent's home, one per agent, and is rewritten only when it changes", async () => {
+    const { agentDir, authPath } = await layers(
+      JSON.stringify({ providers: { localgw: endpoint("http://m/v1", { apiKey: "x" }) } }),
+    );
+    const cache = join(homedir(), ".fastagent", ".cache", "models");
+    const before = new Set(await readdir(cache).catch(() => []));
+    await createPiModelRuntime({ agentDir, authPath });
+    const added = (await readdir(cache)).filter((name) => !before.has(name));
+    expect(added).toHaveLength(1); // this agent's one file
+    const file = join(cache, added[0] as string);
+    const first = await stat(file);
+
+    await createPiModelRuntime({ agentDir, authPath });
+
+    expect((await readdir(cache)).filter((name) => !before.has(name))).toEqual(added); // not another copy
+    expect((await stat(file)).mtimeMs).toBe(first.mtimeMs); // unchanged content, no rewrite
+    expect((first.mode & 0o777).toString(8)).toBe("600");
   });
 
   it("a malformed machine file fails startup naming that file, alone or merged", async () => {

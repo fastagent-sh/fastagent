@@ -23,6 +23,7 @@ import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
   literalKeyProviders,
+  isBuiltinProvider,
   machineModels,
   modelCredentialCarry,
   probeAuthSource,
@@ -255,29 +256,42 @@ export async function preflightDeploy(input: {
     });
   }
 
+  // The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
+  // absent wherever the agent is deployed, its key included.
+  const machine = await machineModels(agentDir);
+  const provider = modelSpec ? providerOf(modelSpec) : undefined;
+  const fromMachine = provider !== undefined && machine?.inherited.includes(provider) === true;
+  if (fromMachine && provider !== undefined && machine) {
+    if (isBuiltinProvider(provider)) {
+      messages.push({
+        level: "warn",
+        text:
+          `model "${modelSpec}" takes its "${provider}" entry from ${machine.path}, the machine's models.json, which ` +
+          `does not ship — the deployed agent runs pi's built-in "${provider}" without it. Declare the entry in the ` +
+          `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
+      });
+    } else {
+      // No built-in to fall back on: the deployed agent cannot resolve the model at all.
+      const issue =
+        `model "${modelSpec}" exists only in ${machine.path}, the machine's models.json, which does not ship — the ` +
+        `deployed agent would fail with an unknown model. Declare "${provider}" in the agent's own ` +
+        `${AGENT_MODELS_FILE} to deploy it.`;
+      if (run) return { ok: false, gate: issue };
+      messages.push({ level: "warn", text: issue });
+    }
+  }
+
   // Probe auth from the SAME project-level file the opener/login use.
   const authPath = resolveAuthPath(agentDir);
   const models = await createPiModelRuntime({ agentDir, authPath });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
   let modelKeyInDefinition = false;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
-  // REACH the host").
-  if (modelSpec && !isEnvKey(modelAuth)) {
+  // REACH the host"). A key in the machine's file reaches no host, so it is never "in the definition".
+  if (modelSpec && !fromMachine && !isEnvKey(modelAuth)) {
     const carry = modelCredentialCarry(models, modelSpec);
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
-  }
-  // The machine's models.json is this box's environment, not the artifact: an endpoint the model takes from it is
-  // absent wherever the agent is deployed. Said here rather than as a late "unknown model" on the host.
-  const machine = await machineModels(agentDir);
-  if (modelSpec && machine?.inherited.includes(providerOf(modelSpec))) {
-    messages.push({
-      level: "warn",
-      text:
-        `model "${modelSpec}" takes its "${providerOf(modelSpec)}" entry from ${machine.path}, the machine's ` +
-        `models.json, which does not ship — the deployed agent does not have it. Declare the provider in the ` +
-        `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
-    });
   }
 
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe

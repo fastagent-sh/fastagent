@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
+import { createPiModels } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -646,7 +647,12 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
+      // Its literal key is the machine's, not the definition's: it reaches no host.
+      expect(pre.modelKeyInDefinition).toBe(false);
     }
+    // No built-in "localgw" to fall back on, so running the deployment is refused, not warned about.
+    const running = await call(await workspace(), { model: "localgw/m" }, { run: true });
+    expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/unknown model/) });
 
     // The agent's own entry for the provider is what ships, so nothing is said.
     const own = await workspace({
@@ -664,6 +670,27 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const shipped = await call(own, { model: "localgw/m" });
     expect(shipped.ok).toBe(true);
     if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
+  });
+
+  it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {
+    const anthropic = createPiModels().getProvider("anthropic")?.getModels()[0]?.id as string;
+    const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+    await writeFile(
+      machine,
+      JSON.stringify({ providers: { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "sk-machine" } } }),
+    );
+    vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+
+    const pre = await call(await workspace(), { model: `anthropic/${anthropic}` }, { run: true });
+
+    expect(pre.ok).toBe(true); // the deployed agent still resolves pi's built-in anthropic
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(/built-in "anthropic" without it/),
+      });
+      expect(pre.modelKeyInDefinition).toBe(false); // so deploy still asks for a credential the host will have
+    }
   });
 
   it("requires what tools and schedules DECLARED, and lists the rest of the value file after them", async () => {

@@ -4,13 +4,12 @@
  * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { providerOf } from "./config.ts";
@@ -63,7 +62,7 @@ export function machineModelsPath(env: NodeJS.ProcessEnv = process.env): string 
   return resolveOverridePath(env.FASTAGENT_MODELS_PATH) ?? join(homedir(), GLOBAL_HOME_DIR, AGENT_MODELS_FILE);
 }
 
-/** A custom-endpoint file's providers by id, or undefined when there is no file. Strict JSON: see {@link modelsFileFor}. */
+/** A custom-endpoint file's providers by id, or undefined when there is no file. Strict JSON: see {@link modelLayers}. */
 async function readProviders(path: string): Promise<Record<string, unknown> | undefined> {
   let raw: string;
   try {
@@ -86,30 +85,42 @@ async function readProviders(path: string): Promise<Record<string, unknown> | un
 }
 
 /**
+ * The two custom-endpoint layers of an agent, read ONCE for every reader: the file pi loads and the report of where a
+ * provider came from both come from this, so what runs and what `info`/`deploy` say cannot disagree. Undefined when
+ * the machine has no file: then the agent's own file goes to pi untouched.
+ *
+ * Read here rather than by pi, because pi loads exactly one path and its comment stripping is not reachable: while a
+ * machine file exists, both files must be plain JSON.
+ */
+async function modelLayers(
+  agentDir: string,
+): Promise<{ machinePath: string; machine: Record<string, unknown>; own: Record<string, unknown> } | undefined> {
+  const machinePath = machineModelsPath();
+  const machine = await readProviders(machinePath);
+  if (!machine) return undefined;
+  return { machinePath, machine, own: (await readProviders(join(agentDir, AGENT_MODELS_FILE))) ?? {} };
+}
+
+/**
  * The models.json pi loads for an agent: its own file, layered over the machine's. The agent's file wins a provider id
  * outright, as a definition's skill wins a name: an agent that pins an endpoint keeps it.
  *
- * With one file present, pi reads it directly, so its errors name that file. With both, they are merged into a file
- * outside the agent directory (pi loads exactly one path); both must then be plain JSON, since pi's comment stripping
- * is not reachable from here. The merged file is named by its content and written `0600`, as it may carry literal
- * keys.
+ * The merged file lives in fastagent's own home, one per agent directory, not in the agent (so `info` writes nothing
+ * there) and not in a shared temp dir, which the OS clears while a long `chat` still re-reads it (pi reloads the path on
+ * every refresh). It is written only when its content changes, `0600`, since it may carry literal keys.
  */
 async function modelsFileFor(
   agentDir: string,
 ): Promise<{ path: string; merged?: { machine: string; definition: string } }> {
   const definition = join(agentDir, AGENT_MODELS_FILE);
-  const machine = machineModelsPath();
-  if (!existsSync(machine)) return { path: definition };
-  if (!existsSync(definition)) return { path: machine };
-  const [machineProviders, definitionProviders] = await Promise.all([
-    readProviders(machine),
-    readProviders(definition),
-  ]);
-  const content = JSON.stringify({ providers: { ...machineProviders, ...definitionProviders } }, null, 2);
-  const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
-  const path = join(tmpdir(), `fastagent-models-${hash}.json`);
-  writeFileAtomic(path, content, 0o600);
-  return { path, merged: { machine, definition } };
+  const layers = await modelLayers(agentDir);
+  if (!layers) return { path: definition };
+  const content = JSON.stringify({ providers: { ...layers.machine, ...layers.own } }, null, 2);
+  const agentKey = createHash("sha256").update(resolve(agentDir)).digest("hex").slice(0, 16);
+  const path = join(homedir(), GLOBAL_HOME_DIR, ".cache", "models", `${agentKey}.json`);
+  const current = await readFile(path, "utf8").catch(() => undefined);
+  if (current !== content) writeFileAtomic(path, content, 0o600);
+  return { path, merged: { machine: layers.machinePath, definition } };
 }
 
 /**
@@ -119,12 +130,19 @@ async function modelsFileFor(
 export async function machineModels(
   agentDir: string,
 ): Promise<{ path: string; inherited: string[]; overridden: string[] } | undefined> {
-  const path = machineModelsPath();
-  const machine = await readProviders(path);
-  if (!machine) return undefined;
-  const own = (await readProviders(join(agentDir, AGENT_MODELS_FILE))) ?? {};
-  const ids = Object.keys(machine).sort();
-  return { path, inherited: ids.filter((id) => !(id in own)), overridden: ids.filter((id) => id in own) };
+  const layers = await modelLayers(agentDir);
+  if (!layers) return undefined;
+  const ids = Object.keys(layers.machine).sort();
+  return {
+    path: layers.machinePath,
+    inherited: ids.filter((id) => !(id in layers.own)),
+    overridden: ids.filter((id) => id in layers.own),
+  };
+}
+
+/** Whether pi ships this provider id itself, so an agent resolves it without any models.json entry. */
+export function isBuiltinProvider(providerId: string): boolean {
+  return builtinProviders().some((provider) => provider.id === providerId);
 }
 
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
