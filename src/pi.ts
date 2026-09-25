@@ -21,6 +21,7 @@ export type { AgentTool, ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-
 export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 
 export {
+  availableModelsFromDir,
   createPiAgentFromDir,
   type CreatePiAgentFromDirOptions,
 } from "./engines/pi/open.ts";
