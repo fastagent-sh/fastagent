@@ -14,7 +14,7 @@ import {
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
-import { GLOBAL_AUTH_PATH } from "./auth.ts";
+import { type FastagentAuthOptions, GLOBAL_AUTH_PATH } from "./auth.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
@@ -422,6 +422,24 @@ export interface CreatePiAgentFromDefinitionOptions {
   observer?: SessionObserver;
 }
 
+/**
+ * THE model registry an agent directory runs on: pi's built-ins, the directory's own `models.json` (custom endpoints
+ * are definition data and travel with the artifact), and any injected Provider instance, over the given credentials.
+ * The directory rung assembles from it and `availableModelsFromDir` lists from it, so a layer added here reaches both.
+ */
+export function definitionModelRuntime(
+  dir: string,
+  options: FastagentAuthOptions & { authPath: string; fallbackAuthPath?: string; providers?: Provider[] },
+): Promise<ModelRuntime> {
+  return createPiModelRuntime({
+    agentDir: dir,
+    authPath: options.authPath,
+    ...(options.fallbackAuthPath !== undefined ? { fallbackAuthPath: options.fallbackAuthPath } : {}),
+    ...(options.providers ? { providers: options.providers } : {}),
+    ...(options.warn ? { warn: options.warn } : {}),
+  });
+}
+
 /** L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. */
 export async function assemblePiFromDefinition(
   dir: string,
@@ -449,13 +467,10 @@ export async function assemblePiFromDefinition(
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
-    // THE directory rung's model surface: built-ins + the agent's own models.json (custom endpoints, which are
-    // definition data and travel with the artifact) + any injected Provider instance.
-    models: await createPiModelRuntime({
-      agentDir: dir,
+    models: await definitionModelRuntime(dir, {
       authPath,
       ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
-      providers: options.providers,
+      ...(options.providers ? { providers: options.providers } : {}),
     }),
     authPath,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the

@@ -14,7 +14,7 @@ import {
 } from "./config.ts";
 import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
-import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
+import { agentOf, assemblePiFromDefinition, definitionModelRuntime, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
@@ -24,7 +24,6 @@ import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
-import { createPiModelRuntime } from "./models.ts";
 import type { FastagentAuthOptions } from "./auth.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
@@ -170,8 +169,7 @@ export async function resolveAgentAssembly(
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
   // The credentials file: project-level by default (under `<agentDir>/.secrets`).
-  const authPath = resolveAuthPath(agentDir, options.authPath);
-  const fallbackAuthPath = resolveAuthFallback(options.authPath);
+  const { authPath, fallbackAuthPath } = agentAuthLayers(agentDir, options.authPath);
   return {
     config,
     configPath,
@@ -203,14 +201,23 @@ export async function availableModelsFromDir(
   options: FastagentAuthOptions & { authPath?: string } = {},
 ): Promise<string[]> {
   const { agentDir } = resolvePlacement(dir);
-  const fallbackAuthPath = resolveAuthFallback(options.authPath);
-  const models = await createPiModelRuntime({
-    agentDir,
-    authPath: resolveAuthPath(agentDir, options.authPath),
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+  const models = await definitionModelRuntime(agentDir, {
+    ...agentAuthLayers(agentDir, options.authPath),
     ...(options.warn ? { warn: options.warn } : {}),
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
+}
+
+/**
+ * Which credentials files an agent directory reads: `authPath` option > FASTAGENT_AUTH_PATH > the agent's own file,
+ * layered over the user-global one unless a path was named. One owner for the opener and the model list.
+ */
+function agentAuthLayers(agentDir: string, authPath?: string): { authPath: string; fallbackAuthPath?: string } {
+  const fallbackAuthPath = resolveAuthFallback(authPath);
+  return {
+    authPath: resolveAuthPath(agentDir, authPath),
+    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+  };
 }
 
 /**

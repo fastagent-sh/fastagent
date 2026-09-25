@@ -47,8 +47,8 @@ afterEach(() => {
 describe("availableModelsFromDir", () => {
   it("lists what the agent can run now: configured endpoints and stored logins, nothing refreshed", async () => {
     // Only the stored login can list anthropic here, whatever this machine's environment holds.
-    vi.stubEnv("ANTHROPIC_API_KEY", undefined);
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", undefined);
+    for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
+      vi.stubEnv(name, undefined);
     const expiredOAuth = { anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } };
     const { dir, authPath } = await workspace(JSON.stringify(expiredOAuth));
     const fetch = vi.spyOn(globalThis, "fetch");
@@ -63,8 +63,12 @@ describe("availableModelsFromDir", () => {
   });
 
   it("a listed spec is one the opener runs with", async () => {
+    for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
+      vi.stubEnv(name, undefined);
     const { dir, authPath } = await workspace("{}");
-    const [spec] = (await availableModelsFromDir(dir, { authPath })).filter((s) => s.startsWith("local/"));
+    const specs = await availableModelsFromDir(dir, { authPath });
+    expect(specs.some((s) => s.startsWith("anthropic/"))).toBe(false); // no stored login, no env key: not listed
+    const [spec] = specs.filter((s) => s.startsWith("local/"));
     expect(spec).toBe("local/llama");
 
     const opened = await createPiAgentFromDir(dir, { model: spec, authPath });
