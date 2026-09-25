@@ -254,8 +254,9 @@ describe("session control: observation plane", () => {
   });
 
   it("entries(): a context edit names the entry the model no longer sees as written", async () => {
-    // pi writes one for every abandoned retry or overflow attempt (`replacement: null`). The attempt stays in the
-    // transcript, so without the target a client cannot tell it from an answer the model still sees.
+    // pi writes an omission (`replacement: null`) for every abandoned retry or overflow attempt, and an extension
+    // may write omissions or replacements. The target stays in the transcript, so without the edit's target a
+    // client cannot tell it from an entry the model still sees as written.
     const { control, sessions } = await makeObserved([]);
     const record = await sessions.openOrCreate("sEdit");
     record.appendMessage({ role: "user", content: "question", timestamp: 1 });
