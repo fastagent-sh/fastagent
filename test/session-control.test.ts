@@ -1271,7 +1271,7 @@ describe("session control: boundary mutations", () => {
       const { join } = await import("node:path");
       const cwd = await mkdtemp(join(tmpdir(), "fa-astra-thinking-"));
       try {
-        const modelRuntime = await createPiModelRuntime({ authPath: join(cwd, "auth.json") });
+        const modelRuntime = await createPiModelRuntime({ auth: { path: join(cwd, "auth.json") } });
         const model = modelRuntime.getModel(provider, "gpt-6-astra")!;
         expect(model).toBeDefined();
         const sessions = piInMemorySessionRecordStore({ cwd });

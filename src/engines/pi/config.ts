@@ -287,6 +287,26 @@ export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessE
 }
 
 /**
+ * Which credentials files an agent reads: `path` first, then, per provider, `fallback` — present only when nothing
+ * named the path ({@link resolveAuthFallback}). One value because it is one decision: the opener, the model list, the
+ * startup report and the first-run picker all read through it.
+ */
+export interface AuthLayers {
+  path: string;
+  fallback?: string;
+}
+
+/** The {@link AuthLayers} an agent directory reads: `authPath` option > `FASTAGENT_AUTH_PATH` > its own file. */
+export function resolveAuthLayers(
+  agentDir: string,
+  authPath?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AuthLayers {
+  const fallback = resolveAuthFallback(authPath, env);
+  return { path: resolveAuthPath(agentDir, authPath, env), ...(fallback !== undefined ? { fallback } : {}) };
+}
+
+/**
  * Where a credential the project does not have is read from instead: the user-global store, because a login is a
  * PERSON on a machine and not a project — one `login -g` then serves every agent here. Undefined when an explicit
  * path was named: "use this file" is an instruction, not a preference, so it gets no second layer.
