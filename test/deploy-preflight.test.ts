@@ -539,6 +539,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
+  it("does not offer the cron's way out when a long connection also pins the machine", async () => {
+    const dir = await workspace({
+      "routines/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
+      "channels/socket.mjs": `export default { name: "socket", connect() {} };\n`,
+    });
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok && pre.hasCron).toBe(true);
+    if (pre.ok) expect(pre.messages.map((m) => m.text).join("\n")).not.toContain("To scale to zero instead");
+  });
+
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {
     const dir = await workspace({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
