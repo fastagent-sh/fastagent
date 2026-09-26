@@ -103,8 +103,10 @@ refuses and says where to `cd`.
   `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`, or run `fastagent login` in the agent dir.
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
-- An API-key login is checked with one request. A 401 removes the key and asks again; other failures keep it and
-  print the provider's message.
+- An API-key login is checked with one request to pi's default model for the provider, before the key is written.
+  A 401 is never stored, so the file keeps what it held, and the key is asked for again; other failures keep the
+  key and print the provider's message. Inside an agent the check goes to the endpoint its `models.json` names (a
+  gateway in front of a built-in provider, say); with `-g` it goes to the provider's own endpoint.
 - `auth.json` is always written `0600`. `.secrets/.env` is `0600` only when fastagent creates it; directories keep
   the permissions you gave them.
 
