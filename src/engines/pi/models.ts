@@ -21,32 +21,22 @@ import {
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
-import { providerOf } from "./config.ts";
+import { type AuthLayers, providerOf } from "./config.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
 /** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md). */
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
+  /** Credentials file (default `GLOBAL_AUTH_PATH`). A named file is an instruction: no second layer. */
   authPath?: string;
-  /**
-   * Read a provider the primary file does not have from here instead (`resolveAuthFallback`: the user-global store).
-   * Omitted by an embedder that named its own store — "use this file" is an instruction, not a preference.
-   */
-  fallbackAuthPath?: string;
   /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
   providers?: Provider[];
 }
 
 /** A `Models` with every built-in pi provider, wired to fastagent's auth. */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  return piModelsOver(
-    fastagentCredentialStore(options.authPath, {
-      warn: options.warn,
-      ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
-    }),
-    options.providers,
-  );
+  return piModelsOver(fastagentCredentialStore(options.authPath, { warn: options.warn }), options.providers);
 }
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
@@ -166,9 +156,8 @@ export function isBuiltinProvider(providerId: string): boolean {
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(
   options: FastagentAuthOptions & {
-    authPath?: string;
-    /** Read a provider the primary file does not have from here instead ({@link CreatePiModelsOptions}). */
-    fallbackAuthPath?: string;
+    /** The credentials files to read (default: the global file alone). */
+    auth?: AuthLayers;
     /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
     agentDir?: string;
     /**
@@ -193,10 +182,7 @@ export async function createPiModelRuntime(
   const runtime = await ModelRuntime.create({
     credentials:
       options.credentials ??
-      fastagentCredentialStore(options.authPath, {
-        warn: options.warn,
-        ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
-      }),
+      fastagentCredentialStore(options.auth?.path, { warn: options.warn, fallbackPath: options.auth?.fallback }),
     modelsPath: models?.path ?? null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
     // write a generated cache INTO the author's agent dir.

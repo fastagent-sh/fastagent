@@ -47,11 +47,11 @@ export async function runRoutine(name: string, dirArg: string, opts: RoutineRunO
   // were printed above: its guarantee must not depend on this call site remembering (a repeated line
   // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
-  const { agent, modelSpec, authPath, fallbackAuthPath } = await createPiAgentFromDir(placement.agentDir, {
+  const { agent, modelSpec, auth } = await createPiAgentFromDir(placement.agentDir, {
     model: opts.model,
   }).catch(failStartup);
   console.error(`[fastagent] routine run: ${name} (${modelSpec})`);
-  await reportAuth(placement.agentDir, modelSpec, authPath, fallbackAuthPath);
+  await reportAuth(placement.agentDir, modelSpec, auth);
   const exitCode = await runInvokeStream(
     agent.invoke({ session: routineSession(name) }, { text: routine.prompt }),
     (text) => process.stdout.write(text),
