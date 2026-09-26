@@ -708,6 +708,30 @@ describe("session control: run modulation", () => {
     ]);
   });
 
+  it("entries(): a steer stays a steer when an extension's message_start handler emits events of its own", async () => {
+    // pi dequeues, then awaits extension handlers, then announces the message. An entry an extension appends there
+    // (`entry_appended`) sits between the dequeue and the message; matching the message by adjacency lost the steer.
+    const dir = await mkdtemp(join(tmpdir(), "fa-delivery-log-"));
+    const extension = join(dir, "log.mjs");
+    await writeFile(extension, 'export default (pi) => pi.on("message_start", () => pi.appendEntry("x.log", {}));\n');
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("after the steer")],
+      { tools: [gate.tool], extensionPaths: [extension] },
+    );
+    const invoked = drive(agent, "sLogged");
+    await waitForToolStarted(control, "sLogged");
+    expect((await control.sessions.get("sLogged").steer({ text: "redirect" })).ok).toBe(true);
+    gate.release();
+    await invoked;
+
+    const users = (await control.sessions.get("sLogged").entries()).entries.filter((e) => e.kind === "user");
+    expect(users.map((e) => e.data)).toEqual([
+      { text: "go", delivery: "prompt" },
+      { text: "redirect", delivery: "steer" },
+    ]);
+  });
+
   it("entries(): a turn an extension command started has no delivery: the command was the prompt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-delivery-ext-"));
     const extension = join(dir, "ask.mjs");
@@ -731,10 +755,10 @@ describe("session control: run modulation", () => {
     const [user] = (await control.sessions.get("sOld").entries()).entries;
     expect(user?.data).toEqual({ text: "written before deliveries were recorded" });
 
-    // A record whose message never reached the journal (the process died in between) is not pinned on a later one.
-    recordDelivery(record, "steer");
-    record.appendMessage(fauxAssistantMessage("an answer"));
-    record.appendMessage({ role: "user", content: "an extension's turn", timestamp: 2 });
+    // A record whose message never reached the journal (the process died in between) is not pinned on the next user
+    // message, which here follows it directly: a later run's turn that records nothing (an extension's).
+    recordDelivery(record, "steer", 100);
+    record.appendMessage({ role: "user", content: "an extension's turn", timestamp: 200 });
     const later = (await control.sessions.get("sOld").entries()).entries.filter((e) => e.kind === "user");
     expect(later.at(-1)?.data).toEqual({ text: "an extension's turn" });
   });

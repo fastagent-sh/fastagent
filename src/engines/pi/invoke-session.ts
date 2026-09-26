@@ -1,6 +1,6 @@
 /** Pi's per-invoke binding over a durable session record. */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -128,6 +128,16 @@ function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> 
   return pending;
 }
 
+/** What `before` held that `after` does not, one occurrence per removal (pi splices one per message). */
+function removed(before: readonly string[], after: readonly string[]): string[] {
+  const left = [...before];
+  for (const text of after) {
+    const index = left.indexOf(text);
+    if (index >= 0) left.splice(index, 1);
+  }
+  return left;
+}
+
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
   const { sessionFactory, lease = inProcessLease(), observer } = options;
 
@@ -227,11 +237,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
       let eventFailure: PortFailure | undefined;
-      // How each user message of this run was delivered, as pi classifies it: pi takes a queued message out of its
-      // steering or follow-up queue, announcing that with `queue_update`, right before the message starts. The first
-      // user message neither taken from a queue nor sent by an extension is the prompt; an extension's is unknown.
-      let queued = { steering: 0, followUp: 0 };
-      let dequeued: Delivery | undefined;
+      // How each user message of this run was delivered, as pi classifies it: pi takes a message out of its steering
+      // or follow-up queue BY ITS TEXT when the message starts, announcing the removal with `queue_update`. So the
+      // match is by text too, not by adjacency: extension handlers pi awaits in between may emit events of their own.
+      // The first user message neither taken from a queue nor sent by an extension is the prompt; an extension's is
+      // unknown. A removal no message claims (a queue cleared on abort) matches nothing.
+      let queued: { steering: readonly string[]; followUp: readonly string[] } = { steering: [], followUp: [] };
+      const taken: { text: string; delivery: Delivery }[] = [];
       let sawUser = false;
       const extensionTurns = trackExtensionTurns(session);
       const stop = () => {
@@ -243,18 +255,23 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             session.subscribe((event) => {
               if (retriedAfterAnswer !== undefined || eventFailure) return;
               try {
-                // A dequeue counts only for the event right after it: the message pi took out.
-                const justDequeued = dequeued;
-                dequeued = undefined;
                 if (event.type === "queue_update") {
-                  if (event.steering.length < queued.steering) dequeued = "steer";
-                  else if (event.followUp.length < queued.followUp) dequeued = "follow_up";
-                  queued = { steering: event.steering.length, followUp: event.followUp.length };
+                  for (const text of removed(queued.steering, event.steering)) taken.push({ text, delivery: "steer" });
+                  for (const text of removed(queued.followUp, event.followUp))
+                    taken.push({ text, delivery: "follow_up" });
+                  queued = { steering: event.steering, followUp: event.followUp };
                 } else if (event.type === "message_start" && event.message.role === "user") {
-                  const delivery = justDequeued ?? (sawUser || extensionTurns.size > 0 ? undefined : "prompt");
+                  const text = contentText(event.message.content, "");
+                  const index = taken.findIndex((entry) => entry.text === text);
+                  const delivery =
+                    index >= 0
+                      ? taken.splice(index, 1)[0]?.delivery
+                      : sawUser || extensionTurns.size > 0
+                        ? undefined
+                        : "prompt";
                   sawUser = true;
                   // Now, before pi journals the message at its message_end: see recordDelivery.
-                  if (delivery) recordDelivery(session.sessionManager, delivery);
+                  if (delivery) recordDelivery(session.sessionManager, delivery, event.message.timestamp);
                 }
                 if (event.type === "agent_start") runStarted = true;
                 // Compaction rewrites session history; the event's assistant message is the turn's fact.

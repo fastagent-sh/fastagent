@@ -86,28 +86,41 @@ export function forkProvenance(record: SessionManager): string | undefined {
   return found;
 }
 
-/** Record the delivery of the user message pi is about to journal. */
-export function recordDelivery(record: SessionManager, delivery: Delivery): void {
-  record.appendCustomEntry(DELIVERY, { delivery });
+/** Record the delivery of the user message pi is about to journal, named by its timestamp. */
+export function recordDelivery(record: SessionManager, delivery: Delivery, timestamp: number): void {
+  record.appendCustomEntry(DELIVERY, { delivery, timestamp });
 }
 
 /**
  * Every recorded delivery in a journal (append order), by user entry id. A record applies to the next conversation
- * message after it, and only if that is a user message: a record whose message was never journaled (a process that
- * died in between) applies to nothing. A user entry with no record (written before deliveries were recorded, or a
- * turn an extension started) is absent: unknown, not a prompt.
+ * message after it, and only if that is the user message it names (its timestamp): a record whose message was never
+ * journaled (a process that died in between) applies to nothing, not to the next user message to come. A user entry
+ * with no record (written before deliveries were recorded, or a turn an extension started) is absent: unknown, not a
+ * prompt.
  */
 export function readDeliveries(
-  entries: readonly { id: string; type?: string; customType?: string; data?: unknown; message?: { role?: string } }[],
+  entries: readonly {
+    id: string;
+    type?: string;
+    customType?: string;
+    data?: unknown;
+    message?: { role?: string; timestamp?: number };
+  }[],
 ): Map<string, Delivery> {
   const found = new Map<string, Delivery>();
-  let pending: Delivery | undefined;
+  let pending: { delivery: Delivery; timestamp: unknown } | undefined;
   for (const entry of entries) {
     if (entry.type === "custom" && entry.customType === DELIVERY) {
-      const delivery = (entry.data as { delivery?: unknown } | undefined)?.delivery;
-      pending = delivery === "prompt" || delivery === "steer" || delivery === "follow_up" ? delivery : undefined;
+      const data = entry.data as { delivery?: unknown; timestamp?: unknown } | undefined;
+      const delivery = data?.delivery;
+      pending =
+        delivery === "prompt" || delivery === "steer" || delivery === "follow_up"
+          ? { delivery, timestamp: data?.timestamp }
+          : undefined;
     } else if (isConversationMessage(entry)) {
-      if (pending && entry.message?.role === "user") found.set(entry.id, pending);
+      if (pending && entry.message?.role === "user" && entry.message.timestamp === pending.timestamp) {
+        found.set(entry.id, pending.delivery);
+      }
       pending = undefined;
     }
   }
