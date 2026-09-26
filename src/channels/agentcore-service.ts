@@ -126,19 +126,19 @@ export async function mountAgentcoreService(
   // control plane, for nobody, on a third transport.
   // Every config key that cannot mean anything on this host says so. Silence here is how an operator concludes a
   // setting took effect — `sessionControl` was the one that already warned, and the other two were just as inert.
-  if (opened.corsOrigins) {
+  if (opened.http?.cors) {
     log.warn(
       "[fastagent] agentcore: http.cors has no effect here — no browser reaches this container. Its ingress is the " +
         "forwarder's Function URL (webhooks) and the Runtime's IAM-gated API, neither of which is a page.",
     );
   }
-  if (opened.serveInvoke !== undefined) {
+  if (opened.http?.invoke !== undefined) {
     log.warn(
       "[fastagent] agentcore: http.invoke has no effect here — this host serves the Runtime's POST /invocations " +
         "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
     );
   }
-  if (opened.serveRun !== undefined) {
+  if (opened.http?.run !== undefined) {
     log.warn(
       "[fastagent] agentcore: http.run has no effect here — routines fire through the forwarder's " +
         "routine-fire envelope, which is gated by the ingress secret rather than served as an anonymous route.",
@@ -157,7 +157,7 @@ export async function mountAgentcoreService(
   const scheduled = startSchedules(agent, stateRoot, routines, { externalClock: true });
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { serveInvoke: false });
+    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: { invoke: false } });
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +

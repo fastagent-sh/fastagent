@@ -29,6 +29,7 @@ import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
+import type { HttpSurface } from "../../service.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills — the definition's, plus the ones its machine lends
@@ -253,12 +254,8 @@ export async function createPiAgentFromDir(
   sessionControl?: SessionControl;
   /** Whether that plane is also served as `/control/*` — `config.sessionControl`. */
   publishControl: boolean;
-  /** The origins a browser may call this serve from; unset answers every one — `http.cors` (MountableAgent). */
-  corsOrigins?: readonly string[];
-  /** Whether to serve the data plane, `POST /invoke` — `http.invoke` (MountableAgent). */
-  serveInvoke?: boolean;
-  /** Whether to serve `POST /run` — `http.run`, which follows `http.invoke` when unset (MountableAgent). */
-  serveRun?: boolean;
+  /** What the serve publishes — `config.http`, handed to the assembly as-is (MountableAgent). */
+  http?: HttpSurface;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
@@ -349,9 +346,7 @@ export async function createPiAgentFromDir(
     sessions,
     sessionControl: hub?.control,
     publishControl: publish,
-    ...(config.http?.cors ? { corsOrigins: config.http.cors } : {}),
-    ...(config.http?.invoke !== undefined ? { serveInvoke: config.http.invoke } : {}),
-    ...(config.http?.run !== undefined ? { serveRun: config.http.run } : {}),
+    http: config.http,
     agentDir,
     workspace,
     config,
