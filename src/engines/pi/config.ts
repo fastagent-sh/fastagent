@@ -13,6 +13,7 @@ import { THINKING_LEVELS } from "./session-settings.ts";
 import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { assertCorsOrigins } from "../../channels/serve.ts";
+import type { HttpSurface } from "../../service.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
@@ -26,25 +27,8 @@ export interface FastagentConfig {
   thinkingLevel?: ThinkingLevel;
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
-  /**
-   * `cors` names the origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin:
-   * any page your users visit can call this port and read the reply, and every route here is unauthenticated. Set it
-   * to your front end's real domain to take that back (`["*"]` is the default said out loud; an empty list is
-   * refused, because it reads as "nobody" and would mean the opposite).
-   *
-   * `run` serves `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It
-   * follows `invoke` unless
-   * set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it `true` for the
-   * one combination that gets wrong — no `/invoke`, but an external clock (a crontab, a CI job) driving the
-   * schedules. It has no effect where `routines/` declares nothing; there is no route then.
-   *
-   * `invoke` serves the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment
-   * that can only be reached through a chat channel is still worth curling. Set it `false` when this port is public
-   * and the channels' own signature checks are meant to be the only way in — the route is unauthenticated and runs a
-   * turn with the agent's full tool authority, so "my telegram bot is deployed" should not have to mean "and anyone
-   * with the URL can drive it".
-   */
-  http?: { port?: number; cors?: string[]; invoke?: boolean; run?: boolean };
+  /** What the serve publishes on its port, and to which browsers; each key is documented on {@link HttpSurface}. */
+  http?: HttpSurface;
   /**
    * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch — steer/abort/compact +
    * session properties and lifecycle) for remote consumers.

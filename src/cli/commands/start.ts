@@ -14,7 +14,7 @@ import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentService, type AgentService } from "../../service.ts";
+import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
@@ -212,7 +212,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
         mountable,
         cliMountOptions(() => traced),
       ));
-  return { ...service, stateRoot, port: config.http?.port ?? 8787 };
+  return { ...service, stateRoot, port: config.http?.port ?? DEFAULT_HTTP_PORT };
 }
 
 async function maybeSeedAuth(authPath: string): Promise<void> {

@@ -84,20 +84,58 @@ export interface ServingSurface {
   setReady(value: boolean): void;
 }
 
+/** The port a serve binds when neither a flag, `PORT` (start only) nor `http.port` names one. */
+export const DEFAULT_HTTP_PORT = 8787;
+
 /**
- * Does this definition serve `POST /run`, given a schedule to fire?
- *
- * It FOLLOWS `invoke` by default, because `http.invoke: false` is documented as "the channels' signature checks are
- * meant to be the only way in" and a second anonymous turn-starter appearing behind that choice would reverse it
- * silently. `trigger` is the explicit exception, and it is a real one: a port with no `/invoke` but an external
- * clock driving its routines is exactly what this route exists for.
- *
- * ONE function, because two readers need the same answer and they are not near each other: the assembly mounts the
- * route, and `preflightDeploy` names it in the list of what a public URL answers unauthenticated. A default spelled
- * twice is a default that moves once.
+ * What a serve publishes on its port — the config file's `http` block, carried as-is into the assembly so every reader
+ * (the routes, the startup report, deploy's pre-flight, AgentCore's inert-key warnings) reads ONE value.
  */
-export function shouldServeRun(serve: { serveInvoke?: boolean; serveRun?: boolean }): boolean {
-  return serve.serveRun ?? serve.serveInvoke !== false;
+export interface HttpSurface {
+  /** Default port for `dev` / `start` ({@link DEFAULT_HTTP_PORT} when unset). */
+  port?: number;
+  /**
+   * The origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin: any page your
+   * users visit can call this port and read the reply, and every route here is unauthenticated. Set it to your front
+   * end's real domain to take that back (`["*"]` is the default said out loud; an empty list is refused, because it
+   * reads as "nobody" and would mean the opposite).
+   */
+  cors?: readonly string[];
+  /**
+   * Serve the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment that can
+   * only be reached through a chat channel is still worth curling. Set it `false` when this port is public and the
+   * channels' own signature checks are meant to be the only way in — the route is unauthenticated and runs a turn
+   * with the agent's full tool authority.
+   */
+  invoke?: boolean;
+  /**
+   * Serve `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It follows
+   * `invoke` unless set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it
+   * `true` for the one combination that gets wrong — no `/invoke`, but an external clock (a crontab, a CI job) driving
+   * the routines. It has no effect where `routines/` declares nothing; there is no route then.
+   */
+  run?: boolean;
+}
+
+/**
+ * Does this surface serve `POST /run`, given a routine to run? It FOLLOWS `invoke` unless `run` says otherwise (see
+ * {@link HttpSurface.run}). ONE function because the assembly mounts the route and `preflightDeploy` names it; a
+ * default spelled twice is a default that moves once.
+ */
+export function shouldServeRun(http: HttpSurface | undefined): boolean {
+  return http?.run ?? http?.invoke !== false;
+}
+
+/**
+ * What an anonymous caller of a port can do, worst first — the ONE wording the startup report and deploy's pre-flight
+ * both print, each from its own facts (what mounted vs what will mount).
+ */
+export function describeAnonymousSurface(open: { invoke: boolean; run: boolean; controlPrefix?: string }): string[] {
+  return [
+    ...(open.invoke ? ["POST /invoke (run a turn with this agent's tools)"] : []),
+    ...(open.run ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
+    ...(open.controlPrefix ? [`${open.controlPrefix}/* (read, steer or delete any session)`] : []),
+  ];
 }
 
 /**
@@ -113,17 +151,14 @@ export async function routesFor(
   stateRoot: string,
   control: SessionControl | undefined,
   /**
-   * `serveInvoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
-   * Runtime's `/invocations` contract instead, and an author sets `http.invoke: false` to leave the channels'
-   * signature checks as the only way into a public port. Named for the config key it carries, not for the
-   * "built-in fallback" it once withheld — that concept is gone.
+   * `http.invoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
+   * Runtime's `/invocations` contract instead, and an author sets it to leave the channels' signature checks as the
+   * only way into a public port.
    *
-   * `routines` mounts `POST /run` and `GET /routines`. Passed in rather than loaded here so the routes and
-   * the resident clock
-   * cannot disagree about which routines exist (`loadServingRoutines`). `serveRun` overrides the default
-   * that route inherits from `serveInvoke`.
+   * `routines` mounts `POST /run` and `GET /routines` (per {@link shouldServeRun}). Passed in rather than loaded here
+   * so the routes and the resident clock cannot disagree about which routines exist (`loadServingRoutines`).
    */
-  options: { serveInvoke?: boolean; serveRun?: boolean; routines?: readonly LoadedRoutine[] } = {},
+  options: { http?: HttpSurface; routines?: readonly LoadedRoutine[] } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -152,12 +187,12 @@ export async function routesFor(
   // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  if (options.serveInvoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
+  if (options.http?.invoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
   // `POST /run` exists only where there is something to run, and `GET /routines` exactly where that route does:
   // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing. Both ride
   // this table for the reason the table exists: they authenticate nobody, so they inherit the JSON body gate, the
   // cross-origin policy, the reserved path and the startup report's account of what is open.
-  if (shouldServeRun(options)) {
+  if (shouldServeRun(options.http)) {
     const routines = options.routines ?? [];
     const run = createRunHandler({ agent, routines });
     if (run) unverified["POST /run"] = run;
@@ -326,23 +361,8 @@ export interface MountableAgent {
   /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
    *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
   publishControl: boolean;
-  /**
-   * The origins a browser may call this serve from (`http.cors`). Unset is the default, which answers EVERY origin
-   * — see `channels/serve.ts`; setting this is the only way to narrow it, and an empty list is refused.
-   */
-  corsOrigins?: readonly string[];
-  /**
-   * Serve the data plane, `POST /invoke` (`http.invoke`; default true). The OFF switch for a deployment whose port
-   * is public and whose channels' signature checks are meant to be the only way in — the route is unauthenticated
-   * and runs a turn with the agent's full tool authority.
-   */
-  serveInvoke?: boolean;
-  /**
-   * Serve `POST /run` (`http.run`). Defaults to whatever `serveInvoke` is: closing the anonymous turn
-   * endpoint must not leave a second one open behind it. Set it explicitly for the one combination that default
-   * gets wrong — no `/invoke`, but an external clock firing this agent's routines.
-   */
-  serveRun?: boolean;
+  /** What the port publishes, and to which browsers — the config's `http` block ({@link HttpSurface}). */
+  http?: HttpSurface;
 }
 
 /**
@@ -358,25 +378,22 @@ export async function mountAgentService(
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  // The embedder's way in, checked like the config file's (`http.cors`): `allowedOrigin` compares exact strings, so
-  // a stray trailing slash would refuse the front end with nothing naming the rule.
-  if (opened.corsOrigins) assertCorsOrigins(opened.corsOrigins, "mountAgentService: corsOrigins");
+  // The embedder's way in, checked like the config file's: `allowedOrigin` compares exact strings, so a stray
+  // trailing slash would refuse the front end with nothing naming the rule.
+  const corsOrigins = opened.http?.cors;
+  if (corsOrigins) assertCorsOrigins(corsOrigins, "mountAgentService: http.cors");
 
   // Loaded BEFORE the routes, because `POST /run` is one of them and the resident clock below must run over the
   // same list — two loads would be two answers to "which routines exist".
   const routines = await loadServingRoutines(agentDir);
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, {
-    ...(opened.serveInvoke !== undefined ? { serveInvoke: opened.serveInvoke } : {}),
-    ...(opened.serveRun !== undefined ? { serveRun: opened.serveRun } : {}),
-    routines,
-  });
+  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http, routines });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
   const handler = router({
     unverified: routed.unverified,
     selfVerifying: withControl.routes,
     mounts: withControl.mounts,
-    ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+    ...(corsOrigins ? { corsOrigins } : {}),
   });
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -511,7 +528,7 @@ export async function mountAgentService(
             longConnections: names,
           },
           unverifiedRoutes: Object.keys(routed.unverified),
-          ...(opened.corsOrigins ? { corsOrigins: opened.corsOrigins } : {}),
+          ...(corsOrigins ? { corsOrigins } : {}),
           routines: scheduled.routines,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),

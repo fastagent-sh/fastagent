@@ -5,6 +5,7 @@ export { nodeListener, serveNode } from "./channels/serve.ts";
 export {
   mountAgentService,
   type AgentService,
+  type HttpSurface,
   type MountableAgent,
   type MountAgentServiceOptions,
 } from "./service.ts";
