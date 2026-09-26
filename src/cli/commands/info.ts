@@ -2,14 +2,7 @@
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
-import {
-  loadConfig,
-  providerOf,
-  resolveAuthFallback,
-  resolveAuthPath,
-  resolveModel,
-  resolveModelSpec,
-} from "../../engines/pi/config.ts";
+import { loadConfig, providerOf, resolveAuthLayers, resolveModel, resolveModelSpec } from "../../engines/pi/config.ts";
 import { createPiModelRuntime, machineModels } from "../../engines/pi/models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
@@ -85,19 +78,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // info must not).
   const stateRoot = resolveStateRoot(agentDir);
   const sessionsDir = resolveSessionsDir(agentDir);
-  const authPath = resolveAuthPath(agentDir); // FASTAGENT_AUTH_PATH > default — the one owner
-  // The second layer this agent reads through: "what is this agent's state" is the question `info` answers, and a
-  // credential it runs on can live in a file the agent dir does not contain.
-  const fallbackAuthPath = resolveAuthFallback();
+  // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
+  // a file the agent dir does not contain.
+  const auth = resolveAuthLayers(agentDir);
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
   // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
   const modelError = modelSpec
-    ? await createPiModelRuntime({
-        agentDir,
-        authPath,
-        ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
-      })
+    ? await createPiModelRuntime({ agentDir, auth })
         .then((models) => {
           resolveModel(models, modelSpec);
           return undefined as string | undefined;
@@ -138,8 +126,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           channelFailures: inspected.failures,
           stateRoot,
           sessionsDir,
-          authPath,
-          fallbackAuthPath: fallbackAuthPath ?? null,
+          authPath: auth.path,
+          fallbackAuthPath: auth.fallback ?? null,
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
@@ -181,7 +169,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     cont(`⚠ dev/start refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
   line("state", stateRoot);
   line("sessions", sessionsDir);
-  line("auth", fallbackAuthPath === undefined ? authPath : `${authPath} (then ${fallbackAuthPath})`);
+  line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
   if (machine.error) line("endpoints", `⚠ ${machine.error}`);
   else if (machine.value) {
     const { path, inherited, overridden } = machine.value;

@@ -217,7 +217,7 @@ function createPiAgentFromDir(
   workspace: string; // the agent's cwd — the agent dir's parent
   stateRoot: string;
   sessionsDir: string;
-  authPath: string;
+  auth: { path: string; fallback?: string }; // credentials file, then the user-global one when none was named
   toolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];

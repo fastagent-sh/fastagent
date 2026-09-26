@@ -399,10 +399,10 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const defaulted = await createPiAgentFromDir(host);
-    expect(defaulted.authPath).toBe(join(agent, ".secrets", "auth.json"));
+    expect(defaulted.auth.path).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
     const overridden = await createPiAgentFromDir(host, { authPath: shared });
-    expect(overridden.authPath).toBe(shared);
+    expect(overridden.auth).toEqual({ path: shared }); // named: no second layer
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

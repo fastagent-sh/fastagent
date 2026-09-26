@@ -15,7 +15,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
     agentDir: "/w/agent",
     workspace: "/w",
     modelSpec: "p/m",
-    authPath: "/w/agent/.secrets/auth.json",
+    auth: { path: "/w/agent/.secrets/auth.json" },
     config: {},
     definition: {
       dir: "/w/agent",
@@ -144,7 +144,7 @@ describe("reportAuth (which layer the line names)", () => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(agentDir, "p/m", primary, fallback);
+      await reportAuth(agentDir, "p/m", { path: primary, fallback });
     } finally {
       spy.mockRestore();
     }

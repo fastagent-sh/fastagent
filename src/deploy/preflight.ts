@@ -286,7 +286,7 @@ export async function preflightDeploy(input: {
   // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
   // how the credential reaches the host.
   const authPath = resolveAuthPath(agentDir);
-  const models = await createPiModelRuntime({ agentDir, authPath, machineLayer: false });
+  const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
   let modelKeyInDefinition = false;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential

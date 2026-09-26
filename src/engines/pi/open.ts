@@ -5,11 +5,11 @@
 import { mkdir } from "node:fs/promises";
 import type { Agent } from "../../agent.ts";
 import {
+  type AuthLayers,
   type FastagentConfig,
   type LoadedConfig,
   loadConfig,
-  resolveAuthFallback,
-  resolveAuthPath,
+  resolveAuthLayers,
   resolveModelSpec,
 } from "./config.ts";
 import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
@@ -120,11 +120,8 @@ export interface AgentAssembly {
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** Absolute credentials file (`authPath` option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
-  authPath: string;
-  /** Where a provider `authPath` does not have is read from instead ({@link resolveAuthFallback}); unset when an
-   *  explicit path was named. */
-  fallbackAuthPath?: string;
+  /** The credentials files it reads ({@link resolveAuthLayers}). */
+  auth: AuthLayers;
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
   toolNames: string[];
@@ -169,7 +166,7 @@ export async function resolveAgentAssembly(
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
   // The credentials file: project-level by default (under `<agentDir>/.secrets`).
-  const { authPath, fallbackAuthPath } = agentAuthLayers(agentDir, options.authPath);
+  const auth = resolveAuthLayers(agentDir, options.authPath);
   return {
     config,
     configPath,
@@ -177,8 +174,7 @@ export async function resolveAgentAssembly(
     agentDir,
     workspace,
     stateRoot,
-    authPath,
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    auth,
     tools,
     toolNames,
     deferredToolNames,
@@ -202,22 +198,10 @@ export async function availableModelsFromDir(
 ): Promise<string[]> {
   const { agentDir } = resolvePlacement(dir);
   const models = await definitionModelRuntime(agentDir, {
-    ...agentAuthLayers(agentDir, options.authPath),
+    auth: resolveAuthLayers(agentDir, options.authPath),
     ...(options.warn ? { warn: options.warn } : {}),
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
-}
-
-/**
- * Which credentials files an agent directory reads: `authPath` option > FASTAGENT_AUTH_PATH > the agent's own file,
- * layered over the user-global one unless a path was named. One owner for the opener and the model list.
- */
-function agentAuthLayers(agentDir: string, authPath?: string): { authPath: string; fallbackAuthPath?: string } {
-  const fallbackAuthPath = resolveAuthFallback(authPath);
-  return {
-    authPath: resolveAuthPath(agentDir, authPath),
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
-  };
 }
 
 /**
@@ -242,11 +226,8 @@ export async function createPiAgentFromDir(
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
-  /** Absolute credentials file in use (for the startup report). */
-  authPath: string;
-  /** The second layer that file reads through ({@link AgentAssembly.fallbackAuthPath}) — the startup report names
-   *  whichever layer the credential came from, so it needs both. */
-  fallbackAuthPath?: string;
+  /** The credentials files in use — the startup report names whichever layer the credential came from. */
+  auth: AuthLayers;
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present on every serve (a channel's stop command reaches the
    *  live run through it). Its boundary is wired only when {@link publishControl}. */
@@ -272,8 +253,7 @@ export async function createPiAgentFromDir(
     agentDir,
     workspace,
     stateRoot,
-    authPath,
-    fallbackAuthPath,
+    auth,
     tools,
     toolNames,
     deferredToolNames,
@@ -292,8 +272,7 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    authPath,
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    auth,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
   });
@@ -359,8 +338,7 @@ export async function createPiAgentFromDir(
     modelSpec,
     stateRoot,
     sessionsDir,
-    authPath,
-    ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
+    auth,
     toolNames,
     deferredToolNames,
     toolCollisions,
