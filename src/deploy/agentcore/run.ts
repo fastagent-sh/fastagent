@@ -269,15 +269,16 @@ export async function deployAgentcoreRun(
   // refuse a valid deploy. The point is to say it BEFORE the multi-minute arm64 build, not to be authoritative.
   // `--region` explicitly: every other region-dependent call here writes it out (the ECR registry URI, the bucket's
   // LocationConstraint), and the warning below names ${region} — the probe must be about the SAME region it names.
-  const service = await aws(
-    ["bedrock-agentcore-control", "list-agent-runtimes", "--max-items", "1", "--region", region],
-    {
-      capture: true,
-      captureStderr: true,
-    },
-  );
-  if (service.code !== 0) {
-    const why = (service.stderr ?? "").trim().split("\n")[0];
+  const service = await cli.present([
+    "bedrock-agentcore-control",
+    "list-agent-runtimes",
+    "--max-items",
+    "1",
+    "--region",
+    region,
+  ]);
+  if (!("ok" in service)) {
+    const why = "unreadable" in service ? service.unreadable.split("\n")[0] : "";
     log(
       `warn: could not confirm AgentCore is available in ${region}${why ? ` (${why})` : ""} — if it is not, ` +
         `cloudformation deploy fails minutes from now, after the image build: ` +
