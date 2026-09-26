@@ -241,7 +241,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // or follow-up queue BY ITS TEXT when the message starts, announcing the removal with `queue_update`. So the
       // match is by text too, not by adjacency: extension handlers pi awaits in between may emit events of their own.
       // The first user message neither taken from a queue nor sent by an extension is the prompt; an extension's is
-      // unknown. A removal no message claims (a queue cleared on abort) matches nothing.
+      // unknown. A removal no message claims matches nothing: pi's clearQueue() empties the queues without starting a
+      // message (only pi's own TUI and RPC modes call it; a served run does not).
       let queued: { steering: readonly string[]; followUp: readonly string[] } = { steering: [], followUp: [] };
       const taken: { text: string; delivery: Delivery }[] = [];
       let sawUser = false;
