@@ -42,7 +42,8 @@ src/
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
 │   ├── program.ts          # the spec registry — the CLI surface's source of truth; lazy per-command imports
 │   ├── invoke-stream.ts    # `invoke`: stream → exit code
-│   ├── models-view.ts, auth-view.ts, add-feishu.ts # `models` / auth-report output; `add feishu|lark` onboarding
+│   ├── models-view.ts, auth-view.ts # `models` / auth-report output
+│   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
@@ -157,6 +158,7 @@ src/
 │   │                       # directory per host. ADDING A HOST: deploy/hosts.ts says what to write and what
 │   │                       # to read first
 │   ├── hosts.ts            # DEPLOY_HOSTS, the targets as a value + the add-a-host guide
+│   ├── residency.ts        # what forbids scaling to zero: ONE rule every host that can scale reads
 │   ├── channel-ingress.ts  # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL, the
 │   │                       # words when nobody can. Consumed by every host AND by the serving path
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
