@@ -596,7 +596,8 @@ verification included, rejects with `LoginCancelled` and writes nothing. `fastag
 For a custom endpoint (`models.json`), store its key with `fastagentCredentialStore(authPath).modify()` instead:
 `login` covers built-in providers at their own endpoints. That includes a built-in provider an agent's `models.json`
 points at a gateway: `login` would check the gateway's key at the provider's endpoint and refuse it. `fastagent
-login`, run inside the agent, checks it at the gateway.
+login`, run inside the agent, checks it at the gateway; `fastagent login -g` does not, since the global file serves
+every agent on the machine.
 
 `fastagent login` writes `<agent dir>/.secrets/auth.json` by default. `createPiModels()` with no `authPath` reads
 `GLOBAL_AUTH_PATH` instead; pass `authPath` to read a project's file (the `createPiAgentFrom*` openers do).

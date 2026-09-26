@@ -388,6 +388,29 @@ describe("login (the entry point a GUI client drives with pi-ai's AuthInteractio
     expect(await probed({})).toMatchObject({ id: PI_DEFAULT_MODELS.openai, baseUrl: "https://gateway.example/v1" });
   });
 
+  it("a broken agent models.json stops a key sign-in before the key is asked for, and not an OAuth one", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-login-broken-"));
+    await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};");
+    await writeFile(join(agentDir, "models.json"), "{ not json");
+
+    const oauth = client([]);
+    await expect(
+      loginOver(
+        { provider: "codex", method: "oauth", authPath: await tmpAuth(), interaction: oauth.interaction },
+        { agentDir, providers: PROVIDERS },
+      ),
+    ).resolves.toMatchObject({ provider: "codex", verified: "n/a" }); // OAuth needs no registry
+
+    const key = client(["sk"]);
+    await expect(
+      loginOver(
+        { provider: "openai", method: "api_key", authPath: await tmpAuth(), interaction: key.interaction },
+        { agentDir, providers: PROVIDERS },
+      ),
+    ).rejects.toThrow(/models\.json/);
+    expect(key.prompts).toHaveLength(0); // said before the person typed a key
+  });
+
   it("the key is verified with the model the picker chose, when login's registry has it; else the first", async () => {
     const models = [{ id: "a-preview-only" }, { id: "chosen" }];
     const probed = async (verifyWith: string | undefined) => {

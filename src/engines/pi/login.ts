@@ -138,9 +138,18 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
-  const models: Models = agentDir
-    ? await createPiModelRuntime({ agentDir, credentials: trial, ...(providers ? { providers: [...providers] } : {}) })
-    : piModelsOver(trial, providers);
+  // Only a key needs the registry, and building an agent's fails on a broken models.json: an OAuth sign-in must not.
+  // For a key it is built BEFORE the flow, so that failure comes before the person types anything.
+  const models: Models | undefined =
+    method !== "api_key"
+      ? undefined
+      : agentDir
+        ? await createPiModelRuntime({
+            agentDir,
+            credentials: trial,
+            ...(providers ? { providers: [...providers] } : {}),
+          })
+        : piModelsOver(trial, providers);
   const store = fastagentCredentialStore(authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
@@ -149,7 +158,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   for (;;) {
     const credential = await runFlow(auth.login.bind(auth), interaction, signal);
     let verified: LoginResult["verified"] = "n/a";
-    if (method === "api_key") {
+    if (models) {
       await trial.modify(provider.id, async () => credential);
       const verdict = await verifyApiKey(models, provider.id, verifyWith, notify, signal);
       if (signal.aborted) throw new LoginCancelled("cancelled");

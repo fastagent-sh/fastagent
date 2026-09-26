@@ -54,10 +54,11 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   }
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
   // Inside an agent, the key is checked on that agent's registry: its models.json may point a provider at a gateway.
+  // Not with `-g`: the global file serves every agent on the machine, so no one agent's routing may judge its key.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,
     ...(provider ? { provider } : {}),
-    ...(agentDir ? { agentDir } : {}),
+    ...(agentDir && !opts.global ? { agentDir } : {}),
   }).catch((error: unknown) => {
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
