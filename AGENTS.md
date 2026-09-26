@@ -161,6 +161,7 @@ src/
 │   │                       # words when nobody can. Consumed by every host AND by the serving path
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
 │   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
+│   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
 │   ├── container.ts        # portable image + ignore files + release manifest (host-neutral)
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
