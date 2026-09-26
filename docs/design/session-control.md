@@ -342,7 +342,7 @@ interface SessionState {
   activeRunId?: string;
   model?: string;
   thinkingLevel?: string;
-  pending: { steering: number; followUp: number };
+  pending: { steering: string[]; followUp: string[] };
   usage?: {
     inputTokens: number;
     outputTokens: number;
@@ -360,6 +360,13 @@ interface SessionState {
 inside a run's activity window and reports as `running` — the observation plane's "running" window
 equals the data plane's lease window, so `state()` never says idle while an invoke would be rejected
 `session_busy`.
+
+`pending` lists the prompts queued on the active run, oldest first, as the engine queued them: plain
+text as sent, a slash command already expanded, images not included. A prompt leaves its list when it
+enters the conversation as a user message, so a client that shows queued prompts apart from the
+transcript moves one into it at that point. An abort can still end the run before the model answers
+it. Whatever is still listed when the run settles never entered the conversation and is dropped;
+the last `queue_changed` before `run_settled` names those prompts.
 
 `usage` (present where `capabilities().usage` holds) is the newest answer's own numbers, not a running
 total: tokens and cost as the provider reported them for the latest answer on the active path that
@@ -450,7 +457,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |
-| L1 | `queue_changed { steering, followUp }` | Normalized queue depths. |
+| L1 | `queue_changed { steering, followUp }` | The active run's whole queue: the queued prompt texts (§7 `pending`). |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
 | L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary`, `error`, or `aborted`). Automatic overflow compaction does not emit these. |
 | L2 | `retry_scheduled { operation, attempt, maxAttempts, delayMs, error }` | A transient provider failure scheduled a summarization retry backoff — explains a quiet gap that would read as a hang. No closing event: the next event is the closure. |

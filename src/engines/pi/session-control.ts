@@ -50,6 +50,7 @@ import {
   type SessionEvent,
   type SessionEventStream,
   type SessionResult,
+  type PendingPrompts,
   type Session,
   type SessionAction,
   type SessionState,
@@ -294,10 +295,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   const { sessions, boundary } = options;
   /** Live run state per session — derived purely from run_started/run_settled and the controls
    *  registered with run_started. */
-  const active = new Map<
-    string,
-    { runId: string; controls?: RunControls; pending: { steering: number; followUp: number } }
-  >();
+  const active = new Map<string, { runId: string; controls?: RunControls; pending: PendingPrompts }>();
   const subscribers = new Map<string, Set<Subscriber>>();
   /** Sessions with a manual compaction in flight — reported as `status: "compacting"`, keyed to
    *  the summarization's AbortController so `abort` has a door into it (run/compaction symmetry:
@@ -326,12 +324,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
 
   const observer: SessionObserver = (session, event, run) => {
     if (event.type === "run_started" && event.runId) {
-      active.set(session, { runId: event.runId, controls: run, pending: { steering: 0, followUp: 0 } });
+      active.set(session, { runId: event.runId, controls: run, pending: { steering: [], followUp: [] } });
     } else if (event.type === "run_settled") {
       active.delete(session);
     } else if (event.type === "queue_changed") {
       const entry = active.get(session);
-      if (entry) entry.pending = event.data as { steering: number; followUp: number };
+      if (entry) entry.pending = event.data as PendingPrompts;
     }
     fanOut(session, event);
     if (event.type === "run_settled") publishUsage(session);
@@ -417,7 +415,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               availableThinkingLevels: settings.availableThinkingLevels,
             }
           : {}),
-        pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
+        pending: run
+          ? { steering: [...run.pending.steering], followUp: [...run.pending.followUp] }
+          : { steering: [], followUp: [] },
         ...(usage ? { usage } : {}),
         ...(leafEntryId ? { leafEntryId } : {}),
       };
