@@ -47,9 +47,12 @@ export interface Session {
   events(): SessionEventStream;
   /** Set durable session properties. */
   update(patch: SessionUpdate): Promise<SessionResult>;
-  /** Join the active run: delivered after the current turn's tool calls, before the next model call. */
+  /**
+   * Join the active run: delivered after the current turn's tool calls, before the next model call. `prompt.text`
+   * must not be empty (`invalid_command`): a queued prompt is reported by its text ({@link PendingPrompts}).
+   */
   steer(prompt: Prompt): Promise<SessionResult>;
-  /** Queue for the active run, FIFO, delivered when it is otherwise idle. */
+  /** Queue for the active run, FIFO, delivered when it is otherwise idle. Same non-empty `text` rule as `steer`. */
   followUp(prompt: Prompt): Promise<SessionResult>;
   /** Stop the active run — its queues, its retry delay, its cancellable tool work. */
   abort(): Promise<SessionResult>;

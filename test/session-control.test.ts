@@ -587,6 +587,12 @@ describe("session control: run modulation", () => {
     const runId = await waitForRunning(control, "s2a");
     await toolRunning;
 
+    // An empty text could not be reported in `pending` (pi never dequeues it): rejected before it is queued.
+    for (const attempt of [
+      () => control.sessions.get("s2a").steer({ text: "" }),
+      () => control.sessions.get("s2a").followUp({ text: "" }),
+    ])
+      expect(await attempt()).toMatchObject({ ok: false, error: { code: INVALID_COMMAND_CODE } });
     const result = await control.sessions.get("s2a").steer({ text: "actually, do it differently" });
     expect(result).toEqual({ ok: true, runId });
     // Queue visibility while the steer is pending (the gate still holds the run). Poll: the

@@ -366,7 +366,13 @@ text as sent, a slash command already expanded, images not included. A prompt le
 enters the conversation as a user message, so a client that shows queued prompts apart from the
 transcript moves one into it at that point. An abort can still end the run before the model answers
 it. Whatever is still listed when the run settles never entered the conversation and is dropped;
-the last `queue_changed` before `run_settled` names those prompts.
+the last `queue_changed` before `run_settled` names those prompts. Because a queued prompt is reported
+by its text, `steer`/`followUp` reject an empty `text` (`invalid_command`), including an image-only prompt.
+
+The pi reference inherits one inexactness from pi, which dequeues by matching text when a user message
+starts: a prompt queued before the run's opening prompt enters the conversation (while the session is still
+binding), with text identical to it, leaves `pending` when the opening prompt enters, before its own
+delivery.
 
 `usage` (present where `capabilities().usage` holds) is the newest answer's own numbers, not a running
 total: tokens and cost as the provider reported them for the latest answer on the active path that

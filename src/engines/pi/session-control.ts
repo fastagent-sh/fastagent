@@ -587,6 +587,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   const runAction = (session: string, action: SessionAction): Promise<SessionResult> =>
     Effect.runPromise(
       Effect.gen(function* (): Effect.fn.Return<SessionResult, PortFailure> {
+        // pi dequeues a queued prompt by matching its text when it enters the conversation, and skips an empty one
+        // (`_handleAgentEvent`): an image-only prompt would sit in `pending` for the whole run and then read as dropped.
+        if ((action.type === "steer" || action.type === "follow_up") && action.prompt.text === "")
+          return invalid(`${action.type} needs non-empty text: a queued prompt is reported by its text`);
         const run = active.get(session);
         if (!run) {
           // Run/compaction symmetry: an in-flight compaction is a model call too, and `abort` is its
