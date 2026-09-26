@@ -400,6 +400,10 @@ retry and overflow attempts, and an extension may write either kind of edit, so 
 necessarily a failed one. The target stays in the transcript. An edit applies only while the
 `context_edit` entry itself lies on the path from `leafEntryId`: after a move or fork to a point
 between the target and the edit, the model sees the target as written.
+A pi reference `user` entry carries `{ text, delivery? }`. `delivery` says how the message reached its run:
+`prompt` started it, `steer` joined it in flight, `follow_up` waited for it. It is absent when unknown (a message
+written before this was recorded, a turn an extension started, or a copy made by `fork` or thread inheritance),
+never defaulted to `prompt`. The classification is pi's own: the queue it took the message from.
 
 Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
 `entries({ since: cursor })` to backfill → `state()` to learn whether work is active. Reading first

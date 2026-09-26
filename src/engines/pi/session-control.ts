@@ -58,7 +58,7 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { type Delivery, forkProvenance, isNavigable, publishedLeaf, readDeliveries } from "./session-markers.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
@@ -125,7 +125,11 @@ function sessionUsage(
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  * One exception: `context_edit` carries `{ targetId, omitted }`, never the replacement content.
  */
-function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
+function toSessionEntry(
+  entry: PiSessionEntry,
+  parentId: string | undefined,
+  deliveries: ReadonlyMap<string, Delivery>,
+): SessionEntry {
   const base = {
     id: entry.id,
     parentId,
@@ -133,7 +137,11 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
   };
   if (entry.type === "message") {
     const m = entry.message;
-    if (m.role === "user") return { ...base, kind: "user", data: { text: contentText(m.content, "") } };
+    if (m.role === "user") {
+      // How it reached the run (readDeliveries): absent when unknown, so a reader can tell that from a prompt.
+      const delivery = deliveries.get(entry.id);
+      return { ...base, kind: "user", data: { text: contentText(m.content, ""), ...(delivery ? { delivery } : {}) } };
+    }
     if (m.role === "assistant") {
       const toolCalls = (m.content as Array<{ type: string; id?: string; name?: string }>)
         .filter((b) => b.type === "toolCall")
@@ -449,7 +457,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         }
         return undefined;
       };
-      const all = journal.filter(isNavigable).map((e) => toSessionEntry(e, publishedParent(e)));
+      const deliveries = readDeliveries(journal);
+      const all = journal.filter(isNavigable).map((e) => toSessionEntry(e, publishedParent(e), deliveries));
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);

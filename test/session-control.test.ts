@@ -644,6 +644,50 @@ describe("session control: run modulation", () => {
     expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
   });
 
+  it("entries(): a user message says how it reached the run: prompt, steer, or follow_up", async () => {
+    // A transcript read after the fact must tell a message that started a run from one that redirected it mid-way or
+    // waited for it. The steer and the follow-up are queued together, while the gate holds the run.
+    const { agent, control, gate } = await makeGated([
+      fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
+      fauxAssistantMessage("after the steer"),
+      fauxAssistantMessage("after the follow-up"),
+      fauxAssistantMessage("second run"),
+    ]);
+    const invoked = drive(agent, "sDelivery");
+    await waitForToolStarted(control, "sDelivery");
+    const handle = control.sessions.get("sDelivery");
+    expect((await handle.steer({ text: "redirect" })).ok).toBe(true);
+    expect((await handle.followUp({ text: "and then this" })).ok).toBe(true);
+    gate.release();
+    await invoked;
+    await drain(agent.invoke({ session: "sDelivery" }, { text: "a new question" }));
+
+    const users = (await handle.entries()).entries.filter((e) => e.kind === "user").map((e) => e.data);
+    expect(users).toEqual([
+      { text: "go", delivery: "prompt" },
+      { text: "redirect", delivery: "steer" },
+      { text: "and then this", delivery: "follow_up" },
+      { text: "a new question", delivery: "prompt" },
+    ]);
+    // The record is the plane's own: it is not an entry, and the head a client sees is the conversation's.
+    const all = (await handle.entries()).entries;
+    expect(all.every((e) => !e.kind.startsWith("custom"))).toBe(true);
+    expect((await handle.state()).leafEntryId).toBe(all.at(-1)?.id);
+    // A copy has new entries the record does not name: unknown there, not guessed.
+    const at = all.at(-1)?.id as string;
+    expect(await control.sessions.fork({ from: "sDelivery", at, into: "sDeliveryCopy" })).toMatchObject({ ok: true });
+    const copied = (await control.sessions.get("sDeliveryCopy").entries()).entries.filter((e) => e.kind === "user");
+    expect(copied.map((e) => e.data)).toEqual(users.map((data) => ({ text: (data as { text: string }).text })));
+  });
+
+  it("entries(): a user message with no recorded delivery has none, rather than reading as a prompt", async () => {
+    const { control, sessions } = await makeObserved([]);
+    const record = await sessions.openOrCreate("sOld");
+    record.appendMessage({ role: "user", content: "written before deliveries were recorded", timestamp: 1 });
+    const [user] = (await control.sessions.get("sOld").entries()).entries;
+    expect(user?.data).toEqual({ text: "written before deliveries were recorded" });
+  });
+
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
     const { toTerminal } = await import("../src/engines/pi/turn-kit.ts");
     const terminal = toTerminal({

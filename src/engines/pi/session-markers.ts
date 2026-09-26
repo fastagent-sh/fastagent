@@ -18,11 +18,23 @@ const FORK_PROVENANCE = "fastagent.fork";
 export const LEAF_ANCHOR = "fastagent.leaf";
 
 /**
+ * How each user message of a run was delivered: the one that started it (`prompt`), or one that joined it in flight
+ * (`steer`) or waited for it (`follow_up`). pi's user entry carries only the message, so the plane records this
+ * beside it, once per run, keyed by entry id.
+ */
+const DELIVERY = "fastagent.delivery";
+
+export type Delivery = "prompt" | "steer" | "follow_up";
+
+/**
  * The CONTROL PLANE's bookkeeping — not a place in a conversation, so never published, never navigable, and never
  * copied by a fork.
  */
 export function isPlaneMarker(entry: { type?: string; customType?: string }): boolean {
-  return entry.type === "custom" && (entry.customType === FORK_PROVENANCE || entry.customType === LEAF_ANCHOR);
+  return (
+    entry.type === "custom" &&
+    (entry.customType === FORK_PROVENANCE || entry.customType === LEAF_ANCHOR || entry.customType === DELIVERY)
+  );
 }
 
 /**
@@ -69,6 +81,29 @@ export function forkProvenance(record: SessionManager): string | undefined {
     if (raw.type !== "custom" || raw.customType !== FORK_PROVENANCE) continue;
     const value = (raw.data as { provenance?: unknown } | undefined)?.provenance;
     if (typeof value === "string") found = value;
+  }
+  return found;
+}
+
+/** Record how a run's user messages were delivered. Nothing is written for a run that recorded none. */
+export function recordDeliveries(record: SessionManager, deliveries: ReadonlyMap<string, Delivery>): void {
+  if (deliveries.size > 0) record.appendCustomEntry(DELIVERY, { entries: Object.fromEntries(deliveries) });
+}
+
+/**
+ * Every recorded delivery in a journal, by user entry id. An entry with none recorded (written before this was
+ * recorded, or by a run that did not finish recording) is absent: unknown, not a prompt.
+ */
+export function readDeliveries(
+  entries: readonly { type?: string; customType?: string; data?: unknown }[],
+): Map<string, Delivery> {
+  const found = new Map<string, Delivery>();
+  for (const entry of entries) {
+    if (entry.type !== "custom" || entry.customType !== DELIVERY) continue;
+    const recorded = (entry.data as { entries?: Record<string, unknown> } | undefined)?.entries ?? {};
+    for (const [id, delivery] of Object.entries(recorded)) {
+      if (delivery === "prompt" || delivery === "steer" || delivery === "follow_up") found.set(id, delivery);
+    }
   }
   return found;
 }
