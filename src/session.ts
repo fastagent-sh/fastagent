@@ -206,7 +206,7 @@ export interface SessionState {
   thinkingLevel?: string;
   /** What `update({ thinkingLevel })` accepts for THIS session — re-read after a model change. */
   availableThinkingLevels?: string[];
-  pending: { steering: number; followUp: number };
+  pending: PendingPrompts;
   /**
    * The NEWEST ANSWER's own numbers, not a running total: tokens and `cost` as the provider reported them for the
    * latest answer on the active path that carries usage (an aborted or failed answer does not, so it reports the one
@@ -303,8 +303,17 @@ export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name
 export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }> & {
   runId: string;
 };
-/** Normalized live queue depths for the active run (L1). */
-export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number; followUp: number }> & {
+/**
+ * The prompts queued on the active run, oldest first, as the engine queued them: plain text as sent, a slash command
+ * already expanded (a `/skill:…` becomes the skill's text), images not included. A prompt LEAVES its list when it
+ * enters the conversation as a user message: from then on it is in the record and in every later model call (an abort
+ * can still end the run before the model answers it). Whatever is still listed when the run settles never entered
+ * the conversation and is dropped with the run.
+ */
+export type PendingPrompts = { steering: string[]; followUp: string[] };
+
+/** The active run's queue changed (L1); `data` is the whole queue, not a delta. */
+export type QueueChangedEvent = SessionEvent<"queue_changed", PendingPrompts> & {
   runId: string;
 };
 

@@ -207,7 +207,7 @@ describe("session control: observation plane", () => {
     // Unknown session: idle, empty — and NOT created by observing it (read-only plane).
     expect(await control.sessions.get("nope").state()).toEqual({
       status: "idle",
-      pending: { steering: 0, followUp: 0 },
+      pending: { steering: [], followUp: [] },
     });
 
     const iter = agent.invoke({ session: "sS" }, { text: "hi" })[Symbol.asyncIterator]();
@@ -349,7 +349,7 @@ describe("session control: observation plane", () => {
       // without a single model call, and an unknown session stays uncreated.
       expect(await control.sessions.get("ghost").state()).toEqual({
         status: "idle",
-        pending: { steering: 0, followUp: 0 },
+        pending: { steering: [], followUp: [] },
       });
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
@@ -560,7 +560,8 @@ describe("session control: run modulation", () => {
         expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages(), method).toEqual([
           "queued during binding",
         ]);
-        const pending = { steering: method === "steer" ? 1 : 0, followUp: method === "followUp" ? 1 : 0 };
+        const queued = ["queued during binding"];
+        const pending = { steering: method === "steer" ? queued : [], followUp: method === "followUp" ? queued : [] };
         expect((await handle.state()).pending, method).toEqual(pending);
         expect(
           seen.filter((event) => event.type === "queue_changed"),
@@ -571,7 +572,7 @@ describe("session control: run modulation", () => {
         startPrompt.resolve();
         await invoked;
       }
-      expect((await control.sessions.get("binding").state()).pending, method).toEqual({ steering: 0, followUp: 0 });
+      expect((await control.sessions.get("binding").state()).pending, method).toEqual({ steering: [], followUp: [] });
       expect(seen.at(-1), method).toMatchObject({ type: "run_settled", data: { status: "completed" } });
     }
   });
@@ -590,10 +591,10 @@ describe("session control: run modulation", () => {
     expect(result).toEqual({ ok: true, runId });
     // Queue visibility while the steer is pending (the gate still holds the run). Poll: the
     // contract says "queued", not "queue_update delivered synchronously before dispatch resolves".
-    for (let i = 0; i < 200 && (await control.sessions.get("s2a").state()).pending.steering !== 1; i++) {
+    for (let i = 0; i < 200 && (await control.sessions.get("s2a").state()).pending.steering.length !== 1; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect((await control.sessions.get("s2a").state()).pending.steering).toBe(1);
+    expect((await control.sessions.get("s2a").state()).pending.steering).toEqual(["actually, do it differently"]);
 
     gate.release();
     const events = await invoked;
@@ -607,7 +608,7 @@ describe("session control: run modulation", () => {
     // After settle the queue state is gone with the run.
     const after = await control.sessions.get("s2a").state();
     expect(after.status).toBe("idle");
-    expect(after.pending).toEqual({ steering: 0, followUp: 0 });
+    expect(after.pending).toEqual({ steering: [], followUp: [] });
   });
 
   it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
@@ -640,7 +641,11 @@ describe("session control: run modulation", () => {
       .join("");
     expect(text).toContain("first answer");
     expect(text).toContain("follow-up answer"); // the settle window spanned the continuation
-    expect(seen.some((e) => e.type === "queue_changed")).toBe(true);
+    // The whole queue each time, and the follow-up leaves it when the model's next turn takes it in.
+    expect(seen.filter((e) => e.type === "queue_changed").map((e) => e.data)).toEqual([
+      { steering: [], followUp: ["and then summarize"] },
+      { steering: [], followUp: [] },
+    ]);
     expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
   });
 
@@ -1040,6 +1045,8 @@ describe("session control: run modulation", () => {
     await waitForRunning(control, "s2c");
     while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
 
+    // A follow-up waits for the run to stop on its own; the abort ends it first.
+    expect((await control.sessions.get("s2c").followUp({ text: "never read" })).ok).toBe(true);
     const result = await control.sessions.get("s2c").abort();
     expect(result.ok).toBe(true);
     void gate; // never released — abort must cut through the blocked tool
@@ -1054,8 +1061,16 @@ describe("session control: run modulation", () => {
     const settledData = settled?.data as { status: string; error?: { message: string } };
     expect(settledData).toMatchObject({ status: "aborted" });
     expect(settledData.error?.message).toBeTruthy();
+    // What is still queued when the run settles is the last queue it reported, and never reaches the record.
+    expect(seen.filter((e) => e.type === "queue_changed").at(-1)?.data).toEqual({
+      steering: [],
+      followUp: ["never read"],
+    });
+    expect(JSON.stringify(await control.sessions.get("s2c").entries())).not.toContain("never read");
     // The session is reusable: back to idle, not poisoned.
-    expect((await control.sessions.get("s2c").state()).status).toBe("idle");
+    const after = await control.sessions.get("s2c").state();
+    expect(after.status).toBe("idle");
+    expect(after.pending).toEqual({ steering: [], followUp: [] });
   });
 });
 
