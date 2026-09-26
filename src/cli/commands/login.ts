@@ -8,9 +8,9 @@ import { enterAgentEnv } from "../../env.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
-import { LoginCancelled } from "../../engines/pi/login.ts";
+import { LoginCancelled, loginFlow } from "../../engines/pi/login.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { isInteractive, loginWithKeyCheck } from "../shared.ts";
+import { isInteractive, terminalLoginIO } from "../shared.ts";
 
 export interface LoginOptions {
   /** `-g`: store in the user-global file every agent on this machine falls back to. */
@@ -52,8 +52,14 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
-  // loginWithKeyCheck: an entered API key is verified with one minimal request.
-  const result = await loginWithKeyCheck(provider, authPath).catch((error: unknown) => {
+  // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
+  // Inside an agent, the key is checked on that agent's registry: its models.json may point a provider at a gateway.
+  // Not with `-g`: the global file serves every agent on the machine, so no one agent's routing may judge its key.
+  const result = await loginFlow(terminalLoginIO(), {
+    authPath,
+    ...(provider ? { provider } : {}),
+    ...(agentDir && !opts.global ? { agentDir } : {}),
+  }).catch((error: unknown) => {
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
       console.error(`[fastagent] login cancelled`);

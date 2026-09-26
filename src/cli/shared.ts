@@ -15,19 +15,12 @@ import {
   providerOf,
   resolveAuthFallback,
   resolveAuthPath,
-  resolveModel,
   resolveModelSpec,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import {
-  createPiModelRuntime,
-  createPiModels,
-  probeApiKey,
-  probeAuthSource,
-  providerAuthStatuses,
-} from "../engines/pi/models.ts";
+import { createPiModelRuntime, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
@@ -184,14 +177,14 @@ async function resolveFirstRunModel(
     authPath,
     ...(fallbackAuthPath !== undefined ? { fallbackAuthPath } : {}),
   }).catch(failStartup);
-  const chosen = await pickWithCredentials(models, authPath);
+  const chosen = await pickWithCredentials(models, authPath, agentDir);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(agentDir, configPath, chosen);
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */
-async function pickWithCredentials(models: Models, authPath: string): Promise<string | undefined> {
+async function pickWithCredentials(models: Models, authPath: string, agentDir: string): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -223,8 +216,8 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   }
 
   try {
-    // Verified against the CHOSEN model — the exact request the agent is about to make.
-    await loginWithKeyCheck(provider, authPath, chosen);
+    // Verified on this agent's registry, against the chosen model: the request the agent is about to make.
+    await loginFlow(terminalLoginIO(), { provider, authPath, agentDir, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
     if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
@@ -237,73 +230,8 @@ async function pickWithCredentials(models: Models, authPath: string): Promise<st
   return chosen;
 }
 
-/**
- * Interactive login with the api_key quick-fail probe closed into a LOOP: a definitively rejected key (HTTP 401)
- * deletes the bad credential and RE-PROMPTS immediately.
- */
-export async function loginWithKeyCheck(
-  provider: string | undefined,
-  authPath: string,
-  spec?: string,
-  // Test seams: this loop DESTROYS credential state on `rejected`, so its policy (rejected → delete → re-ask ONLY the
-  // key) is pinned by a test through fake flow/verify.
-  seams: {
-    flow?: (
-      io: LoginIO,
-      options: { provider?: string; authPath?: string; method?: LoginMethod },
-    ) => Promise<LoginResult>;
-    verify?: (provider: string, authPath: string, spec?: string) => Promise<"ok" | "rejected" | "unknown">;
-  } = {},
-): Promise<LoginResult> {
-  const flow = seams.flow ?? loginFlow;
-  const verify = seams.verify ?? verifyApiKeyLogin;
-  const io = terminalLoginIO();
-  let method: LoginMethod | undefined;
-  for (;;) {
-    const result = await flow(io, { provider, authPath, method });
-    if (result.method !== "api_key") return result;
-    const verdict = await verify(result.provider, authPath, spec);
-    if (verdict !== "rejected") return result;
-    // Retry re-asks ONLY the key: the provider/method choices weren't the mistake, the keystrokes were.
-    provider = result.provider;
-    method = "api_key";
-  }
-}
-
-/** Quick-fail check after an api_key login (OAuth needs none — completing the flow already proved the credential). */
-async function verifyApiKeyLogin(
-  provider: string,
-  authPath: string,
-  spec?: string,
-): Promise<"ok" | "rejected" | "unknown"> {
-  // Built-ins only: `login` itself offers built-in providers (login.ts), and a models.json endpoint authenticates
-  // from its own `apiKey` (env/command), so there is no stored credential to verify here.
-  const models = createPiModels({ authPath });
-  const model = spec ? resolveModel(models, spec) : models.getProvider(provider)?.getModels()[0];
-  if (!model) {
-    console.error(`[fastagent] cannot verify the key: provider "${provider}" lists no models — kept as stored`);
-    return "unknown";
-  }
-  const label = `${model.provider}/${model.id}`;
-  console.error(`[fastagent] verifying the key with ${label}…`);
-  const probe = await probeApiKey(models, model);
-  if (probe.state === "ok") {
-    console.error(`[fastagent] key verified — ${label} responded`);
-  } else if (probe.state === "rejected") {
-    await fastagentCredentialStore(authPath).delete(provider);
-    console.error(
-      `[fastagent] ${provider} rejected the API key (HTTP 401): ${probe.message} — enter it again (or cancel)`,
-    );
-  } else {
-    console.error(
-      `[fastagent] could not verify the key with ${label}: ${probe.message} — kept; invokes surface the provider's error`,
-    );
-  }
-  return probe.state;
-}
-
 /** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
-function terminalLoginIO(): LoginIO {
+export function terminalLoginIO(): LoginIO {
   return {
     async select(message, options) {
       const r = await (options.length > 7 ? autocomplete : select)({ message, options });

@@ -3,7 +3,7 @@
  * list.
  */
 import { providerOf } from "../engines/pi/config.ts";
-import type { InteractiveLoginKind } from "../engines/pi/login.ts";
+import type { InteractiveLoginKind } from "../engines/pi/models.ts";
 import type { ProviderAuthStatus } from "../engines/pi/models.ts";
 
 /** One first-run picker entry (@clack/prompts option shape). */

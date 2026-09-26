@@ -9,12 +9,19 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type CredentialStore,
+  InMemoryCredentialStore,
+  type Model,
+  type Models,
+  type Provider,
+  defaultProviderAuthContext,
+} from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { providerOf } from "./config.ts";
-import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
@@ -33,14 +40,19 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
 
 /** A `Models` with every built-in pi provider, wired to fastagent's auth. */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  const models = builtinModels({
-    credentials: fastagentCredentialStore(options.authPath, {
+  return piModelsOver(
+    fastagentCredentialStore(options.authPath, {
       warn: options.warn,
       ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
     }),
-    authContext: defaultProviderAuthContext(),
-  });
-  for (const provider of options.providers ?? []) models.setProvider(provider);
+    options.providers,
+  );
+}
+
+/** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
+export function piModelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
+  const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
+  for (const provider of providers) models.setProvider(provider);
   return models;
 }
 
@@ -168,6 +180,8 @@ export async function createPiModelRuntime(
     stateRoot?: string;
     /** Extra providers for the ids the built-ins do not cover. */
     providers?: Provider[];
+    /** A credential store to use instead of the files (login verifies an entered key from memory). */
+    credentials?: CredentialStore;
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
@@ -177,10 +191,12 @@ export async function createPiModelRuntime(
       ? { path: join(agentDir, AGENT_MODELS_FILE) }
       : await modelsFileFor(agentDir);
   const runtime = await ModelRuntime.create({
-    credentials: fastagentCredentialStore(options.authPath, {
-      warn: options.warn,
-      ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
-    }),
+    credentials:
+      options.credentials ??
+      fastagentCredentialStore(options.authPath, {
+        warn: options.warn,
+        ...(options.fallbackAuthPath !== undefined ? { fallbackPath: options.fallbackAuthPath } : {}),
+      }),
     modelsPath: models?.path ?? null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
     // write a generated cache INTO the author's agent dir.
@@ -256,6 +272,27 @@ function isLiteralKey(apiKey: unknown): boolean {
   return !/\$\{?[A-Za-z_]/.test(apiKey.replaceAll("$$", ""));
 }
 
+/**
+ * What a provider can offer as an interactive login: an OAuth flow, an API-key ENTRY prompt, or nothing ("none" — the
+ * key must come from the provider's env var).
+ */
+export type InteractiveLoginKind = "oauth" | "api_key" | "none";
+
+export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
+  if (interactiveAuth(p, "oauth")) return "oauth";
+  return interactiveAuth(p, "api_key") ? "api_key" : "none";
+}
+
+/** THE rule for "can this method be signed in to interactively": the auth to run for it, or undefined. */
+export function interactiveAuth(provider: Provider, method: Exclude<InteractiveLoginKind, "none">) {
+  return method === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login ? provider.auth.apiKey : undefined;
+}
+
+/** The providers a sign-in can target: pi's built-ins plus `extra`, composed exactly as {@link createPiModels} does. */
+export function loginProviders(extra?: readonly Provider[]): readonly Provider[] {
+  return piModelsOver(new InMemoryCredentialStore(), extra).getProviders();
+}
+
 /** Per-provider auth status for the first-run model picker. */
 export type ProviderAuthStatus =
   | { state: "ready"; source?: string }
@@ -296,7 +333,7 @@ export async function probeAuthSource(models: Models, spec: string): Promise<str
 export type KeyProbe = { state: "ok" } | { state: "rejected" | "unknown"; message: string };
 
 /** Quick-fail probe for a just-stored API key. */
-export async function probeApiKey(models: Models, model: Model<Api>): Promise<KeyProbe> {
+export async function probeApiKey(models: Models, model: Model<Api>, signal?: AbortSignal): Promise<KeyProbe> {
   let status: number | undefined;
   let reply: Awaited<ReturnType<Models["complete"]>>;
   try {
@@ -307,6 +344,7 @@ export async function probeApiKey(models: Models, model: Model<Api>): Promise<Ke
         maxTokens: 16,
         timeoutMs: 15_000,
         maxRetries: 0,
+        ...(signal ? { signal } : {}),
         onResponse: (r) => {
           status = r.status;
         },
