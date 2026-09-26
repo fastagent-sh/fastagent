@@ -18,9 +18,10 @@ const FORK_PROVENANCE = "fastagent.fork";
 export const LEAF_ANCHOR = "fastagent.leaf";
 
 /**
- * How each user message of a run was delivered: the one that started it (`prompt`), or one that joined it in flight
- * (`steer`) or waited for it (`follow_up`). pi's user entry carries only the message, so the plane records this
- * beside it, once per run, keyed by entry id.
+ * How a user message was delivered: it started its run (`prompt`), joined it in flight (`steer`) or waited for it
+ * (`follow_up`). pi's user entry carries only the message, so the plane records this in its own entry written just
+ * BEFORE the message's: a user entry is published with its delivery already knowable, since a cursor never returns to
+ * an entry it has passed.
  */
 const DELIVERY = "fastagent.delivery";
 
@@ -85,24 +86,29 @@ export function forkProvenance(record: SessionManager): string | undefined {
   return found;
 }
 
-/** Record how a run's user messages were delivered. Nothing is written for a run that recorded none. */
-export function recordDeliveries(record: SessionManager, deliveries: ReadonlyMap<string, Delivery>): void {
-  if (deliveries.size > 0) record.appendCustomEntry(DELIVERY, { entries: Object.fromEntries(deliveries) });
+/** Record the delivery of the user message pi is about to journal. */
+export function recordDelivery(record: SessionManager, delivery: Delivery): void {
+  record.appendCustomEntry(DELIVERY, { delivery });
 }
 
 /**
- * Every recorded delivery in a journal, by user entry id. An entry with none recorded (written before this was
- * recorded, or by a run that did not finish recording) is absent: unknown, not a prompt.
+ * Every recorded delivery in a journal (append order), by user entry id. A record applies to the next conversation
+ * message after it, and only if that is a user message: a record whose message was never journaled (a process that
+ * died in between) applies to nothing. A user entry with no record (written before deliveries were recorded, or a
+ * turn an extension started) is absent: unknown, not a prompt.
  */
 export function readDeliveries(
-  entries: readonly { type?: string; customType?: string; data?: unknown }[],
+  entries: readonly { id: string; type?: string; customType?: string; data?: unknown; message?: { role?: string } }[],
 ): Map<string, Delivery> {
   const found = new Map<string, Delivery>();
+  let pending: Delivery | undefined;
   for (const entry of entries) {
-    if (entry.type !== "custom" || entry.customType !== DELIVERY) continue;
-    const recorded = (entry.data as { entries?: Record<string, unknown> } | undefined)?.entries ?? {};
-    for (const [id, delivery] of Object.entries(recorded)) {
-      if (delivery === "prompt" || delivery === "steer" || delivery === "follow_up") found.set(id, delivery);
+    if (entry.type === "custom" && entry.customType === DELIVERY) {
+      const delivery = (entry.data as { delivery?: unknown } | undefined)?.delivery;
+      pending = delivery === "prompt" || delivery === "steer" || delivery === "follow_up" ? delivery : undefined;
+    } else if (isConversationMessage(entry)) {
+      if (pending && entry.message?.role === "user") found.set(entry.id, pending);
+      pending = undefined;
     }
   }
   return found;

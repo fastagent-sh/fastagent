@@ -17,7 +17,7 @@ import {
 } from "../../agent.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { type CancelHooks, cancellableStream } from "../../collect.ts";
-import { type Delivery, recordDeliveries } from "./session-markers.ts";
+import { type Delivery, recordDelivery } from "./session-markers.ts";
 import { log } from "../../log.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
 import type { SessionInheritance } from "./session-inheritance.ts";
@@ -229,25 +229,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       let eventFailure: PortFailure | undefined;
       // How each user message of this run was delivered, as pi classifies it: pi takes a queued message out of its
       // steering or follow-up queue, announcing that with `queue_update`, right before the message starts. The first
-      // user message not taken from a queue is the prompt; any later one (an extension's own turn) is left unknown.
-      const deliveries: { message: unknown; delivery: Delivery }[] = [];
+      // user message neither taken from a queue nor sent by an extension is the prompt; an extension's is unknown.
       let queued = { steering: 0, followUp: 0 };
       let dequeued: Delivery | undefined;
-      let starting: Delivery | undefined;
       let sawUser = false;
-      yield* Effect.addFinalizer(() =>
-        portCleanup("record message deliveries", () => {
-          if (deliveries.length === 0) return; // no user message this run: nothing to look up or write
-          // pi journals the message object it announced, so identity finds each one's entry.
-          const byMessage = new Map(deliveries.map(({ message, delivery }) => [message, delivery]));
-          const recorded = new Map<string, Delivery>();
-          for (const entry of session.sessionManager.getBranch()) {
-            const delivery = entry.type === "message" ? byMessage.get(entry.message) : undefined;
-            if (delivery) recorded.set(entry.id, delivery);
-          }
-          recordDeliveries(session.sessionManager, recorded);
-        }),
-      );
+      const extensionTurns = trackExtensionTurns(session);
       const stop = () => {
         void Effect.runPromise(portCleanup("event-fault abort", () => session.abort()));
       };
@@ -265,11 +251,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                   else if (event.followUp.length < queued.followUp) dequeued = "follow_up";
                   queued = { steering: event.steering.length, followUp: event.followUp.length };
                 } else if (event.type === "message_start" && event.message.role === "user") {
-                  starting = justDequeued ?? (sawUser ? undefined : "prompt");
+                  const delivery = justDequeued ?? (sawUser || extensionTurns.size > 0 ? undefined : "prompt");
                   sawUser = true;
-                } else if (event.type === "message_end" && event.message.role === "user") {
-                  if (starting) deliveries.push({ message: event.message, delivery: starting });
-                  starting = undefined;
+                  // Now, before pi journals the message at its message_end: see recordDelivery.
+                  if (delivery) recordDelivery(session.sessionManager, delivery);
                 }
                 if (event.type === "agent_start") runStarted = true;
                 // Compaction rewrites session history; the event's assistant message is the turn's fact.
@@ -321,7 +306,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         ),
         (unsubscribe) => Effect.sync(unsubscribe),
       );
-      const extensionTurns = trackExtensionTurns(session);
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.
       yield* Deferred.succeed(bound, session);
       const promptOptions = yield* port(() => toPiPromptOptions(prompt, "prompt"));

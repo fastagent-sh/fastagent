@@ -24,6 +24,7 @@ import {
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
+import { recordDelivery } from "../src/engines/pi/session-markers.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
@@ -680,12 +681,62 @@ describe("session control: run modulation", () => {
     expect(copied.map((e) => e.data)).toEqual(users.map((data) => ({ text: (data as { text: string }).text })));
   });
 
+  it("entries(): a user entry is published with its delivery, mid-run too: a cursor never comes back for it", async () => {
+    // A client following with `since` passes each entry once. The delivery must be there the first time it reads the
+    // entry, which is while the run is still going: the prompt while a tool holds the run, the steer by the next
+    // model request.
+    let readAtSteer: SessionEntry[] = [];
+    const { agent, control, gate } = await makeGated([
+      fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
+      async () => {
+        readAtSteer = (await control.sessions.get("sLive").entries()).entries;
+        return fauxAssistantMessage("after the steer");
+      },
+    ]);
+    const invoked = drive(agent, "sLive");
+    await waitForToolStarted(control, "sLive");
+    const midRun = (await control.sessions.get("sLive").entries()).entries.filter((e) => e.kind === "user");
+    expect(midRun.map((e) => e.data)).toEqual([{ text: "go", delivery: "prompt" }]);
+    expect((await control.sessions.get("sLive").steer({ text: "redirect" })).ok).toBe(true);
+    gate.release();
+    await invoked;
+
+    const steered = readAtSteer.filter((e) => e.kind === "user").map((e) => e.data);
+    expect(steered).toEqual([
+      { text: "go", delivery: "prompt" },
+      { text: "redirect", delivery: "steer" },
+    ]);
+  });
+
+  it("entries(): a turn an extension command started has no delivery: the command was the prompt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-delivery-ext-"));
+    const extension = join(dir, "ask.mjs");
+    await writeFile(
+      extension,
+      'export default (pi) => pi.registerCommand("ask", { description: "", handler: async (args) => pi.sendUserMessage("asked: " + args) });\n',
+    );
+    const { agent, control } = await fauxControlledAgent([fauxAssistantMessage("answered")], {
+      extensionPaths: [extension],
+    });
+    await drain(agent.invoke({ session: "sExt" }, { text: "/ask something" }));
+
+    const users = (await control.sessions.get("sExt").entries()).entries.filter((e) => e.kind === "user");
+    expect(users.map((e) => e.data)).toEqual([{ text: "asked: something" }]);
+  });
+
   it("entries(): a user message with no recorded delivery has none, rather than reading as a prompt", async () => {
     const { control, sessions } = await makeObserved([]);
     const record = await sessions.openOrCreate("sOld");
     record.appendMessage({ role: "user", content: "written before deliveries were recorded", timestamp: 1 });
     const [user] = (await control.sessions.get("sOld").entries()).entries;
     expect(user?.data).toEqual({ text: "written before deliveries were recorded" });
+
+    // A record whose message never reached the journal (the process died in between) is not pinned on a later one.
+    recordDelivery(record, "steer");
+    record.appendMessage(fauxAssistantMessage("an answer"));
+    record.appendMessage({ role: "user", content: "an extension's turn", timestamp: 2 });
+    const later = (await control.sessions.get("sOld").entries()).entries.filter((e) => e.kind === "user");
+    expect(later.at(-1)?.data).toEqual({ text: "an extension's turn" });
   });
 
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {

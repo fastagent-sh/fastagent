@@ -403,7 +403,9 @@ between the target and the edit, the model sees the target as written.
 A pi reference `user` entry carries `{ text, delivery? }`. `delivery` says how the message reached its run:
 `prompt` started it, `steer` joined it in flight, `follow_up` waited for it. It is absent when unknown (a message
 written before this was recorded, a turn an extension started, or a copy made by `fork` or thread inheritance),
-never defaulted to `prompt`. The classification is pi's own: the queue it took the message from.
+never defaulted to `prompt`. The classification is pi's own: the queue it took the message from. It is recorded
+just before the message is journaled, so an entry is published with it, mid-run included: a reader following
+with `since` never passes an entry whose delivery is still to come.
 
 Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
 `entries({ since: cursor })` to backfill → `state()` to learn whether work is active. Reading first
