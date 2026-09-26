@@ -34,9 +34,10 @@ describe("deploy/residency", () => {
   it("reports the reason WITHOUT a way out first — the message depends on which one it is", () => {
     // A cron is the one reason with a way out: someone else's clock can call POST /run.
     expect(residencyFor({ ...nothing, hasCron: true })?.reason).toBe(CRON_CAN_BE_EXTERNAL);
-    // A long connection is last only because the others are stronger, not because it is optional.
+    // With both, the long connection is the reason: offering the cron's way out would advise scaling a box to
+    // zero that holds a connection nothing can re-open from zero.
     expect(residencyFor({ ...nothing, hasCron: true, channels: [channel("socket", "long-connection")] })?.reason).toBe(
-      "cron",
+      "long-connection",
     );
   });
 
