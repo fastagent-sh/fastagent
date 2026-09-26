@@ -112,7 +112,9 @@ export async function runAddChannel(
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to ${envLabel}`);
   }
   const install =
-    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
+    detectRuntime(target, await readPackageJson(target).catch(failStartup)).runtime === "bun"
+      ? "bun install"
+      : "npm install";
   console.error(`  next steps:`);
   console.error(
     `    ${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}                      # if @fastagent-sh/fastagent is not installed yet`,

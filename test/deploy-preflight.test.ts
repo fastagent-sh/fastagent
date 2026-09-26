@@ -559,6 +559,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     );
     expect(pre.messages.some((m) => /does not list @fastagent-sh\/fastagent/.test(m.text))).toBe(true);
   });
+
+  it("names a package.json it cannot parse instead of reporting it as missing a dependency", async () => {
+    const dir = await workspace({ "package.json": "{ not json" });
+    await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/package\.json.*not valid JSON/);
+  });
 });
 
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
