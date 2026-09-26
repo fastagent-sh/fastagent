@@ -790,7 +790,7 @@ One thing neither mechanism covers, recorded so it is not rediscovered: a cross-
 `/control/sessions/{id}/events` is a simple request, so it is sent and the server subscribes, even
 though the page cannot read a byte of it. That costs a held connection, not a disclosure.
 
-KNOWN GAP (tracked as issue #573): DNS rebinding. The page rebinds its own hostname to `127.0.0.1`, so
+KNOWN GAP (decided in issue #573, closed as not planned): DNS rebinding. The page rebinds its own hostname to `127.0.0.1`, so
 its requests become same-origin — no `Origin` to judge, and any content type it likes, which defeats
 mechanism 1 as well.
 
