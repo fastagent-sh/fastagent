@@ -120,8 +120,8 @@ describe("createAgentService", () => {
     // MountableAgent path is the other way in and had no check at all.
     const dir = await agentDir();
     const opened = await createPiAgentFromDir(dir, { serving: true });
-    await expect(mountAgentService({ ...opened, corsOrigins: ["https://app.example.com/"] })).rejects.toThrow(
-      /mountAgentService: corsOrigins entry "https:\/\/app\.example\.com\/" is not the origin a browser sends/,
+    await expect(mountAgentService({ ...opened, http: { cors: ["https://app.example.com/"] } })).rejects.toThrow(
+      /mountAgentService: http\.cors entry "https:\/\/app\.example\.com\/" is not the origin a browser sends/,
     );
   });
 

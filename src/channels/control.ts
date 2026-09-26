@@ -25,7 +25,7 @@ import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
-const CONTROL_PREFIX = "/control";
+export const CONTROL_PREFIX = "/control";
 
 /** The one variable segment in this plane's paths: a percent-encoded session id. */
 const SESSION_SEGMENT = "{session}";

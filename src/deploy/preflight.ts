@@ -34,7 +34,8 @@ import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
-import { shouldServeRun } from "../service.ts";
+import { DEFAULT_HTTP_PORT, describeAnonymousSurface, shouldServeRun } from "../service.ts";
+import { CONTROL_PREFIX } from "../channels/control.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -180,23 +181,14 @@ export async function preflightDeploy(input: {
   // because a cron was broken on deploy day would sleep through it afterwards.
   const loadedRoutines = await loadRoutines(agentDir);
 
-  // What the PUBLIC host URL answers with no authentication of ours in front of it — NAMED FROM WHAT WILL ACTUALLY
-  // MOUNT, never from the host alone. `POST /invoke` is on by default whatever channels a definition declares (so
-  // this is not conditioned on `sessionControl`), but `http.invoke: false` withholds it. Listing an endpoint this deployment does not serve
-  // is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
-  //
-  // `POST /run` follows the SAME condition the assembly uses, through the same function
-  // (`shouldServeRun`). Leaving it out had the two failures this list exists to prevent —
-  // one missing endpoint in the ordinary case, and complete silence for `http.invoke: false` + `http.run: true`,
-  // which is a public URL whose ONLY anonymous turn endpoint went unmentioned.
-  const servesRun =
-    loadedRoutines.routines.length > 0 &&
-    shouldServeRun({ serveInvoke: config.http?.invoke, serveRun: config.http?.run });
-  const unauthenticated = [
-    ...(config.http?.invoke === false ? [] : ["POST /invoke (run a turn with this agent's tools)"]),
-    ...(servesRun ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
-    ...(config.sessionControl === true ? ["/control/* (read, steer or delete any session)"] : []),
-  ];
+  // What the PUBLIC host URL answers with no authentication of ours, NAMED FROM WHAT WILL ACTUALLY MOUNT (through the
+  // same `shouldServeRun` the assembly uses), never from the host alone: listing an endpoint this deployment does not
+  // serve is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
+  const unauthenticated = describeAnonymousSurface({
+    invoke: config.http?.invoke !== false,
+    run: loadedRoutines.routines.length > 0 && shouldServeRun(config.http),
+    ...(config.sessionControl === true ? { controlPrefix: CONTROL_PREFIX } : {}),
+  });
   if (publicUrl && unauthenticated.length > 0) {
     messages.push({
       level: "warn",
@@ -487,7 +479,7 @@ export async function preflightDeploy(input: {
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };
-  const port = config.http?.port ?? 8787;
+  const port = config.http?.port ?? DEFAULT_HTTP_PORT;
   // EVERYTHING the definition declared it needs, from wherever it was declared. Read through the SAME resolver
   // dev/start mount with, so "which tool declarations count" has one answer (config.tools declare too; a shadowed
   // file's declaration is dropped in both places).
