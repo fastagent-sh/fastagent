@@ -16,7 +16,7 @@
 import type { DeclaredChannel } from "../channels/discover.ts";
 
 /** Why one machine has to stay up. Also the order they are checked in. */
-export type ResidencyReason = "cron" | "long-connection";
+export type ResidencyReason = "long-connection" | "cron";
 
 export interface Residency {
   reason: ResidencyReason;
@@ -41,16 +41,16 @@ export function residencyFor(facts: {
   /** `routines/` declares at least one cron. */
   hasCron: boolean;
 }): Residency | undefined {
-  if (facts.hasCron) {
-    return {
-      reason: "cron",
-      why: "a cron instant has no external wake-up here, so a sleeping box sleeps through it",
-    };
-  }
   if (facts.channels.some((channel) => channel.ingress === "long-connection")) {
     return {
       reason: "long-connection",
       why: "a long-connection channel must stay connected — it cannot wake from zero",
+    };
+  }
+  if (facts.hasCron) {
+    return {
+      reason: "cron",
+      why: "a cron instant has no external wake-up here, so a sleeping box sleeps through it",
     };
   }
   return undefined;
