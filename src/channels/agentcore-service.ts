@@ -7,8 +7,8 @@ import type { LoadedRoutine } from "../schedule/routine.ts";
 import { type AgentService, loadServingRoutines, type MountableAgent, routesFor, startSchedules } from "../service.ts";
 import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
 import * as Effect from "effect/Effect";
-import { MAX_ECHOED_NAME, runRoutineByName } from "../schedule/run.ts";
-import { fireScheduleOnce } from "../schedule/scheduler.ts";
+import { runRoutineByName, unknownRoutine } from "../schedule/run.ts";
+import { fireRoutineOnce } from "../schedule/scheduler.ts";
 import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
 import type { ChannelHandler } from "../channel.ts";
@@ -219,24 +219,19 @@ export function mountAgentcore(options: {
   // relays its instant behind the ingress secret, so the slot is a real grid point of that schedule and a claim
   // means something (dedup across redeliveries, a fire history, the overlap policy). `POST /run` — the
   // unauthenticated API — is NOT this and is not served here at all.
-  const fireSchedule = async (name: string, occurrence: Date): Promise<Response> => {
+  const fireRoutine = async (name: string, occurrence: Date): Promise<Response> => {
     const routine = routines.find((r) => r.name === name);
-    if (!routine) {
-      return text(
-        `no schedule named "${name}" (this deployment has: ${routines.map((r) => r.name).join(", ")})\n`,
-        404,
-      );
-    }
+    if (!routine) return unknownRoutine(name, routines);
     const outcome = await Effect.runPromise(
-      fireScheduleOnce({ agent, stateRoot, schedule: routine, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+      fireRoutineOnce({ agent, stateRoot, routine, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
     ).catch((cause: unknown) => {
-      // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
+      // `fireRoutineOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
       // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
       log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
       return undefined;
     });
     if (outcome === undefined) {
-      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
+      return text(`routine "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
     }
     return Response.json({ slot: occurrence.toISOString(), ...outcome });
   };
@@ -245,12 +240,7 @@ export function mountAgentcore(options: {
   // without a cron is reachable ONLY this way on this host, and that is the point: nothing is unreachable.
   const runRoutine = async (name: string): Promise<Response> => {
     const routine = routines.find((r) => r.name === name);
-    if (!routine) {
-      return text(
-        `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${routines.map((r) => r.name).join(", ")})\n`,
-        404,
-      );
-    }
+    if (!routine) return unknownRoutine(name, routines);
     return Response.json(await runRoutineByName(agent, routine));
   };
   return agentcoreRoutes({
@@ -261,6 +251,6 @@ export function mountAgentcore(options: {
     // What separates a forwarder envelope from any IAM principal's InvokeAgentRuntime call.
     ingressSecret: process.env.FASTAGENT_INGRESS_SECRET,
     onStateReady,
-    ...(routines.length > 0 ? { fireSchedule, runRoutine } : {}),
+    ...(routines.length > 0 ? { fireRoutine, runRoutine } : {}),
   });
 }

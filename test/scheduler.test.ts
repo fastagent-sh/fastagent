@@ -6,11 +6,11 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedRoutine } from "../src/schedule/routine.ts";
 import * as Effect from "effect/Effect";
-import { createScheduler as scheduler, fireScheduleOnce as fire } from "../src/schedule/scheduler.ts";
+import { createScheduler as scheduler, fireRoutineOnce as fire } from "../src/schedule/scheduler.ts";
 import { routineSession } from "../src/schedule/routine.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
-const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
+const fireRoutineOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readFires, settleClaim } from "../src/schedule/state.ts";
 
@@ -284,10 +284,10 @@ describe("schedule/scheduler: fire algorithm", () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     seedClaim(root, "job", "2026-07-07T12:00:03.000Z", "2026-07-07T12:00:00.000Z");
-    const stale = await fireScheduleOnce({
+    const stale = await fireRoutineOnce({
       agent,
       stateRoot: root,
-      schedule: hourly(),
+      routine: hourly(),
       slot: new Date("2026-07-07T09:00:00Z"), // its own claim was pruned long ago
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
@@ -572,14 +572,14 @@ describe("schedule/createScheduler: a routine with no cron", () => {
   });
 });
 
-describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
+describe("schedule/fireRoutineOnce: the external-clock fire path", () => {
   const slot = new Date("2026-07-07T10:00:00Z");
 
   it("claims the slot, records when it fired and how it ended, and returns the outcome", async () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     const now = () => new Date("2026-07-07T10:00:03Z");
-    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
+    const outcome = await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot, now });
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBeUndefined();
     expect(calls).toEqual([{ session: routineSession("job"), text: "go" }]);
@@ -597,7 +597,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
     const root = await freshRoot();
     const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
-    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const outcome = await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
 
     expect(outcome).toMatchObject({ fired: false, skipped: true });
     expect(outcome.failed).toBeUndefined();
@@ -619,7 +619,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // exactly what this asserts.
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
     const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
 
     expect(lines.join("\n")).toMatch(/INFO.*job: occurrence skipped \(session busy\)/);
     expect(lines.join("\n")).not.toMatch(/ERROR/);
@@ -633,7 +633,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // model error; by the time a `failed` event arrives, that budget is spent.
     const root = await freshRoot();
     const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);
-    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const outcome = await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
 
     expect(outcome).toMatchObject({ fired: true, failed: "upstream 500" });
     expect(outcome.skipped).toBeUndefined();
@@ -648,7 +648,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const { agent } = recordingAgent([{ type: "text", delta: "the digest, in full" }, { type: "completed" }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
     expect(logs.some((l) => /job completed \(\d+ms\)$/.test(l))).toBe(true);
     expect(logs.join("\n")).not.toContain("digest");
     const stored = readFires(root, "job");
@@ -664,7 +664,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const forged = "boom\n  at somewhere\nERROR [schedule] daily failed (1ms): DISK ON FIRE";
     const { agent } = recordingAgent([{ type: "failed", retryable: false, details: forged }]);
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
     const line = logs.find((l) => /job failed/.test(l)) ?? "";
     expect(line).not.toContain("\n");
     expect(line).toContain("boom at somewhere ERROR [schedule] daily failed (1ms): DISK ON FIRE"); // folded, not cut
@@ -675,8 +675,8 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
     const now = () => new Date("2026-07-07T10:00:03Z");
-    await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
-    const dup = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot, now });
+    await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot, now });
+    const dup = await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot, now });
     expect(dup.fired).toBe(false);
     expect(dup.skippedReason).toMatch(/is already claimed/);
     expect(calls).toHaveLength(1);
@@ -694,10 +694,10 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     });
     const { agent, calls } = recordingAgent();
     seedClaim(root, "job", "2026-07-07T12:00:03.000Z", "2026-07-07T12:00:00.000Z");
-    const stale = await fireScheduleOnce({
+    const stale = await fireRoutineOnce({
       agent,
       stateRoot: root,
-      schedule: hourly(),
+      routine: hourly(),
       slot: new Date("2026-07-07T09:00:00Z"),
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
@@ -707,10 +707,10 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(claimed(root, "job")).toEqual(["2026-07-07T12-00-00-000Z"]); // no claim for the stale slot
 
     // The duplicate path is the ordinary one and stays an info line.
-    await fireScheduleOnce({
+    await fireRoutineOnce({
       agent,
       stateRoot: root,
-      schedule: hourly(),
+      routine: hourly(),
       slot: new Date("2026-07-07T12:00:00.000Z"),
       now: () => new Date("2026-07-07T12:31:00Z"),
     });
@@ -720,18 +720,18 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
   it("a LATER slot still fires even when the earlier delivery arrived after it", async () => {
     const root = await freshRoot();
     const { agent, calls } = recordingAgent();
-    await fireScheduleOnce({
+    await fireRoutineOnce({
       agent,
       stateRoot: root,
-      schedule: hourly(),
+      routine: hourly(),
       slot,
       // Delivery lag exceeds the interval to the next distinct slot.
       now: () => new Date("2026-07-07T12:30:00Z"),
     });
-    const next = await fireScheduleOnce({
+    const next = await fireRoutineOnce({
       agent,
       stateRoot: root,
-      schedule: hourly(),
+      routine: hourly(),
       slot: new Date("2026-07-07T11:00:00Z"),
       now: () => new Date("2026-07-07T12:31:00Z"),
     });
@@ -746,7 +746,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "model exploded" }]);
-    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const outcome = await fireRoutineOnce({ agent, stateRoot: root, routine: hourly(), slot });
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBe("model exploded");
     expect(readFires(root, "job")[0]).toMatchObject({ outcome: "failed" });

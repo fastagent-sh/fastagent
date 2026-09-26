@@ -52,12 +52,12 @@ export interface AgentcoreAdapterOptions {
    *
    * Undefined when the definition declares no schedules.
    */
-  fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
+  fireRoutine?: (name: string, occurrence: Date) => Promise<Response>;
   /**
    * Run a declared routine BY NAME — the `POST /run` contract, for the host that publishes no routes.
    *
    * Undefined when the definition declares none. Note what this does NOT do: no occurrence, no claim, no fire
-   * history. Those belong to {@link fireSchedule}, whose caller is a clock we wrote.
+   * history. Those belong to {@link fireRoutine}, whose caller is a clock we wrote.
    */
   runRoutine?: (name: string) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
@@ -121,7 +121,7 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, fireSchedule, runRoutine, ingressSecret, onStateReady } = options;
+  const { channels, agent, stateRoot, isBusy, fireRoutine, runRoutine, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
 
@@ -220,12 +220,12 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         }
         // No schedules in this definition: nothing to fire, and no rule should have survived a deploy that removed
         // them either.
-        if (!fireSchedule) return text(`no schedules in this deployment (routine-fire "${name}")\n`, 404);
+        if (!fireRoutine) return text(`no routines in this deployment (routine-fire "${name}")\n`, 404);
         // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
         // the connection while the turn keeps running server-side.
         const workDone = beginWork();
         try {
-          return await fireSchedule(name, new Date(occurrence));
+          return await fireRoutine(name, new Date(occurrence));
         } finally {
           workDone();
         }
