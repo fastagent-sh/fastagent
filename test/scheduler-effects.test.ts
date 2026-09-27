@@ -15,7 +15,7 @@ import { activeWork } from "../src/channels/busy.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import {
   createScheduler,
-  fireScheduleOnce,
+  fireRoutineOnce,
   type ScheduleFireOutcome,
   type Scheduler,
 } from "../src/schedule/scheduler.ts";
@@ -64,12 +64,12 @@ it("two SCHEDULERS over one state root fire a cron slot exactly once", async () 
           "-e",
           `
           import * as Effect from "effect/Effect";
-          const { fireScheduleOnce } = await import(${JSON.stringify(source)});
+          const { fireRoutineOnce } = await import(${JSON.stringify(source)});
           const agent = { async *invoke() { await new Promise((r) => setTimeout(r, 150)); yield { type: "completed" }; } };
-          const outcome = await Effect.runPromise(fireScheduleOnce({
+          const outcome = await Effect.runPromise(fireRoutineOnce({
             agent,
             stateRoot: ${JSON.stringify(stateRoot)},
-            schedule: { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" },
+            routine: { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" },
             slot: new Date(${JSON.stringify(slot)}),
           }));
           process.send(outcome.fired ? "fired" : "skipped");
@@ -417,7 +417,7 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
   await mkdir(join(stateRoot, "schedule", "claims"), { recursive: true });
   await writeFile(join(stateRoot, "schedule", "claims", "job"), "");
   const invoke = vi.fn();
-  const work = fireScheduleOnce({ agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW });
+  const work = fireRoutineOnce({ agent: { invoke }, stateRoot, routine: hourly(), slot: NOW });
   expectTypeOf(work).toEqualTypeOf<Effect.Effect<ScheduleFireOutcome, PortFailure>>();
   // @ts-expect-error -- a failed durable claim still needs a failure policy
   const infallible: Effect.Effect<ScheduleFireOutcome> = work;
@@ -431,14 +431,14 @@ it("keeps claim IO failures typed and never invokes, and never burns the slot", 
   // The fault is fixed and the SAME slot still fires: a failed state write must not consume it.
   await rm(join(stateRoot, "schedule", "claims", "job"));
   const retry = await Effect.runPromise(
-    fireScheduleOnce({
+    fireRoutineOnce({
       agent: {
         async *invoke() {
           yield { type: "completed" as const };
         },
       },
       stateRoot,
-      schedule: hourly(),
+      routine: hourly(),
       slot: NOW,
     }),
   );
@@ -470,7 +470,7 @@ it("an interrupted external fire joins its claimed turn and its settlement", asy
       yield { type: "completed" };
     },
   };
-  const done = Effect.runPromiseExit(fireScheduleOnce({ agent, stateRoot, schedule: hourly(), slot: NOW }), {
+  const done = Effect.runPromiseExit(fireRoutineOnce({ agent, stateRoot, routine: hourly(), slot: NOW }), {
     signal: abort.signal,
   });
   await entered.promise;
@@ -490,13 +490,13 @@ it("claims an external slot synchronously before a concurrent duplicate can invo
     await finish.promise;
     yield { type: "completed" };
   });
-  const options = { agent: { invoke }, stateRoot, schedule: hourly(), slot: NOW };
-  const first = Effect.runPromise(fireScheduleOnce(options));
+  const options = { agent: { invoke }, stateRoot, routine: hourly(), slot: NOW };
+  const first = Effect.runPromise(fireRoutineOnce(options));
   try {
     expect(existsSync(join(stateRoot, "schedule", "claims", "job", NOW.toISOString().replace(/[:.]/g, "-")))).toBe(
       true,
     );
-    const second = await Effect.runPromise(fireScheduleOnce(options));
+    const second = await Effect.runPromise(fireRoutineOnce(options));
     expect(second).toMatchObject({ fired: false, skippedReason: expect.stringContaining("is already claimed") });
     expect(invoke).toHaveBeenCalledOnce();
   } finally {

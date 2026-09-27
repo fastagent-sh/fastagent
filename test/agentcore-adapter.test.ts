@@ -28,7 +28,7 @@ interface AdapterOverrides {
   channels?: RouteSurface | (() => Promise<RouteSurface> | RouteSurface);
   agent?: Agent;
   isBusy?: () => boolean;
-  fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
+  fireRoutine?: (name: string, occurrence: Date) => Promise<Response>;
   ingressSecret?: string;
   onStateReady?: () => void;
 }
@@ -45,7 +45,7 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
-    fireSchedule: over.fireSchedule,
+    fireRoutine: over.fireRoutine,
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
   });
@@ -143,7 +143,7 @@ describe("agentcore adapter: lazy channel construction", () => {
       return Response.json({ fired: true, ms: 5 });
     });
     const routes = adapter({
-      fireSchedule: fire,
+      fireRoutine: fire,
       channels: () => {
         order.push("construct");
         return { routes: health };
@@ -157,7 +157,7 @@ describe("agentcore adapter: lazy channel construction", () => {
     // unrelated channel misconfiguration must not turn one fault into two.
     const fire2 = vi.fn(async () => Response.json({ fired: true, ms: 5 }));
     const broken = adapter({
-      fireSchedule: fire2,
+      fireRoutine: fire2,
       channels: () => {
         throw new Error("channels/lark.ts is broken");
       },
@@ -314,7 +314,7 @@ describe("agentcore adapter: routine-fire envelope", () => {
     // not served on this host at all.
     const seen: { name: string; occurrence: string }[] = [];
     const routes = adapter({
-      fireSchedule: async (name, occurrence) => {
+      fireRoutine: async (name, occurrence) => {
         seen.push({ name, occurrence: occurrence.toISOString() });
         return Response.json({ fired: true, ms: 5 });
       },
@@ -325,20 +325,20 @@ describe("agentcore adapter: routine-fire envelope", () => {
     expect(seen).toEqual([{ name: "job", occurrence: new Date(OCCURRENCE).toISOString() }]);
   });
 
-  it("no schedules in this deployment is a 404 the adapter answers itself", async () => {
+  it("no routines in this deployment is a 404 the adapter answers itself", async () => {
     // The only verdict left here: with no schedules there is no trigger handler and no route either,
     // so an EventBridge rule outliving its schedule gets an answer instead of a crash. Every other
     // verdict (unknown name, claim fault, the outcome shape) belongs to the handler this relays to.
     const res = await postEnvelope(adapter(), fireEnvelope);
     expect(res.status).toBe(404);
-    expect(await res.text()).toContain("no schedules in this deployment");
+    expect(await res.text()).toContain("no routines in this deployment");
   });
 
   it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {
     const { activeWork } = await import("../src/channels/busy.ts");
     const base = activeWork();
     let release: (r: Response) => void = () => {};
-    const routes = adapter({ fireSchedule: () => new Promise<Response>((r) => (release = r)) });
+    const routes = adapter({ fireRoutine: () => new Promise<Response>((r) => (release = r)) });
     const pending = postEnvelope(routes, fireEnvelope) as Promise<Response>;
     await vi.waitFor(() => expect(activeWork()).toBe(base + 1));
     release(Response.json({ fired: true, ms: 1 }));
@@ -347,7 +347,7 @@ describe("agentcore adapter: routine-fire envelope", () => {
   });
 
   it("rejects an envelope that names no schedule, no occurrence, or one that is not a date", async () => {
-    const fire = adapter({ fireSchedule: async () => Response.json({ fired: true, ms: 0 }) });
+    const fire = adapter({ fireRoutine: async () => Response.json({ fired: true, ms: 0 }) });
     expect((await postEnvelope(fire, { kind: "routine-fire" } as AgentcoreEnvelope)).status).toBe(400);
     expect((await postEnvelope(fire, { kind: "routine-fire", name: "job" } as AgentcoreEnvelope)).status).toBe(400);
     // Parsed HERE because this path claims the instant: an unparseable one would claim `Invalid Date`.
@@ -420,7 +420,7 @@ describe("agentcore adapter: the authentication boundary", () => {
   it("rejects unauthenticated INTERNAL kinds — InvokeAgentRuntime is an ordinary IAM action, not proof of origin", async () => {
     const fire = vi.fn(async () => Response.json({ fired: true, ms: 1 }));
     const routes = adapter({
-      fireSchedule: fire,
+      fireRoutine: fire,
       channels: { routes: { "POST /hook": () => new Response("must not run") } },
     });
 

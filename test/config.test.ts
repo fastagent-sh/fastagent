@@ -379,10 +379,9 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     expect(existsSync(join(agent, ".secrets", ".gitignore"))).toBe(false);
   });
 
-  it("sessionsDir overrides the default <agentDir>/.state/sessions (start's deploy posture)", async () => {
-    // dev defaults sessions under <agentDir>/.state/sessions; start points them elsewhere (a mounted
-    // volume) so a redeploy that replaces the dir does not wipe conversations. Lock that the override
-    // wins and the default lands under .state (the single opener both commands drive).
+  it("sessionsDir overrides the default <agentDir>/.state/sessions (an embedder's option)", async () => {
+    // The CLI has no spelling of it: sessions move with the state root (FASTAGENT_STATE_DIR). An embedder
+    // that wants the records elsewhere passes `sessionsDir`; lock that it wins and the default lands under .state.
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));

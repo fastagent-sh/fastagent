@@ -97,7 +97,7 @@ function oneLine(text: string): string {
  * (`routine:<name>` for a cron, the asking conversation for a wake-up), and a session is persisted under
  * EXPORTED for the API path (`POST /run`), which runs the same turn without a claim: it has no occurrence to
  * claim, because nobody's grid produced it (schedule/run.ts). The resident clock's own claim/run/settle is
- * {@link fireScheduleOnce}.
+ * {@link fireRoutineOnce}.
  *
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
  * unstructured, in a stream with a wider audience and a bound that differs per host.
@@ -161,17 +161,17 @@ export interface ScheduleFireOutcome {
 }
 
 /** Shared resident/external claim → run → settle. */
-export function fireScheduleOnce(opts: {
+export function fireRoutineOnce(opts: {
   agent: Agent;
   stateRoot: string;
-  schedule: LoadedRoutine;
+  routine: LoadedRoutine;
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
   slot: Date;
   now?: () => Date;
 }): Effect.Effect<ScheduleFireOutcome, PortFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
-    const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
+    const { agent, stateRoot, routine: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
     const firedAt = now();
     const skippedReason = yield* Effect.try({
       try: () => {
@@ -271,7 +271,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           }
           // `slot: due` is what two schedulers have in common: both compute the same cron instant, so both try to
           // claim the same name and exactly one wins. Claiming `now()` would give them different names.
-          yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
+          yield* fireRoutineOnce({ agent, stateRoot, routine: s, slot: due, now }).pipe(
             Effect.catchTag("PortFailure", (error) =>
               Effect.sync(() => {
                 // Nothing to record: this fault happens BEFORE the claim exists (that is what keeps the slot

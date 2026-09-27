@@ -46,7 +46,22 @@ const MAX_RUN_BODY_BYTES = 4 * 1024;
  * from a stale caller needs the name and nothing else does. Long enough to recognise one, short enough not to be a
  * page.
  */
-export const MAX_ECHOED_NAME = 64;
+const MAX_ECHOED_NAME = 64;
+
+/**
+ * The 404 for a name this deployment does not declare — drift: a caller outliving the thing it calls. The names are
+ * listed so an operator can see whether it is a typo or a stale job without shelling in. The caller's name is CLIPPED
+ * before it goes back out: listing this deployment's own names is deliberate, quoting an unauthenticated caller's
+ * 4 KiB of body is not (`refuseNonJsonBody` states the same rule for the same table).
+ */
+export function unknownRoutine(name: string, routines: readonly LoadedRoutine[]): Response {
+  return text(
+    `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${routines
+      .map((r) => r.name)
+      .join(", ")})\n`,
+    404,
+  );
+}
 
 /** The Effect boundary, in one place: the turn runs, and its outcome is what the caller reads. */
 const runOnce = (agent: Agent, routine: LoadedRoutine) =>
@@ -150,19 +165,7 @@ export function createRunHandler(options: {
       return text('need { "name": string } — e.g. {"name":"daily"}\n', 400);
     }
     const routine = routines.find((r) => r.name === name);
-    // Drift: a caller outliving the thing it calls. The names are listed so an operator can see whether it is a
-    // typo or a stale job without shelling in.
-    if (!routine) {
-      return text(
-        // The name is CLIPPED before it goes back out — the one thing this route echoes. Listing this deployment's
-        // own names is deliberate; quoting an unauthenticated caller's 4 KiB of body is not (`refuseNonJsonBody`
-        // states the same rule for the same table).
-        `no declared work named "${name.slice(0, MAX_ECHOED_NAME)}" (this deployment has: ${routines
-          .map((r) => r.name)
-          .join(", ")})\n`,
-        404,
-      );
-    }
+    if (!routine) return unknownRoutine(name, routines);
     return Response.json(await runRoutineByName(agent, routine));
   };
 }

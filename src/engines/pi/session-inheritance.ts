@@ -3,12 +3,7 @@
  * the room knew"), on pi's `SessionManager`.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import {
-  type CompactionEntry,
-  type ContextEditEntry,
-  type SessionManager,
-  estimateTokens,
-} from "@earendil-works/pi-coding-agent";
+import { type CompactionEntry, type SessionManager, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { isConversationMessage, isPlaneMarker } from "./session-markers.ts";
 
@@ -161,75 +156,62 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
     unanchored = [];
     copied.set(parentId, childId);
   };
-  for (const raw of parent.getBranch(at)) {
-    const entry = raw as Entry & {
-      summary?: string;
-      // Bound to pi's own field so a shape change there cannot land quietly.
-      firstKeptEntryId?: CompactionEntry["firstKeptEntryId"];
-      customType?: string;
-      content?: string | unknown[];
-      display?: boolean;
-      data?: unknown;
-      provider?: string;
-      modelId?: string;
-      thinkingLevel?: string;
-      tokensBefore?: number;
-      details?: unknown;
-      targetId?: string;
-      replacement?: ContextEditEntry["replacement"];
-    };
+  // Typed by pi's own union, and exhaustive: a pi release that adds an entry type fails typecheck here instead of
+  // being dropped from every copied branch without a word.
+  for (const entry of parent.getBranch(at)) {
     let childId: string | undefined;
     switch (entry.type) {
       case "message":
         // Every message, INCLUDING the engine's system entries: the child starts from the prompt the parent was
         // running under, and pi diffs its own sections against it, so the thread's first request carries that
         // prompt once rather than twice.
-        if (entry.message) {
-          childId = child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
-        }
+        childId = child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
         break;
       case "custom_message":
         // Model-visible history, unlike the `custom` entries below it: an extension injected it INTO the
         // conversation, and the assistant messages answering it are being copied.
-        childId = child.appendCustomMessageEntry(
-          entry.customType ?? "",
-          entry.content as Parameters<SessionManager["appendCustomMessageEntry"]>[1],
-          entry.display ?? false,
-          entry.details,
-        );
+        childId = child.appendCustomMessageEntry(entry.customType, entry.content, entry.display, entry.details);
         break;
       case "compaction":
         // `firstKeptEntryId` is where the RETAINED TAIL starts — the entries pi did not summarize, which still reach
         // the model.
         childId = child.appendCompaction(
-          entry.summary ?? "",
-          copied.get(entry.firstKeptEntryId ?? "") ?? "",
-          entry.tokensBefore ?? 0,
+          entry.summary,
+          copied.get(entry.firstKeptEntryId) ?? "",
+          entry.tokensBefore,
           entry.details,
         );
         break;
-      case "context_edit":
+      case "context_edit": {
         // pi omits an abandoned retry/overflow attempt from the model's context this way; dropping the edit would
         // hand that attempt back to the copy. Its target is a message, which the copy always anchors.
-        if (entry.targetId && entry.replacement !== undefined) {
-          const target = copied.get(entry.targetId);
-          if (target) childId = child.appendContextEdit(target, entry.replacement);
-        }
+        const target = copied.get(entry.targetId);
+        if (target) childId = child.appendContextEdit(target, entry.replacement);
         break;
+      }
       case "model_change":
-        if (entry.provider && entry.modelId) childId = child.appendModelChange(entry.provider, entry.modelId);
+        childId = child.appendModelChange(entry.provider, entry.modelId);
         break;
       case "thinking_level_change":
-        if (entry.thinkingLevel) childId = child.appendThinkingLevelChange(entry.thinkingLevel);
+        childId = child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
         // The plane's markers describe the parent's RECORD, not the thread's history.
-        if (entry.customType && !isPlaneMarker(entry)) {
-          childId = child.appendCustomEntry(entry.customType, entry.data);
-        }
+        if (!isPlaneMarker(entry)) childId = child.appendCustomEntry(entry.customType, entry.data);
         break;
-      default:
-        break; // label / session_info / branch_summary: the parent's facts, not the thread's history
+      case "label":
+      case "session_info":
+      case "branch_summary":
+      case "usage":
+        break; // the parent's facts, not the thread's history
+      default: {
+        // Unreachable by type; a record written by a newer pi can still carry one, and refusing to start the thread
+        // over it would be worse than naming it.
+        const unhandled: never = entry;
+        log.warn(
+          `[fastagent] inheritance skipped a session entry of unknown type "${(unhandled as { type: string }).type}"`,
+        );
+      }
     }
     if (childId === undefined) unanchored.push(entry.id);
     else record(entry.id, childId);
