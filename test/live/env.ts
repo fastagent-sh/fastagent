@@ -130,6 +130,38 @@ export const run = (file: string, args: string[], cwd?: string) =>
 /** The product entry every deploy probe drives, spawned as `process.execPath [CLI, …]`. */
 export const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
 
+/**
+ * `deploy agentcore --run` from `workspace`, the way every AgentCore probe drives it. On failure the error
+ * carries CloudFormation's own per-resource reasons, read HERE because the probe's teardown deletes the stack
+ * next — and with it the only place a nightly could have read why. The driver's own message names the
+ * command to run; an unattended run has nobody to run it before the stack is gone.
+ */
+export async function deployAgentcore(workspace: string, stack: string): Promise<void> {
+  try {
+    await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
+  } catch (error) {
+    const e = error as { stderr?: string; stdout?: string };
+    const events = await aws([
+      "cloudformation",
+      "describe-stack-events",
+      "--stack-name",
+      stack,
+      "--query",
+      "StackEvents[?contains(ResourceStatus, 'FAILED')].[LogicalResourceId, ResourceStatus, ResourceStatusReason]",
+      "--output",
+      "text",
+    ]);
+    const reasons =
+      events.code === 0
+        ? events.stdout.trim() || "(no FAILED events — the failure was before CloudFormation)"
+        : `(could not read the stack events: ${events.stderr.trim().slice(0, 300)})`;
+    throw new Error(
+      `deploy agentcore --run failed for ${stack}:\n${(e.stderr || e.stdout || "").slice(-4000)}\n` +
+        `CloudFormation's FAILED events:\n${reasons.slice(0, 4000)}`,
+    );
+  }
+}
+
 /** One `aws` invocation, returning the exit code instead of throwing on it. The AgentCore probes both
  *  need that: several assertions are ABOUT the failure (a name that does not exist must answer "not
  *  found", never "access denied"), and teardown must attempt every deletion even after one fails. */

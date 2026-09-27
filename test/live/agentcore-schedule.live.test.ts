@@ -54,7 +54,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { parseFireLine } from "../fire-line.ts";
 import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { CLI, aws, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv, run } from "./env.ts";
+import { aws, deployAgentcore, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 
@@ -176,12 +176,7 @@ async function waitForFire(
 describe("agentcore routines: EventBridge holds the clock and names each fire", () => {
   it("delivers a fire the container accepts, and runs the occurrence the clock named", async () => {
     const deployedAt = Date.now();
-    try {
-      await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
-    } catch (error) {
-      const e = error as { stderr?: string; stdout?: string };
-      throw new Error(`deploy agentcore --run failed for ${STACK}:\n${(e.stderr || e.stdout || "").slice(-4000)}`);
-    }
+    await deployAgentcore(workspace, STACK);
 
     const outputs = await aws([
       "cloudformation",

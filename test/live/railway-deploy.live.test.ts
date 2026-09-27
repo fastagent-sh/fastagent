@@ -83,7 +83,16 @@ afterAll(async () => {
     // workspace the deploy linked. What leaks if this is skipped is a service holding the model
     // credential and serving `/invoke` unauthenticated — same stake as the project delete it replaces,
     // one level down.
-    if (serviceCreated) await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], workspace);
+    if (serviceCreated) {
+      // Deleting a service KEEPS its volume, so read the volume's id first and remove it after: otherwise every
+      // run leaves a 50 GB volume billing in the standing project.
+      const listed = await run("railway", ["volume", "list", "--json"], workspace);
+      const ours = (JSON.parse(listed.stdout) as { volumes: { id: string; serviceName: string | null }[] }).volumes
+        .filter((volume) => volume.serviceName === SERVICE)
+        .map((volume) => volume.id);
+      await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], workspace);
+      for (const id of ours) await run("railway", ["volume", "delete", "--volume", id, "--yes"], workspace);
+    }
   } catch (error) {
     errors.push(error);
   }
@@ -91,6 +100,21 @@ afterAll(async () => {
   if (errors.length > 0)
     throw new AggregateError(errors, `teardown failed — check for service ${SERVICE} in ${RAILWAY_PROBE_PROJECT}`);
 }, 300_000);
+
+/** The service's latest deployment log, as text — never a throw: this is read only to explain a failure. */
+async function deploymentLog(service: string, cwd: string): Promise<string> {
+  try {
+    const { stdout, stderr } = await run(
+      "railway",
+      ["logs", "--deployment", "--lines", "200", "--service", service],
+      cwd,
+    );
+    return (stdout || stderr).slice(-8000) || "(empty)";
+  } catch (error) {
+    const e = error as { stderr?: string; message?: string };
+    return `(could not read the deployment log: ${(e.stderr || e.message || "").slice(0, 300)})`;
+  }
+}
 
 describe("deploy railway --run: a real project, provisioned and destroyed", () => {
   it("provisions, mints a domain, and serves a turn on it", async () => {
@@ -112,7 +136,11 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
     const url = output.match(/https:\/\/[a-z0-9-]+\.up\.railway\.app/i)?.[0];
     expect(url, `no minted domain in the deploy output:\n${output.slice(-1500)}`).toBeTruthy();
 
-    expect(await waitForHealth(`${url}/health`, 180_000, 3_000), `${url}/health never came up`).toBe(true);
+    // WHY it never came up is in the deployment's own log, and teardown deletes the service — and the log with
+    // it — right after this assertion. Read it first, so an unattended run reports the cause, not the symptom.
+    const healthy = await waitForHealth(`${url}/health`, 180_000, 3_000);
+    const why = healthy ? "" : await deploymentLog(SERVICE, workspace);
+    expect(healthy, `${url}/health never came up. The deployment's log (last 200 lines):\n${why}`).toBe(true);
 
     const session = "live-railway";
     expectCompleted(

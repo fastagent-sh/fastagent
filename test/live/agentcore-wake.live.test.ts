@@ -51,14 +51,13 @@ import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import { MIN_WAKE_MS } from "../../src/schedule/wakeups.ts";
 import {
-  CLI,
   aws,
+  deployAgentcore,
   destroyAgentcoreDeployment,
   invokeAgentcore,
   installSpec,
   requireAwsAccount,
   requireEnv,
-  run,
 } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -144,12 +143,7 @@ async function getAlarm(name: string): Promise<{ ScheduleExpression?: string; Ac
 
 describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge one-shot", () => {
   it("the container registers an alarm with the forwarder, and it fires", async () => {
-    try {
-      await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
-    } catch (error) {
-      const e = error as { stderr?: string; stdout?: string };
-      throw new Error(`deploy agentcore --run failed for ${STACK}:\n${(e.stderr || e.stdout || "").slice(-4000)}`);
-    }
+    await deployAgentcore(workspace, STACK);
 
     const outputs = await aws([
       "cloudformation",
