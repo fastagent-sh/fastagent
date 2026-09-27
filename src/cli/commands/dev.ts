@@ -5,7 +5,7 @@
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
-import { mountAgentService } from "../../service.ts";
+import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import type { ResolvedPlacement } from "../../paths.ts";
 import { failStartup } from "../fail.ts";
@@ -63,7 +63,7 @@ async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promis
   const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);
   serveService(
     service,
-    { port: portFlag ?? a.config.http?.port ?? 8787, host },
+    { port: portFlag ?? a.config.http?.port ?? DEFAULT_HTTP_PORT, host },
     { tunnel, agentDir: a.agentDir, stateRoot: a.stateRoot },
   );
 }

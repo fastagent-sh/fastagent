@@ -3,7 +3,12 @@ import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import type { Agent } from "../agent.ts";
 import type { ChannelHandler } from "../channel.ts";
-import type { AgentService, MountableAgent, MountAgentServiceOptions } from "../service.ts";
+import {
+  type AgentService,
+  describeAnonymousSurface,
+  type MountableAgent,
+  type MountAgentServiceOptions,
+} from "../service.ts";
 import { serveNode } from "../channels/serve.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -34,7 +39,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
  * exactly the job it was added for.
  */
 export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
-  return run.invoke === false ? { ...opened, serveInvoke: false, serveRun: false } : opened;
+  return run.invoke === false ? { ...opened, http: { ...opened.http, invoke: false, run: false } } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -132,13 +137,11 @@ export function announceControl(
   if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
   // What an unauthenticated caller of this port can do, worst first. From `unverifiedRoutes`, so a channel that serves
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
-  const exposed = [
-    ...(service.unverifiedRoutes.includes("POST /invoke") ? ["POST /invoke (run a turn with this agent's tools)"] : []),
-    ...(service.unverifiedRoutes.includes("POST /run")
-      ? ["POST /run (run any routine this agent declares; GET /routines lists them)"]
-      : []),
-    ...(controlPrefix ? [`${controlPrefix}/* (read, steer, delete any session)`] : []),
-  ];
+  const exposed = describeAnonymousSurface({
+    invoke: service.unverifiedRoutes.includes("POST /invoke"),
+    run: service.unverifiedRoutes.includes("POST /run"),
+    ...(controlPrefix ? { controlPrefix } : {}),
+  });
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
   const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
   if (corsOrigins === undefined || corsOrigins.includes("*")) {

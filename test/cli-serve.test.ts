@@ -19,7 +19,7 @@ describe("serving surface", () => {
 
     // The ONE posture that opts out: AgentCore serves the Runtime's `/invocations` contract instead.
     const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
-      serveInvoke: false,
+      http: { invoke: false },
     });
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
   });
@@ -40,19 +40,18 @@ describe("serving surface", () => {
     // a catalogue of nothing, and the names were already public (the 404 lists them).
     expect(Object.keys(withRun.unverified)).toContain("GET /routines");
 
-    // It FOLLOWS `serveInvoke`: `http.invoke: false` means "the channels' signature checks are the only
+    // It FOLLOWS `http.invoke`: `http.invoke: false` means "the channels' signature checks are the only
     // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
     const invokeOff = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
       routines,
-      serveInvoke: false,
+      http: { invoke: false },
     });
     expect(Object.keys(invokeOff.unverified)).toEqual(["GET /health"]);
     // …with one explicit exception, which is the combination this route exists for: no `/invoke`, but
     // a scheduler of yours calling routines by name.
     const clockOnly = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
       routines,
-      serveInvoke: false,
-      serveRun: true,
+      http: { invoke: false, run: true },
     });
     expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "GET /routines", "POST /run"]);
 
@@ -108,7 +107,7 @@ describe("serving surface", () => {
     // …but ONLY where this serve actually answers there: AgentCore serves the Runtime's `/invocations`
     // contract instead, so the same channel is legal on that posture and the refusal would be a lie.
     const onAgentcore = await routesFor(taken, {} as Agent, join(taken, ".state"), undefined, {
-      serveInvoke: false,
+      http: { invoke: false },
     });
     expect(await (await onAgentcore.selfVerifying["POST /invoke"]!(new Request("http://x/invoke"))).text()).toBe(
       "mine",
@@ -236,21 +235,25 @@ describe("cli: the assembled serving surface", () => {
     // flag exists for is `dev --tunnel`: the standard way to register a chat channel's webhook, which
     // publishes the port at a public quick-tunnel URL — and would publish an anonymous, fully-tooled
     // `POST /invoke` alongside it.
-    const opened = { serveInvoke: undefined, agentDir: "/x" } as unknown as MountableAgent;
+    const opened = { agentDir: "/x" } as unknown as MountableAgent;
     expect(withRunOverrides(opened, {})).toBe(opened); // no flag, nothing changed
-    expect(withRunOverrides(opened, { invoke: false }).serveInvoke).toBe(false);
+    expect(withRunOverrides(opened, { invoke: false }).http?.invoke).toBe(false);
     // Only `false` overrides: an absent flag must not turn into "serve it", which would beat a
     // definition that said `http.invoke: false`.
-    const configuredOff = { ...opened, serveInvoke: false } as MountableAgent;
-    expect(withRunOverrides(configuredOff, {}).serveInvoke).toBe(false);
-    expect(withRunOverrides(configuredOff, { invoke: true }).serveInvoke).toBe(false);
+    const configuredOff = { ...opened, http: { invoke: false } } as MountableAgent;
+    expect(withRunOverrides(configuredOff, {}).http?.invoke).toBe(false);
+    expect(withRunOverrides(configuredOff, { invoke: true }).http?.invoke).toBe(false);
 
     // It takes `POST /run` with it, over a definition that asked for it. Both routes start a turn
     // for an anonymous caller, and `dev --tunnel --no-invoke` leaving the other one on the tunnel URL
-    // would be the flag failing at the job it exists for.
-    const triggerOn = { ...opened, serveRun: true } as MountableAgent;
-    expect(withRunOverrides(triggerOn, { invoke: false }).serveRun).toBe(false);
-    expect(withRunOverrides(triggerOn, {}).serveRun).toBe(true); // no flag, the definition stands
+    // would be the flag failing at the job it exists for. The rest of `http` stands.
+    const runOn = { ...opened, http: { run: true, cors: ["https://app.example.com"] } } as MountableAgent;
+    expect(withRunOverrides(runOn, { invoke: false }).http).toEqual({
+      run: false,
+      invoke: false,
+      cors: ["https://app.example.com"],
+    });
+    expect(withRunOverrides(runOn, {}).http?.run).toBe(true); // no flag, the definition stands
   });
 
   it("the cross-origin grant is said at EVERY boot, loopback included", async () => {
@@ -335,7 +338,7 @@ describe("cli: the assembled serving surface", () => {
       // With the control plane still published, the warning stands — naming only that.
       announceControl({ controlPrefix: "/control", unverifiedRoutes: [] }, { tunnel: true });
       const controlOnly = reachLines().join(" ");
-      expect(controlOnly).toContain("/control/* (read, steer, delete any session) answers");
+      expect(controlOnly).toContain("/control/* (read, steer or delete any session) answers");
       expect(controlOnly).not.toContain("POST /invoke");
     } finally {
       warn.mockRestore();
