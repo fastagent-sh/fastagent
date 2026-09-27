@@ -5,18 +5,31 @@ import {
   isLinked,
   linkedName,
   parseDomainUrl,
-  parseHasVolume,
+  volumeOn,
 } from "../src/deploy/railway/run.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
-/** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */
+/** `railway volume list --json` as the CLI prints it: the whole project's volumes. */
+const volumes = (...vs: { serviceName: string | null; mountPath?: string; status?: string }[]) =>
+  JSON.stringify({ volumes: vs.map((v) => ({ mountPath: "/data", status: "Ready", ...v })) });
+
+/**
+ * A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). A
+ * `volume list` the script does not answer behaves like the project's: nothing on `bot` until `volume add`, then
+ * the new volume listed on it.
+ */
 function fakeRailway(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
   const calls: { args: string[]; input?: string }[] = [];
+  let added = false;
   const railway: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
+    if (args[0] === "volume" && args[1] === "add" && (r.code ?? 0) === 0) added = true;
+    if (args[0] === "volume" && args[1] === "list" && r.stdout === undefined) {
+      return { code: r.code ?? 0, stdout: added ? volumes({ serviceName: "bot" }) : volumes() };
+    }
     return { code: r.code ?? 0, stdout: r.stdout ?? "" };
   };
   return { railway, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
@@ -46,7 +59,15 @@ const run = (
   railway: CliRunner,
   tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
   healthy: () => Promise<boolean> = async () => true,
-) => deployRailwayRun(p, railway, () => {}, { telegram: tg }, healthy);
+) =>
+  deployRailwayRun(
+    p,
+    railway,
+    () => {},
+    { telegram: tg },
+    healthy,
+    async () => {},
+  );
 
 describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
   it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
@@ -77,6 +98,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",
       "volume add --mount-path /data",
+      "volume list --json", // attached to `bot` and Ready before the deploy that needs it
       "up --ci --service bot",
       "domain --json --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
     ]);
@@ -172,7 +194,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
   it("--into-linked: provisions INTO the linked project (skips init/add), reuses an existing volume", async () => {
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: LINKED }; // linked
-      if (a[0] === "volume" && a[1] === "list") return { stdout: `[{"mountPath":"/data"}]` }; // volume present
+      if (a[0] === "volume" && a[1] === "list") return { stdout: volumes({ serviceName: "bot" }) }; // volume present
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
@@ -188,7 +210,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
   it("--into-linked with a MISSING volume heals it (check-then-act) — no deploy without persistence", async () => {
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: LINKED };
-      if (a[0] === "volume" && a[1] === "list") return { stdout: "[]" }; // NO volume
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
@@ -196,6 +217,59 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(out.ok).toBe(true);
     expect(cmds()).not.toContain("init --name bot");
     expect(cmds()).toContain("volume add --mount-path /data"); // heals the missing volume
+  });
+
+  it("--into-linked beside ANOTHER service's volume (or a leftover one) still gives this service its own", async () => {
+    let added = false;
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: LINKED };
+      if (a[0] === "volume" && a[1] === "add") added = true;
+      if (a[0] === "volume" && a[1] === "list") {
+        const others = [{ serviceName: "worker" }, { serviceName: null }];
+        return { stdout: volumes(...others, ...(added ? [{ serviceName: "bot" }] : [])) };
+      }
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const out = await run(plan({ intoLinked: true }), railway);
+    expect(out.ok).toBe(true);
+    expect(cmds()).toContain("volume add --mount-path /data");
+  });
+
+  it("deploys only once the new volume is attached: Railway's `volume add` returns before it is", async () => {
+    // A deployment started in that window runs with NO volume, and `start` then refuses to boot.
+    let listed = 0;
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "volume" && a[1] === "list") {
+        listed++;
+        // 1: before the add. 2: not listed yet. 3: listed, still creating. 4: Ready.
+        if (listed <= 2) return { stdout: volumes() };
+        return { stdout: volumes({ serviceName: "bot", status: listed === 3 ? "Creating" : "Ready" }) };
+      }
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const out = await run(plan(), railway);
+    expect(out.ok).toBe(true);
+    const order = cmds();
+    expect(order.filter((c) => c === "volume list --json")).toHaveLength(4);
+    expect(order.lastIndexOf("volume list --json")).toBeLessThan(order.indexOf("up --ci --service bot"));
+  });
+
+  it("gate: a volume that never attaches stops the run before `up`, naming the recovery", async () => {
+    const { railway, cmds } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "volume" && a[1] === "list") return { stdout: volumes() }; // never on `bot`
+      return {};
+    });
+    const out = await run(plan(), railway);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.gate).toContain("not attached to service bot");
+      expect(out.gate).toContain("--into-linked");
+    }
+    expect(cmds()).not.toContain("up --ci --service bot");
   });
 
   it("gate (SAFETY): a linked dir WITHOUT --into-linked is refused before any side effect — names the project", async () => {
@@ -333,10 +407,12 @@ describe("deploy/railway/run: pure parsers", () => {
     expect(parseDomainUrl("not json")).toBeUndefined();
   });
 
-  it("parseHasVolume: true iff the mount path appears in the volume list JSON (shape-agnostic)", () => {
-    expect(parseHasVolume(`[{"mountPath":"/data"}]`, "/data")).toBe(true);
-    expect(parseHasVolume(`[{"mountPath":"/other"}]`, "/data")).toBe(false);
-    expect(parseHasVolume("[]", "/data")).toBe(false); // no volume → (re)create it
-    expect(parseHasVolume("", "/data")).toBe(false); // failed/empty list → treat as absent
+  it("volumeOn: the volume at the mount path ON this service, never another service's or a leftover", () => {
+    expect(volumeOn(volumes({ serviceName: "bot" }), "bot", "/data")).toBe("Ready");
+    expect(volumeOn(volumes({ serviceName: "bot", status: "Creating" }), "bot", "/data")).toBe("Creating");
+    // The list is the PROJECT's: a sibling service's volume and one a deleted service left behind share the path.
+    expect(volumeOn(volumes({ serviceName: "worker" }, { serviceName: null }), "bot", "/data")).toBeUndefined();
+    expect(volumeOn(volumes({ serviceName: "bot", mountPath: "/other" }), "bot", "/data")).toBeUndefined();
+    expect(volumeOn("", "bot", "/data")).toBeUndefined(); // failed/empty list → treat as absent
   });
 });

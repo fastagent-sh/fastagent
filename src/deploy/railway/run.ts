@@ -79,10 +79,34 @@ export function parseDomainUrl(stdout: string): string | undefined {
   return undefined;
 }
 
-/** Whether `railway volume list --json` shows a volume at `mountPath` — shape-agnostic, like {@link parseDomainUrl}. */
-export function parseHasVolume(stdout: string, mountPath: string): boolean {
-  return jsonStrings(stdout).includes(mountPath);
+/**
+ * The status of the volume `railway volume list --json` shows mounted at `mountPath` ON `service`, or undefined when
+ * that service has none there. The list is the whole PROJECT's: another service's volume, or one a deleted service
+ * left behind (`serviceName: null` — deleting a service keeps its volume), sits at the same path and is not this
+ * one. Read from any object carrying `mountPath` and `serviceName`, so a wrapper key moving does not matter.
+ */
+export function volumeOn(stdout: string, service: string, mountPath: string): string | undefined {
+  const walk = (v: unknown): string | undefined => {
+    if (Array.isArray(v)) return v.map(walk).find((status) => status !== undefined);
+    if (!v || typeof v !== "object") return undefined;
+    const o = v as Record<string, unknown>;
+    if (o.mountPath === mountPath && o.serviceName === service) return typeof o.status === "string" ? o.status : "";
+    return walk(Object.values(o));
+  };
+  try {
+    return walk(JSON.parse(stdout));
+  } catch {
+    return undefined;
+  }
 }
+
+/**
+ * How long `--run` waits for a new volume to reach its service before deploying. Railway's `volume add` returns
+ * before the volume is attached, and a deployment started in that window runs WITHOUT it — no `/data` at all —
+ * while a later one gets it (measured 2026-09-27: listed on the service as `Ready` 5s after the add).
+ */
+const VOLUME_ATTACH_TIMEOUT_MS = 60_000;
+const VOLUME_POLL_MS = 2_000;
 
 export async function deployRailwayRun(
   plan: RailwayRunPlan,
@@ -90,6 +114,7 @@ export async function deployRailwayRun(
   log: (msg: string) => void,
   registrars: Registrars,
   healthProbe?: PublicHealthProbe,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service (`init
@@ -168,13 +193,29 @@ export async function deployRailwayRun(
   }
 
   // 3c.
-  const vols = await railway(["volume", "list", "--json"], { capture: true });
-  if (parseHasVolume(vols.stdout, plan.mountPath)) {
-    log(`volume at ${plan.mountPath} exists — skipping`);
+  const volumeStatus = async () =>
+    volumeOn((await railway(["volume", "list", "--json"], { capture: true })).stdout, plan.name, plan.mountPath);
+  if ((await volumeStatus()) !== undefined) {
+    log(`volume at ${plan.mountPath} exists on ${plan.name} — skipping`);
   } else {
     log(`creating volume at ${plan.mountPath}…`);
     if ((await railway(["volume", "add", "--mount-path", plan.mountPath])).code !== 0) {
       return gate("`railway volume add` failed — see the railway output above");
+    }
+    // Deploying before the volume is attached boots a container with no volume, which `start` refuses (it must
+    // never seed a workspace onto a disk that vanishes on restart).
+    let status: string | undefined;
+    for (let waited = 0; ; waited += VOLUME_POLL_MS) {
+      status = await volumeStatus();
+      if (status === "Ready" || waited >= VOLUME_ATTACH_TIMEOUT_MS) break;
+      await sleep(VOLUME_POLL_MS);
+    }
+    if (status !== "Ready") {
+      return gate(
+        `the volume at ${plan.mountPath} is not attached to service ${plan.name} after ` +
+          `${VOLUME_ATTACH_TIMEOUT_MS / 1000}s (${status === undefined ? "not listed on it" : `status ${status}`}) — ` +
+          "check `railway volume list`, then re-run with --into-linked once it shows Ready",
+      );
     }
   }
 
