@@ -13,9 +13,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
-import { type FastagentAuthOptions, GLOBAL_AUTH_PATH } from "./auth.ts";
-import { isAgentcoreRuntime, isDeployedWorkspace, resolveSecretsDir } from "../../paths.ts";
+import { type FastagentConfig, resolveAuthFallback, resolveAuthPath, resolveModel } from "./config.ts";
+import type { FastagentAuthOptions } from "./auth.ts";
+import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
@@ -459,12 +459,10 @@ export async function assemblePiFromDefinition(
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
-  // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener passes an explicit
-  // authPath, so this only affects direct L2 callers).
-  // A path the CALLER named is an instruction; the default location is a preference, so only that one layers over
-  // the user-global store (resolveAuthFallback says the same thing for the CLI).
-  const authPath = options.authPath ?? defaultAuthPath(resolveSecretsDir(dir));
-  const fallbackAuthPath = options.fallbackAuthPath ?? (options.authPath === undefined ? GLOBAL_AUTH_PATH : undefined);
+  // Without a named path, the same layers the opener resolves for this dir (config.ts owns the rule). A named path is
+  // an instruction, so it layers over nothing but the fallback the caller passed with it (the opener's own).
+  const authPath = options.authPath ?? resolveAuthPath(dir);
+  const fallbackAuthPath = options.authPath === undefined ? resolveAuthFallback() : options.fallbackAuthPath;
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
