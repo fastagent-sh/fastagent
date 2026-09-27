@@ -2,20 +2,12 @@
  * The host-NEUTRAL deploy pre-flight: everything `fastagent deploy <host>` computes and checks BEFORE the target
  * branch (Docker / Fly / Railway).
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
-import ignore from "ignore";
+import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
-import {
-  AGENT_MODELS_FILE,
-  type ResolvedPlacement,
-  resolveSecretsDir,
-  resolveStateRoot,
-  exists,
-  readTextIfExists,
-} from "../paths.ts";
+import { AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
@@ -31,7 +23,8 @@ import {
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
-import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
+import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface, shouldServeRun } from "../service.ts";
@@ -83,27 +76,24 @@ interface DeployFacts {
 export type DeployPreflight = { ok: false; gate: string } | ({ ok: true } & DeployFacts);
 
 /**
- * "Would docker's packer drop this path?" — built from a `.dockerignore`'s text via the `ignore` matcher (the same
- * library the workspace ignore files use), so `!` negation and last-match-wins are the library's problem, not ours.
+ * Where a check says what it found. An ISSUE is what would crash-loop the deployed box: under `--run` the first one
+ * stops the pre-flight as its gate, generate-only prints it as a warning and goes on.
  */
-function dockerignoreMatcher(text: string): (path: string) => boolean {
-  const anchored = text
-    .split("\n")
-    .map((raw) => {
-      const line = raw.trim();
-      if (line === "" || line.startsWith("#")) return line;
-      const negated = line.startsWith("!");
-      const pattern = negated ? line.slice(1) : line;
-      if (pattern.startsWith("/") || pattern.startsWith("**/")) return line;
-      return `${negated ? "!" : ""}/${pattern}`;
-    })
-    .join("\n");
-  const matcher = ignore({ ignorecase: false }).add(anchored);
-  return (path) => matcher.ignores(path);
+export interface DeployReport {
+  note(text: string): void;
+  warn(text: string): void;
+  issue(text: string): void;
 }
 
-/** Run the host-neutral pre-flight. */
-export async function preflightDeploy(input: {
+/** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
+class DeployGate {
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+
+interface PreflightInput {
   placement: ResolvedPlacement;
   config: FastagentConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
@@ -119,11 +109,31 @@ export async function preflightDeploy(input: {
    * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
    */
   publicUrl?: boolean;
-}): Promise<DeployPreflight> {
+}
+
+/** Run the host-neutral pre-flight. */
+export async function preflightDeploy(input: PreflightInput): Promise<DeployPreflight> {
+  const messages: DeployMessage[] = [];
+  const report: DeployReport = {
+    note: (text) => void messages.push({ level: "note", text }),
+    warn: (text) => void messages.push({ level: "warn", text }),
+    issue: (text) => {
+      if (input.run) throw new DeployGate(text);
+      messages.push({ level: "warn", text });
+    },
+  };
+  try {
+    return { ok: true, messages, ...(await gatherFacts(input, report)) };
+  } catch (error) {
+    if (error instanceof DeployGate) return { ok: false, gate: error.text };
+    throw error;
+  }
+}
+
+async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
   const {
     placement: { agentDir, workspace },
     config,
-    run,
     force,
     externalClock,
     publicUrl = true,
@@ -131,16 +141,13 @@ export async function preflightDeploy(input: {
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
-    return {
-      ok: false,
-      gate:
-        `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
+    throw new DeployGate(
+      `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
         `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
         `makes it an agent, never its name)`,
-    };
+    );
   }
   const agentPrefix = `${basename(agentDir)}/`;
-  const messages: DeployMessage[] = [];
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
@@ -150,10 +157,9 @@ export async function preflightDeploy(input: {
   if (model.invalid !== undefined) {
     // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
     // there is no artifact to produce either. Same class as the agent-directory-name gate above.
-    return {
-      ok: false,
-      gate: `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
-    };
+    throw new DeployGate(
+      `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
+    );
   }
   if (!model.spec) {
     const issue =
@@ -167,10 +173,9 @@ export async function preflightDeploy(input: {
         ? `. Note that a FASTAGENT_MODEL in the environment running deploy is not one of those sources — it ` +
           `belongs to this machine, not to the deployment`
         : ``);
-    if (run) return { ok: false, gate: issue };
-    messages.push({ level: "warn", text: issue });
+    report.issue(issue);
   } else {
-    messages.push({ level: "note", text: `model ${model.spec} (source: ${model.source})` });
+    report.note(`model ${model.spec} (source: ${model.source})`);
   }
   const modelSpec = model.spec;
 
@@ -190,13 +195,11 @@ export async function preflightDeploy(input: {
     ...(config.sessionControl === true ? { controlPrefix: CONTROL_PREFIX } : {}),
   });
   if (publicUrl && unauthenticated.length > 0) {
-    messages.push({
-      level: "warn",
-      text:
-        `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +
+    report.warn(
+      `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +
         `fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private network in front of that ` +
         `URL (docs/design/session-control.md §14)`,
-    });
+    );
   }
 
   // Known channel kinds only — a custom channel's webhook (and, unless it declared them, its secrets) are unknown to
@@ -211,13 +214,11 @@ export async function preflightDeploy(input: {
   for (const { name, ingress } of channels) {
     if ((CHANNEL_KINDS as string[]).includes(name)) continue;
     const secretsPart = `its variables travel from ${valueFile} like every other`;
-    messages.push({
-      level: "note",
-      text:
-        ingress === "long-connection"
-          ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
-          : `route channel "${name}" is custom — ${secretsPart}; configure its webhook yourself`,
-    });
+    report.note(
+      ingress === "long-connection"
+        ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
+        : `route channel "${name}" is custom — ${secretsPart}; configure its webhook yourself`,
+    );
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
@@ -230,49 +231,21 @@ export async function preflightDeploy(input: {
   // zero because the file did not parse would hide that behind silence.
   const hasCron = loadedRoutines.routines.some((r) => r.cron !== undefined) || loadedRoutines.failures.length > 0;
   if (longConnectionChannels.length > 0 && !externalClock) {
-    messages.push({
-      level: "note",
-      text:
-        `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
+    report.note(
+      `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
         `(an outbound connection cannot wake a scaled-to-zero service).`,
-    });
+    );
   }
   // A cron has an external substitute, and an operator who is paying for an idle box should be told so.
   if (hasCron && !externalClock) {
-    messages.push({
-      level: "note",
-      text:
-        `routines/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
+    report.note(
+      `routines/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
         `instant). To scale to zero instead, keep the time in a scheduler you own and let it call ` +
         `\`POST /run\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-run).`,
-    });
+    );
   }
 
-  // The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
-  // absent wherever the agent is deployed. Said in so many words here; the credential probe below already reads the
-  // deployed registry.
-  const machine = await machineModels(agentDir);
-  const provider = modelSpec ? providerOf(modelSpec) : undefined;
-  const fromMachine = provider !== undefined && machine?.inherited.includes(provider) === true;
-  if (fromMachine && provider !== undefined && machine) {
-    if (isBuiltinProvider(provider)) {
-      messages.push({
-        level: "warn",
-        text:
-          `model "${modelSpec}" takes its "${provider}" entry from ${machine.path}, the machine's models.json, which ` +
-          `does not ship — the deployed agent runs pi's built-in "${provider}" without it. Declare the entry in the ` +
-          `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
-      });
-    } else {
-      // No built-in to fall back on: the deployed agent cannot resolve the model at all.
-      const issue =
-        `model "${modelSpec}" exists only in ${machine.path}, the machine's models.json, which does not ship — the ` +
-        `deployed agent would fail with an unknown model. Declare "${provider}" in the agent's own ` +
-        `${AGENT_MODELS_FILE} to deploy it.`;
-      if (run) return { ok: false, gate: issue };
-      messages.push({ level: "warn", text: issue });
-    }
-  }
+  await checkMachineModels(agentDir, modelSpec, report);
 
   // Probe auth from the SAME project-level file the opener/login use, on the registry the DEPLOYED agent has: the
   // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
@@ -296,14 +269,12 @@ export async function preflightDeploy(input: {
   // Asked of EVERY provider, not just the selected model's: the file ships whole.
   const literalKeys = await literalKeyProviders(agentDir);
   if (literalKeys.length > 0) {
-    messages.push({
-      level: "warn",
-      text:
-        `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
+    report.warn(
+      `${AGENT_MODELS_FILE} carries a literal apiKey for ${literalKeys.map((id) => `"${id}"`).join(", ")} — that ` +
         `file ships inside the image, where anyone who can pull it reads the layer. If it is a credential, use ` +
         `"$YOUR_ENV_VAR" (deploy carries it like any provider key) or "!command" (it runs on the box and never ` +
         `travels); a placeholder for a keyless local server is fine as it is.`,
-    });
+    );
   }
 
   // Container facts (shared by every host) + the warnings that follow.
@@ -324,152 +295,39 @@ export async function preflightDeploy(input: {
     : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
   // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own answer and its
   // runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
-  messages.push({
-    level: "note",
-    text:
-      `the whole directory is baked as the agent's workspace (WYSIWYG — what you see is what ships, ` +
+  report.note(
+    `the whole directory is baked as the agent's workspace (WYSIWYG — what you see is what ships, ` +
       `git or not, clean or not); ${deps}. The image seeds the storage once; a later release replaces ` +
       `only ${agentPrefix} and leaves the rest of the workspace, state and credentials in place — for ` +
       `how long, see this host's storage note below`,
-  });
+  );
   // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not reproducible.
   if (hasPackageJson && !hasLockfile) {
     const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
-    messages.push({
-      level: "warn",
-      text: hasOtherLock
+    report.warn(
+      hasOtherLock
         ? `the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
-          `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
+            `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
         : `no ${lock} — the image build resolves deps at build time (not reproducible). ` +
-          `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
-    });
+            `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
+    );
   }
   // The code-path Dockerfile runs `${runner}`.
   if (hasPackageJson && !("@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
-    messages.push({
-      level: "warn",
-      text:
-        `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
+    report.warn(
+      `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
-    });
+    );
   }
-  // A KEPT workspace-root .dockerignore silently replaces the generated one's protections.
-  const inContext = (p: string): string | undefined => {
-    const rel = relative(workspace, p);
-    return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? undefined : rel.split(sep).join("/");
-  };
-  // The secrets DIR is the unit of RESPONSIBILITY, but never the unit of the leak QUESTION below.
-  const secretsRel = inContext(resolveSecretsDir(agentDir));
-  const authRel = inContext(authPath);
-  const authElsewhere = authRel !== undefined && (secretsRel === undefined || !authRel.startsWith(`${secretsRel}/`));
-  const secretPaths = [...(secretsRel ? [secretsRel] : []), ...(authElsewhere ? [authRel] : [])];
-  // ONE rule for every checked path: a file that is not there cannot be baked, so gating on it would be a refusal
-  // about a spelling rather than about what would ship (an agent that has never run `login` has no auth.json).
-  const present = async (rels: string[]): Promise<string[]> => {
-    const found: string[] = [];
-    for (const rel of rels) if (await exists(join(workspace, rel))) found.push(rel);
-    return found;
-  };
-  // State gets the same treatment (a custom in-tree FASTAGENT_STATE_DIR is invisible to the name-based `**/.state`),
-  // at warn level.
-  const stateRel = inContext(resolveStateRoot(agentDir));
-  // Existence gates the WARNING, never the generated exclude (same split as secretPaths vs leakCandidates).
-  const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel))) ? stateRel : undefined;
-  // The `.env` family at the two levels fastagent is RESPONSIBLE for: the agent dir and the workspace root.
-  const dotEnvFiles = async (relDir: string): Promise<string[]> => {
-    const names = await readdir(join(workspace, relDir || ".")).catch(() => [] as string[]);
-    // POSIX separators, like every other context-relative path here (`inContext`).
-    return names
-      .filter((n) => (n === ".env" || n.startsWith(".env.")) && n !== ".env.example")
-      .map((n) => join(relDir, n).split(sep).join("/"));
-  };
-  const envFiles = (await Promise.all([...new Set(["", agentPrefix])].map(dotEnvFiles))).flat();
-  // Everything ACTUALLY inside the secrets dir, minus the two tracked scaffolds the image ships on purpose (they
-  // carry no values; the generated ignore re-includes them by name).
-  const secretDirFiles = async (dirRel: string): Promise<string[]> => {
-    const entries = await readdir(join(workspace, dirRel), { withFileTypes: true }).catch(() => []);
-    const files: string[] = [];
-    for (const entry of entries) {
-      if (entry.name === ".gitignore" || entry.name === ".env.example") continue;
-      if (entry.isDirectory()) files.push(...(await secretDirFiles(`${dirRel}/${entry.name}`)));
-      else files.push(`${dirRel}/${entry.name}`);
-    }
-    return files;
-  };
-  const leakCandidates = [
-    ...(secretsRel ? await secretDirFiles(secretsRel) : []),
-    ...(await present(authElsewhere && authRel !== undefined ? [authRel] : [])),
-    ...envFiles,
-  ];
-  // Same existence rule: a node_modules that is not there cannot be uploaded.
-  const depDirs = await present([...new Set([`${agentPrefix}node_modules`, "node_modules"])]);
-  const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
-
-  // BOTH ignore files deploy emits get the same interrogation.
-  for (const rel of [".dockerignore", `${agentPrefix}Dockerfile.dockerignore`]) {
-    const kept = await readTextIfExists(join(workspace, rel));
-    if (kept === undefined) continue;
-    // One WE generated is regenerated by this very run under --force, so checking the stale content on disk would
-    // gate a deploy on a file about to be replaced.
-    const keptIsOurs = isGeneratedDockerignore(kept);
-    if (force && keptIsOurs) continue;
-    const remedy = (lines: string[]): string =>
-      keptIsOurs
-        ? `Re-run with --force to regenerate it.`
-        : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before deploying (the same lines the generated ${rel} writes).`;
-    const excluded = dockerignoreMatcher(kept);
-    // Asked as a DIRECTORY (trailing slash), which is what it is.
-    if (excluded(`${basename(agentDir)}/`)) {
-      const text =
-        `your ${rel} (kept) excludes \`${basename(agentDir)}\` — the build context would ship WITHOUT the ` +
-        `agent entirely (the deployed box has no persona/config and crash-loops). Remove that rule ` +
-        `before deploying.`;
-      if (run) return { ok: false, gate: text };
-      messages.push({ level: "warn", text });
-    }
-    // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore), so a bare
-    // `.secrets` line does not cover `fastagent/.secrets`.
-    const leaks = leakCandidates.filter((p) => !excluded(p));
-    if (leaks.length > 0) {
-      const text =
-        `your ${rel} (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
-        `context would BAKE SECRETS INTO THE IMAGE. ${remedy(leaks.map((p) => `/${p}`))}`;
-      if (run) return { ok: false, gate: text };
-      messages.push({ level: "warn", text });
-    }
-    if (stateShips && !excluded(`${stateShips}/sessions`)) {
-      messages.push({
-        level: "warn",
-        text: `your ${rel} (kept) does not exclude \`${stateRel}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateRel}`])}`,
-      });
-    }
-    // Both the agent's own node_modules and the workspace's.
-    const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));
-    if (unexcludedDeps.length > 0) {
-      messages.push({
-        level: "warn",
-        text:
-          `your ${rel} does not exclude ${unexcludedDeps.map((p) => `\`${p}\``).join(" or ")} — the ` +
-          `build machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
-          `freshly-installed ones. ${remedy(unexcludedDeps.map((p) => `/${p}`))}`,
-      });
-    }
-    if (excluded(".git/HEAD")) {
-      messages.push({
-        level: "note",
-        text:
-          `your ${rel} excludes .git — the baked copy ships WITHOUT history/remote, so the agent ` +
-          `cannot pull/commit/push it; it must \`git clone\` its repo in the workspace instead (or remove the .git line).`,
-      });
-    }
-  }
+  const paths = await buildContextPaths(workspace, agentDir, agentPrefix, authPath);
+  await checkKeptIgnoreFiles({ workspace, agentDir, agentPrefix, force, paths }, report);
 
   // Write-back mechanics are fastagent's (the policy is the persona's).
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),
     agentPrefix,
-    machineryPaths,
+    machineryPaths: paths.machineryPaths,
     hasPackageJson,
     runtime,
     bunVersion,
@@ -493,52 +351,16 @@ export async function preflightDeploy(input: {
     const issue =
       `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried ` +
       `to the host, so the deployed box would refuse to start`;
-    if (run) return { ok: false, gate: issue };
-    messages.push({ level: "warn", text: issue });
+    report.issue(issue);
   }
   const declaredSecrets: DeclaredSecret[] = [
     ...allSecrets(resolvedTools.toolSecrets),
     ...allSecrets(loadedRoutines.secrets),
     ...allSecrets(inspected.secrets),
   ];
-  // What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
-  // looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
-  // FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
-  // ONLY in the value file would be reported here and absent on the box.
-  // NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
-  // hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
-  // `--run --force` ship the crash-loop this gate exists to stop.
-  const dockerfileHome = join(agentDir, "Dockerfile");
-  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
-  if (dockerfileText !== undefined && !isGeneratedDockerfile(dockerfileText)) {
-    if (config.deploy?.apt?.length) {
-      messages.push({
-        level: "warn",
-        text:
-          `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-          `NOT applied; install those packages in your Dockerfile.`,
-      });
-    }
-    // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
-    // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
-    // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
-    // missing on the box.
-    // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
-    // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
-    // (covering it means joining lines first) — the remaining over-strict edge.
-    if (model.envValue !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
-      const issue =
-        `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
-        `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
-        `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`;
-      if (run) return { ok: false, gate: issue };
-      messages.push({ level: "warn", text: issue });
-    }
-  }
+  await checkKeptDockerfile(agentDir, config, model.envValue, valueFile, report);
 
   return {
-    ok: true,
-    messages,
     channels,
     hasCron,
     values,
@@ -551,6 +373,78 @@ export async function preflightDeploy(input: {
     declaredSecrets,
     secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
   };
+}
+
+/**
+ * The machine's models.json is this box's environment, not the artifact: whatever the model takes from it is
+ * absent wherever the agent is deployed. Said in so many words here; the credential probe already reads the deployed
+ * registry.
+ */
+async function checkMachineModels(
+  agentDir: string,
+  modelSpec: string | undefined,
+  report: DeployReport,
+): Promise<void> {
+  const machine = await machineModels(agentDir);
+  const provider = modelSpec ? providerOf(modelSpec) : undefined;
+  if (provider === undefined || !machine?.inherited.includes(provider)) return;
+  if (isBuiltinProvider(provider)) {
+    report.warn(
+      `model "${modelSpec}" takes its "${provider}" entry from ${machine.path}, the machine's models.json, which ` +
+        `does not ship — the deployed agent runs pi's built-in "${provider}" without it. Declare the entry in the ` +
+        `agent's own ${AGENT_MODELS_FILE} to deploy it.`,
+    );
+  } else {
+    // No built-in to fall back on: the deployed agent cannot resolve the model at all.
+    const issue =
+      `model "${modelSpec}" exists only in ${machine.path}, the machine's models.json, which does not ship — the ` +
+      `deployed agent would fail with an unknown model. Declare "${provider}" in the agent's own ` +
+      `${AGENT_MODELS_FILE} to deploy it.`;
+    report.issue(issue);
+  }
+}
+
+/**
+ * What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
+ * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
+ * FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
+ * ONLY in the value file would be reported here and absent on the box.
+ *
+ * NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
+ * hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
+ * `--run --force` ship the crash-loop this gate exists to stop.
+ */
+async function checkKeptDockerfile(
+  agentDir: string,
+  config: FastagentConfig,
+  /** The model the release manifest carries (set only when the value file named it). */
+  modelFromValueFile: string | undefined,
+  valueFile: string,
+  report: DeployReport,
+): Promise<void> {
+  const dockerfileHome = join(agentDir, "Dockerfile");
+  const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
+  if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
+  if (config.deploy?.apt?.length) {
+    report.warn(
+      `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
+        `NOT applied; install those packages in your Dockerfile.`,
+    );
+  }
+  // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
+  // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
+  // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
+  // missing on the box.
+  // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
+  // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
+  // (covering it means joining lines first) — the remaining over-strict edge.
+  if (modelFromValueFile !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
+    const issue =
+      `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
+      `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
+      `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`;
+    report.issue(issue);
+  }
 }
 
 /**
