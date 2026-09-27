@@ -94,7 +94,7 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
         type: "queue_changed",
         timestamp: at,
         runId,
-        data: { steering: event.steering.length, followUp: event.followUp.length },
+        data: { steering: [...event.steering], followUp: [...event.followUp] },
       };
     case "auto_retry_start":
     case "summarization_retry_scheduled":
