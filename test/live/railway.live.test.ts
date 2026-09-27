@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { isLinked, linkedName, parseHasVolume } from "../../src/deploy/railway/run.ts";
+import { isLinked, linkedName, volumeOn } from "../../src/deploy/railway/run.ts";
 import { RAILWAY_PROBE_PROJECT, requireEnv } from "./env.ts";
 
 const run = promisify(execFile);
@@ -121,21 +121,29 @@ describe("railway CLI output still matches what the Railway driver reads", () =>
       RAILWAY_PROBE_PROJECT,
     );
 
-    // `parseHasVolume` is shape-agnostic (any JSON string equal to the mount path), so what it needs is
-    // for mount paths to keep appearing as strings at all. Asserted in both directions against the
-    // volumes this project really has.
+    // `volumeOn` reads each volume's `mountPath`, `serviceName` and `status` — the three fields that decide
+    // whether `--run` gives a service its own volume and waits for it. Asserted against the volumes this
+    // project really has.
     const volumes = await railway(["volume", "list", "--json"], dir);
     // The `volumes` key must EXIST. `?? []` would have folded "the field is gone" into "this project
     // has no volumes": the loop runs zero times, only the always-false negative assertion is left, and
     // the shape change this file exists to catch goes green.
-    const mounts = parseJson<{ volumes?: { mountPath?: string }[] }>(volumes.stdout, "volume list --json").volumes;
-    if (!Array.isArray(mounts))
+    const listed = parseJson<{ volumes?: { mountPath?: string; serviceName?: string | null; status?: string }[] }>(
+      volumes.stdout,
+      "volume list --json",
+    ).volumes;
+    if (!Array.isArray(listed))
       throw new Error(
         `\`railway volume list --json\` no longer carries a volumes array: ${volumes.stdout.slice(0, 300)}`,
       );
-    for (const { mountPath } of mounts) {
-      expect(parseHasVolume(volumes.stdout, mountPath as string), `mount ${mountPath} unreadable`).toBe(true);
+    for (const { mountPath, serviceName, status } of listed) {
+      expect(typeof status, `volume at ${mountPath} carries no status`).toBe("string");
+      // A deleted service's volume stays listed with `serviceName: null`; it belongs to no service.
+      if (typeof serviceName !== "string") continue;
+      expect(volumeOn(volumes.stdout, serviceName, mountPath as string), `volume on ${serviceName} unreadable`).toBe(
+        status,
+      );
     }
-    expect(parseHasVolume(volumes.stdout, "/definitely-not-a-mount-path")).toBe(false);
+    expect(volumeOn(volumes.stdout, "no-such-service", "/data")).toBeUndefined();
   });
 });
