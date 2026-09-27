@@ -83,7 +83,16 @@ afterAll(async () => {
     // workspace the deploy linked. What leaks if this is skipped is a service holding the model
     // credential and serving `/invoke` unauthenticated — same stake as the project delete it replaces,
     // one level down.
-    if (serviceCreated) await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], workspace);
+    if (serviceCreated) {
+      // Deleting a service KEEPS its volume, so read the volume's id first and remove it after: otherwise every
+      // run leaves a 50 GB volume billing in the standing project.
+      const listed = await run("railway", ["volume", "list", "--json"], workspace);
+      const ours = (JSON.parse(listed.stdout) as { volumes: { id: string; serviceName: string | null }[] }).volumes
+        .filter((volume) => volume.serviceName === SERVICE)
+        .map((volume) => volume.id);
+      await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], workspace);
+      for (const id of ours) await run("railway", ["volume", "delete", "--volume", id, "--yes"], workspace);
+    }
   } catch (error) {
     errors.push(error);
   }

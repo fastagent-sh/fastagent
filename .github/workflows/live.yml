@@ -306,6 +306,12 @@ jobs:
             | jq -r '.[] | select(.name | test("^fastagent-live-[0-9a-f]{8}$")) | .name' \
             | tee /dev/stderr \
             | xargs -r -n1 -I{} railway service delete --service {} --yes
+          # Deleting a service KEEPS its volume (listed with `serviceName: null`), so a probe's volume
+          # outlives its service unless it is removed by id. Only this probe's naming, only unattached.
+          railway volume list --json \
+            | jq -r '.volumes[] | select(.serviceName == null and (.name | test("^fastagent-live-[0-9a-f]{8}-volume$"))) | .id' \
+            | tee /dev/stderr \
+            | xargs -r -I{} railway volume delete --volume {} --yes
 
       # Same reasoning as the sweeps above, with AgentCore's twist: the bucket and the repository are
       # deliberately created OUTSIDE the stack, so `delete-stack` leaves both behind.
