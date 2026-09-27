@@ -35,15 +35,24 @@ export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): A
   return { runtime: "node", hasLockfile: existsSync(join(dir, "package-lock.json")) };
 }
 
-/** Parse `<dir>/package.json`, or `{}` when absent/malformed (a real build surfaces the actual error). */
+/**
+ * Parse `<dir>/package.json`, or `{}` when there is none (a markdown-only agent). A file that does not parse throws,
+ * naming itself: read as `{}` it became "does not list @fastagent-sh/fastagent" and an npm-based image, both wrong.
+ */
 export async function readPackageJson(dir: string): Promise<{
   packageManager?: unknown;
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
 }> {
+  const path = join(dir, "package.json");
+  const raw = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (raw === undefined) return {};
   try {
-    return JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
-  } catch {
-    return {};
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`);
   }
 }

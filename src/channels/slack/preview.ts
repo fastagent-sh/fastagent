@@ -103,16 +103,22 @@ async function settleClassic(
   /** The renderer's own edit — it spends the mutation slot the pacing depends on. */
   update: (ts: string, value: string) => Promise<void>,
 ): Promise<void> {
+  // Best-effort: the reply lands either way, but a preview left behind sits above it, so say so.
+  const dropPreview = (ts: string) =>
+    api
+      .deleteMessage(target.channelId, ts)
+      .catch((error) => log.warn(`[slack] could not delete the live preview ${ts}: ${String(error)}`));
   if (markdown.trim() === "") {
-    if (previewTs) await api.deleteMessage(target.channelId, previewTs).catch(() => {});
+    if (previewTs) await dropPreview(previewTs);
     return;
   }
   const [head, ...rest] = chunkSlackMarkdown(markdown);
   if (previewTs && head !== undefined) {
     try {
       await update(previewTs, head);
-    } catch {
-      await api.deleteMessage(target.channelId, previewTs).catch(() => {});
+    } catch (error) {
+      log.warn(`[slack] final edit of the live preview failed (${String(error)}); sending the reply as a new message`);
+      await dropPreview(previewTs);
       await api.sendMarkdown(target, markdown);
       return;
     }

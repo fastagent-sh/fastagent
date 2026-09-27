@@ -181,7 +181,7 @@ src/
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result
 │                             # MEANS — there / gone / could not find out — because eleven call sites each
 │                             # deciding that produced the same defect five review rounds running. Every AWS
-│                             # read in this directory goes through it
+│                             # read that asks "is it there, and could I tell" goes through it
 ├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
 │   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
 │   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)

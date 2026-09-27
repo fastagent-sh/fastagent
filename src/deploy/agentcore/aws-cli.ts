@@ -31,6 +31,8 @@
  * `cloudformation deploy`) keeps its streams on the terminal — capturing a multi-minute arm64 build to replay it
  * at the end is a regression, and it is why `run.ts` can say "see the output above" where `destroy.ts` cannot.
  * That is a stdio choice, not a second classifier: those calls ask "did this work", never "is it there".
+ * Nor does `aws configure get region`, whose nonzero exit means "not set" and whose only consumer is the next
+ * line's "no region configured" gate.
  *
  * What is deliberately NOT here: what to DO about each answer. Whether an unreadable read aborts the teardown
  * or degrades it is a per-resource policy (the stack's probe decides the report's honesty; a log-group listing
