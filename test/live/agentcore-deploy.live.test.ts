@@ -41,14 +41,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName } from "../../src/deploy/agentcore/plan.ts";
 import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
 import {
-  CLI,
   aws,
+  deployAgentcore,
   destroyAgentcoreDeployment,
   invokeAgentcore,
   installSpec,
   requireAwsAccount,
   requireEnv,
-  run,
 } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -100,12 +99,7 @@ afterAll(async () => {
 
 describe("deploy agentcore --run: a real stack, provisioned and destroyed", () => {
   it("converges the stack and completes a model turn", async () => {
-    try {
-      await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
-    } catch (error) {
-      const e = error as { stderr?: string; stdout?: string };
-      throw new Error(`deploy agentcore --run failed for ${STACK}:\n${(e.stderr || e.stdout || "").slice(-4000)}`);
-    }
+    await deployAgentcore(workspace, STACK);
 
     // The stack's own Outputs, read through the driver's parser: RuntimeArn is what every later call
     // addresses, and the driver gates when it is absent.
