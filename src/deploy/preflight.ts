@@ -25,6 +25,7 @@ import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
+import { CRON_CAN_BE_EXTERNAL, residencyFor } from "./residency.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface, shouldServeRun } from "../service.ts";
@@ -236,12 +237,17 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     );
   }
-  // A cron has an external substitute, and an operator who is paying for an idle box should be told so.
+  // A cron has an external substitute, and an operator who is paying for an idle box should be told so — unless a
+  // long connection pins the box anyway, which residency.ts decides.
   if (hasCron && !externalClock) {
+    const wayOut = residencyFor({ channels, hasCron })?.reason === CRON_CAN_BE_EXTERNAL;
     report.note(
       `routines/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
-        `instant). To scale to zero instead, keep the time in a scheduler you own and let it call ` +
-        `\`POST /run\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-run).`,
+        `instant).` +
+        (wayOut
+          ? ` To scale to zero instead, keep the time in a scheduler you own and let it call ` +
+            `\`POST /run\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-run).`
+          : ""),
     );
   }
 
