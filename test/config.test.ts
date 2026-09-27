@@ -84,6 +84,10 @@ describe("config: loadConfig validation", () => {
     };
     await expect(load(`export default { modle: "openai-codex/gpt-5.5" };`)).rejects.toThrow(/unknown key "modle"/);
     await expect(load(`export default { http: { porrt: 9999 } };`)).rejects.toThrow(/unknown key "http\.porrt"/);
+    // The message names what IS valid at that level, from the same list the check reads.
+    await expect(load(`export default { deploy: { agentcore: { idle: 60 } } };`)).rejects.toThrow(
+      'unknown key "deploy.agentcore.idle" (valid keys: idleTimeoutSeconds)',
+    );
     // Retired: placement is structural now, and a directory agent always gets the complete tool set.
     await expect(load(`export default { agentDir: "./agent" };`)).rejects.toThrow(/unknown key "agentDir"/);
     await expect(load(`export default { codingTools: false };`)).rejects.toThrow(/unknown key "codingTools"/);

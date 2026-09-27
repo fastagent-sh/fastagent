@@ -82,6 +82,15 @@ function validateStringList(value: unknown, key: string, shape: RegExp, desc: st
   }
 }
 
+/** Refuse a key `level` does not have, naming the keys it does (the ONE list both the check and the message read). */
+function refuseUnknownKeys(level: object, valid: readonly string[], prefix: string, path: string): void {
+  for (const key of Object.keys(level)) {
+    if (!valid.includes(key)) {
+      throw new Error(`${path}: unknown key "${prefix}${key}" (valid keys: ${valid.join(", ")})`);
+    }
+  }
+}
+
 /** Load `<dir>/fastagent.config.ts`. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const path = join(dir, AGENT_CONFIG_FILE);
@@ -107,20 +116,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw. This is NOT redundant with `defineConfig`'s types: Node strips types without checking them,
   // so `modle:` reaches here whatever the editor said, and silently degrading to defaults is the failure it would
   // otherwise cause.
-  for (const key of Object.keys(c)) {
-    if (
-      key !== "model" &&
-      key !== "thinkingLevel" &&
-      key !== "tools" &&
-      key !== "http" &&
-      key !== "deploy" &&
-      key !== "sessionControl"
-    ) {
-      throw new Error(
-        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, tools, http, deploy, sessionControl)`,
-      );
-    }
-  }
+  refuseUnknownKeys(c, ["model", "thinkingLevel", "tools", "http", "deploy", "sessionControl"], "", path);
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
   }
@@ -153,11 +149,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
     throw new Error(`${path}: "http" must be an object`);
   }
-  for (const key of Object.keys(c.http ?? {})) {
-    if (key !== "port" && key !== "cors" && key !== "invoke" && key !== "run") {
-      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port, cors, invoke, run)`);
-    }
-  }
+  refuseUnknownKeys(c.http ?? {}, ["port", "cors", "invoke", "run"], "http.", path);
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
     throw new Error(`${path}: "http.invoke" must be a boolean`);
   }
@@ -171,19 +163,11 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.deploy !== undefined && (typeof c.deploy !== "object" || c.deploy === null)) {
     throw new Error(`${path}: "deploy" must be an object`);
   }
-  for (const key of Object.keys(c.deploy ?? {})) {
-    if (key !== "apt" && key !== "agentcore") {
-      throw new Error(`${path}: unknown key "deploy.${key}" (valid keys: apt, agentcore)`);
-    }
-  }
+  refuseUnknownKeys(c.deploy ?? {}, ["apt", "agentcore"], "deploy.", path);
   if (c.deploy?.agentcore !== undefined && (typeof c.deploy.agentcore !== "object" || c.deploy.agentcore === null)) {
     throw new Error(`${path}: "deploy.agentcore" must be an object`);
   }
-  for (const key of Object.keys(c.deploy?.agentcore ?? {})) {
-    if (key !== "idleTimeoutSeconds") {
-      throw new Error(`${path}: unknown key "deploy.agentcore.${key}" (valid keys: idleTimeoutSeconds)`);
-    }
-  }
+  refuseUnknownKeys(c.deploy?.agentcore ?? {}, ["idleTimeoutSeconds"], "deploy.agentcore.", path);
   // AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is rejected by CloudFormation minutes into
   // `deploy agentcore --run`, after the image build.
   const idle = c.deploy?.agentcore?.idleTimeoutSeconds;
