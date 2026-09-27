@@ -8,8 +8,12 @@ import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
 import { exists } from "../paths.ts";
+import { detectRuntime, readPackageJson } from "../runtime.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
+
+/** The deployment's own bookkeeping on the storage: the lease, the release journal, the install marker. */
+const deploymentMeta = (root: string): string => join(root, ".deployment");
 
 export interface DeploymentRelease {
   version: 1;
@@ -84,7 +88,7 @@ interface PendingRelease {
 
 /** A completed staging tree is published before its journal; readers start only after recovery. */
 async function finishRelease(root: string, pending: PendingRelease): Promise<void> {
-  const meta = join(root, ".deployment"),
+  const meta = deploymentMeta(root),
     staged = join(meta, "staged"),
     previous = join(meta, "previous");
   const target = pending.initial ? join(root, "base") : join(root, "base", pending.release.agent);
@@ -108,7 +112,7 @@ export async function applyDeploymentRelease(
   root: string,
   release: DeploymentRelease,
 ): Promise<string> {
-  const meta = join(root, ".deployment"),
+  const meta = deploymentMeta(root),
     staged = join(meta, "staged"),
     pendingPath = join(meta, "pending.json");
   await mkdir(meta, { recursive: true });
@@ -205,7 +209,7 @@ export async function leaseDeployment(metadata: string, waitSeconds = 35): Promi
  */
 export async function prepareDeployment(source: string, root: string, release: DeploymentRelease): Promise<string> {
   await assertStorageMounted(root);
-  const meta = join(root, ".deployment");
+  const meta = deploymentMeta(root);
   await mkdir(meta, { recursive: true });
   const unlock = await leaseDeployment(meta);
   try {
@@ -213,5 +217,29 @@ export async function prepareDeployment(source: string, root: string, release: D
   } catch (error) {
     await unlock();
     throw error;
+  }
+}
+
+/**
+ * Install the deployed agent's dependencies into the storage when it has no installed CLI yet (a fresh volume), or
+ * when an earlier install died part-way — its `installing` marker is still there, so the next boot redoes it.
+ */
+export async function installAgentDependencies(root: string, agentDir: string): Promise<void> {
+  const installing = join(deploymentMeta(root), "installing");
+  // A failed install can leave the CLI link in place before its dependencies are complete.
+  if ((await exists(installing)) || !(await exists(join(agentDir, "node_modules/.bin/fastagent")))) {
+    const { runtime, hasLockfile } = detectRuntime(agentDir, await readPackageJson(agentDir));
+    const args =
+      runtime === "bun" ? ["install", ...(hasLockfile ? ["--frozen-lockfile"] : [])] : [hasLockfile ? "ci" : "install"];
+    writeFileAtomic(installing, "");
+    log.info(`[fastagent] installing the agent's dependencies (${runtime} ${args.join(" ")})…`);
+    // stdio inherited: a five-minute install with no output reads as a hang, and the default 1 MB capture would
+    // kill a noisy one outright.
+    const [code, signal] = (await once(
+      spawn(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, stdio: "inherit" }),
+      "exit",
+    )) as [number | null, NodeJS.Signals | null];
+    if (code !== 0) throw new Error(`dependency install failed (${signal ?? `exit ${code}`})`);
+    await rm(installing);
   }
 }

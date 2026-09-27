@@ -2,14 +2,16 @@
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { readFile, rm } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import * as Effect from "effect/Effect";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { applyCarriedEnv, authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
-import { applyReleaseEnv, parseDeploymentRelease, prepareDeployment } from "../../deploy/workspace.ts";
-import { detectRuntime, readPackageJson } from "../../runtime.ts";
+import {
+  applyReleaseEnv,
+  installAgentDependencies,
+  parseDeploymentRelease,
+  prepareDeployment,
+} from "../../deploy/workspace.ts";
 import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
@@ -137,25 +139,7 @@ export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: S
     const { root, agent } = prepared.deployed;
     const agentDir = join(prepared.dir, agent);
     if (await exists(join(agentDir, "package.json"))) {
-      const installing = join(root, ".deployment", "installing");
-      // A failed install can leave the CLI link in place before its dependencies are complete.
-      if ((await exists(installing)) || !(await exists(join(agentDir, "node_modules/.bin/fastagent")))) {
-        const { runtime, hasLockfile } = detectRuntime(agentDir, await readPackageJson(agentDir));
-        const args =
-          runtime === "bun"
-            ? ["install", ...(hasLockfile ? ["--frozen-lockfile"] : [])]
-            : [hasLockfile ? "ci" : "install"];
-        writeFileAtomic(installing, "");
-        log.info(`[fastagent] installing the agent's dependencies (${runtime} ${args.join(" ")})…`);
-        // stdio inherited: a five-minute install with no output reads as a hang, and the default 1 MB capture would
-        // kill a noisy one outright.
-        const [code, signal] = (await once(
-          spawn(runtime === "bun" ? "bun" : "npm", args, { cwd: agentDir, stdio: "inherit" }),
-          "exit",
-        )) as [number | null, NodeJS.Signals | null];
-        if (code !== 0) throw new Error(`dependency install failed (${signal ?? `exit ${code}`})`);
-        await rm(installing);
-      }
+      await installAgentDependencies(root, agentDir);
       // Tools and their session context must share the workspace's runtime module instance.
       const entry = createRequire(join(agentDir, "package.json")).resolve("@fastagent-sh/fastagent");
       const local = (await import(
