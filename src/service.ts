@@ -88,12 +88,11 @@ export interface ServingSurface {
 export const DEFAULT_HTTP_PORT = 8787;
 
 /**
- * What a serve publishes on its port — the config file's `http` block, carried as-is into the assembly so every reader
- * (the routes, the startup report, deploy's pre-flight, AgentCore's inert-key warnings) reads ONE value.
+ * What a serve publishes on its port, and to which browsers — the config file's `http` block minus `port`, carried
+ * as-is into the assembly so every reader (the routes, the startup report, deploy's pre-flight, AgentCore's inert-key
+ * warnings) reads ONE value. The port is not here: the assembly binds nothing, so only the CLI reads it.
  */
 export interface HttpSurface {
-  /** Default port for `dev` / `start` ({@link DEFAULT_HTTP_PORT} when unset). */
-  port?: number;
   /**
    * The origins a BROWSER may call this serve from. The default, with this unset, answers EVERY origin: any page your
    * users visit can call this port and read the reply, and every route here is unauthenticated. Set it to your front

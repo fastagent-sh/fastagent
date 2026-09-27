@@ -27,8 +27,11 @@ export interface FastagentConfig {
   thinkingLevel?: ThinkingLevel;
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
-  /** What the serve publishes on its port, and to which browsers; each key is documented on {@link HttpSurface}. */
-  http?: HttpSurface;
+  /** What the serve publishes on its port, and to which browsers (each key is documented on {@link HttpSurface}). */
+  http?: HttpSurface & {
+    /** Default port for `dev` / `start` (`DEFAULT_HTTP_PORT` when unset). */
+    port?: number;
+  };
   /**
    * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch — steer/abort/compact +
    * session properties and lifecycle) for remote consumers.
