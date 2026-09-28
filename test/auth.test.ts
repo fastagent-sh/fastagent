@@ -236,6 +236,25 @@ describe("fastagentCredentialStore: the global fallback layer", () => {
     expect(JSON.parse(await readFile(globalPath, "utf8")).anthropic).toBeUndefined();
   });
 
+  it("never reaches the fallback for a provider the project authenticates itself: not to read, list or write back", async () => {
+    const projectPath = await authPath("{}");
+    const globalPath = await authPath(JSON.stringify({ anthropic: oauth("global"), openai: oauth("g") }));
+    const store = fastagentCredentialStore(projectPath, {
+      fallbackPath: globalPath,
+      projectAuthenticates: async (id) => id === "anthropic",
+    });
+    expect(await store.read("anthropic")).toBeUndefined();
+    expect((await store.read("openai"))?.type).toBe("oauth"); // an uncovered provider still falls back
+    expect((await store.list()).map((c) => c.providerId)).toEqual(["openai"]);
+    // layerOf is the same answer, for a report: a covered provider belongs to the project file, an uncovered one to
+    // the file that holds it.
+    expect(await store.layerOf("anthropic")).toBe(projectPath);
+    expect(await store.layerOf("openai")).toBe(globalPath);
+    await store.modify("anthropic", async () => oauth("project"));
+    expect(JSON.parse(await readFile(projectPath, "utf8")).anthropic.access).toBe("project");
+    expect(JSON.parse(await readFile(globalPath, "utf8")).anthropic.access).toBe("global");
+  });
+
   it("deletes from the owning layer, and no fallback path means no second layer", async () => {
     const { projectPath, globalPath, store } = await layered({ anthropic: oauth("p") }, { openai: oauth("g") });
     await store.delete("openai");

@@ -566,6 +566,31 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 });
 
+describe("preflight: an OAuth model credential", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("warns that the deployment and this machine would share one grant, and says nothing for an API key", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    const shared = (pre: Awaited<ReturnType<typeof call>>) => {
+      if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
+      return pre.messages.some((m) => m.level === "warn" && /OAuth login/.test(m.text));
+    };
+
+    const withLogin = await workspace({ ".secrets/auth.json": JSON.stringify({ anthropic: oauth }) });
+    const pre = await call(withLogin, { model: "anthropic/claude-sonnet-4-5" });
+    expect(pre.ok && pre.modelAuth).toBe("OAuth");
+    expect(shared(pre)).toBe(true);
+
+    const withKey = await workspace({
+      ".secrets/auth.json": JSON.stringify({ anthropic: { type: "api_key", key: "k" } }),
+    });
+    expect(shared(await call(withKey, { model: "anthropic/claude-sonnet-4-5" }))).toBe(false);
+  });
+});
+
 describe("preflight: how a models.json endpoint's credential reaches the host", () => {
   afterEach(() => vi.unstubAllEnvs());
   const GATEWAY = (apiKey: string, baseUrl = "https://gw.example.com/v1") =>

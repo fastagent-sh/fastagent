@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
-import { probeAuthSource } from "../src/engines/pi/models.ts";
+import { createPiModelRuntime, probeAuthSource } from "../src/engines/pi/models.ts";
 
 const SPEC = "fa-layer/m1";
 const credential = { "fa-layer": { type: "api_key", key: "sk-test" } };
@@ -72,5 +72,42 @@ describe("L2 reads credentials through the same layers as the opener", () => {
     process.env.FASTAGENT_SECRETS_DIR = mkdtempSync(join(tmpdir(), "fa-mounted-secrets-"));
     writeAuth(GLOBAL);
     expect(await l2AuthSource(agentDir())).toBeUndefined();
+  });
+});
+
+describe("the global file yields to a provider the project authenticates itself", () => {
+  // A deployment never has the global file, so a global login that outranked the project's own key would run one
+  // credential here and another deployed.
+  const KEY = "ANTHROPIC_API_KEY";
+  const savedKey = process.env[KEY];
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env[KEY];
+    else process.env[KEY] = savedKey;
+  });
+
+  async function anthropicKey(dir: string): Promise<string | undefined> {
+    const runtime = await createPiModelRuntime({
+      agentDir: dir,
+      auth: { path: join(dir, ".secrets", "auth.json"), fallback: GLOBAL },
+      machineLayer: false,
+    });
+    const model = runtime.getModels("anthropic")[0];
+    if (!model) throw new Error("pi has no anthropic model");
+    return (await runtime.getAuth(model))?.auth.apiKey;
+  }
+
+  it("an env key or the agent's models.json wins over a global login; with neither, the global login serves", async () => {
+    mkdirSync(join(GLOBAL, ".."), { recursive: true });
+    writeFileSync(GLOBAL, JSON.stringify({ anthropic: { type: "api_key", key: "global-login" } }));
+    const dir = mkdtempSync(join(tmpdir(), "fa-auth-yield-"));
+
+    process.env[KEY] = "project-env";
+    expect(await anthropicKey(dir)).toBe("project-env");
+
+    delete process.env[KEY];
+    expect(await anthropicKey(dir)).toBe("global-login");
+
+    writeFileSync(join(dir, "models.json"), JSON.stringify({ providers: { anthropic: { apiKey: "models-json" } } }));
+    expect(await anthropicKey(dir)).toBe("models-json");
   });
 });

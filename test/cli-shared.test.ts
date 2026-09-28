@@ -166,4 +166,20 @@ describe("reportAuth (which layer the line names)", () => {
     expect(line).toContain("(none found)");
     expect(line).toContain(none.primary);
   });
+
+  it("does not name the fallback for a provider the project authenticates itself", async () => {
+    // The runtime never reads the global file for it, so the line must not point there either.
+    const held = layers("fallback");
+    writeFileSync(
+      join(held.dir, "models.json"),
+      JSON.stringify({
+        providers: {
+          p: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "k", models: [{ id: "m" }] },
+        },
+      }),
+    );
+    const line = await authLine(held.dir, held.primary, held.fallback);
+    expect(line).not.toContain(held.fallback);
+    expect(line).toContain(held.primary);
+  });
 });

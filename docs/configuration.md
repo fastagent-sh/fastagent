@@ -212,9 +212,21 @@ others the edit still costs a cache miss. The session control plane reports that
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. An agent reads the global file for any provider its own lacks, and writes a refresh back to the file it read from. |
+| `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. |
 | Provider env vars | Servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Agent `.env` | `<agent dir>/.secrets/.env`, loaded by CLI commands and carried whole by `deploy`. Excluded from git by the `.secrets/.gitignore` that `init` scaffolds. |
+
+For one provider, the agent uses the first of:
+
+1. its own `auth.json`;
+2. an `apiKey` in `models.json`;
+3. the provider's env var;
+4. the global `~/.fastagent/.secrets/auth.json`.
+
+The first three are pi's order. The global file comes last because a deployment never has it: a global login that
+outranked a key in `.secrets/.env` would run one credential locally and another deployed. A refresh is written back
+to the file the credential was read from. Setting `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` names the one
+file to use, so the global file is not read at all.
 
 Do not commit `.env` or credentials. `fastagent info` and `fastagent dev` print the resolved auth source.
 

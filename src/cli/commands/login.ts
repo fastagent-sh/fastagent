@@ -9,11 +9,12 @@ import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled, loginFlow } from "../../engines/pi/login.ts";
+import { environmentAuthSource } from "../../engines/pi/models.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { isInteractive, terminalLoginIO } from "../shared.ts";
 
 export interface LoginOptions {
-  /** `-g`: store in the user-global file every agent on this machine falls back to. */
+  /** `-g`: store in the user-global file, which an agent reads for a provider it has no other credential for. */
   global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
@@ -29,6 +30,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
   // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
   // through that proxy (region-locked providers).
+  // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
+  // environment the shell hands down, not one agent's value file.
+  const shellEnv = { ...process.env };
   enterAgentEnv(loginDir);
   // `-g` names the global file outright. Otherwise: FASTAGENT_AUTH_PATH > default — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
@@ -40,9 +44,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
       `[fastagent] no agent here (no fastagent.config.ts, here or one level inside) — ` +
-        `logging in GLOBALLY (${authPath}). Every agent on this machine reads this file for providers its own ` +
-        `.secrets/auth.json does not have, so this is usually what you want; \`cd\` into an agent to give that ` +
-        `one its own account instead.`,
+        `logging in GLOBALLY (${authPath}). An agent on this machine uses this file for a provider it has no ` +
+        `credential of its own for (no entry in its .secrets/auth.json, no apiKey in its models.json, no env ` +
+        `variable), so this is usually what you want; \`cd\` into an agent to give that one its own account instead.`,
     );
   }
   // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or prompts for a
@@ -68,5 +72,14 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     failStartup(error);
   });
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
+  // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
+  // agents run on, say, an API key billed per request, with only a startup line to show it.
+  const shadowedBy = authPath === GLOBAL_AUTH_PATH ? await environmentAuthSource(result.provider, shellEnv) : undefined;
+  if (shadowedBy !== undefined) {
+    console.error(
+      `[fastagent] warning: ${result.provider} is also authenticated by ${shadowedBy} in your shell environment, which ` +
+        `agents use before the global file, so this login is not used while it is set. Unset it to use this login.`,
+    );
+  }
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
