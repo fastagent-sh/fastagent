@@ -173,14 +173,24 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
  * already has globally. And the layer a credential was READ from is the layer its refresh is written back to —
  * anything else would conjure a second holder of the same OAuth grant, which is the failure this whole area exists
  * to avoid. A provider present in neither layer is new, and new credentials belong to the primary.
+ *
+ * The fallback also yields to `projectAuthenticates`: a provider the project authenticates some other way (an env key,
+ * its own models.json) never reaches it — for reading, listing or writing back.
  */
 export function fastagentCredentialStore(
   authPath: string = GLOBAL_AUTH_PATH,
-  options: FastagentAuthOptions & { fallbackPath?: string } = {},
+  options: FastagentAuthOptions & {
+    fallbackPath?: string;
+    /** Whether the project authenticates this provider without the fallback; then the fallback is not read for it. */
+    projectAuthenticates?: (providerId: string) => Promise<boolean>;
+  } = {},
 ): CredentialStore {
   const warn = options.warn ?? ((message: string) => log.warn(message));
   const fallback =
     options.fallbackPath !== undefined && options.fallbackPath !== authPath ? options.fallbackPath : undefined;
+  /** The fallback, when it may serve this provider at all. */
+  const fallbackFor = async (providerId: string): Promise<string | undefined> =>
+    fallback === undefined || (await options.projectAuthenticates?.(providerId)) ? undefined : fallback;
   /**
    * The file that owns this provider: where it already is, else the primary.
    *
@@ -189,17 +199,19 @@ export function fastagentCredentialStore(
    * "one grant, one copy" rule can be lost. Re-checking under the lock means locking both files in a fixed order;
    * worth it only if concurrent logins stop being a rounding error.
    */
-  const owner = (providerId: string): string => {
-    if (fallback === undefined) return authPath;
+  const owner = async (providerId: string): Promise<string> => {
+    const second = await fallbackFor(providerId);
+    if (second === undefined) return authPath;
     const primary = readCreds(authPath, warn);
     if (primary && pick(primary, providerId)) return authPath;
-    const secondary = readCreds(fallback, warn);
-    return secondary && pick(secondary, providerId) ? fallback : authPath;
+    const secondary = readCreds(second, warn);
+    return secondary && pick(secondary, providerId) ? second : authPath;
   };
 
   return {
     async read(providerId) {
-      for (const path of fallback === undefined ? [authPath] : [authPath, fallback]) {
+      const second = await fallbackFor(providerId);
+      for (const path of second === undefined ? [authPath] : [authPath, second]) {
         const creds = readCreds(path, warn);
         const found = creds && pick(creds, providerId);
         if (found) return found;
@@ -212,14 +224,15 @@ export function fastagentCredentialStore(
       const infos = new Map<string, CredentialInfo>();
       for (const path of fallback === undefined ? [authPath] : [fallback, authPath]) {
         for (const [providerId, cred] of Object.entries(readCreds(path, warn) ?? {})) {
+          if (path === fallback && (await fallbackFor(providerId)) === undefined) continue;
           if (cred && (cred.type === "oauth" || cred.type === "api_key"))
             infos.set(providerId, { providerId, type: cred.type });
         }
       }
       return [...infos.values()];
     },
-    modify(providerId, fn) {
-      const path = owner(providerId);
+    async modify(providerId, fn) {
+      const path = await owner(providerId);
       return withLockedAuthFile(path, async (current) => {
         const creds = parseForWrite(current, path); // corrupt → throw → no clobber
         const next = await fn(pick(creds, providerId));
@@ -229,7 +242,7 @@ export function fastagentCredentialStore(
       });
     },
     async delete(providerId) {
-      const path = owner(providerId);
+      const path = await owner(providerId);
       // No-op when nothing is stored: do NOT take the lock (which would create the file) on a machine that never
       // stored this provider.
       if (!existsSync(path)) return;

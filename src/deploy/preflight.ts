@@ -267,6 +267,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     if (carry.envVar) modelAuth = carry.envVar;
     else modelKeyInDefinition = carry.inDefinition;
   }
+  // The carry copies the whole auth.json, so the grant then has two holders that refresh independently.
+  if (modelAuth === "OAuth") {
+    report.warn(
+      `${modelSpec} authenticates with an OAuth login. Deploy carries a copy, and from then on this machine and the ` +
+        `deployment each refresh the same grant: a provider that rotates refresh tokens logs out whichever side ` +
+        `refreshes second, and on a host that keeps its volume a redeploy does not replace the auth.json already ` +
+        `there. Use a provider API key for a deployment.`,
+    );
+  }
 
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
   // `"apiKey": "ollama"` for a keyless local server, and no static rule separates that from a leaked key. The

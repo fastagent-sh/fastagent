@@ -153,43 +153,86 @@ export function isBuiltinProvider(providerId: string): boolean {
   return builtinProviders().some((provider) => provider.id === providerId);
 }
 
-/** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
-export async function createPiModelRuntime(
-  options: FastagentAuthOptions & {
-    /** The credentials files to read (default: the global file alone). */
-    auth?: AuthLayers;
-    /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
-    agentDir?: string;
-    /**
-     * Layer the machine's models.json under the agent's (default). Off for the registry a DEPLOYED agent has, which
-     * `deploy` must judge by: the machine's file does not ship.
-     */
-    machineLayer?: boolean;
-    /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
-    stateRoot?: string;
-    /** Extra providers for the ids the built-ins do not cover. */
-    providers?: Provider[];
-    /** A credential store to use instead of the files (login verifies an entered key from memory). */
-    credentials?: CredentialStore;
-  } = {},
-): Promise<ModelRuntime> {
+export type PiModelRuntimeOptions = FastagentAuthOptions & {
+  /** The credentials files to read (default: the global file alone). */
+  auth?: AuthLayers;
+  /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
+  agentDir?: string;
+  /**
+   * Layer the machine's models.json under the agent's (default). Off for the registry a DEPLOYED agent has, which
+   * `deploy` must judge by: the machine's file does not ship.
+   */
+  machineLayer?: boolean;
+  /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
+  stateRoot?: string;
+  /** Extra providers for the ids the built-ins do not cover. */
+  providers?: Provider[];
+  /** A credential store to use instead of the files (login verifies an entered key from memory). */
+  credentials?: CredentialStore;
+};
+
+/** The models.json a runtime for these options loads, and where its catalog cache goes. */
+async function runtimeFiles(options: PiModelRuntimeOptions) {
   const { agentDir } = options;
   const models = !agentDir
     ? undefined
     : options.machineLayer === false
       ? { path: join(agentDir, AGENT_MODELS_FILE) }
       : await modelsFileFor(agentDir);
+  return {
+    models,
+    create: {
+      modelsPath: models?.path ?? null,
+      // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
+      // write a generated cache INTO the author's agent dir.
+      ...(agentDir
+        ? { modelsStorePath: join(options.stateRoot ?? resolveStateRoot(agentDir), "models-store.json") }
+        : {}),
+      allowModelNetwork: false,
+    },
+  };
+}
+
+/**
+ * Whether the PROJECT authenticates a provider without the user-global credentials file (its own auth file, a
+ * models.json key, or the environment), answered by pi's own resolution over a runtime that has no global layer.
+ * Undefined when there is no global layer to yield. The global file serves only the providers this says no to: a
+ * deployment never has that file, so a global login that outranked, say, an `ANTHROPIC_API_KEY` in `.secrets/.env`
+ * would run one credential here and a different one deployed.
+ */
+export async function projectAuthenticates(
+  options: PiModelRuntimeOptions,
+): Promise<((providerId: string) => Promise<boolean>) | undefined> {
+  return projectCheck(options, (await runtimeFiles(options)).create);
+}
+
+async function projectCheck(
+  options: PiModelRuntimeOptions,
+  create: Awaited<ReturnType<typeof runtimeFiles>>["create"],
+): Promise<((providerId: string) => Promise<boolean>) | undefined> {
+  if (options.credentials || options.auth?.fallback === undefined) return undefined;
+  const project = await ModelRuntime.create({
+    credentials: fastagentCredentialStore(options.auth.path, { warn: options.warn }),
+    ...create,
+    refreshOnCreate: false,
+  });
+  for (const provider of options.providers ?? []) project.registerNativeProvider(provider);
+  return async (providerId) => (await project.checkAuth(providerId)) !== undefined;
+}
+
+/** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
+export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}): Promise<ModelRuntime> {
+  const { models, create } = await runtimeFiles(options);
+  const covers = await projectCheck(options, create);
   const runtime = await ModelRuntime.create({
     credentials:
       options.credentials ??
-      fastagentCredentialStore(options.auth?.path, { warn: options.warn, fallbackPath: options.auth?.fallback }),
-    modelsPath: models?.path ?? null,
-    // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
-    // write a generated cache INTO the author's agent dir.
-    ...(agentDir
-      ? { modelsStorePath: join(options.stateRoot ?? resolveStateRoot(agentDir), "models-store.json") }
-      : {}),
-    allowModelNetwork: false,
+      fastagentCredentialStore(options.auth?.path, {
+        warn: options.warn,
+        fallbackPath: options.auth?.fallback,
+        ...(covers ? { projectAuthenticates: covers } : {}),
+      }),
+    ...create,
   });
   // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in
   // getError().

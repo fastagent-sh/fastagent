@@ -20,7 +20,12 @@ import {
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import { createPiModelRuntime, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
+import {
+  createPiModelRuntime,
+  probeAuthSource,
+  projectAuthenticates,
+  providerAuthStatuses,
+} from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
@@ -134,7 +139,12 @@ export async function reportAuth(agentDir: string, modelSpec: string, auth: Auth
       .read(provider)
       .catch(() => undefined);
   const inPrimary = await readFrom(authPath);
-  const inFallback = inPrimary || fallbackAuthPath === undefined ? undefined : await readFrom(fallbackAuthPath);
+  // The same rule the runtime reads by: a provider the project authenticates itself never reaches the global file.
+  const covers = await projectAuthenticates({ agentDir, auth });
+  const inFallback =
+    inPrimary || fallbackAuthPath === undefined || (await covers?.(provider))
+      ? undefined
+      : await readFrom(fallbackAuthPath);
   // Name the layer the credential actually came from: "which file do I edit" is the question this line answers, and
   // a global credential lives in a file the agent dir does not contain. With NEITHER layer holding it, the answer is
   // the primary — that is the file the `fastagent login` this report recommends writes.
