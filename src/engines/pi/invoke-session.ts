@@ -1,11 +1,12 @@
 /** Pi's per-invoke binding over a durable session record. */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import type * as EffectScope from "effect/Scope";
 import {
   ABORTED_CODE,
   SESSION_BUSY_CODE,
@@ -125,6 +126,35 @@ function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> 
   session.sendUserMessage = (...args) => track(sendUserMessage(...args));
   session.sendCustomMessage = (...args) => track(sendCustomMessage(...args));
   return pending;
+}
+
+/**
+ * Report each user message when it is WRITTEN, which is later than pi announces it: pi awaits extension `message_end`
+ * handlers before it appends. Emitting from the write is what makes `user_message.entryId` readable through
+ * `entries()` by the time the event arrives, so a reconnecting client's backfill cannot miss a message whose event
+ * fired before it subscribed. pi's agent awaits each listener before the next event, so the message still reports
+ * before the answer to it. The in-memory store reuses one record across runs, so the release restores the method.
+ */
+function reportUserMessages(
+  session: AgentSession,
+  report: (entryId: string, text: string) => void,
+): Effect.Effect<void, never, EffectScope.Scope> {
+  const record = session.sessionManager;
+  const append = record.appendMessage;
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      record.appendMessage = (message) => {
+        const entryId = append.call(record, message);
+        // The same text `entries()` publishes for this entry (session-control.ts toSessionEntry).
+        if (message.role === "user") report(entryId, contentText(message.content, ""));
+        return entryId;
+      };
+    }),
+    () =>
+      Effect.sync(() => {
+        record.appendMessage = append;
+      }),
+  );
 }
 
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
@@ -284,6 +314,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           }),
         ),
         (unsubscribe) => Effect.sync(unsubscribe),
+      );
+      yield* reportUserMessages(session, (entryId, text) =>
+        observe({ type: "user_message", timestamp: Date.now(), runId, data: { entryId, text } }),
       );
       const extensionTurns = trackExtensionTurns(session);
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.

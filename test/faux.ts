@@ -41,6 +41,10 @@ export const bareSessionParts = {
   waitForIdle: async () => {},
   sendUserMessage: async () => {},
   sendCustomMessage: async () => {},
+  /** A getter, so each spread gets its own record: a run wraps `appendMessage` on the one it binds. */
+  get sessionManager() {
+    return { appendMessage: () => "entry" };
+  },
   extensionRunner: {
     onError: () => () => {},
     emit: async () => undefined,

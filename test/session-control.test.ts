@@ -655,6 +655,94 @@ describe("session control: run modulation", () => {
     expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
   });
 
+  it("user_message reports each prompt once it is recorded, before the answer to it — even when an extension delays the write", async () => {
+    // pi awaits extension `message_end` handlers before it appends a message. A slow one is the case where reporting
+    // at `message_start` would put the event ahead of the record a backfill reads.
+    const dir = await mkdtemp(join(tmpdir(), "fa-user-message-"));
+    const slowWrite = join(dir, "slow-write.mjs");
+    await writeFile(
+      slowWrite,
+      `export default (pi) => pi.on("message_end", async (e) => {\n` +
+        `  if (e.message.role === "user") await new Promise((r) => setTimeout(r, 30));\n});\n`,
+    );
+    for (const extensionPaths of [[], [slowWrite]]) {
+      const label = extensionPaths.length ? "slow write" : "plain";
+      const gate = makeGate();
+      const { agent, control } = await fauxControlledAgent(
+        [
+          fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
+          fauxAssistantMessage("steered answer"),
+          fauxAssistantMessage("follow-up answer"),
+        ],
+        { tools: [gate.tool], extensionPaths },
+      );
+      const handle = control.sessions.get("sU");
+      const seen: string[] = [];
+      const readable: boolean[] = [];
+      const watching = (async () => {
+        for await (const ev of handle.events()) {
+          if (ev.type === "user_message") {
+            const { entryId, text } = ev.data as { entryId: string; text: string };
+            seen.push(`user:${text}`);
+            // Read the moment it arrives: the record must already hold it, with the same text.
+            const { entries } = await handle.entries();
+            readable.push(entries.some((e) => e.id === entryId && (e.data as { text: string }).text === text));
+          } else if (ev.type === "message_started") seen.push("answer");
+          else if (ev.type === "tool_started") seen.push("tool");
+          else if (ev.type === "run_started" || ev.type === "run_settled") seen.push(ev.type);
+          if (ev.type === "run_settled") break;
+        }
+      })();
+      const invoked = drive(agent, "sU");
+      while (!seen.includes("tool")) await new Promise((r) => setTimeout(r, 5));
+      expect((await handle.steer({ text: "a steer" })).ok).toBe(true);
+      expect((await handle.followUp({ text: "a follow-up" })).ok).toBe(true);
+      gate.release();
+      await invoked;
+      await watching;
+
+      expect(seen, label).toEqual([
+        "run_started",
+        "user:go",
+        "answer",
+        "tool",
+        "user:a steer",
+        "answer",
+        "user:a follow-up",
+        "answer",
+        "run_settled",
+      ]);
+      expect(readable, label).toEqual([true, true, true]);
+    }
+  });
+
+  it("user_message also reports a message an extension sends, and an image-only prompt as empty text", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-user-message-ext-"));
+    const command = join(dir, "go.mjs");
+    await writeFile(
+      command,
+      `export default (pi) => pi.registerCommand("go", { description: "", handler: async (args) => pi.sendUserMessage("from command " + args) });\n`,
+    );
+    const { agent, control } = await fauxControlledAgent([fauxAssistantMessage("a"), fauxAssistantMessage("b")], {
+      extensionPaths: [command],
+    });
+    const reported = async (prompt: { text: string; images?: { mimeType: string; data: string }[] }) => {
+      const texts: string[] = [];
+      const watching = (async () => {
+        for await (const ev of control.sessions.get("sX").events()) {
+          if (ev.type === "user_message") texts.push((ev.data as { text: string }).text);
+          if (ev.type === "run_settled") return texts;
+        }
+      })();
+      await drain(agent.invoke({ session: "sX" }, prompt));
+      return watching;
+    };
+    // The typed command never enters the conversation; the message it sends does.
+    expect(await reported({ text: "/go X" })).toEqual(["from command X"]);
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    expect(await reported({ text: "", images: [{ mimeType: "image/png", data: png }] })).toEqual([""]);
+  });
+
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
     const { toTerminal } = await import("../src/engines/pi/turn-kit.ts");
     const terminal = toTerminal({
