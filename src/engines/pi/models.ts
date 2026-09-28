@@ -221,18 +221,23 @@ async function projectCheck(
 }
 
 /**
- * What satisfies a provider from the ENVIRONMENT alone (its API-key variable, or an ambient source such as an AWS
- * profile), by pi's own check, or undefined. The environment is shared by every agent on the machine, and it outranks
- * the global credentials file ({@link projectAuthenticates}), so a global login for such a provider is not used.
+ * What satisfies a provider from `env` alone (its API-key variable, or an ambient source such as an AWS profile), by
+ * pi's own check, or undefined. Passed explicitly rather than read from `process.env`: only the environment a SHELL
+ * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
+ * that agent's variables too. What the shell shares outranks the global credentials file ({@link
+ * projectAuthenticates}), so a global login for such a provider is not used.
  */
-export async function environmentAuthSource(providerId: string): Promise<string | undefined> {
-  const runtime = await ModelRuntime.create({
+export async function environmentAuthSource(providerId: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const ambient = defaultProviderAuthContext();
+  const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
-    modelsPath: null,
-    allowModelNetwork: false,
-    refreshOnCreate: false,
+    authContext: {
+      // pi's own reading of a variable (a blank one is unset), over the given environment.
+      env: async (name) => (env[name]?.trim() ? env[name] : undefined),
+      fileExists: ambient.fileExists,
+    },
   });
-  return (await runtime.checkAuth(providerId))?.source;
+  return (await models.checkAuth(providerId))?.source;
 }
 
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */

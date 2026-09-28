@@ -30,6 +30,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Absent, not blank: an agent's `.env` only fills variables the process does not already have. */
+function unsetAnthropicEnv(): void {
+  for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
+    vi.stubEnv(name, undefined);
+}
+
 /** stderr of one `fastagent login` run from `cwd`. */
 async function login(cwd: string, global: boolean): Promise<string> {
   vi.spyOn(process, "cwd").mockReturnValue(cwd);
@@ -41,13 +47,11 @@ async function login(cwd: string, global: boolean): Promise<string> {
 }
 
 describe("login: a global credential the environment shadows", () => {
-  it("environmentAuthSource names the variable that authenticates a provider, and nothing when none does", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-env");
-    expect(await environmentAuthSource("anthropic")).toBe("ANTHROPIC_API_KEY");
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
-    expect(await environmentAuthSource("anthropic")).toBeUndefined();
+  it("environmentAuthSource answers for the environment it is given, not for process.env", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-process");
+    expect(await environmentAuthSource("anthropic", { ANTHROPIC_API_KEY: "sk-shell" })).toBe("ANTHROPIC_API_KEY");
+    expect(await environmentAuthSource("anthropic", {})).toBeUndefined();
+    expect(await environmentAuthSource("anthropic", { ANTHROPIC_API_KEY: " " })).toBeUndefined(); // blank is unset
   });
 
   it("warns after a global login the environment shadows, and only then", async () => {
@@ -62,10 +66,18 @@ describe("login: a global credential the environment shadows", () => {
     await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n");
     expect(await login(agent, false)).not.toMatch(/warning:/);
 
-    // Nothing in the environment: the global login is the one agents use.
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
+    // A key in ONE agent's value file is that agent's, not the machine's: `login` loads the file before it runs, and
+    // a warning then would tell the owner to unset the deployment key `deploy` carries.
+    unsetAnthropicEnv();
+    await mkdir(join(agent, ".secrets"), { recursive: true });
+    await writeFile(join(agent, ".secrets", ".env"), "ANTHROPIC_API_KEY=sk-agent-only\n");
+    expect(await login(agent, true)).not.toMatch(/warning:/);
+    // Outside an agent, `login` loads ~/.fastagent/.secrets/.env, which no agent reads at all. With nothing in the
+    // shell, the global login is the one agents use.
+    unsetAnthropicEnv(); // a fresh process: the previous run loaded the agent's `.env` into this one
+    const machineSecrets = join(process.env.HOME as string, ".fastagent", ".secrets");
+    await mkdir(machineSecrets, { recursive: true });
+    await writeFile(join(machineSecrets, ".env"), "ANTHROPIC_API_KEY=sk-machine-home\n");
     expect(await login(outside, true)).not.toMatch(/warning:/);
   });
 });

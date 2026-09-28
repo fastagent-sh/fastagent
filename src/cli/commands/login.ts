@@ -30,6 +30,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
   // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
   // through that proxy (region-locked providers).
+  // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
+  // environment the shell hands down, not one agent's value file.
+  const shellEnv = { ...process.env };
   enterAgentEnv(loginDir);
   // `-g` names the global file outright. Otherwise: FASTAGENT_AUTH_PATH > default — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
@@ -71,10 +74,10 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   // The environment outranks the global file for every agent, so a global login it shadows would sit unused while
   // agents run on, say, an API key billed per request, with only a startup line to show it.
-  const shadowedBy = authPath === GLOBAL_AUTH_PATH ? await environmentAuthSource(result.provider) : undefined;
+  const shadowedBy = authPath === GLOBAL_AUTH_PATH ? await environmentAuthSource(result.provider, shellEnv) : undefined;
   if (shadowedBy !== undefined) {
     console.error(
-      `[fastagent] warning: ${result.provider} is also authenticated by ${shadowedBy} in this environment, which ` +
+      `[fastagent] warning: ${result.provider} is also authenticated by ${shadowedBy} in your shell environment, which ` +
         `agents use before the global file, so this login is not used while it is set. Unset it to use this login.`,
     );
   }
