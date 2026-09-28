@@ -36,7 +36,7 @@ export interface AgentcoreRunPlan {
    * region`.
    */
   region?: string;
-  /** Env-var name → value: the value file's carried variables, plus FASTAGENT_AUTH_SEED for a file credential. */
+  /** Env-var name → value: the value file's carried variables. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -147,11 +147,10 @@ const MINTED_PARAMS: Record<string, string> = {
   FASTAGENT_WAKE_SECRET: "FastagentWakeSecret",
 };
 
-/** What each carrier holds for this deploy: the credential seed, and every other variable as one encoded object. */
+/** What each carrier holds for this deploy: every variable but the minted ones, as one encoded object. */
 function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS)[number]["env"], string> {
-  const { FASTAGENT_AUTH_SEED: seed = "", ...rest } = secrets;
-  const carried = Object.fromEntries(Object.entries(rest).filter(([name]) => !(name in MINTED_PARAMS)));
-  return { FASTAGENT_AUTH_SEED: seed, FASTAGENT_ENV: encodeCarriedEnv(carried) };
+  const carried = Object.fromEntries(Object.entries(secrets).filter(([name]) => !(name in MINTED_PARAMS)));
+  return { FASTAGENT_ENV: encodeCarriedEnv(carried) };
 }
 
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
@@ -240,12 +239,6 @@ export async function deployAgentcoreRun(
   // 3b.
   const capacity = CARRIER_CHUNK_SIZE * CARRIER_MAX_CHUNKS;
   const carried = carrierValues(plan.secrets);
-  if (carried.FASTAGENT_AUTH_SEED.length > capacity) {
-    return gate(
-      `your auth.json is too large to carry (${carried.FASTAGENT_AUTH_SEED.length} chars base64 > ${capacity}) — ` +
-        `slim it (keep only the model's credential), or set a provider API key in .env instead`,
-    );
-  }
   if (carried.FASTAGENT_ENV.length > capacity) {
     return gate(
       `the variables in ${plan.valueFile} are too large to carry (${carried.FASTAGENT_ENV.length} chars encoded > ` +
@@ -320,9 +313,7 @@ export async function deployAgentcoreRun(
   } else if (status !== "" && !EMPTY_STACK_STATUSES.has(status)) {
     log(
       `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
-        `sessions, channel state and pending wake-ups start blank` +
-        // Only the carried auth.json is re-seeded; a provider API key deployment has no such step to blame.
-        `${carried.FASTAGENT_AUTH_SEED ? ", and the model credential is re-seeded from FASTAGENT_AUTH_SEED" : ""}. ` +
+        `sessions, channel state and pending wake-ups start blank. ` +
         `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }

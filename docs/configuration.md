@@ -262,7 +262,7 @@ Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse
   Single-process; point it at a volume in a container.
 - `<agent dir>/.secrets/` — the agent's `.env` and `auth.json`. The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
-  secret store; its seeded (possibly rotated) `auth.json` lives on the volume.
+  secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
 
 Generated deployments keep the workspace at `<persistent-root>/base/`, with `.state/` and `.secrets/` beside it.
 The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see

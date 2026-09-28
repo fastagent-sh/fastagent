@@ -7,7 +7,7 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
+import type { DeploymentSecret } from "../secrets.ts";
 
 /** The one schedule fact the plan needs (from loadRoutines) — name + cron + tz. */
 export interface ScheduleFact {
@@ -19,8 +19,6 @@ export interface ScheduleFact {
 export interface AgentcorePlanInput extends ContainerInput {
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
   name: string;
-  /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
-  modelAuth: string | undefined;
   /**
    * Every declared channel and its ingress — the source of the webhook steps, and whether the
    * forwarder is needed at all (ANY webhook channel requires it, customs included).
@@ -92,16 +90,14 @@ export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
 /**
- * AgentCore env values max 2048 chars — a real OAuth auth.json's base64 exceeds it, so each carrier is CHUNKED across
- * `<NAME>` + `_2`… (collectChunked reassembles at boot): FASTAGENT_AUTH_SEED for the credential, FASTAGENT_ENV for the
- * value file's variables.
+ * AgentCore env values max 2048 chars — a value file's variables easily exceed it, so the carrier is CHUNKED across
+ * `<NAME>` + `_2`… (collectChunked reassembles at boot).
  */
 export const CARRIER_CHUNK_SIZE = 2000;
 export const CARRIER_MAX_CHUNKS = 4;
 
 /** The template's two chunked carriers: CloudFormation parameter prefix → container env-var name. */
 export const CARRIERS = [
-  { param: "FastagentAuthSeed", env: "FASTAGENT_AUTH_SEED", what: "base64 auth.json" },
   { param: "FastagentEnv", env: "FASTAGENT_ENV", what: "base64 JSON of the value file's variables" },
 ] as const;
 
@@ -308,7 +304,7 @@ function template(
     `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
     `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
   ];
-  // Both carriers are chunked (env values max 2048 chars — see CARRIER_CHUNK_SIZE): N parameters, each riding its
+  // The carrier is chunked (env values max 2048 chars — see CARRIER_CHUNK_SIZE): N parameters, each riding its
   // own env var; `start` reassembles them. ONE parameter set for every variable, so the template does not change
   // when the value file gains a name.
   for (const carrier of CARRIERS) {
@@ -677,18 +673,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws logs put-retention-policy --log-group-name ${forwarderLogGroup(input.name)} --retention-in-days 14`,
   );
 
-  // Model-auth guidance mirrors the other hosts: an env key became a parameter above; OAuth/stored can't be read at
-  // plan time — `--run` carries it as FastagentAuthSeed.
-  if (!isEnvKey(input.modelAuth)) {
-    runbook.push(
-      ``,
-      input.modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — set FASTAGENT_AUTH_PATH, or \`--run\` carries it`
-        : `# Model auth: your local auth is "${input.modelAuth}" — the plan can't read its value; \`--run\` carries it`,
-      `#   as the FastagentAuthSeed parameter (base64 of auth.json), materialized on first boot.`,
-    );
-  }
-
   // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's Function URL
   // (read from the stack outputs).
   const post = webhookRunbook(`<ForwarderUrl>`, channels);
@@ -737,10 +721,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# STATE: ${MOUNT} is managed SessionStorage. It keeps base/ (including unfinished work), .state/`,
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
-    `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank,`,
-    `# and the model credential is re-seeded from FASTAGENT_AUTH_SEED. Deploying IS re-authenticating.`,
-    `# An OAuth refresh token is single-use and shared with your machine, so the box can lose model`,
-    `# access between deploys — deploy again to refresh it, or use a provider API key.`,
+    `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,
+    `# The model's credential is therefore a provider API key in the value file, which every deploy carries.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,

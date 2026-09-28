@@ -105,6 +105,30 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
   });
 
+  it("the box logs in after it answers and before any webhook points at it", async () => {
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const order: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      order.push("register");
+      return "registered";
+    });
+    const healthy = async () => {
+      order.push("health");
+      return true;
+    };
+    const boxLogin = async () => {
+      order.push("login");
+      return "not logged in: …";
+    };
+    const out = await run(plan({ channels: declaredChannels(["telegram"]), boxLogin }), railway, tg, healthy);
+    expect(out).toEqual({ ok: false, gate: "not logged in: …" });
+    expect(order).toEqual(["health", "login"]);
+  });
+
   it("RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
     // Railway's documented service-variable route to a non-root Dockerfile — without it the build
     // auto-detects the workspace root (config-as-code could carry the path, but pointing Railway at

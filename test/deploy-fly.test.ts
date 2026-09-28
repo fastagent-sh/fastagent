@@ -24,7 +24,7 @@ const base = {
 
 describe("deploy/fly: planFlyDeploy", () => {
   it("wires the state root to the volume and tunes autostop to suspend", () => {
-    const toml = flyToml(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
+    const toml = flyToml(planFlyDeploy({ ...base, channels: [] }));
     expect(toml).toContain('FASTAGENT_STATE_DIR = "/data/.state"');
     expect(toml).toContain('FASTAGENT_SECRETS_DIR = "/data/.secrets"');
     expect(toml).toContain('destination = "/data"');
@@ -34,18 +34,17 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("keeps one machine running for a cron, scales to zero otherwise (definition-aware)", () => {
-    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasCron: true }))).toContain(
+    expect(flyToml(planFlyDeploy({ ...base, channels: [], hasCron: true }))).toContain(
       "min_machines_running = 1", // routines/wake need a running machine — no external wake-up for a cron instant
     );
-    expect(
-      flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),
-    ).toContain("min_machines_running = 0");
+    expect(flyToml(planFlyDeploy({ ...base, channels: declaredChannels(["telegram"]) }))).toContain(
+      "min_machines_running = 0",
+    );
   });
 
   it("keeps one machine running and drops webhook URLs for long-connection Feishu", () => {
     const plan = planFlyDeploy({
       ...base,
-      modelAuth: undefined,
       channels: [...declaredChannels(["feishu"], "long-connection")],
     });
     const toml = flyToml(plan);
@@ -58,7 +57,6 @@ describe("deploy/fly: planFlyDeploy", () => {
   it("keeps one machine running for a custom long-connection channel", () => {
     const plan = planFlyDeploy({
       ...base,
-      modelAuth: undefined,
       channels: declaredChannels(["socket"], "long-connection"),
     });
     expect(flyToml(plan)).toContain("min_machines_running = 1");
@@ -66,7 +64,7 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("suspends on idle and scales to zero when nothing in the definition needs a machine up", () => {
     // The two lines an operator edits when they want otherwise: the artifact IS the knob.
-    const def = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    const def = flyToml(planFlyDeploy({ ...base, channels: [] }));
     expect(def).toContain('auto_stop_machines = "suspend"');
     expect(def).toContain("min_machines_running = 0");
   });
@@ -75,7 +73,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     // The runbook is the DEFAULT path (`--run` is opt-in), so #425 reaches an operator through it
     // first. `[http_service]` declares a service without allocating an address, and both commands
     // are needed: an AAAA-only app is unreachable to IPv4-only webhook senders.
-    const out = runbook(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
+    const out = runbook(planFlyDeploy({ ...base, channels: [] }));
     expect(out).toContain("fly ips allocate-v4 --shared --app bot");
     expect(out).toContain("fly ips allocate-v6 --app bot");
   });
@@ -84,7 +82,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     const out = runbook(
       planFlyDeploy({
         ...base,
-        modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram"]),
         secrets: [
           { name: "OPENAI_API_KEY", hint: "your model provider key" },
@@ -101,41 +98,36 @@ describe("deploy/fly: planFlyDeploy", () => {
   // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
   // is fly's is the base URL those steps are spelled with.
   it("spells every webhook step at the fly URL", () => {
-    const out = runbook(
-      planFlyDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["slack", "feishu"]) }),
-    );
+    const out = runbook(planFlyDeploy({ ...base, channels: declaredChannels(["slack", "feishu"]) }));
     expect(out).toContain("https://bot.fly.dev/slack");
     expect(out).toContain("https://bot.fly.dev/feishu");
     expect(out).not.toContain("https://bot.fly.dev/lark"); // only what is mounted
   });
 
   it("bakes config deploy.apt into the generated Dockerfile (G6 — system tools the agent's tools need)", () => {
-    const docker = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], apt: ["git", "ripgrep"] }));
+    const docker = dockerfile(planFlyDeploy({ ...base, channels: [], apt: ["git", "ripgrep"] }));
     expect(docker).toMatch(/apt-get install -y --no-install-recommends git ripgrep/);
     // omitted when no apt declared: no apt layer at all
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("apt-get");
+    expect(dockerfile(planFlyDeploy({ ...base, channels: [] }))).not.toContain("apt-get");
   });
 
-  it("turns a non-env auth label into guidance, not a secret (positive env-name match)", () => {
-    // OAuth, stored credential, or any future non-UPPER_SNAKE label → guidance, never a fake secret.
-    for (const label of ["OAuth", "stored credential", "keychain"]) {
-      const out = runbook(planFlyDeploy({ ...base, modelAuth: label, channels: [] }));
-      expect(out).not.toContain(`${label}=`);
-      expect(out).toContain("Model auth");
-    }
+  it("a credential that does not travel is a login on the box, after the deploy", () => {
+    const out = runbook(planFlyDeploy({ ...base, boxLogin: "openai-codex", channels: [] }));
+    expect(out.indexOf("fastagent login --deployment fly")).toBeGreaterThan(out.indexOf("fly deploy"));
+    expect(runbook(planFlyDeploy({ ...base, channels: [] }))).not.toContain("login --deployment");
   });
 
   it("leaves the volume to `fly deploy`: fly.toml sizes it, the runbook never pre-creates it", () => {
     // A pre-created volume is pinned to a host chosen WITHOUT the machine's guest/image, which is how a deploy
     // ends at "insufficient resources to create new machine with existing volume".
-    const p = planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] });
+    const p = planFlyDeploy({ ...base, channels: [] });
     expect(flyToml(p)).toContain("primary_region");
     expect(flyToml(p)).toContain("initial_size");
     expect(runbook(p)).not.toContain("fly volumes create");
   });
 
   it("the markdown path pins the global install and ALWAYS uses node:22-slim, whatever the runtime says", () => {
-    const md = { ...base, modelAuth: undefined, channels: [], hasPackageJson: false } as const;
+    const md = { ...base, channels: [], hasPackageJson: false } as const;
     const docker = dockerfile(planFlyDeploy(md));
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned to the current version
     expect(docker).not.toContain("npm ci");
@@ -147,7 +139,7 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("artifacts namespaced under fastagent/, agent deps installed, .git shipped, explicit deploy flags", () => {
-    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [] });
+    const p = planFlyDeploy({ ...base, channels: [] });
     // Artifacts never collide with the workspace's own deploy files.
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the workspace has one)
@@ -193,7 +185,6 @@ describe("deploy/fly: planFlyDeploy", () => {
       ...base,
       runtime: "bun",
       bunVersion: "1.3.13",
-      modelAuth: undefined,
       channels: [],
     });
     const bunDf = bun.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
@@ -213,7 +204,6 @@ describe("deploy/fly: planFlyDeploy", () => {
     const md = planFlyDeploy({
       ...base,
       hasPackageJson: false,
-      modelAuth: undefined,
       channels: [],
     });
     const mdDf = md.artifacts.find((a) => a.path === "fastagent/Dockerfile")?.content ?? "";
@@ -225,16 +215,14 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
+    expect(dockerfile(planFlyDeploy({ ...base, channels: [], hasLockfile: false }))).toMatch(
       /cd fastagent && npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
     );
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(
-      /cd fastagent && npm ci\n/,
-    );
+    expect(dockerfile(planFlyDeploy({ ...base, channels: [] }))).toMatch(/cd fastagent && npm ci\n/);
   });
 
   it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
-    const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    const npm = dockerfile(planFlyDeploy({ ...base, channels: [] }));
     // The LOCAL bin, resolved from the image WORKDIR — never npx (which would fetch an unrelated package).
     const bin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(npm)?.[1];
     expect(posix.normalize(posix.join("/app", bin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
@@ -242,18 +230,14 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("generates a Bun Dockerfile for a bun workspace (oven/bun base, bun install, bun run)", () => {
-    const bun = dockerfile(
-      planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", bunVersion: "1.3.13" }),
-    );
+    const bun = dockerfile(planFlyDeploy({ ...base, channels: [], runtime: "bun", bunVersion: "1.3.13" }));
     expect(bun).toContain("FROM oven/bun:1.3.13");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
     // The LOCAL bin, never the registry — the npm package named `fastagent` is an unrelated third party.
     expect(bun).toContain('CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]');
     expect(bun).not.toContain("node:22-slim");
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
-    const unpinned = dockerfile(
-      planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", hasLockfile: false }),
-    );
+    const unpinned = dockerfile(planFlyDeploy({ ...base, channels: [], runtime: "bun", hasLockfile: false }));
     expect(unpinned).toContain("FROM oven/bun:1\n");
     expect(unpinned).toMatch(/cd fastagent && bun install\n/); // no --frozen-lockfile without a lockfile
   });
@@ -263,7 +247,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     // may replace, and deploy.ts uses it to decide whether to round-trip `app =` and run the
     // scale-to-zero gate. Before it existed, `fly.toml` read as the author's forever.
     const { isGeneratedFlyToml } = await import("../src/deploy/fly/plan.ts");
-    const generated = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    const generated = flyToml(planFlyDeploy({ ...base, channels: [] }));
     expect(isGeneratedFlyToml(generated)).toBe(true);
     expect(isGeneratedFlyToml('app = "mine"\n')).toBe(false);
     expect(isGeneratedFlyToml(`# my own header\n${generated}`)).toBe(false); // marker must open the file

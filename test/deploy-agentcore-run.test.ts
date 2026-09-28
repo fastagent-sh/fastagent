@@ -223,10 +223,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
         "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
-        "FastagentAuthSeed=",
-        "FastagentAuthSeed2=",
-        "FastagentAuthSeed3=",
-        "FastagentAuthSeed4=",
         `FastagentEnv=${encodeCarriedEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })}`,
         "FastagentEnv2=",
         "FastagentEnv3=",
@@ -426,27 +422,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       expect(logs[warned]).toContain("/mnt/data");
       expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
     });
-
-    it("blames FASTAGENT_AUTH_SEED only when this deploy carries one", async () => {
-      const carried = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { FASTAGENT_AUTH_SEED: "seed" } });
-      expect(carried.logs.join("\n")).toContain("re-seeded from FASTAGENT_AUTH_SEED");
-
-      // A provider API key deployment re-seeds nothing; saying it would send the operator after a credential
-      // problem that does not exist.
-      const apiKey = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { OPENAI_API_KEY: "k" } });
-      expect(apiKey.logs.join("\n")).toContain("REDEPLOY");
-      expect(apiKey.logs.join("\n")).not.toContain("FASTAGENT_AUTH_SEED");
-    });
   });
 
-  it("gates an auth seed or a value file beyond the chunk ceiling", async () => {
-    const tooBigSeed = await run(
-      plan({ secrets: { FASTAGENT_AUTH_SEED: "x".repeat(8001) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(tooBigSeed).toMatchObject({ ok: false, gate: expect.stringContaining("auth.json is too large") });
-
+  it("gates a value file beyond the chunk ceiling", async () => {
     const tooBigValues = await run(
       plan({ secrets: { SOME_BLOB: "x".repeat(6000) } }),
       fakeCli(happyAws).cli,
@@ -620,23 +598,13 @@ describe("deploy/agentcore/run: helpers", () => {
   it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
     const FWD = { bucket: "b", key: "k" };
     const params = JSON.parse(
-      paramsFileContent(
-        "img:1",
-        { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64", FASTAGENT_INGRESS_SECRET: "in" },
-        FWD,
-      ),
+      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_INGRESS_SECRET: "in" }, FWD),
     ) as string[];
     expect(params.slice(0, 4)).toEqual([
       "ImageUri=img:1",
       "ForwarderBucket=b",
       "ForwarderS3Key=k",
       "FastagentIngressSecret=in",
-    ]);
-    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
-      "FastagentAuthSeed=b64",
-      "FastagentAuthSeed2=",
-      "FastagentAuthSeed3=",
-      "FastagentAuthSeed4=",
     ]);
     // Everything else rides FastagentEnv, and reads back as exactly what was carried.
     const env = Object.fromEntries(
@@ -647,21 +615,13 @@ describe("deploy/agentcore/run: helpers", () => {
     applyCarriedEnv(env);
     expect(env).toMatchObject({ OPENAI_API_KEY: "sk" });
 
-    // A real OAuth-size seed (2756+) rides across the chunks, reassemblable in order.
-    const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756);
-    const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed }, FWD)) as string[];
-    expect(chunked.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
-      `FastagentAuthSeed=${"a".repeat(2000)}`,
-      `FastagentAuthSeed2=${"b".repeat(2000)}`,
-      `FastagentAuthSeed3=${"c".repeat(756)}`,
-      "FastagentAuthSeed4=",
-    ]);
-    for (const param of chunked) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
-
-    // Switching to an API key clears a previously deployed seed rather than leaving it behind.
-    const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" }, FWD)) as string[];
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(CARRIER_MAX_CHUNKS);
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed")).every((p) => p.endsWith("="))).toBe(true);
+    // A value file past one env value's 2048-char cap rides across the chunks; an unused chunk is cleared.
+    const long = JSON.parse(paramsFileContent("img:1", { BLOB: "x".repeat(3000) }, FWD)) as string[];
+    const chunks = long.filter((p) => p.startsWith("FastagentEnv"));
+    expect(chunks).toHaveLength(CARRIER_MAX_CHUNKS);
+    expect(chunks[1]).not.toBe("FastagentEnv2=");
+    expect(chunks.at(-1)).toBe("FastagentEnv4=");
+    for (const param of chunks) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentEnv0=".length);
   });
 });
 

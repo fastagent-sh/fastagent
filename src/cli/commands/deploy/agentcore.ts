@@ -20,8 +20,9 @@ import { deployAgentcoreRun } from "../../../deploy/agentcore/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadRoutines } from "../../../schedule/discover.ts";
+import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
+import { type HostDeploy, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
@@ -31,9 +32,10 @@ function shellArg(value: string): string {
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
+  artifact: TEMPLATE_FILE,
   async deploy(ctx) {
     const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
-    const { modelAuth, modelKeyInDefinition, authPath, container, declaredSecrets, values, valueFile } = pre;
+    const { modelAuth, container, declaredSecrets, values, valueFile } = pre;
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
     // has nothing to wake it.
     if (longConnectionChannels.length > 0) {
@@ -77,7 +79,6 @@ export const agentcoreHost: HostDeploy = {
     }
     const plan = planAgentcoreDeploy({
       name: acName,
-      modelAuth,
       channels,
       secrets: pre.secrets,
       // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, through this host's
@@ -124,8 +125,6 @@ export const agentcoreHost: HostDeploy = {
         agentPrefix: container.agentPrefix,
         name: acName,
         modelAuth,
-        modelKeyInDefinition,
-        authPath,
         channels,
         declaredSecrets,
         values,
@@ -144,8 +143,6 @@ async function runDeployAgentcore(
     agentPrefix: string;
     name: string;
     modelAuth: string | undefined;
-    modelKeyInDefinition: boolean;
-    authPath: string;
     channels: readonly DeclaredChannel[];
     declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
@@ -154,12 +151,15 @@ async function runDeployAgentcore(
   },
 ): Promise<void> {
   const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
-  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
+  const { secrets, missingSecrets } = assembleSecrets({
+    modelAuth: params.modelAuth,
+    declared: params.declaredSecrets,
+    values: params.values,
+  });
   // The wake-alarm shared secret (container ↔ forwarder).
   secrets.FASTAGENT_WAKE_SECRET = crypto.randomUUID();
   // The forwarder→runtime ingress secret: what makes an envelope the forwarder's rather than any IAM principal's.
   secrets.FASTAGENT_INGRESS_SECRET = crypto.randomUUID();
-  gateOnModelCredential(needsModelCredential);
   // The params temp dir holds the ONE file carrying secret values (file:// parameter-overrides — never argv);
   // 0700/0600 and removed after the run, success or gate.
   const paramsDir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-"));

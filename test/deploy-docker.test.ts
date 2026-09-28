@@ -28,12 +28,12 @@ const base = {
 
 describe("deploy/docker: planDockerDeploy", () => {
   it("asks for no container privilege: the volume is a local disk, nothing needs mounting", () => {
-    const yaml = compose(planDockerDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    const yaml = compose(planDockerDeploy({ ...base, channels: [] }));
     expect(yaml).not.toContain("SYS_ADMIN");
     expect(yaml).not.toContain("apparmor");
   });
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
-    const plan = planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram"]) });
+    const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent/fastagent.compose.yml",
       "fastagent/fastagent.release.json",
@@ -59,7 +59,6 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("--tunnel adds a pinned ephemeral cloudflared service, without changing the app image", () => {
     const plan = planDockerDeploy({
       ...base,
-      modelAuth: "OPENAI_API_KEY",
       channels: declaredChannels(["telegram"]),
       tunnel: true,
     });
@@ -81,20 +80,18 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("omits public paths for long-connection Feishu", () => {
     const plan = planDockerDeploy({
       ...base,
-      modelAuth: undefined,
       channels: [...declaredChannels(["feishu"], "long-connection")],
     });
     expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
   });
 
-  it("names the value file instead of interpolating each secret, and keeps only the auth-seed seam", () => {
+  it("names the value file instead of interpolating each secret", () => {
     // Interpolation resolves from the SHELL or the project `.env` — exactly the source a deployment must not have.
     // `env_file` points Compose at the deployed environment's own declaration, so no declared name appears here at
-    // all, by hand or under `--run`. The seed is the one value that is not in that file.
+    // all, by hand or under `--run`.
     const yaml = compose(
       planDockerDeploy({
         ...base,
-        modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram", "feishu"]),
         secrets: [{ name: "GH_TOKEN", hint: "required by tools/gh.ts" }],
       }),
@@ -103,15 +100,15 @@ describe("deploy/docker: planDockerDeploy", () => {
     for (const name of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "FEISHU_APP_ID", "GH_TOKEN"]) {
       expect(yaml).not.toContain(name);
     }
-    expect(yaml).toContain(`FASTAGENT_AUTH_SEED: "\${FASTAGENT_AUTH_SEED:-}"`);
+    expect(yaml).not.toMatch(/: "\$\{/); // no value is interpolated from the shell
     expect(yaml).not.toContain("<value>");
     expect(yaml).not.toContain("sk-");
 
     // The path is FIXED, never the builder's FASTAGENT_SECRETS_DIR: this file is committed and must mean the same
     // thing on every machine. `deploy` creates the file so the entry is never a missing path.
-    expect(
-      compose(planDockerDeploy({ ...base, modelAuth: undefined, channels: [], valueFile: "somewhere/else/.env" })),
-    ).toContain("env_file:\n      - .secrets/.env");
+    expect(compose(planDockerDeploy({ ...base, channels: [], valueFile: "somewhere/else/.env" }))).toContain(
+      "env_file:\n      - .secrets/.env",
+    );
 
     // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the
     // container's sessions or credentials to a host path that does not exist inside it.
@@ -119,7 +116,7 @@ describe("deploy/docker: planDockerDeploy", () => {
   });
 
   it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
-    const plan = planDockerDeploy({ ...base, modelAuth: undefined, channels: [] });
+    const plan = planDockerDeploy({ ...base, channels: [] });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",
       "fastagent/Dockerfile",
@@ -134,9 +131,7 @@ describe("deploy/docker: planDockerDeploy", () => {
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
-    const out = runbook(
-      planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: declaredChannels(["telegram", "slack"]) }),
-    );
+    const out = runbook(planDockerDeploy({ ...base, channels: declaredChannels(["telegram", "slack"]) }));
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
     for (const cmd of ["up -d --build", "logs -f agent", "ps", "down"]) {

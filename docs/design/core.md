@@ -646,8 +646,9 @@ an operator's capacity decision (size the volume, prune deliberately), not a ret
 project may impose on someone's data.
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
-the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
-volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
+the deploy lifecycle differs: values ride the host's secret store, a model login is made on the box
+itself, and state rides the volume. A deployed box points both knobs at its volume so its login, and
+every OAuth refresh of it, persists.
 
 The shipped file-backed implementations are single-process, and the cost of ignoring that is specific
 rather than general — measured, not assumed:
@@ -701,8 +702,19 @@ storage preserves unfinished work without commits or pushes.
 `.secrets/` and `.deployment/`, and a generated release manifest selects the definition. A
 process-lifetime lease precedes initialization; staged trees and a pending journal make definition
 replacement recoverable. The same release preserves agent edits; a new one removes obsolete definition
-files while keeping everything outside the definition. Credentials seed only when absent. Nothing is
-mounted or unmounted by fastagent: the host's volume is the only storage.
+files while keeping everything outside the definition. Nothing is mounted or unmounted by fastagent:
+the host's volume is the only storage.
+
+No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent
+login --deployment` runs `login --stdio` inside the running image through the host's own
+owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`; `HostDeploy.shell`),
+in the server's directory with the server's credential path (`boxLoginCommand` in
+`deploy/container.ts`). The wire is `LoginIO` as JSON lines (`cli/login-relay.ts`): the box sends what
+the flow asks and says, the terminal renders it and answers by id, and one `result` line ends it. The
+box holds the PKCE verifier and exchanges the code, so it is the only holder of its grant and nothing
+can log the builder's machine out. Success is read only from that line, because a host shell can drop
+a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
+credential the box already holds (`--if-missing`); without a terminal it exits 1 naming the command.
 
 `start` loads the actual service from the persistent definition's installed package, because its tools
 and session context must use the same runtime module instance — reusing the image's engine after
@@ -750,10 +762,10 @@ tried and removed: it cost a presign path in the forwarder, a refresh endpoint, 
 and a save-on-idle edge — roughly 700 lines whose failure modes were invisible until a deploy. A host
 without a volume promises no volume; Fly and Railway are where cross-deploy memory lives.
 
-Credentials need no extra rule: `maybeSeedAuth` is absent-only, so a restart within a release keeps
-what the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Deploying IS re-authenticating.
-The caveat is OAuth's: a refresh token is single-use and shared with the builder machine, so the box
-can lose model access between deploys and the fix is another deploy.
+The model credential is a provider API key in the value file, carried on every deploy. A login on the
+box would be wiped by the next deploy, and `login --deployment` has no shell into AgentCore yet
+(`InvokeAgentRuntimeCommandShell` needs a SigV4 WebSocket client), so the pre-flight refuses `--run`
+for a model whose key is not there.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a

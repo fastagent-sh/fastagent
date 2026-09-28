@@ -24,7 +24,6 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   secrets: {},
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
-  needsModelCredential: false,
   requireTunnel: false,
   announce: async () => [],
   ...override,
@@ -60,30 +59,6 @@ describe("deploy/docker/run: local Compose journey", () => {
       "compose -f fastagent.compose.yml port agent 8787",
     ]);
     expect(healthUrls).toEqual(["http://127.0.0.1:9876/health"]);
-  });
-
-  it("passes ONLY the auth seed, and sets it even when absent", async () => {
-    // The container reads the value file itself through the generated `env_file`, so nothing else has to cross this
-    // process. The seed is the exception (`--run` mints it from the local auth.json) and is set unconditionally:
-    // `spawnRunner` merges over `process.env`, so leaving it unset would let a same-named variable in the builder's
-    // shell interpolate into the container in its place.
-    const before = process.env.FASTAGENT_AUTH_SEED;
-    process.env.FASTAGENT_AUTH_SEED = "from-the-builders-shell";
-    try {
-      const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
-      await deployDockerRun(plan({ secrets: { TELEGRAM_BOT_TOKEN: "t" } }), docker, () => {}, healthy);
-      const passed = calls.find((call) => call.env)?.env;
-      expect(passed).toEqual({ FASTAGENT_AUTH_SEED: "" }); // blanked, and nothing else travels
-    } finally {
-      if (before === undefined) delete process.env.FASTAGENT_AUTH_SEED;
-      else process.env.FASTAGENT_AUTH_SEED = before;
-    }
-  });
-
-  it("carries the minted auth seed when there is one", async () => {
-    const { docker, calls } = fakeDocker((args) => (args[1] === "port" ? { code: 1 } : {}));
-    await deployDockerRun(plan({ secrets: { FASTAGENT_AUTH_SEED: "b64" } }), docker, () => {}, healthy);
-    expect(calls.find((call) => call.env)?.env).toEqual({ FASTAGENT_AUTH_SEED: "b64" });
   });
 
   it("tells the health probe when the agent container is gone (a crashed boot must not spend the budget)", async () => {
@@ -139,6 +114,36 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/--tunnel.*no "tunnel" service.*--force/);
     expect(withoutTunnel.commands()).not.toContain("compose -f fastagent.compose.yml up -d --build");
+  });
+
+  it("the box logs in once healthy and before the tunnel is announced; a failed login still says where Compose is", async () => {
+    const { docker } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\ntunnel\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const order: string[] = [];
+    const out = await deployDockerRun(
+      plan({
+        requireTunnel: true,
+        boxLogin: async () => {
+          order.push("login");
+          return "not logged in: …";
+        },
+      }),
+      docker,
+      () => {},
+      async () => {
+        order.push("health");
+        return true;
+      },
+      async () => {
+        order.push("tunnel");
+        return { url: "https://blue-cat.trycloudflare.com", connected: true };
+      },
+    );
+    expect(out).toEqual({ ok: false, gate: "not logged in: …", url: "http://127.0.0.1:8787" });
+    expect(order).toEqual(["health", "login"]);
   });
 
   it("gates when a webhook registration terminally fails, and still reports where Compose is", async () => {
@@ -238,17 +243,12 @@ describe("deploy/docker/run: local Compose journey", () => {
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
       return {};
     });
-    await deployDockerRun(
-      plan({ secrets: { OPENAI_API_KEY: "sk-secret", FASTAGENT_AUTH_SEED: "base64-secret" } }),
-      docker,
-      () => {},
-      healthy,
-    );
+    await deployDockerRun(plan({ secrets: { OPENAI_API_KEY: "sk-secret" } }), docker, () => {}, healthy);
 
     expect(calls.some((call) => call.args.join(" ").includes("sk-secret"))).toBe(false);
     const up = calls.find((call) => call.args.includes("up"))!;
     // The declared key rides `env_file` in the generated Compose, so it does not travel through this process at all.
-    expect(up.env).toEqual({ FASTAGENT_AUTH_SEED: "base64-secret" });
+    expect(up.env).toBeUndefined();
   });
 
   it("names the values the container must find, and the file it reads them from", async () => {
@@ -302,7 +302,6 @@ describe("deploy/docker/run: local Compose journey", () => {
         script: (args) => (args[0] === "compose" && args[1] === "version" ? { code: 1 } : {}),
         gate: /Compose plugin/,
       },
-      { name: "credential", override: { needsModelCredential: true }, gate: /fastagent login/ },
       { name: "secret", override: { missingSecrets: ["BOT_TOKEN"] }, gate: /BOT_TOKEN/ },
       {
         name: "daemon",
@@ -362,18 +361,13 @@ describe("deploy/docker/run: parsers", () => {
         : { stdout: "INF https://blue-cat.trycloudflare.com ready\n" };
     });
     const sleeps: number[] = [];
-    const url = await waitForComposeTunnelUrl(
-      docker,
-      "fastagent.compose.yml",
-      {},
-      {
-        attempts: 2,
-        intervalMs: 7,
-        sleep: async (ms) => {
-          sleeps.push(ms);
-        },
+    const url = await waitForComposeTunnelUrl(docker, "fastagent.compose.yml", {
+      attempts: 2,
+      intervalMs: 7,
+      sleep: async (ms) => {
+        sleeps.push(ms);
       },
-    );
+    });
     // Neither poll carries a connection line, so the budget runs out — and the URL is still returned,
     // marked as never having connected. The registrars downstream report their own outcome; a "no URL"
     // gate would misname this one, and an unmarked URL would leave the driver unable to say which it is.
@@ -393,18 +387,13 @@ describe("deploy/docker/run: parsers", () => {
         : { stdout: "INF https://blue-cat.trycloudflare.com ready\nINF Registered tunnel connection connIndex=0\n" };
     });
     const sleeps: number[] = [];
-    const url = await waitForComposeTunnelUrl(
-      docker,
-      "fastagent.compose.yml",
-      {},
-      {
-        attempts: 5,
-        intervalMs: 7,
-        sleep: async (ms) => {
-          sleeps.push(ms);
-        },
+    const url = await waitForComposeTunnelUrl(docker, "fastagent.compose.yml", {
+      attempts: 5,
+      intervalMs: 7,
+      sleep: async (ms) => {
+        sleeps.push(ms);
       },
-    );
+    });
     expect(url).toEqual({ url: "https://blue-cat.trycloudflare.com", connected: true });
     expect(calls, "the URL was there on poll 1; it kept polling for the connection").toBe(2);
     expect(sleeps).toEqual([7, TUNNEL_DNS_LAG_MS]);

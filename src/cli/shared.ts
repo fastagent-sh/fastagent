@@ -30,7 +30,7 @@ import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
-import type { ResolvedPlacement } from "../paths.ts";
+import { type ResolvedPlacement, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -144,7 +144,7 @@ export async function reportAuth(agentDir: string, modelSpec: string, auth: Auth
   // Only when nothing satisfies auth does the stored credential matter: it tells "nothing stored" from "stored but
   // unusable". `read` never refreshes.
   const stored = source === undefined ? await store.read(provider) : undefined;
-  const report = formatAuthReport(provider, found, source, stored);
+  const report = formatAuthReport(provider, found, source, stored, isDeployedWorkspace());
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }

@@ -15,6 +15,8 @@ interface ArgSpec {
 export interface FlagSpec {
   flags: string;
   description: string;
+  /** Parsed but left out of help: an internal seam between two fastagent processes, not a user-facing flag. */
+  hidden?: boolean;
 }
 
 interface ExampleSpec {
@@ -118,7 +120,7 @@ function register(parent: Command, spec: CommandSpec): void {
     }
     cmd.addArgument(arg);
   }
-  for (const f of spec.flags ?? []) cmd.addOption(new Option(f.flags, f.description));
+  for (const f of spec.flags ?? []) cmd.addOption(new Option(f.flags, f.description).hideHelp(f.hidden === true));
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;
   if (run) {

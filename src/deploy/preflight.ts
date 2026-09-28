@@ -17,6 +17,8 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
+  interactiveAuth,
+  loginProviders,
   modelCredentialCarry,
   probeAuthSource,
 } from "../engines/pi/models.ts";
@@ -57,17 +59,16 @@ interface DeployFacts {
   /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
   /**
-   * The definition itself carries the model key (a models.json literal `apiKey`, or a `!command` run on the host), so
-   * there is nothing for `--run` to carry AND nothing to gate: `fastagent login` cannot serve a custom provider, so
-   * gating on it would strand a correctly configured agent.
+   * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
+   * not travel, because it is neither a variable in the value file nor carried by the definition (a models.json
+   * literal `apiKey` or `!command`). Nothing from this machine's credentials file is ever copied, so a login on the
+   * box is its only holder.
    */
-  modelKeyInDefinition: boolean;
+  boxLogin: string | undefined;
   /** Every tool/routine/channel declaration — the names the value file must supply, by declaring file. */
   declaredSecrets: DeclaredSecret[];
   /** The runbook's variable list: the declared names, then everything else the value file carries. */
   secrets: DeploymentSecret[];
-  /** The project-level auth file `--run` reads to carry the credential (probed with the same path). */
-  authPath: string;
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
   container: ContainerInput;
   port: number;
@@ -110,6 +111,8 @@ interface PreflightInput {
    * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
    */
   publicUrl?: boolean;
+  /** The target can open a shell on its box, so the deployment can log in there (`fastagent login --deployment`). */
+  shell?: boolean;
 }
 
 /** Run the host-neutral pre-flight. */
@@ -138,6 +141,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     force,
     externalClock,
     publicUrl = true,
+    shell = true,
   } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
@@ -259,22 +263,33 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const authPath = resolveAuthPath(agentDir);
   const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
   let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
-  let modelKeyInDefinition = false;
+  let boxLogin: string | undefined;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
   // REACH the host").
   if (modelSpec && !isEnvKey(modelAuth)) {
     const carry = modelCredentialCarry(models, modelSpec);
     if (carry.envVar) modelAuth = carry.envVar;
-    else modelKeyInDefinition = carry.inDefinition;
+    else if (!carry.inDefinition) boxLogin = providerOf(modelSpec);
   }
-  // The carry copies the whole auth.json, so the grant then has two holders that refresh independently.
-  if (modelAuth === "OAuth") {
-    report.warn(
-      `${modelSpec} authenticates with an OAuth login. Deploy carries a copy, and from then on this machine and the ` +
-        `deployment each refresh the same grant: a provider that rotates refresh tokens logs out whichever side ` +
-        `refreshes second, and on a host that keeps its volume a redeploy does not replace the auth.json already ` +
-        `there. Use a provider API key for a deployment.`,
-    );
+  if (boxLogin !== undefined) {
+    const provider = loginProviders().find((p) => p.id === boxLogin);
+    if (!provider || !(["oauth", "api_key"] as const).some((method) => interactiveAuth(provider, method))) {
+      report.issue(
+        `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
+          `its API key in ${valueFile}`,
+      );
+    } else if (!shell) {
+      report.issue(
+        `no credential for ${modelSpec} reaches the deployment, and this host cannot log in on the deployment yet ` +
+          `— set ${boxLogin}'s API key in ${valueFile}`,
+      );
+    } else {
+      report.note(
+        `${modelSpec}: this machine's credentials stay here — the deployment logs in to ${boxLogin} itself ` +
+          `(\`fastagent login --deployment\`, which \`--run\` starts once the box is up), or set its API key in ` +
+          `${valueFile}`,
+      );
+    }
   }
 
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
@@ -381,8 +396,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     values,
     valueFile,
     modelAuth,
-    modelKeyInDefinition,
-    authPath,
+    boxLogin,
     container,
     port,
     declaredSecrets,

@@ -33,7 +33,7 @@ const DEPLOY_OWNED = new Set([
 
 /** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */
 function isDeployOwned(name: string): boolean {
-  return DEPLOY_OWNED.has(name) || /^FASTAGENT_(AUTH_SEED|ENV)(_\d+)?$/.test(name);
+  return DEPLOY_OWNED.has(name) || /^FASTAGENT_ENV(_\d+)?$/.test(name);
 }
 
 /** The value-file variables that travel: everything with a value that the deployment does not set itself. */
@@ -70,48 +70,29 @@ export function deploymentSecrets(
 }
 
 /**
- * Assemble the VALUES a `--run` deploy sets on the host: every variable the value file carries, plus the local
- * credential. Never minted here.
+ * Assemble the VALUES a `--run` deploy sets on the host: every variable the value file carries. Never minted here.
  *
  * `values` is the selected value file, read as data — **the environment running `deploy` is not a source**. A
  * deployment must be reproducible from what it carries, and a variable that happens to be exported on the builder is
  * written down nowhere. CI supplies values by writing the file before running the command.
+ *
+ * No credentials file travels: a model that does not authenticate through a variable (or its own definition) logs in
+ * on the deployment itself (`fastagent login --deployment`), so the box is the only holder of its grant.
  */
 export function assembleSecrets(input: {
   modelAuth: string | undefined;
-  /**
-   * The definition carries the model key itself (a models.json literal `apiKey` / `!command`): there is no value to
-   * carry and no gate to raise.
-   */
-  modelKeyInDefinition?: boolean;
-  authFile: Buffer | undefined;
   /** Every name the definition declared it needs — what must have a value. */
   declared?: readonly DeclaredSecret[];
   /** The selected value file's contents (`loadEnvValues`). The ONLY source of operator-supplied values. */
   values: ReadonlyMap<string, string>;
-}): {
-  secrets: Record<string, string>;
-  missingSecrets: string[];
-  needsModelCredential: boolean;
-} {
+}): { secrets: Record<string, string>; missingSecrets: string[] } {
   const secrets = carriedValues(input.values);
   const missingSecrets: string[] = [];
-  let needsModelCredential = false;
-
-  if (isEnvKey(input.modelAuth)) {
-    if (!secrets[input.modelAuth]) missingSecrets.push(input.modelAuth); // `.env` remediation fits
-  } else if (input.authFile) {
-    secrets.FASTAGENT_AUTH_SEED = input.authFile.toString("base64");
-  } else if (input.modelKeyInDefinition) {
-    // The definition authenticates itself (models.json literal key, or a command run on the host), so it travels in
-    // the image with everything else.
-  } else {
-    needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
-  }
+  if (isEnvKey(input.modelAuth) && !secrets[input.modelAuth]) missingSecrets.push(input.modelAuth);
   for (const { name } of dedupeSecrets(input.declared ?? [])) {
     if (!secrets[name] && !missingSecrets.includes(name)) missingSecrets.push(name);
   }
-  return { secrets, missingSecrets, needsModelCredential };
+  return { secrets, missingSecrets };
 }
 
 /**
@@ -125,11 +106,6 @@ export function missingValuesGate(missing: readonly string[], valueFile: string)
     `no value for: ${missing.join(", ")} — the deployed environment is declared by ${valueFile}, and this deploy ` +
     `reads only that file (exporting the variable here does not reach the deployment). Add them there and re-run`
   );
-}
-
-/** The bytes to seed to the auth file, or undefined to leave it alone. */
-export function authSeedBytes(seed: string | undefined, fileExists: boolean): Buffer | undefined {
-  return !seed || fileExists ? undefined : Buffer.from(seed, "base64");
 }
 
 /**
@@ -146,11 +122,6 @@ function collectChunked(env: NodeJS.ProcessEnv, name: string): string | undefine
     value += part;
   }
   return value;
-}
-
-/** `FASTAGENT_AUTH_SEED` (+ `_2`, …): the base64 auth.json a deploy carries. */
-export function collectAuthSeed(env: NodeJS.ProcessEnv): string | undefined {
-  return collectChunked(env, "FASTAGENT_AUTH_SEED");
 }
 
 /**

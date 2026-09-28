@@ -4,8 +4,6 @@ import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 import {
   assembleSecrets,
-  authSeedBytes,
-  collectAuthSeed,
   applyCarriedEnv,
   deploymentSecrets,
   encodeCarriedEnv,
@@ -71,6 +69,37 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
+  });
+
+  it("the box logs in after it answers and before any webhook points at it; a box left logged out stays dark", async () => {
+    const order: string[] = [];
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      order.push("register");
+      return "registered";
+    });
+    const healthy = async () => {
+      order.push("health");
+      return true;
+    };
+    const login = async (verdict: string | undefined) => {
+      order.push("login");
+      return verdict;
+    };
+    const p = (verdict: string | undefined) =>
+      plan({ channels: declaredChannels(["telegram"]), boxLogin: () => login(verdict) });
+
+    expect(await run(p(undefined), fly, tg, healthy)).toEqual({ ok: true });
+    expect(order).toEqual(["health", "login", "register"]);
+
+    order.length = 0;
+    expect(await run(p("not logged in: …"), fly, tg, healthy)).toEqual({ ok: false, gate: "not logged in: …" });
+    expect(order).toEqual(["health", "login"]);
+
+    // No webhook to point, but a login follows: the box must be up (workspace prepared, CLI installed) for it.
+    order.length = 0;
+    await run(plan({ boxLogin: () => login(undefined) }), fly, tg, healthy);
+    expect(order).toEqual(["health", "login"]);
   });
 
   it("an app that already has both families is not allocated a second address", async () => {
@@ -255,43 +284,25 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   it("an env-key model auth travels as its own secret (value from the value file)", () => {
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
       values: new Map(Object.entries({ OPENAI_API_KEY: "sk-x" })),
     });
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "sk-x" });
-    expect(r.needsModelCredential).toBe(false);
-  });
-
-  it("OAuth/stored auth (no env key) rides as a base64 FASTAGENT_AUTH_SEED", () => {
-    const r = assembleSecrets({ modelAuth: "OAuth", authFile: Buffer.from('{"a":1}'), values: new Map() });
-    expect(r.secrets.FASTAGENT_AUTH_SEED).toBe(Buffer.from('{"a":1}').toString("base64"));
-    expect(r.needsModelCredential).toBe(false);
-  });
-
-  it("no env key AND no auth file → needsModelCredential (its own login gate, NOT missingSecrets)", () => {
-    const r = assembleSecrets({ modelAuth: undefined, authFile: undefined, values: new Map() });
-    expect(r.needsModelCredential).toBe(true);
     expect(r.missingSecrets).toEqual([]);
   });
 
-  it("a definition-carried model key (models.json) satisfies the gate without carrying a secret", () => {
-    // A models.json endpoint has no env-key name and no auth.json: `fastagent login` has no flow for a custom
-    // provider, and the key is already inside the definition, which the image ships.
-    const r = assembleSecrets({
-      modelAuth: "configured API key",
-      modelKeyInDefinition: true,
-      authFile: undefined,
-      values: new Map(),
-    });
-    expect(r.needsModelCredential).toBe(false);
-    expect(r.secrets).toEqual({}); // nothing to carry — and nothing invented
-    expect(r.missingSecrets).toEqual([]);
+  it("an env-key model auth the value file lacks is missing, like any declared name", () => {
+    const r = assembleSecrets({ modelAuth: "OPENAI_API_KEY", values: new Map() });
+    expect(r.missingSecrets).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("a stored credential (OAuth or a logged-in key) carries nothing: the box logs in itself", () => {
+    const r = assembleSecrets({ modelAuth: "OAuth", values: new Map() });
+    expect(r).toEqual({ secrets: {}, missingSecrets: [] });
   });
 
   it("the WHOLE value file travels, declared or not — minus what the deployment sets itself", () => {
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
       values: new Map(
         Object.entries({
           OPENAI_API_KEY: "k",
@@ -303,7 +314,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
           FASTAGENT_STATE_DIR: "/Users/me/state",
           FASTAGENT_SECRETS_DIR: "/Users/me/secrets",
           FASTAGENT_MODEL: "openai/gpt-5",
-          FASTAGENT_AUTH_SEED_2: "stale",
+          FASTAGENT_ENV_2: "stale",
         }),
       ),
     });
@@ -318,7 +329,6 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     ];
     const present = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
       declared,
       values: new Map(Object.entries({ OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" })),
     });
@@ -326,7 +336,6 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(present.missingSecrets).toEqual([]);
     const absent = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
-      authFile: undefined,
       declared,
       values: new Map(Object.entries({ OPENAI_API_KEY: "k" })),
     });
@@ -340,7 +349,6 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     try {
       const r = assembleSecrets({
         modelAuth: "OPENAI_API_KEY",
-        authFile: undefined,
         declared: [{ name: "GH_TOKEN", source: "tools/gh.ts" }],
         values: new Map([["OPENAI_API_KEY", "k"]]),
       });
@@ -397,24 +405,5 @@ describe("deploy/secrets: missingValuesGate (one refusal, every host)", () => {
     expect(gate).toContain("GH_TOKEN, X_API_KEY");
     expect(gate).toContain("/data/.secrets/.env");
     expect(gate).not.toMatch(/\n/); // one line: it is printed straight into an Error
-  });
-});
-
-describe("deploy/secrets: authSeedBytes (the start-side seed guard)", () => {
-  it("seeds only when the seed is set AND the auth file is absent (absent-only — no rollback)", () => {
-    expect(authSeedBytes(undefined, false)).toBeUndefined(); // no seed → no-op
-    expect(authSeedBytes(Buffer.from("hi").toString("base64"), true)).toBeUndefined(); // file present → never clobber
-    expect(authSeedBytes(Buffer.from("hi").toString("base64"), false)?.toString()).toBe("hi"); // absent → materialize
-  });
-
-  it("collectAuthSeed reassembles a chunked seed in order and stops at the first gap", () => {
-    expect(collectAuthSeed({})).toBeUndefined();
-    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "abc" })).toBe("abc");
-    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_2: "b", FASTAGENT_AUTH_SEED_3: "c" })).toBe(
-      "abc",
-    );
-    // A gap ends collection (the writer fills contiguously); an empty continuation reads as absent.
-    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_3: "c" })).toBe("a");
-    expect(collectAuthSeed({ FASTAGENT_AUTH_SEED: "a", FASTAGENT_AUTH_SEED_2: "" })).toBe("a");
   });
 });

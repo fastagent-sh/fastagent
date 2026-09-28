@@ -4,16 +4,14 @@ import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import * as Effect from "effect/Effect";
-import { writeFileAtomic } from "../../atomic-write.ts";
-import { applyCarriedEnv, authSeedBytes, collectAuthSeed } from "../../deploy/secrets.ts";
+import { applyCarriedEnv } from "../../deploy/secrets.ts";
 import {
   applyReleaseEnv,
   installAgentDependencies,
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import { resolveAuthPath } from "../../engines/pi/config.ts";
-import { SECRET_FILE_MODE, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
+import { resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
@@ -165,7 +163,6 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 /** Internal entry loaded from the active workspace's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
-  await maybeSeedAuth(resolveAuthPath(placement.agentDir));
   const opened = await createPiAgentFromDir(placement.agentDir, {
     model: opts.model,
     serving: true,
@@ -197,13 +194,6 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
         cliMountOptions(() => traced),
       ));
   return { ...service, stateRoot, port: config.http?.port ?? DEFAULT_HTTP_PORT };
-}
-
-async function maybeSeedAuth(authPath: string): Promise<void> {
-  const bytes = authSeedBytes(collectAuthSeed(process.env), await exists(authPath));
-  if (!bytes) return;
-  writeFileAtomic(authPath, bytes, SECRET_FILE_MODE); // creates the directory it needs
-  log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 
 /**

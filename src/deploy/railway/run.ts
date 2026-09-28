@@ -12,10 +12,7 @@ export interface RailwayRunPlan {
    * in lockstep).
    */
   mountPath: string;
-  /**
-   * `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables + `FASTAGENT_AUTH_SEED` for a
-   * file credential.
-   */
+  /** `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -27,6 +24,11 @@ export interface RailwayRunPlan {
   intoLinked: boolean;
   /** `RAILWAY_DOCKERFILE_PATH` value (`/fastagent/Dockerfile`). */
   dockerfilePath: string;
+  /**
+   * Log the box in (`fastagent login --deployment`) once it is up and before any entrance opens: a channel pointed at
+   * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
+   */
+  boxLogin?: () => Promise<string | undefined>;
 }
 
 /**
@@ -238,8 +240,11 @@ export async function deployRailwayRun(
     log,
     inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
     probe: healthProbe,
+    loginFollows: plan.boxLogin !== undefined,
   });
   if (healthGate) return gate(healthGate);
+  const notLoggedIn = await plan.boxLogin?.();
+  if (notLoggedIn) return gate(notLoggedIn);
 
   // 7.
   const registrationGateMsg = await registerWebhooks({

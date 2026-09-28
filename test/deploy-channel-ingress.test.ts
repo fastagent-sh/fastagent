@@ -127,7 +127,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      modelAuth: undefined,
       channels,
     }).runbook.join("\n");
 
@@ -141,7 +140,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      modelAuth: undefined,
       channels,
     }).runbook.join("\n");
 
@@ -149,7 +147,6 @@ describe("every host's runbook reads the same answer", () => {
     planAgentcoreDeploy({
       releaseId: "release-one",
       name: "bot",
-      modelAuth: undefined,
       channels,
       schedules: [],
       hasPackageJson: true,

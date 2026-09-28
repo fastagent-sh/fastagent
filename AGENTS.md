@@ -46,6 +46,8 @@ src/
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
+│   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
+│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts
@@ -164,7 +166,8 @@ src/
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
 │   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
-│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral)
+│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
+│   │                       # that runs `login --stdio` inside that image where its server runs
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
 │                           # .secrets/ stay outside the definition)

@@ -12,16 +12,23 @@ import { deployFlyRun } from "../../../deploy/fly/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
+import { assembleSecrets } from "../../../deploy/secrets.ts";
+import type { BoxShell } from "../../box-login.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials, gateOnModelCredential, registrarsFor } from "./shared.ts";
+import { isInteractive } from "../../shared.ts";
+import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
+  artifact: "fly.toml",
+  async shell({ agentDir, workspace }) {
+    const flyToml = await readTextIfExists(join(agentDir, "fly.toml"));
+    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(workspace)));
+  },
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, pre, write } = ctx;
-    const { hasCron, modelAuth, modelKeyInDefinition, authPath, container, port, declaredSecrets, values, valueFile } =
-      pre;
+    const { hasCron, modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // Two consistent modes.
     const flyTomlPath = join(agentDir, "fly.toml");
     const flyToml = await readTextIfExists(flyTomlPath).catch(failStartup);
@@ -54,7 +61,7 @@ export const flyHost: HostDeploy = {
     const plan = planFlyDeploy({
       appName,
       port,
-      modelAuth,
+      boxLogin,
       channels,
       secrets: pre.secrets,
       hasCron,
@@ -68,8 +75,8 @@ export const flyHost: HostDeploy = {
         agentPrefix: container.agentPrefix,
         appName,
         modelAuth,
-        modelKeyInDefinition,
-        authPath,
+        boxLogin,
+        input: opts.input !== false && isInteractive(),
         channels,
         declaredSecrets,
         values,
@@ -87,8 +94,10 @@ async function runDeployFly(
     agentPrefix: string;
     appName: string;
     modelAuth: string | undefined;
-    modelKeyInDefinition: boolean;
-    authPath: string;
+    /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
+    boxLogin: string | undefined;
+    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+    input: boolean;
     channels: readonly DeclaredChannel[];
     declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
@@ -102,8 +111,11 @@ async function runDeployFly(
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
   }
 
-  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
-  gateOnModelCredential(needsModelCredential);
+  const { secrets, missingSecrets } = assembleSecrets({
+    modelAuth: params.modelAuth,
+    declared: params.declaredSecrets,
+    values: params.values,
+  });
 
   const outcome = await deployFlyRun(
     {
@@ -114,6 +126,7 @@ async function runDeployFly(
       channels,
       flyConfig: `${agentPrefix}fly.toml`,
       dockerfile: `${agentPrefix}Dockerfile`,
+      ...boxLoginStep("fly", params, flyShell(appName)),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
@@ -121,4 +134,17 @@ async function runDeployFly(
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
+}
+
+/** `fly ssh console` into the app's machine, woken first: a suspended machine has no shell to open. */
+function flyShell(app: string): BoxShell {
+  return {
+    bin: "fly",
+    args: (command) => ["ssh", "console", "--app", app, "--quiet", "--command", `sh -c '${command}'`],
+    // `fly ssh` fails with "no started VMs" while the machine is suspended, and a request is what resumes it. The
+    // answer is not the point: a machine that stays down makes the shell fail right after, with Fly's own reason.
+    wake: async () => {
+      await fetch(`https://${app}.fly.dev/health`, { signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
+    },
+  };
 }

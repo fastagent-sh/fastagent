@@ -124,7 +124,8 @@ export type PublicHealthProbe = (healthUrl: string) => Promise<boolean>;
  * report success. The channels that DO verify (Slack/Feishu challenge) would fail here too, but as "registration
  * failed" — a diagnosis that hides the actual cause.
  *
- * Asked ONLY when this deployment actually has a webhook to point. A definition with none (schedules only, the
+ * Asked ONLY when this deployment actually has a webhook to point, or a login on the box follows (the box must
+ * have prepared its workspace and installed the CLI the login runs). A definition with neither (schedules only, the
  * built-in `POST /invoke`, or long-connection channels) needs no inbound reachability at all, and demanding it would
  * invent a failure for a deploy run from a network that cannot reach the platform's edge.
  */
@@ -135,8 +136,10 @@ export async function publicHealthGate(input: {
   /** How THIS host is inspected and re-run — the only per-host words in the gate. */
   inspectHint: string;
   probe?: PublicHealthProbe;
+  /** A login on the box follows (`fastagent login --deployment`). */
+  loginFollows?: boolean;
 }): Promise<string | undefined> {
-  if (webhookKinds(input.channels).length === 0) return undefined;
+  if (webhookKinds(input.channels).length === 0 && !input.loginFollows) return undefined;
   const healthUrl = `${input.baseUrl}/health`;
   input.log(`waiting for ${healthUrl} (up to ${PUBLIC_HEALTH_TIMEOUT_MS / 1000}s)…`);
   const probe =
@@ -146,7 +149,7 @@ export async function publicHealthGate(input: {
   // `re-run` as the only way out (a Fly re-run repeats the remote build).
   for (const line of webhookRunbook(input.baseUrl, input.channels)) input.log(line);
   return (
-    `the deployed agent did not become healthy at ${healthUrl}, so no webhook was registered — ${input.inspectHint}. ` +
+    `the deployed agent did not become healthy at ${healthUrl}, so it was not activated — ${input.inspectHint}. ` +
     `To point the channels by hand instead, use the lines above.`
   );
 }
