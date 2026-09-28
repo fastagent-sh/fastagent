@@ -7,7 +7,6 @@ import { relative, resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
-import { fastagentCredentialStore } from "../engines/pi/auth.ts";
 import {
   isValidPort,
   listModels,
@@ -21,9 +20,9 @@ import {
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
 import {
+  agentCredentialStore,
   createPiModelRuntime,
   probeAuthSource,
-  projectAuthenticates,
   providerAuthStatuses,
 } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
@@ -129,29 +128,17 @@ export function parseBind(value: string | undefined): string | undefined {
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
 export async function reportAuth(agentDir: string, modelSpec: string, auth: AuthLayers): Promise<void> {
   const provider = providerOf(modelSpec);
-  const { path: authPath, fallback: fallbackAuthPath } = auth;
-  const models = await createPiModelRuntime({ agentDir, auth }).catch(failStartup);
+  // ONE store for the runtime and for this report: which file holds the credential is the store's own answer, so the
+  // line cannot name a file other than the one the runtime reads.
+  const store = await agentCredentialStore({ agentDir, auth });
+  const models = await createPiModelRuntime({ agentDir, auth, credentials: store }).catch(failStartup);
   const source = await probeAuthSource(models, modelSpec);
-  // One refresh-FREE read per layer, serving both questions below. A read failure is already warned about by the
-  // store itself; this line degrades to "nothing stored" rather than taking down the startup report.
-  const readFrom = (path: string) =>
-    fastagentCredentialStore(path)
-      .read(provider)
-      .catch(() => undefined);
-  const inPrimary = await readFrom(authPath);
-  // The same rule the runtime reads by: a provider the project authenticates itself never reaches the global file.
-  const covers = await projectAuthenticates({ agentDir, auth });
-  const inFallback =
-    inPrimary || fallbackAuthPath === undefined || (await covers?.(provider))
-      ? undefined
-      : await readFrom(fallbackAuthPath);
-  // Name the layer the credential actually came from: "which file do I edit" is the question this line answers, and
-  // a global credential lives in a file the agent dir does not contain. With NEITHER layer holding it, the answer is
-  // the primary — that is the file the `fastagent login` this report recommends writes.
-  const found = fallbackAuthPath !== undefined && inFallback ? fallbackAuthPath : authPath;
+  // "Which file do I edit" is the question this line answers, and a global credential lives in a file the agent dir
+  // does not contain. With neither layer holding it, the answer is the file the recommended `fastagent login` writes.
+  const found = await store.layerOf(provider);
   // Only when nothing satisfies auth does the stored credential matter: it tells "nothing stored" from "stored but
-  // unusable".
-  const stored = source === undefined ? (inPrimary ?? inFallback) : undefined;
+  // unusable". `read` never refreshes.
+  const stored = source === undefined ? await store.read(provider) : undefined;
   const report = formatAuthReport(provider, found, source, stored);
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);

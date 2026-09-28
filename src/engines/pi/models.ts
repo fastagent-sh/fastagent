@@ -20,7 +20,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
+import { type FastagentAuthOptions, type FastagentCredentialStore, fastagentCredentialStore } from "./auth.ts";
 import { type AuthLayers, providerOf } from "./config.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
@@ -194,30 +194,33 @@ async function runtimeFiles(options: PiModelRuntimeOptions) {
 }
 
 /**
- * Whether the PROJECT authenticates a provider without the user-global credentials file (its own auth file, a
- * models.json key, or the environment), answered by pi's own resolution over a runtime that has no global layer.
- * Undefined when there is no global layer to yield. The global file serves only the providers this says no to: a
- * deployment never has that file, so a global login that outranked, say, an `ANTHROPIC_API_KEY` in `.secrets/.env`
- * would run one credential here and a different one deployed.
+ * The credential store an agent reads through: its own file, then the user-global one for a provider the PROJECT
+ * authenticates no other way (its own auth file, a models.json key, or the environment). "No other way" is answered
+ * by pi's own resolution over a runtime that has no global layer. A deployment never has the global file, so a global
+ * login that outranked, say, an `ANTHROPIC_API_KEY` in `.secrets/.env` would run one credential here and a different
+ * one deployed. {@link createPiModelRuntime} reads through this store, and so does anything reporting on it.
  */
-export async function projectAuthenticates(
-  options: PiModelRuntimeOptions,
-): Promise<((providerId: string) => Promise<boolean>) | undefined> {
-  return projectCheck(options, (await runtimeFiles(options)).create);
+export async function agentCredentialStore(options: PiModelRuntimeOptions): Promise<FastagentCredentialStore> {
+  return credentialStoreFor(options, (await runtimeFiles(options)).create);
 }
 
-async function projectCheck(
+async function credentialStoreFor(
   options: PiModelRuntimeOptions,
   create: Awaited<ReturnType<typeof runtimeFiles>>["create"],
-): Promise<((providerId: string) => Promise<boolean>) | undefined> {
-  if (options.credentials || options.auth?.fallback === undefined) return undefined;
+): Promise<FastagentCredentialStore> {
+  const { auth, warn } = options;
+  if (auth?.fallback === undefined) return fastagentCredentialStore(auth?.path, { warn });
   const project = await ModelRuntime.create({
-    credentials: fastagentCredentialStore(options.auth.path, { warn: options.warn }),
+    credentials: fastagentCredentialStore(auth.path, { warn }),
     ...create,
     refreshOnCreate: false,
   });
   for (const provider of options.providers ?? []) project.registerNativeProvider(provider);
-  return async (providerId) => (await project.checkAuth(providerId)) !== undefined;
+  return fastagentCredentialStore(auth.path, {
+    warn,
+    fallbackPath: auth.fallback,
+    projectAuthenticates: async (providerId) => (await project.checkAuth(providerId)) !== undefined,
+  });
 }
 
 /**
@@ -225,7 +228,7 @@ async function projectCheck(
  * pi's own check, or undefined. Passed explicitly rather than read from `process.env`: only the environment a SHELL
  * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
  * that agent's variables too. What the shell shares outranks the global credentials file ({@link
- * projectAuthenticates}), so a global login for such a provider is not used.
+ * agentCredentialStore}), so a global login for such a provider is not used.
  */
 export async function environmentAuthSource(providerId: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
   const ambient = defaultProviderAuthContext();
@@ -243,15 +246,8 @@ export async function environmentAuthSource(providerId: string, env: NodeJS.Proc
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}): Promise<ModelRuntime> {
   const { models, create } = await runtimeFiles(options);
-  const covers = await projectCheck(options, create);
   const runtime = await ModelRuntime.create({
-    credentials:
-      options.credentials ??
-      fastagentCredentialStore(options.auth?.path, {
-        warn: options.warn,
-        fallbackPath: options.auth?.fallback,
-        ...(covers ? { projectAuthenticates: covers } : {}),
-      }),
+    credentials: options.credentials ?? (await credentialStoreFor(options, create)),
     ...create,
   });
   // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in

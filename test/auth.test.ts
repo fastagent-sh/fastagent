@@ -246,6 +246,10 @@ describe("fastagentCredentialStore: the global fallback layer", () => {
     expect(await store.read("anthropic")).toBeUndefined();
     expect((await store.read("openai"))?.type).toBe("oauth"); // an uncovered provider still falls back
     expect((await store.list()).map((c) => c.providerId)).toEqual(["openai"]);
+    // layerOf is the same answer, for a report: a covered provider belongs to the project file, an uncovered one to
+    // the file that holds it.
+    expect(await store.layerOf("anthropic")).toBe(projectPath);
+    expect(await store.layerOf("openai")).toBe(globalPath);
     await store.modify("anthropic", async () => oauth("project"));
     expect(JSON.parse(await readFile(projectPath, "utf8")).anthropic.access).toBe("project");
     expect(JSON.parse(await readFile(globalPath, "utf8")).anthropic.access).toBe("global");

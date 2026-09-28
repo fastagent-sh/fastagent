@@ -25,6 +25,15 @@ export interface FastagentAuthOptions {
 
 type Creds = Record<string, Credential>;
 
+/** A credential store over fastagent's files, which can also say which file a provider belongs to. */
+export type FastagentCredentialStore = CredentialStore & {
+  /**
+   * The file this store reads a provider from and writes its refresh to: where it already is, else the primary. The
+   * one answer to "which file do I edit", so a report naming a file cannot disagree with the store that reads it.
+   */
+  layerOf(providerId: string): Promise<string>;
+};
+
 /** A valid stored credential, or undefined — a foreign/old entry reads as not-configured, not a crash. */
 function pick(creds: Creds, providerId: string): Credential | undefined {
   const cred = creds[providerId];
@@ -184,7 +193,7 @@ export function fastagentCredentialStore(
     /** Whether the project authenticates this provider without the fallback; then the fallback is not read for it. */
     projectAuthenticates?: (providerId: string) => Promise<boolean>;
   } = {},
-): CredentialStore {
+): FastagentCredentialStore {
   const warn = options.warn ?? ((message: string) => log.warn(message));
   const fallback =
     options.fallbackPath !== undefined && options.fallbackPath !== authPath ? options.fallbackPath : undefined;
@@ -209,6 +218,7 @@ export function fastagentCredentialStore(
   };
 
   return {
+    layerOf: owner,
     async read(providerId) {
       const second = await fallbackFor(providerId);
       for (const path of second === undefined ? [authPath] : [authPath, second]) {
