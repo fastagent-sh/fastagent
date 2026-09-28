@@ -529,13 +529,14 @@ const login: CommandSpec = {
     "agent it writes the global ~/.fastagent/.secrets/auth.json, and says so): pick a method " +
     "(subscription/OAuth or API " +
     "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
-    "what that provider supports, asked only when both. An agent READS the global store for any provider " +
-    "its own file does not have, so `-g` logs in once for every agent on this machine.",
+    "what that provider supports, asked only when both. An agent READS the global store for a provider it has " +
+    "no other credential for (its own file, a models.json key, an env variable), so `-g` logs in once for every " +
+    "agent on this machine; it warns when an env variable already authenticates the provider.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
   flags: [
     {
       flags: "-g, --global",
-      description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for providers its own file lacks`,
+      description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for a provider it has no other credential for`,
     },
     NO_INPUT,
   ],

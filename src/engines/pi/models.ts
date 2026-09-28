@@ -220,6 +220,21 @@ async function projectCheck(
   return async (providerId) => (await project.checkAuth(providerId)) !== undefined;
 }
 
+/**
+ * What satisfies a provider from the ENVIRONMENT alone (its API-key variable, or an ambient source such as an AWS
+ * profile), by pi's own check, or undefined. The environment is shared by every agent on the machine, and it outranks
+ * the global credentials file ({@link projectAuthenticates}), so a global login for such a provider is not used.
+ */
+export async function environmentAuthSource(providerId: string): Promise<string | undefined> {
+  const runtime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsPath: null,
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+  return (await runtime.checkAuth(providerId))?.source;
+}
+
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}): Promise<ModelRuntime> {
   const { models, create } = await runtimeFiles(options);

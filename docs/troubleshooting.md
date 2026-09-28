@@ -40,8 +40,8 @@ Precedence:
 The selected provider has no credentials.
 
 Most common cause: you ran `fastagent login` in a different agent. Login writes `<agent dir>/.secrets/auth.json`;
-an agent also reads `~/.fastagent/.secrets/auth.json` (written by `fastagent login -g`) for providers its own file
-lacks, but not another project's file. An explicit `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` disables that
+an agent also reads `~/.fastagent/.secrets/auth.json` (written by `fastagent login -g`) for a provider it has no
+other credential for (its own `auth.json`, a `models.json` key, an env variable), but not another project's file. An explicit `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR` disables that
 fallback.
 
 Options:

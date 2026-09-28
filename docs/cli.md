@@ -97,8 +97,11 @@ Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, 
 running outside any agent, writes `~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it
 refuses and says where to `cd`.
 
-- An agent reads the global file for any provider its own file lacks, so one `login -g` serves every agent on the
-  machine. A refresh is written back to the file it was read from.
+- An agent reads the global file for a provider it has no credential of its own for: no entry in its `auth.json`, no
+  `apiKey` in its `models.json`, no env variable ([order](configuration.md#auth-and-secrets)). So one `login -g`
+  serves every agent on the machine that has nothing else for that provider. A refresh is written back to the file
+  it was read from. `login` warns when an env variable already authenticates the provider, because the global login
+  is then not used.
 - `deploy` carries the project file only. After `login -g`, deploy with
   `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`, or run `fastagent login` in the agent dir.
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
