@@ -292,6 +292,13 @@ export type RunSettledEvent = SessionEvent<
 // message_*/tool_* events only exist inside a run, so their types REQUIRE `runId` — a consumer of KnownSessionEvent
 // must not null-check a field the contract guarantees.
 export type MessageStartedEvent = SessionEvent<"message_started", Record<never, never>> & { runId: string };
+/**
+ * A user message entered the conversation: the run's opening prompt, a steer or follow-up leaving `pending`, or one an
+ * extension sent. It reports after the message is recorded, so `entries()` already holds `entryId` with the same
+ * `text` (a slash command expanded, images not included), and before the answer to it starts. The one live event a
+ * backfill can be deduplicated against exactly.
+ */
+export type UserMessageEvent = SessionEvent<"user_message", { entryId: string; text: string }> & { runId: string };
 export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
   runId: string;
 };
@@ -367,6 +374,7 @@ export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
   | MessageStartedEvent
+  | UserMessageEvent
   | MessageDeltaEvent
   | MessageFinishedEvent
   | ToolStartedEvent

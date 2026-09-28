@@ -433,7 +433,8 @@ subscriber past it is closed, which is exactly the loss the recipe exists to pre
 belong on a task beside a live iteration, not in front of one — the
 [api-reference example](../api-reference.md#session-control-observation-plane) has that shape. The overlap that
 follows is display-level: durable records may appear both in the replay and in the live stream, and
-live-only events have no entry id to deduplicate against. Live events are not the durable history API; a product that needs replayable run
+live-only events have no entry id to deduplicate against. The exception is `user_message`, which carries
+the `entryId` of a record already readable when the event arrives. Live events are not the durable history API; a product that needs replayable run
 timelines persists normalized events above FastAgent.
 
 The neutral state never exposes session file paths, working directories, provider base URLs,
@@ -461,6 +462,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 |---|---|---|
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
+| L0 | `user_message { entryId, text }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |
 | L1 | `queue_changed { steering, followUp }` | The active run's whole queue: the queued prompt texts (§7 `pending`). |
