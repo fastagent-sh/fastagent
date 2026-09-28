@@ -21,7 +21,11 @@ import {
   createPiSessionControl,
   type PiBoundaryWiring,
 } from "../src/engines/pi/session-control.ts";
-import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import {
+  type PiSessionRecordStore,
+  piInMemorySessionRecordStore,
+  piSessionRecordStore,
+} from "../src/engines/pi/session-store.ts";
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
@@ -665,8 +669,19 @@ describe("session control: run modulation", () => {
       `export default (pi) => pi.on("message_end", async (e) => {\n` +
         `  if (e.message.role === "user") await new Promise((r) => setTimeout(r, 30));\n});\n`,
     );
-    for (const extensionPaths of [[], [slowWrite]]) {
-      const label = extensionPaths.length ? "slow write" : "plain";
+    // The disk store is the serving default, and the one where "already readable" can fail: `entries()` re-reads the
+    // file, and pi defers writing a record that has no assistant message yet, which a
+    // fresh session's opening "go" is.
+    const configs = [
+      { label: "plain", extensionPaths: [] },
+      { label: "slow write", extensionPaths: [slowWrite] },
+      {
+        label: "disk store",
+        extensionPaths: [slowWrite],
+        sessions: piSessionRecordStore({ dir: join(dir, "sessions") }),
+      },
+    ];
+    for (const { label, extensionPaths, sessions } of configs) {
       const gate = makeGate();
       const { agent, control } = await fauxControlledAgent(
         [
@@ -674,13 +689,15 @@ describe("session control: run modulation", () => {
           fauxAssistantMessage("steered answer"),
           fauxAssistantMessage("follow-up answer"),
         ],
-        { tools: [gate.tool], extensionPaths },
+        { tools: [gate.tool], extensionPaths, ...(sessions ? { sessions } : {}) },
       );
       const handle = control.sessions.get("sU");
       const seen: string[] = [];
       const readable: boolean[] = [];
+      const toolStarted = Promise.withResolvers<void>();
       const watching = (async () => {
         for await (const ev of handle.events()) {
+          if (ev.type === "tool_started") toolStarted.resolve();
           if (ev.type === "user_message") {
             const { entryId, text } = ev.data as { entryId: string; text: string };
             seen.push(`user:${text}`);
@@ -694,7 +711,11 @@ describe("session control: run modulation", () => {
         }
       })();
       const invoked = drive(agent, "sU");
-      while (!seen.includes("tool")) await new Promise((r) => setTimeout(r, 5));
+      // Raced against the watcher, so a failed read surfaces as its own error instead of a wait that never ends.
+      await Promise.race([
+        toolStarted.promise,
+        watching.then(() => Promise.reject(new Error(`${label}: run settled before the tool started`))),
+      ]);
       expect((await handle.steer({ text: "a steer" })).ok).toBe(true);
       expect((await handle.followUp({ text: "a follow-up" })).ok).toBe(true);
       gate.release();
