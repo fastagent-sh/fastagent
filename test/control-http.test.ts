@@ -560,6 +560,8 @@ describe("session control over HTTP", () => {
         .map((e) => (e.data as { delta: string }).delta)
         .join("");
       expect(text).toBe("hello over the wire");
+      // The prompt crosses the wire with its data intact (its ordering and backfill rules are the engine's, tested there).
+      expect(seen.find((e) => e.type === "user_message")?.data).toEqual({ entryId: expect.any(String), text: "hi" });
       // Envelope fields never leak into the semantic event.
       for (const e of seen) {
         expect(e).not.toHaveProperty("epoch");
