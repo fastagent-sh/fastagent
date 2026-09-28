@@ -560,6 +560,12 @@ describe("session control over HTTP", () => {
         .map((e) => (e.data as { delta: string }).delta)
         .join("");
       expect(text).toBe("hello over the wire");
+      // The prompt crosses the wire too, ahead of its answer, naming an entry the remote backfill can find.
+      const user = seen.find((e) => e.type === "user_message")?.data as { entryId: string; text: string } | undefined;
+      expect(user?.text).toBe("hi");
+      expect(types.indexOf("user_message")).toBeLessThan(types.indexOf("message_started"));
+      const backfill = (await remote.sessions.get("sE").entries()).entries;
+      expect(backfill.find((e) => e.kind === "user")?.id).toBe(user?.entryId);
       // Envelope fields never leak into the semantic event.
       for (const e of seen) {
         expect(e).not.toHaveProperty("epoch");
