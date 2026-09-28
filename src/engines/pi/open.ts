@@ -22,9 +22,10 @@ import { refuseBrokenDeclarations } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
-import type { FastagentAuthOptions } from "./auth.ts";
+import { type CredentialSourceOptions, type FastagentAuthOptions, assertOneCredentialSource } from "./auth.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -91,6 +92,8 @@ export interface CreatePiAgentFromDirOptions {
   sessionsDir?: string;
   /** Credentials file override. */
   authPath?: string;
+  /** The caller's own credential store, in place of any file ({@link CredentialSourceOptions}). */
+  credentialStore?: CredentialStore;
   /**
    * This is a long-running SERVE (`dev`/`start`), where the scheduler poller runs — so a self-scheduled wake-up is
    * actually honored.
@@ -195,11 +198,14 @@ export async function resolveAgentAssembly(
  */
 export async function availableModelsFromDir(
   dir: string,
-  options: FastagentAuthOptions & { authPath?: string } = {},
+  options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<string[]> {
+  assertOneCredentialSource(options);
   const { agentDir } = resolvePlacement(dir);
   const models = await definitionModelRuntime(agentDir, {
-    auth: resolveAuthLayers(agentDir, options.authPath),
+    ...(options.credentialStore
+      ? { credentials: options.credentialStore }
+      : { auth: resolveAuthLayers(agentDir, options.authPath) }),
     ...(options.warn ? { warn: options.warn } : {}),
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
@@ -227,8 +233,11 @@ export async function createPiAgentFromDir(
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
-  /** The credentials files in use — the startup report names whichever layer the credential came from. */
-  auth: AuthLayers;
+  /**
+   * The credentials files in use — the startup report names whichever layer the credential came from. Absent when the
+   * caller supplied `credentialStore`: then no file is in use.
+   */
+  auth?: AuthLayers;
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present on every serve (a channel's stop command reaches the
    *  live run through it). Its boundary is wired only when {@link publishControl}. */
@@ -243,6 +252,8 @@ export async function createPiAgentFromDir(
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
 }> {
+  assertOneCredentialSource(options);
+  const { credentialStore } = options;
   const {
     config,
     configPath,
@@ -269,7 +280,7 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    auth,
+    ...(credentialStore ? { credentialStore } : { auth }),
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
   });
@@ -333,7 +344,7 @@ export async function createPiAgentFromDir(
     modelSpec,
     stateRoot,
     sessionsDir,
-    auth,
+    ...(credentialStore ? {} : { auth }),
     toolNames,
     deferredToolNames,
     toolCollisions,

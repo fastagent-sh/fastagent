@@ -148,6 +148,7 @@ Common options:
 | `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads `persona.md` and `skills/`. Project context and tools use the local process directly. This is not a sandbox. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
+| `authPath` / `credentialStore` | Where model credentials live: a credentials file, or your own `CredentialStore` ([Auth](#config-and-models)). One or neither, not both. |
 
 Tool contexts preserve the original caller session id. FastAgent's default `bash` tool also exposes it
 as `PI_SESSION_ID`. When the id contains NUL or unpaired UTF-16 surrogates, the shell receives its JSON
@@ -177,7 +178,8 @@ Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi promp
 ```ts
 function createAgentService(
   dir: string,
-  options?: { model?: string; authPath?: string; sessionsDir?: string; signal?: AbortSignal;
+  options?: { model?: string; authPath?: string; credentialStore?: CredentialStore; sessionsDir?: string;
+              signal?: AbortSignal;
               onChannelClosed?: (name: string, error?: unknown) => void },
 ): Promise<{
   handler: ChannelHandler;              // channels + control plane + health, composed
@@ -206,7 +208,8 @@ The assembly `dev`/`start` perform, without the process: no port bound, no signa
 ```ts
 function createPiAgentFromDir(
   dir: string,
-  options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean },
+  options?: { model?: string; sessionsDir?: string; authPath?: string; credentialStore?: CredentialStore;
+              serving?: boolean },
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
@@ -542,7 +545,7 @@ function createPiModels(options?: CreatePiModelsOptions): Models;
 function probeAuthSource(models: Models, spec: string): Promise<string | undefined>;
 function availableModelsFromDir(
   dir: string,
-  options?: { authPath?: string; warn?: (message: string) => void },
+  options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void },
 ): Promise<string[]>;
 ```
 
@@ -560,6 +563,23 @@ const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
+Every option bag that takes `authPath` (`createPiAgent`, `createPiAgentFromDefinition`, `createPiAgentFromDir`,
+`createAgentService`, `availableModelsFromDir`, `createPiModels`, `login`) also takes a `credentialStore`: pi-ai's
+`CredentialStore` (`read`, `list`, `modify`, `delete`), for a client that keeps credentials in an OS keychain or behind
+Electron `safeStorage` instead of a JSON file. `loginOptions` takes either one as its argument: a file path or a
+store. Passing both is an error.
+
+A supplied store replaces the credentials files: no file is read or written, no global layer applies, and OAuth
+refresh write-backs land in the store. Environment variables and `models.json` keys still apply, as they do with
+`authPath`, and a stored credential outranks them. So a store emptied to sign out does not stop a turn that a
+provider's env variable (e.g. `ANTHROPIC_API_KEY`) authenticates. `createPiAgentFromDir` returns no `auth` when a
+store is supplied (no file is in use). Your store must guarantee what the file store does:
+
+- `modify` for one provider runs one call at a time, across everything that shares the store. An OAuth refresh
+  happens inside it, and a rotated refresh token used twice logs the grant out.
+- A store it cannot read or parse is an error, not an empty store: the next `modify` would otherwise replace every
+  provider's credential.
+
 Sign-in, for a client that is not a terminal:
 
 ```ts
@@ -570,19 +590,19 @@ interface LoginOption {
   subscription: boolean; // an OAuth login backed by a provider subscription
   stored?: "oauth" | "api_key"; // what the file holds for this provider now
 }
-function loginOptions(authPath: string): Promise<LoginOption[]>;
+function loginOptions(credentials: string | CredentialStore): Promise<LoginOption[]>; // a file path, or your store
 function login(request: {
   provider: string;
   method: "oauth" | "api_key";
-  authPath: string;
+  authPath: string; // or credentialStore: CredentialStore, exactly one
   interaction: AuthInteraction; // pi-ai's: prompt(AuthPrompt) and notify(AuthEvent)
 }): Promise<{ provider: string; method: "oauth" | "api_key"; verified: "ok" | "unknown" | "n/a" }>;
 class LoginCancelled extends Error {}
 ```
 
-`loginOptions` lists every interactive sign-in of pi's built-in providers, with `stored` naming what the file holds
-for that provider now. The file keeps one credential per provider, so signing in with the other method
-replaces it. `login` checks the file first, runs the provider's flow over your `AuthInteraction`, and writes the
+`loginOptions` lists every interactive sign-in of pi's built-in providers, with `stored` naming what the store holds
+for that provider now. A store keeps one credential per provider, so signing in with the other method
+replaces it. `login` checks the store first (a no-op `modify`), runs the provider's flow over your `AuthInteraction`, and writes the
 credential. Prompts arrive with pi-ai's own types (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`,
 `device_code`, `progress`, `info`), so open URLs yourself and race `manual_code` against the provider's callback.
 Every prompt carries a `signal` that aborts when the provider withdraws it, when `interaction.signal` aborts, or
