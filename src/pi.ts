@@ -57,7 +57,8 @@ export {
   type LoginRequest,
   type LoginResult,
 } from "./engines/pi/login.ts";
-export type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
+/** pi-ai's sign-in types, and the `CredentialStore` a caller supplies as `credentialStore` (with what it holds). */
+export type { AuthEvent, AuthInteraction, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 export type { Models } from "@earendil-works/pi-ai";
 // Types only: they appear in our signatures, so a caller must be able to name them.
 export type { Provider, ProviderAuth } from "@earendil-works/pi-ai";

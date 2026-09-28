@@ -203,9 +203,12 @@ Credentials resolve from a **credentials file**, then **env vars** (e.g. `ANTHRO
 
 - `createPiAgentFromDir` (what `dev`/`start` use) and `createPiAgentFromDefinition(dir)` read
   `<agent dir>/.secrets/auth.json` (`FASTAGENT_SECRETS_DIR` moves it), and fall back to the global
-  `~/.fastagent/.secrets/auth.json` for any provider the project file lacks.
+  `~/.fastagent/.secrets/auth.json` for a provider the project authenticates no other way
+  ([order](configuration.md#auth-and-secrets)).
 - `createPiAgent` and `createPiModels` read the global file.
 - Every opener accepts an explicit `authPath`, which then is the only file read.
+- Every opener also accepts a `credentialStore` of your own (an OS keychain, Electron `safeStorage`), which then is
+  the only source, refreshes included. See [the store's contract](api-reference.md#config-and-models).
 
 To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
 

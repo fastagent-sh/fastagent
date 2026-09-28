@@ -25,6 +25,28 @@ export interface FastagentAuthOptions {
 
 type Creds = Record<string, Credential>;
 
+/**
+ * Where a caller's model credentials live: fastagent's JSON file (`authPath`, or the default layers when neither is
+ * given), or a {@link CredentialStore} the caller owns (an OS keychain, Electron `safeStorage`). A supplied store is
+ * the ONLY source: no file is read or written, and no global layer applies. The store owns what the file store does
+ * for its file: `modify` for one provider must run one at a time, because an OAuth refresh happens inside it and a
+ * rotated refresh token must never be used twice; and a store it cannot parse must not be answered as empty, or the
+ * next write replaces every provider's credential.
+ */
+export interface CredentialSourceOptions {
+  /** fastagent's credentials file. Mutually exclusive with {@link credentialStore}. */
+  authPath?: string;
+  /** The caller's own store, read and written instead of any file. Mutually exclusive with {@link authPath}. */
+  credentialStore?: CredentialStore;
+}
+
+/** The one refusal for a caller that names both sources: silently preferring one would hide the other's mistake. */
+export function assertOneCredentialSource(options: CredentialSourceOptions): void {
+  if (options.authPath !== undefined && options.credentialStore !== undefined) {
+    throw new Error("pass authPath or credentialStore, not both: a supplied store replaces the credentials file");
+  }
+}
+
 /** A credential store over fastagent's files, which can also say which file a provider belongs to. */
 export type FastagentCredentialStore = CredentialStore & {
   /**

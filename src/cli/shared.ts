@@ -58,7 +58,7 @@ export interface ReportableAssembly {
   agentDir: string;
   workspace: string;
   modelSpec: string;
-  auth: AuthLayers;
+  auth?: AuthLayers;
   config: { thinkingLevel?: string };
   definition: LoadedDefinition;
   toolNames: string[];
@@ -126,8 +126,13 @@ export function parseBind(value: string | undefined): string | undefined {
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
-export async function reportAuth(agentDir: string, modelSpec: string, auth: AuthLayers): Promise<void> {
+export async function reportAuth(agentDir: string, modelSpec: string, auth: AuthLayers | undefined): Promise<void> {
   const provider = providerOf(modelSpec);
+  // No files: the opener was handed a credential store, which is its caller's to describe.
+  if (auth === undefined) {
+    log.info(`[fastagent] auth:   the caller's credential store (${provider})`);
+    return;
+  }
   // ONE store for the runtime and for this report: which file holds the credential is the store's own answer, so the
   // line cannot name a file other than the one the runtime reads.
   const store = await agentCredentialStore({ agentDir, auth });

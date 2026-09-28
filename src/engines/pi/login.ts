@@ -9,11 +9,12 @@ import {
   type AuthInteraction,
   type AuthPrompt,
   type Credential,
+  type CredentialStore,
   InMemoryCredentialStore,
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
-import { fastagentCredentialStore } from "./auth.ts";
+import { assertOneCredentialSource, fastagentCredentialStore } from "./auth.ts";
 import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
@@ -30,27 +31,32 @@ export interface LoginOption {
   /** An OAuth login backed by a provider subscription. */
   subscription: boolean;
   /**
-   * What the file holds for this provider now. It keeps ONE credential per provider, so signing in with the other
+   * What the store holds for this provider now. It keeps ONE credential per provider, so signing in with the other
    * method replaces it — worth a warning in a client.
    */
   stored?: LoginMethod;
 }
 
 /**
- * Every interactive sign-in of pi's built-in providers, with what `authPath` already holds for each. A provider whose
- * key can only come from its env var offers none and is left out.
+ * Every interactive sign-in of pi's built-in providers, with what `credentials` (a credentials file, or the caller's
+ * own store) already holds for each. A provider whose key can only come from its env var offers none and is left out.
  */
-export function loginOptions(authPath: string): Promise<LoginOption[]> {
-  return loginOptionsOver(authPath);
+export function loginOptions(credentials: string | CredentialStore): Promise<LoginOption[]> {
+  return loginOptionsOver(credentials);
 }
 
+/** A credentials file path names fastagent's store over it; a store is used as given. */
+const storeOf = (credentials: string | CredentialStore): CredentialStore =>
+  typeof credentials === "string" ? fastagentCredentialStore(credentials) : credentials;
+
 /** {@link loginOptions} over pi's built-ins plus `providers` (a same id replaces one). Not public: a test seam. */
-export async function loginOptionsOver(authPath: string, providers?: readonly Provider[]): Promise<LoginOption[]> {
-  // ONE read of the file: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
+export async function loginOptionsOver(
+  credentials: string | CredentialStore,
+  providers?: readonly Provider[],
+): Promise<LoginOption[]> {
+  // ONE read of the store: `list` is metadata only, and reading per provider would repeat a corrupt file's warning for
   // every provider.
-  const held = new Map(
-    (await fastagentCredentialStore(authPath).list()).map((info) => [info.providerId, info.type] as const),
-  );
+  const held = new Map((await storeOf(credentials).list()).map((info) => [info.providerId, info.type] as const));
   const offered: LoginOption[] = [];
   for (const provider of loginProviders(providers)) {
     const methods = (["oauth", "api_key"] as const).filter((method) => interactiveAuth(provider, method));
@@ -69,14 +75,23 @@ export async function loginOptionsOver(authPath: string, providers?: readonly Pr
   return offered;
 }
 
-export interface LoginRequest {
+export type LoginRequest = {
   provider: string;
   method: LoginMethod;
-  /** The credentials file the sign-in is written to. */
-  authPath: string;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
   interaction: AuthInteraction;
-}
+} & (
+  | {
+      /** The credentials file the sign-in is written to. */
+      authPath: string;
+      credentialStore?: never;
+    }
+  | {
+      /** The caller's own store the sign-in is written to, in place of any file. */
+      credentialStore: CredentialStore;
+      authPath?: never;
+    }
+);
 
 export interface LoginResult {
   provider: string;
@@ -92,10 +107,11 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
 }
 
 /**
- * Sign in to one of pi's built-in providers and persist the credential to `authPath`.
+ * Sign in to one of pi's built-in providers and persist the credential to `authPath`, or to the caller's
+ * `credentialStore`.
  *
- * The file is checked FIRST (a no-op write runs the refuse-corrupt and writability checks), so a flow never runs
- * toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
+ * The store is checked FIRST (a no-op write runs the file store's refuse-corrupt and writability checks, or whatever
+ * the caller's store does on a write), so a flow never runs toward a credential that could not be saved. An entered API key is verified with one minimal request to pi's
  * default model for the provider (its first model when pi names none), at pi's built-in endpoint, BEFORE it is
  * written. Credentials are provider-scoped, so any of the provider's models answers the question the check asks (does
  * the provider refuse the key, HTTP 401); a key the provider rejects is never stored, and the provider's key flow runs
@@ -131,7 +147,11 @@ export interface LoginInternals {
 /** {@link login}, plus {@link LoginInternals}. */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
   const { providers, verifyWith, agentDir } = internals;
-  const { method, authPath, interaction } = request;
+  const { method, interaction } = request;
+  assertOneCredentialSource(request);
+  if (request.credentialStore === undefined && typeof request.authPath !== "string") {
+    throw new Error("login needs authPath or credentialStore: where the sign-in is written");
+  }
   const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
@@ -150,7 +170,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
             ...(providers ? { providers: [...providers] } : {}),
           })
         : piModelsOver(trial, providers);
-  const store = fastagentCredentialStore(authPath);
+  const store = request.credentialStore ?? storeOf(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
