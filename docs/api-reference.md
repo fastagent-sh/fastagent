@@ -563,13 +563,17 @@ const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
-Every rung that takes `authPath` (`createPiAgent`, `createPiAgentFromDefinition`, `createPiAgentFromDir`,
-`createAgentService`, `availableModelsFromDir`, `createPiModels`, `loginOptions`, `login`) also takes a
-`credentialStore`: pi-ai's `CredentialStore` (`read`, `list`, `modify`, `delete`), for a client that keeps credentials
-in an OS keychain or behind Electron `safeStorage` instead of a JSON file. A supplied store is the only source: no
-file is read or written, no global layer applies, and it receives OAuth refresh write-backs. Passing both is an
-error. `createPiAgentFromDir` then returns no `auth` (no file is in use). Your store must guarantee what the file
-store does:
+Every option bag that takes `authPath` (`createPiAgent`, `createPiAgentFromDefinition`, `createPiAgentFromDir`,
+`createAgentService`, `availableModelsFromDir`, `createPiModels`, `login`) also takes a `credentialStore`: pi-ai's
+`CredentialStore` (`read`, `list`, `modify`, `delete`), for a client that keeps credentials in an OS keychain or behind
+Electron `safeStorage` instead of a JSON file. `loginOptions` takes either one as its argument: a file path or a
+store. Passing both is an error.
+
+A supplied store replaces the credentials files: no file is read or written, no global layer applies, and OAuth
+refresh write-backs land in the store. Environment variables and `models.json` keys still apply, as they do with
+`authPath`, and a stored credential outranks them. So a store emptied to sign out does not stop a turn that a
+provider's env variable (e.g. `ANTHROPIC_API_KEY`) authenticates. `createPiAgentFromDir` returns no `auth` when a
+store is supplied (no file is in use). Your store must guarantee what the file store does:
 
 - `modify` for one provider runs one call at a time, across everything that shares the store. An OAuth refresh
   happens inside it, and a rotated refresh token used twice logs the grant out.

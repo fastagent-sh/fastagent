@@ -22,7 +22,7 @@ import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import { createPiAgent } from "../src/engines/pi/create.ts";
 import { createAgentService } from "../src/engines/pi/service.ts";
 import { login, loginOptions } from "../src/engines/pi/login.ts";
-import { createPiModels } from "../src/engines/pi/models.ts";
+import { createPiModels, probeAuthSource } from "../src/engines/pi/models.ts";
 import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -81,6 +81,18 @@ describe("a caller's credential store replaces the credentials file", () => {
     expect(anthropic(await availableModelsFromDir(host, { credentialStore: store }))).toBe(true);
     expect(anthropic(await availableModelsFromDir(host))).toBe(false); // the files hold nothing
     noCredentialFiles(agent);
+  });
+
+  it("the store replaces the files, not the environment: an env key still authenticates, below a stored one", async () => {
+    // Emptying the store does not sign a provider out while its env variable is set (docs/api-reference.md).
+    noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-env");
+    const empty = createPiModels({ credentialStore: await recordingStore() });
+    expect(await probeAuthSource(empty, "anthropic/claude-sonnet-4-5")).toBe("ANTHROPIC_API_KEY");
+    const stored = createPiModels({
+      credentialStore: await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } }),
+    });
+    expect((await stored.getAuth("anthropic"))?.auth.apiKey).toBe("sk-from-store");
   });
 
   it("createAgentService hands the store to the opener", async () => {

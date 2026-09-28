@@ -27,8 +27,9 @@ type Creds = Record<string, Credential>;
 
 /**
  * Where a caller's model credentials live: fastagent's JSON file (`authPath`, or the default layers when neither is
- * given), or a {@link CredentialStore} the caller owns (an OS keychain, Electron `safeStorage`). A supplied store is
- * the ONLY source: no file is read or written, and no global layer applies. The store owns what the file store does
+ * given), or a {@link CredentialStore} the caller owns (an OS keychain, Electron `safeStorage`). A supplied store
+ * replaces the FILES: none is read or written, and no global layer applies. Env variables and `models.json` keys still
+ * apply, below a stored credential, exactly as with `authPath`. The store owns what the file store does
  * for its file: `modify` for one provider must run one at a time, because an OAuth refresh happens inside it and a
  * rotated refresh token must never be used twice; and a store it cannot parse must not be answered as empty, or the
  * next write replaces every provider's credential.
