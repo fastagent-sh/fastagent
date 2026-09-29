@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
@@ -258,9 +259,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   await checkMachineModels(agentDir, modelSpec, report);
 
   // The registry the DEPLOYED agent has (its own models.json, not the machine's), built here only so a malformed file
-  // stops the deploy with pi's own reason before anything below reads the file raw.
+  // stops the deploy with pi's own reason before anything below reads the file raw. No credential is read for that.
+  await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore(), machineLayer: false });
   const authPath = resolveAuthPath(agentDir);
-  await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
   const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
   const boxLogin = route.boxLogin;

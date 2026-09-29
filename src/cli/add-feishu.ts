@@ -346,8 +346,10 @@ async function createFeishuAppFlow(
   try {
     const cfg = await api.getAppConfig(appId);
     token = cfg.verificationToken;
-  } catch {
-    // the read surface is best-effort — the bootstrap below is the real path
+  } catch (error) {
+    // Best-effort read; the bootstrap below is the real path. Said, because that path can take minutes and the reason
+    // it was needed would otherwise be invisible.
+    console.error(`[fastagent] could not read the app's Verification Token directly: ${(error as Error).message}`);
   }
   if (!token) {
     console.error(

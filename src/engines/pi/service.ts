@@ -1,13 +1,10 @@
 /** `createAgentService` — the product as one call, with pi supplying the engine. */
 import { type AgentService, type MountAgentServiceOptions, mountAgentService } from "../../service.ts";
-import type { CredentialStore } from "@earendil-works/pi-ai";
+import type { CredentialSourceOptions } from "./auth.ts";
 import { createPiAgentFromDir } from "./open.ts";
 
-export interface CreateAgentServiceOptions extends MountAgentServiceOptions {
+export interface CreateAgentServiceOptions extends MountAgentServiceOptions, CredentialSourceOptions {
   model?: string;
-  authPath?: string;
-  /** The caller's own credential store, in place of any file (see `createPiAgentFromDir`). */
-  credentialStore?: CredentialStore;
   sessionsDir?: string;
 }
 
