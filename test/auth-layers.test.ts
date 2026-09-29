@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
-import { createPiModelRuntime, probeAuthSource } from "../src/engines/pi/models.ts";
+import { agentCredentialStore, createPiModelRuntime, probeAuthSource } from "../src/engines/pi/models.ts";
 
 const SPEC = "fa-layer/m1";
 const credential = { "fa-layer": { type: "api_key", key: "sk-test" } };
@@ -88,7 +88,10 @@ describe("the global file yields to a provider the project authenticates itself"
   async function anthropicKey(dir: string): Promise<string | undefined> {
     const runtime = await createPiModelRuntime({
       agentDir: dir,
-      auth: { path: join(dir, ".secrets", "auth.json"), fallback: GLOBAL },
+      credentials: agentCredentialStore(
+        { path: join(dir, ".secrets", "auth.json"), fallback: GLOBAL },
+        { agentDir: dir },
+      ),
       machineLayer: false,
     });
     const model = runtime.getModels("anthropic")[0];

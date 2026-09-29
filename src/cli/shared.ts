@@ -19,7 +19,12 @@ import {
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import { agentAuthStatus, createPiModelRuntime, providerAuthStatuses } from "../engines/pi/models.ts";
+import {
+  agentAuthStatus,
+  agentCredentialStore,
+  createPiModelRuntime,
+  providerAuthStatuses,
+} from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
@@ -152,7 +157,9 @@ async function resolveFirstRunModel(
   const auth = resolveAuthLayers(agentDir);
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
-  const models = await createPiModelRuntime({ agentDir, auth }).catch(failStartup);
+  const models = await createPiModelRuntime({ agentDir, credentials: agentCredentialStore(auth, { agentDir }) }).catch(
+    failStartup,
+  );
   const chosen = await pickWithCredentials(models, auth.path, agentDir);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
