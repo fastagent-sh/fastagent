@@ -90,6 +90,6 @@ describe("Slack proactive delivery rides the channel's transport", () => {
     vi.stubEnv("FASTAGENT_STATE_DIR", "");
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxe.xoxb-left-in-env");
     fakeSlack();
-    await expect(send(agentDir())).rejects.toThrow(/rotating Slack bot token.*Upgrading from a rotating-token app/);
+    await expect(send(agentDir())).rejects.toThrow(/rotating Slack bot token.*If token rotation is on/);
   });
 });
