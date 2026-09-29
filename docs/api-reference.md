@@ -567,7 +567,8 @@ Every option bag that takes `authPath` (`createPiAgent`, `createPiAgentFromDefin
 `createAgentService`, `availableModelsFromDir`, `createPiModels`, `login`) also takes a `credentialStore`: pi-ai's
 `CredentialStore` (`read`, `list`, `modify`, `delete`), for a client that keeps credentials in an OS keychain or behind
 Electron `safeStorage` instead of a JSON file. `loginOptions` takes either one as its argument: a file path or a
-store. Passing both is an error.
+store. Passing both is an error. An `authPath` reads like `FASTAGENT_AUTH_PATH`: `~` is the home directory and a
+relative path resolves against the current directory.
 
 A supplied store replaces the credentials files: no file is read or written, no global layer applies, and OAuth
 refresh write-backs land in the store. Environment variables and `models.json` keys still apply, as they do with
