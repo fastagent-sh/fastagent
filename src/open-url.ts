@@ -29,9 +29,7 @@ export function browserCommand(url: string, platform: NodeJS.Platform): { cmd: s
 export function openExternalUrl(url: string): void {
   const command = browserCommand(url, process.platform);
   if (!command) {
-    console.error(
-      `[fastagent] not opening ${JSON.stringify(url)} in a browser: only an https (or loopback http) URL is`,
-    );
+    console.error(`[fastagent] not opening ${JSON.stringify(url)}: only an https URL, or http on this machine, opens`);
     return;
   }
   spawn(command.cmd, command.args, { stdio: "ignore", detached: true }).on("error", () => {});
