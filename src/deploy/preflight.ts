@@ -272,16 +272,22 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       ? await probeAuthSource(models, modelSpec)
       : undefined;
   let boxLogin: string | undefined;
-  // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
-  // REACH the host").
-  if (modelSpec && !isEnvKey(modelAuth)) {
+  // probeAuthSource and modelCredentialCarry answer "what authenticates it HERE", from this process's environment,
+  // which holds the shell running deploy as well as the value file. Past the value file, an environment variable is
+  // this machine's and does not travel (§9), so it decides nothing: a provider with a login logs the box in, and one
+  // without keeps the variable's NAME, which the values gate then asks the value file for.
+  if (modelSpec && !isEnvKey(valueFileKey)) {
+    const provider = providerOf(modelSpec);
+    const canLogIn = hasLogin(provider);
     const carry = modelCredentialCarry(models, modelSpec);
-    if (carry.envVar) modelAuth = carry.envVar;
-    else if (!carry.inDefinition) boxLogin = providerOf(modelSpec);
+    if (carry.envVar && !canLogIn) modelAuth = carry.envVar;
+    else if (carry.envVar || !carry.inDefinition) {
+      boxLogin = provider;
+      modelAuth = undefined; // nothing about this machine's credential is asked of the value file
+    }
   }
   if (boxLogin !== undefined) {
-    const provider = loginProviders().find((p) => p.id === boxLogin);
-    if (!provider || !(["oauth", "api_key"] as const).some((method) => interactiveAuth(provider, method))) {
+    if (!hasLogin(boxLogin)) {
       report.issue(
         `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
           `its API key in ${valueFile}`,
@@ -405,6 +411,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     declaredSecrets,
     secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
   };
+}
+
+/** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
+function hasLogin(providerId: string): boolean {
+  const provider = loginProviders().find((p) => p.id === providerId);
+  return provider !== undefined && (["oauth", "api_key"] as const).some((method) => interactiveAuth(provider, method));
 }
 
 /**

@@ -599,6 +599,17 @@ describe("preflight: a model credential that does not travel", () => {
     expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
   });
 
+  it("a key exported in the shell running deploy does not travel: the box logs in, and nothing asks for that key", async () => {
+    // §9: the shell is not a source. A developer's ANTHROPIC_API_KEY for local tools must not turn a subscription
+    // deploy into a "no value for ANTHROPIC_API_KEY" refusal, nor decide which path the deploy takes at all.
+    noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
+    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.boxLogin).toBe("anthropic");
+    expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
+  });
+
   it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {
     // pi ranks a stored credential above the environment, which answers "what authenticates HERE". The deploy asks
     // what reaches the box, and a key the author put in the value file for the deployment is exactly that.
@@ -748,9 +759,13 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     );
     vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
     vi.stubEnv("CORP_PROXY_KEY", "proxy");
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
 
-    const pre = await call(await workspace(), { model: `anthropic/${anthropic}` }, { run: true });
+    // The deployment's key, where a deployment's key lives: the value file.
+    const pre = await call(
+      await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" }),
+      { model: `anthropic/${anthropic}` },
+      { run: true },
+    );
 
     expect(pre.ok).toBe(true); // the deployed agent still resolves pi's built-in anthropic
     if (pre.ok) {
