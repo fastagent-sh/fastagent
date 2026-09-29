@@ -26,7 +26,7 @@ export interface DockerRunPlan {
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
   /**
-   * Log the box in (`fastagent login --deployment`) once it is up and before any entrance opens: a channel pointed at
+   * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
   boxLogin?: () => Promise<string | undefined>;
@@ -101,6 +101,29 @@ export async function waitForComposeTunnelUrl(
 
 const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile) =>
   waitForComposeTunnelUrl(docker, composeFile);
+
+/**
+ * `/health` asked from inside the agent container, for a topology that publishes no host port. The image always has
+ * node or bun (the generated Dockerfile's base), and both have `fetch`; nothing else is assumed installed.
+ */
+async function containerHealthy(
+  docker: CliRunner,
+  compose: string[],
+  port: number,
+  stillStarting: () => Promise<boolean>,
+): Promise<boolean> {
+  const probe =
+    `r=$(command -v node || command -v bun) && "$r" -e ` +
+    `"fetch('http://127.0.0.1:${port}/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"`;
+  const deadline = Date.now() + 180_000; // the same first-boot budget as the published-port probe
+  while (Date.now() < deadline) {
+    if ((await docker([...compose, "exec", "-T", "agent", "sh", "-c", probe], { capture: true })).code === 0)
+      return true;
+    if (!(await stillStarting())) return false;
+    await sleep(1_000);
+  }
+  return false;
+}
 
 export async function deployDockerRun(
   plan: DockerRunPlan,
@@ -187,19 +210,28 @@ export async function deployDockerRun(
   // A user-owned topology may deliberately remove the host port and expose only through its own ingress.
   const published = await docker([...compose, "port", "agent", String(plan.port)], { capture: true });
   const url = published.code === 0 ? localUrlFromComposePort(published.stdout) : undefined;
-  if (!url) {
+  // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a second, and a
+  // `compose ps` per poll would cost more than the wait it shortens.
+  let lastCheck = Date.now();
+  const stillStarting = async (): Promise<boolean> => {
+    if (Date.now() - lastCheck < 5_000) return true;
+    lastCheck = Date.now();
+    const ps = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
+    return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
+  };
+  if (!url && plan.boxLogin) {
+    // The login runs in the prepared workspace, with the CLI the first boot installs: it needs the box READY, and
+    // with no published port the only place to ask `/health` is inside the container.
+    log("agent is running (no host-published port found); waiting for /health inside the container before login…");
+    if (!(await containerHealthy(docker, compose, plan.port, stillStarting))) {
+      return gate(
+        `agent did not become healthy inside the container — inspect \`docker compose -f ${plan.composeFile} logs agent\``,
+      );
+    }
+  } else if (!url) {
     log("agent is running (no host-published port found; using the Compose ingress readiness floor)");
   } else {
     const healthUrl = `${url}/health`;
-    // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a second, and a
-    // `compose ps` per poll would cost more than the wait it shortens.
-    let lastCheck = Date.now();
-    const stillStarting = async (): Promise<boolean> => {
-      if (Date.now() - lastCheck < 5_000) return true;
-      lastCheck = Date.now();
-      const ps = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
-      return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
-    };
     if (!(await healthProbe(healthUrl, stillStarting))) {
       return gate(
         `agent did not become healthy at ${healthUrl} — inspect \`docker compose -f ${plan.composeFile} logs agent\``,

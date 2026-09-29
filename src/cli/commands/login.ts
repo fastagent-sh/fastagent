@@ -11,8 +11,8 @@ import { resolveAuthPath } from "../../engines/pi/config.ts";
 import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../../engines/pi/auth.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
-import { environmentAuthSource } from "../../engines/pi/models.ts";
+import { LoginCancelled, type LoginIO, type LoginMethod, loginFlow } from "../../engines/pi/login.ts";
+import { createPiModelRuntime, environmentAuthSource, probeAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -105,6 +105,8 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
 async function runDeploymentLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.global) failUsage("--deployment logs the deployment in; -g names this machine's global file — pick one");
   const placement = placementOrExit(process.cwd());
+  // The host's CLI must reach the account/region/proxy the deploy used, and those may be definition-local.
+  enterAgentEnv(placement.agentDir);
   let host: DeployHost;
   if (typeof opts.deployment === "string") {
     if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment)) {
@@ -164,8 +166,14 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   if (agentDir) enterAgentEnv(agentDir); // the server's egress proxy, if its value file declares one
   const authPath = resolveAuthPath(agentDir ?? process.cwd());
   if (opts.ifMissing && provider) {
-    const held = (await fastagentCredentialStore(authPath).list()).find((info) => info.providerId === provider);
-    if (held) return { ok: true, provider, method: held.type, path: authPath, stored: true };
+    const held = await heldCredential(authPath, provider, agentDir);
+    if (held.usable) return { ok: true, provider, method: held.type, path: authPath, stored: true };
+    if (opts.input === false) {
+      const what = held.type
+        ? `the stored ${provider} ${held.type} credential is expired or unusable`
+        : `no ${provider} credential`;
+      return { ok: false, reason: "missing", message: `${what} in ${authPath}` };
+    }
   }
   if (opts.input === false) {
     return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${authPath}` };
@@ -176,4 +184,23 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
     ...(agentDir ? { agentDir } : {}),
   });
   return { ok: true, provider: result.provider, method: result.method, path: authPath };
+}
+
+/**
+ * What the box holds for `provider`, and whether it still authenticates: the same answer the box's own startup report
+ * gives (`probeAuthSource`, which refreshes an expired OAuth token). A stored entry alone is not a credential: a revoked
+ * grant is still a line in the file, and keeping it would let `deploy --run` point webhooks at a box that fails every
+ * message.
+ */
+export async function heldCredential(
+  authPath: string,
+  provider: string,
+  agentDir: string | undefined,
+): Promise<{ type: LoginMethod; usable: boolean } | { type?: undefined; usable: false }> {
+  const type = (await fastagentCredentialStore(authPath).list()).find((info) => info.providerId === provider)?.type;
+  if (type === undefined) return { usable: false };
+  const models = await createPiModelRuntime({ ...(agentDir ? { agentDir } : {}), auth: { path: authPath } });
+  const model = models.getProvider(provider)?.getModels()[0];
+  const usable = model !== undefined && (await probeAuthSource(models, `${provider}/${model.id}`)) !== undefined;
+  return { type, usable };
 }

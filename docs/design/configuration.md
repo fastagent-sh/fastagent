@@ -150,7 +150,7 @@ Step 4 is `publicHealthGate` (`src/deploy/channel-ingress.ts`), asked by the hos
 
 Step 5 needs no probe of its own, and `/health` must not grow a credential check. The login reports its own outcome as one result line from the box (a credential for the provider now exists there, or not), and without a terminal to run it in, `--run` stops right there with the command to run. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key comes from a `models.json` `!command` be declared dead.
 
-The point of the ordering is that a run with no usable credential **opens no entrance at all**, instead of reporting success and failing on the first real message.
+The point of the ordering is that a run with no usable credential **registers no webhook**, instead of reporting success and failing on the first real message. What the box starts by itself is not gated: a long-connection channel connects and the resident scheduler runs from boot, so on a host that stays up without a login (a first `--run` from CI) those turns fail until someone logs the box in. The alternative, holding them back until a credential exists, would put a credential check in the serving path, which step 5 rules out.
 
 ## 8. Credentials
 
@@ -263,6 +263,6 @@ Checked boxes are covered by a test in the offline suite. The unchecked ones are
 - [ ] Value files, secret values, and credentials appear in no build context, image, manifest, command argument, or log.
 - [x] With no project credential, the global one is used and its source is printed; a credential read from the global store refreshes back into it and leaves no project copy.
 - [x] Concurrent local projects share the global credential file safely.
-- [x] With no usable credential, **no public entrance is activated**; a redeploy against a host that already holds one does not overwrite it (`--if-missing`).
+- [x] With no usable credential, **no webhook is registered**; a redeploy against a host that already holds one does not overwrite it (`--if-missing`).
 - [ ] Redeploy, rollback, restart, and session-snapshot restore all preserve the latest credentials.
 - [x] Every supported host has an end-to-end check (`test/live/{docker,fly-deploy,railway-deploy,agentcore-deploy}`: provision, serve a turn, destroy) — of deployment itself, not of the `--env` items above.

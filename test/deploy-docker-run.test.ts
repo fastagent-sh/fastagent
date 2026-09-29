@@ -146,6 +146,33 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(order).toEqual(["health", "login"]);
   });
 
+  it("with no published port, a login waits for /health inside the container; without one, nothing is probed", async () => {
+    const order: string[] = [];
+    let probes = 0;
+    const { docker, commands } = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\n" };
+      if (args.includes("port")) return { code: 1 }; // the owner's Compose publishes nothing
+      if (args.includes("exec")) {
+        order.push("probe");
+        return { code: ++probes < 2 ? 1 : 0 }; // not ready yet, then ready
+      }
+      return {};
+    });
+    const boxLogin = async () => {
+      order.push("login");
+      return undefined;
+    };
+    expect(await deployDockerRun(plan({ boxLogin }), docker, () => {}, healthy)).toEqual({ ok: true, url: undefined });
+    expect(order).toEqual(["probe", "probe", "login"]);
+    expect(commands().find((c) => c.includes("exec"))).toMatch(/exec -T agent sh -c .*127\.0\.0\.1:8787\/health/);
+
+    const quiet = fakeDocker((args) =>
+      args.includes("port") ? { code: 1 } : args.includes("--services") ? { stdout: "agent\n" } : {},
+    );
+    await deployDockerRun(plan(), quiet.docker, () => {}, healthy);
+    expect(quiet.commands().some((c) => c.includes("exec"))).toBe(false);
+  });
+
   it("gates when a webhook registration terminally fails, and still reports where Compose is", async () => {
     // The parity fix: fly/railway/agentcore all gate on their registrars, and docker could not,
     // because registration happened above this layer — where no outcome was available to gate on.

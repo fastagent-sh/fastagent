@@ -22,7 +22,7 @@ export interface FlyRunPlan {
    */
   dockerfile: string;
   /**
-   * Log the box in (`fastagent login --deployment`) once it is up and before any entrance opens: a channel pointed at
+   * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
   boxLogin?: () => Promise<string | undefined>;

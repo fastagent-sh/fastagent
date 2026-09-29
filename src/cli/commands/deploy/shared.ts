@@ -74,7 +74,7 @@ export function registrarsFor(agentDir: string): Registrars {
 }
 
 /**
- * The login `--run` starts on the box it just deployed, before any entrance opens (a host driver's `boxLogin`): for
+ * The login `--run` starts on the box it just deployed, before any webhook is pointed at it (a host driver's `boxLogin`): for
  * the model's provider, keeping a credential the box already holds (a redeploy), and asking only when a person can
  * answer. None when the model's credential travels as a variable.
  */

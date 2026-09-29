@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { boxLoginCommand } from "../src/deploy/container.ts";
 import { relayLogin } from "../src/cli/login-relay.ts";
 import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
+import { heldCredential } from "../src/cli/commands/login.ts";
 import { processShell } from "../src/deploy/box-shell.ts";
 import type { LoginIO } from "../src/engines/pi/login.ts";
 import { createServer as createNetServer } from "node:net";
@@ -213,5 +214,29 @@ describe("catching the browser's redirect on this machine", () => {
     io.openUrl("https://github.com/login/device");
     expect(await io.prompt("code")).toBe("typed");
     io.close();
+  });
+});
+
+describe("what a redeploy keeps: a credential that still authenticates, not a line in the file", () => {
+  it("keeps a live one, and treats an absent or a dead one as missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-held-"));
+    const authPath = join(dir, "auth.json");
+    const write = (cred: unknown) => writeFile(authPath, JSON.stringify({ "openai-codex": cred }));
+
+    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ usable: false });
+
+    await write({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 });
+    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ type: "oauth", usable: true });
+
+    // Expired, and the refresh is refused (a revoked grant): the box's startup report calls this unusable too.
+    await write({ type: "oauth", access: "a", refresh: "revoked", expires: 1 });
+    const refresh = vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 }));
+    vi.stubGlobal("fetch", refresh);
+    try {
+      expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ type: "oauth", usable: false });
+      expect(refresh).toHaveBeenCalled(); // it asked the provider, rather than trusting the file
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
