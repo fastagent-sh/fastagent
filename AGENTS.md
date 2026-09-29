@@ -58,7 +58,8 @@ src/
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
-├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
+├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
+│                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
