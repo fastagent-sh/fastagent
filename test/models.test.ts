@@ -164,6 +164,7 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       expect(await definitionKeyOf(await keyed(apiKey), "mygw")).toEqual({ inFile: true });
     }
     expect(await definitionKeyOf(await keyed("$GW_KEY"), "mygw")).toEqual({ reference: "GW_KEY" });
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: pi's own `${NAME}` form, written literally in models.json
     expect(await definitionKeyOf(await keyed("${GW_KEY}"), "mygw")).toEqual({ reference: "GW_KEY" });
     expect(await definitionKeyOf(await keyed("$GW_KEY"), "anthropic")).toBeUndefined(); // not declared there
   });
