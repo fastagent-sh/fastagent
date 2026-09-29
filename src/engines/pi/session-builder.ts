@@ -4,7 +4,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
@@ -17,11 +16,11 @@ import {
 import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { readMachine } from "./machine.ts";
 import { resolveModel } from "./config.ts";
-import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
-import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
-import { DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
-import { reportFindingsIfChanged, reportToolCollisions } from "./report.ts";
+import { assemblePiFromDefinition } from "./create.ts";
+import { canonicalPath } from "./definition.ts";
+import { reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
+import { resolvePlacement } from "../../paths.ts";
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). */
@@ -31,86 +30,60 @@ export interface BuildSessionRuntimeOptions {
 }
 
 /**
- * Build pi's interactive runtime driven by fastagent's assembled agent (model, prompt, tools, skills, and auth
- * resolved exactly as the serving opener does).
+ * Build pi's interactive runtime over the SAME assembly `dev`/`start` serve ({@link assemblePiFromDefinition}): model
+ * registry, prompt, tools, skills, reasoning effort and credentials all come from it, so what differs is only the
+ * session's shape (one resident runtime rather than one session per invoke).
  */
 export async function buildAgentSessionRuntime(
   dir: string,
   options: BuildSessionRuntimeOptions = {},
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  async function resolveAssembly(cwd: string) {
-    // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving opener uses
-    // (open.ts).
-    const { config, modelSpec, agentDir, auth, stateRoot, tools, toolCollisions } = await resolveAgentAssembly(
-      cwd,
-      options,
-    );
-    reportToolCollisions(toolCollisions);
-    // ONE hub owns model resolution AND per-request auth.
-    // The fallback layer travels too: `chat` resolving credentials differently from dev/start/invoke is exactly the
-    // divergence the layer exists to remove.
-    const modelRuntime = await createPiModelRuntime({ auth, agentDir, stateRoot });
-    const env = new NodeExecutionEnv({ cwd });
-    const definition = await loadAgentDefinition(agentDir, { cwd, env });
-    reportFindingsIfChanged(definition.dir, definition);
-    // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings happen once per
-    // runtime rather than per session rebuild (/new, /resume, fork).
-    const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
-
-    // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including them here would
-    // duplicate them).
-    const systemPrompt = assembleSystemPrompt({
-      base: piBasePrompt({ tools, persona: definition.persona }),
-      contextFiles: definition.contextFiles,
+  async function resolveAssembly() {
+    const front = await resolveAgentAssembly(dir, options);
+    reportToolCollisions(front.toolCollisions);
+    const { assembly } = await assemblePiFromDefinition(front.agentDir, {
+      model: front.modelSpec,
+      thinkingLevel: front.config.thinkingLevel,
+      cwd: front.workspace,
+      tools: front.tools,
+      credentialStore: front.credentials,
     });
-
-    return {
-      modelRuntime,
-      modelSpec,
-      // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
-      thinkingLevel: config.thinkingLevel,
-      definition,
-      extensionPaths,
-      tools,
-      systemPrompt,
-    };
+    // Read ONCE per runtime: a rebuild (/new, fork) keeps the startup snapshot, because config and tools stay in the
+    // import cache and a half-refreshed agent is worse than a stale one. Restart chat to pick up edits.
+    return { modelSpec: front.modelSpec, assembly, definition: await assembly.readDefinition() };
   }
 
-  // pi calls the factory again on /new, /resume, switch, and fork.
-  const rootCwd = canonicalPath(dir);
-  let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
+  // The workspace, like serving's: where tools run and what session records are keyed to. Canonical, because pi's
+  // process.cwd() fallback is a realpath and a symlinked workspace would otherwise mismatch it.
+  const rootCwd = canonicalPath(resolvePlacement(dir).workspace);
+  // pi calls the factory again on /new, /resume, switch, and fork; the assembly is built once.
+  let assembly: ReturnType<typeof resolveAssembly> | undefined;
   const assemblyFor = (cwd: string) => {
-    // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would otherwise mismatch a
-    // non-realpath rootCwd.
     const activeCwd = canonicalPath(cwd);
     if (activeCwd !== rootCwd) {
       throw workspaceScopeError(activeCwd);
     }
-    assembly ??= resolveAssembly(rootCwd);
+    assembly ??= resolveAssembly();
     return assembly;
   };
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const { modelRuntime, modelSpec, thinkingLevel, definition, extensionPaths, tools, systemPrompt } =
-      await assemblyFor(cwd);
-
+    const { modelSpec, assembly, definition } = await assemblyFor(cwd);
     // Per session, NOT memoized with the assembly.
-    const machine = await readMachine(cwd);
+    const [modelRuntime, machine] = await Promise.all([assembly.modelRuntime(), readMachine(cwd)]);
     const loaded = await createAgentSessionServices({
       cwd,
-      // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth unification point; see the
-      // header.
+      // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth unification point.
       modelRuntime,
       // PACKAGELESS, for the loader: fastagent never installs a pi package (machine.ts). Handed pi's own settings, the
       // loader resolves `packages` itself — installing a missing one, and failing chat's start when that fails.
       settingsManager: machine.settingsManager(),
-      // Chat's assembly is fixed for the life of the runtime (a rebuild makes a new one), so these read constants.
       resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => systemPrompt,
+        systemPrompt: () => definition.systemPrompt,
         skills: () => definition.skills,
         machine,
-        extensionPaths,
+        extensionPaths: assembly.extensionPaths,
       }),
     });
     // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
@@ -127,13 +100,10 @@ export async function buildAgentSessionRuntime(
       sessionManager,
       sessionStartEvent,
       model,
-      // The SPELLING serving uses (agent-session-factory), never `thinkingLevel` alone: pi resolves an ABSENT level
-      // from its own settings, which every posture now reads from the machine (`~/.pi/agent/settings.json`). A
-      // `/thinking` + Ctrl+S saved for coding would otherwise silently make this the one posture that answers at a
-      // different reasoning effort than the deployment does — the effort is the DEFINITION's (`thinkingLevel` in
-      // fastagent.config.ts), unlike the engine knobs around it.
-      thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-      tools,
+      // Always set, never left for pi to fill: pi resolves an ABSENT level from the machine's settings, and the effort
+      // is the definition's (`thinkingLevel` in fastagent.config.ts), like serving's.
+      thinkingLevel: assembly.thinkingLevel,
+      tools: assembly.tools,
       // A tool must see one spelling of the workspace, including when opened through a symlink.
       cwd: rootCwd,
       recordActivations: false,

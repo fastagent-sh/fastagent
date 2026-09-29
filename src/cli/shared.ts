@@ -19,7 +19,12 @@ import {
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import { agentAuthStatus, createPiModelRuntime, providerAuthStatuses } from "../engines/pi/models.ts";
+import {
+  agentAuthStatus,
+  agentCredentialStore,
+  createPiModelRuntime,
+  providerAuthStatuses,
+} from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
@@ -152,7 +157,9 @@ async function resolveFirstRunModel(
   const auth = resolveAuthLayers(agentDir);
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
-  const models = await createPiModelRuntime({ agentDir, auth }).catch(failStartup);
+  const models = await createPiModelRuntime({ agentDir, credentials: agentCredentialStore(auth, { agentDir }) }).catch(
+    failStartup,
+  );
   const chosen = await pickWithCredentials(models, auth.path, agentDir);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
@@ -226,11 +233,11 @@ export function terminalLoginIO(): LoginIO {
 
 /** Best-effort persist the picked model so the next run does not prompt. */
 async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
-  const hint = (): void =>
+  const hint = (why = ""): void =>
     console.error(
       // The pick lives in THIS process's environment only, so it serves this run and nothing that outlives it: a
       // deployment resolves in the environment being deployed, where this machine's variables do not exist.
-      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
+      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist${why}`,
     );
   if (!configPath) return hint();
   try {
@@ -238,7 +245,8 @@ async function persistModelChoice(agentDir: string, configPath: string | undefin
     if (!replaced) return hint();
     await writeFile(configPath, replaced);
     console.error(`[fastagent] saved model ${JSON.stringify(spec)} to ${relative(agentDir, configPath)}`);
-  } catch {
-    hint();
+  } catch (error) {
+    // The run goes on with the pick either way; the reason the file was not written is what the author needs to fix.
+    hint(` (could not write ${configPath}: ${(error as Error).message})`);
   }
 }

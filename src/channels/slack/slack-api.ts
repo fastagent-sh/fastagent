@@ -212,13 +212,13 @@ async function readBytesCapped(response: Response): Promise<Buffer> {
   );
 }
 
-/** A rotating token (an app created by a release up to 0.20) would work for up to 12 hours and then
- *  fail as `token_expired`, far from the cause — refuse it where the token enters, on both paths. */
+/** A rotating token (an app with token rotation on) would work for up to 12 hours and then fail as
+ *  `token_expired`, far from the cause — refuse it where the token enters, on both paths. */
 function assertLongLivedBotToken(botToken: string): void {
   if (botToken.startsWith("xoxe.")) {
     throw new Error(
-      "got a rotating Slack bot token (xoxe.…); this release uses a long-lived xoxb- token — " +
-        'create a new app (docs/slack.md → "Upgrading from a rotating-token app")',
+      "got a rotating Slack bot token (xoxe.…); FastAgent needs a long-lived xoxb- token — " +
+        'create a new app (docs/slack.md → "If token rotation is on")',
     );
   }
 }

@@ -14,8 +14,15 @@ import {
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
-import { assertOneCredentialSource, fastagentCredentialStore } from "./auth.ts";
-import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
+import { fastagentCredentialStore } from "./auth.ts";
+import {
+  createPiModelRuntime,
+  interactiveAuth,
+  loginProviders,
+  piModelsOver,
+  probeApiKey,
+  resolveCredentials,
+} from "./models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -148,7 +155,6 @@ export interface LoginInternals {
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<LoginResult> {
   const { providers, verifyWith, agentDir } = internals;
   const { method, interaction } = request;
-  assertOneCredentialSource(request);
   if (request.credentialStore === undefined && typeof request.authPath !== "string") {
     throw new Error("login needs authPath or credentialStore: where the sign-in is written");
   }
@@ -170,7 +176,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
             ...(providers ? { providers: [...providers] } : {}),
           })
         : piModelsOver(trial, providers);
-  const store = request.credentialStore ?? storeOf(request.authPath);
+  const { credentials: store } = resolveCredentials(request);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
