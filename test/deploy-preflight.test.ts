@@ -610,6 +610,44 @@ describe("preflight: a model credential that does not travel", () => {
     expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
   });
 
+  it('a built-in provider the definition keys by its own "$NAME" carries that variable, even over a local login', async () => {
+    // environmentAuthSource knows only the built-in variable (ANTHROPIC_API_KEY); the deployed registry reads the
+    // definition's reference instead, so that is what the value file must hold and what travels.
+    noAnthropicEnv();
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    const keyedBy = (env: string) =>
+      workspace({
+        "models.json": JSON.stringify({ providers: { anthropic: { apiKey: "$MY_ANT_KEY" } } }),
+        ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
+        ".secrets/.env": env,
+      });
+    const held = await call(
+      await keyedBy("MY_ANT_KEY=sk-ant\n"),
+      { model: "anthropic/claude-sonnet-4-5" },
+      { run: true },
+    );
+    if (!held.ok) throw new Error(held.gate);
+    expect(held.boxLogin).toBeUndefined();
+    expect(held.modelAuth).toBe("MY_ANT_KEY");
+
+    // Declared but not set yet: still that variable, which the values gate then asks for by name.
+    const unset = await call(await keyedBy(""), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!unset.ok) throw new Error(unset.gate);
+    expect(unset.boxLogin).toBeUndefined();
+    expect(unset.secrets.map((s) => s.name)).toContain("MY_ANT_KEY");
+  });
+
+  it("a keyless environment credential (an AWS role) is the host's own: nothing travels, nothing logs in", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
+    const pre = await call(await workspace(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.boxLogin).toBeUndefined();
+    expect(pre.modelAuth).toBeUndefined();
+  });
+
   it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {
     // pi ranks a stored credential above the environment, which answers "what authenticates HERE". The deploy asks
     // what reaches the box, and a key the author put in the value file for the deployment is exactly that.

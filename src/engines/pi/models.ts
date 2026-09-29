@@ -297,21 +297,43 @@ export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { env
  * gates what IT causes; what the author wrote into their own committed file, it reports.
  */
 export async function literalKeyProviders(agentDir: string): Promise<string[]> {
+  return Object.entries(await definitionApiKeys(agentDir))
+    .filter(([, apiKey]) => isLiteralKey(apiKey))
+    .map(([id]) => id);
+}
+
+/**
+ * How the agent's OWN models.json supplies `providerId`'s key, read from the file for the reason
+ * {@link literalKeyProviders} gives: `reference` is the variable a `"$NAME"` reads (the value file must hold it),
+ * `inFile` a key that travels with the definition itself (a literal, or a `"!command"` run on the box), and undefined
+ * no apiKey there at all.
+ */
+export async function definitionKeyOf(
+  agentDir: string,
+  providerId: string,
+): Promise<{ reference: string } | { inFile: true } | undefined> {
+  const apiKey = (await definitionApiKeys(agentDir))[providerId];
+  if (typeof apiKey !== "string" || apiKey === "") return undefined;
+  if (apiKey.startsWith("!") || isLiteralKey(apiKey)) return { inFile: true };
+  // Not a literal, so isLiteralKey's own pattern matched: there is a name to read.
+  return { reference: apiKey.replaceAll("$$", "").match(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/)?.[1] as string };
+}
+
+/** Each provider's `apiKey` as the agent's own models.json writes it. */
+async function definitionApiKeys(agentDir: string): Promise<Record<string, unknown>> {
   const file = join(agentDir, AGENT_MODELS_FILE);
   let raw: string;
   try {
     raw = await readFile(file, "utf8");
   } catch (error) {
     // No custom endpoints is the normal case; anything else (unreadable, a directory) is the caller's problem.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw error;
   }
   // Malformed JSON already threw out of createPiModelRuntime before this runs, so a parse failure here would be a
   // genuine surprise and must not be swallowed.
   const providers = (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> }).providers ?? {};
-  return Object.entries(providers)
-    .filter(([, provider]) => isLiteralKey(provider?.apiKey))
-    .map(([id]) => id);
+  return Object.fromEntries(Object.entries(providers).map(([id, provider]) => [id, provider?.apiKey]));
 }
 
 /**

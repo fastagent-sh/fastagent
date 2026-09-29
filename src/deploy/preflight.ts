@@ -14,6 +14,7 @@ import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
+  definitionKeyOf,
   environmentAuthSource,
   literalKeyProviders,
   isBuiltinProvider,
@@ -21,7 +22,6 @@ import {
   interactiveAuth,
   loginProviders,
   modelCredentialCarry,
-  probeAuthSource,
 } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -57,7 +57,10 @@ interface DeployFacts {
   values: ReadonlyMap<string, string>;
   /** That file, workspace-relative — the name every "set it here" message must use. */
   valueFile: string;
-  /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
+  /**
+   * The variable the value file carries the model's key in (the provider's own, or a models.json `"$NAME"`), or
+   * undefined when no key travels that way ({@link credentialRoute}).
+   */
   modelAuth: string | undefined;
   /**
    * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
@@ -260,32 +263,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // how the credential reaches the host.
   const authPath = resolveAuthPath(agentDir);
   const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
-  // The value file first: a provider key the author put there is what reaches the box, whatever authenticates the
-  // provider on THIS machine. Asking the machine first let a local login (pi ranks stored above the environment)
-  // outrank that key, and the deploy then logged the box in with a subscription instead of carrying the key.
-  const valueFileKey = modelSpec
-    ? await environmentAuthSource(providerOf(modelSpec), Object.fromEntries(values))
-    : undefined;
-  let modelAuth = isEnvKey(valueFileKey)
-    ? valueFileKey
-    : modelSpec
-      ? await probeAuthSource(models, modelSpec)
-      : undefined;
-  let boxLogin: string | undefined;
-  // probeAuthSource and modelCredentialCarry answer "what authenticates it HERE", from this process's environment,
-  // which holds the shell running deploy as well as the value file. Past the value file, an environment variable is
-  // this machine's and does not travel (§9), so it decides nothing: a provider with a login logs the box in, and one
-  // without keeps the variable's NAME, which the values gate then asks the value file for.
-  if (modelSpec && !isEnvKey(valueFileKey)) {
-    const provider = providerOf(modelSpec);
-    const canLogIn = hasLogin(provider);
-    const carry = modelCredentialCarry(models, modelSpec);
-    if (carry.envVar && !canLogIn) modelAuth = carry.envVar;
-    else if (carry.envVar || !carry.inDefinition) {
-      boxLogin = provider;
-      modelAuth = undefined; // nothing about this machine's credential is asked of the value file
-    }
-  }
+  const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values, models) : {};
+  const modelAuth = route.envVar;
+  const boxLogin = route.boxLogin;
   if (boxLogin !== undefined) {
     if (!hasLogin(boxLogin)) {
       report.issue(
@@ -411,6 +391,34 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     declaredSecrets,
     secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
   };
+}
+
+/**
+ * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, decided from what travels and never from what authenticates it HERE:
+ * `probeAuthSource` and pi's `getProviderAuthStatus` rank this machine's stored login above the environment and read
+ * the shell running deploy, and three fixes in a row came from asking them a deployment's question. In order:
+ *
+ * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (whether or not
+ *    it does yet: the values gate asks), and a literal or `"!command"` travels in the image;
+ * 2. the provider's own key variable, in the value file;
+ * 3. an ambient credential with no key (an AWS role, Google ADC), which is the host's own environment wherever it runs;
+ * 4. otherwise a login on the box — `boxLogin` — and the pre-flight says so, or that the provider has none.
+ */
+async function credentialRoute(
+  agentDir: string,
+  spec: string,
+  values: ReadonlyMap<string, string>,
+  models: Awaited<ReturnType<typeof createPiModelRuntime>>,
+): Promise<{ envVar?: string; boxLogin?: string }> {
+  const provider = providerOf(spec);
+  const declared = await definitionKeyOf(agentDir, provider);
+  if (declared) return "reference" in declared ? { envVar: declared.reference } : {};
+  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values));
+  if (isEnvKey(fromValues)) return { envVar: fromValues };
+  // Past steps 1 and 2 an `envVar` here is this machine's (the shell's) and does not travel; only a keyless
+  // environment credential says anything about the box.
+  if (modelCredentialCarry(models, spec).inDefinition) return {};
+  return { boxLogin: provider };
 }
 
 /** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
