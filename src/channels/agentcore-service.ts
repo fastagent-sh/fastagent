@@ -106,26 +106,18 @@ export async function mountAgentcoreService(
   const { agentDir, workspace, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
-  // NO control plane on this host, and `sessionControl: true` cannot change that.
+  // NO control plane on this host, and `sessionControl: true` cannot change that. The only public way in is the
+  // forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a webhook envelope and attaches the
+  // ingress secret ITSELF (deploy/agentcore/forwarder.js), so every anonymous caller arrives as trusted ingress. A
+  // channel route survives that because it checks its platform's signature; `/control/*` has no such check.
   //
-  // The only public way in is the forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a
-  // webhook envelope (deploy/agentcore/forwarder.js) and attaches the ingress secret ITSELF — so every anonymous
-  // caller arrives as trusted ingress. A channel route survives that because the platform's signature is checked
-  // inside it; `/control/*` has no such check, and mounting it here made `GET /control/sessions` and
-  // `DELETE /control/sessions/{id}` answerable from the public URL with no credential at all.
+  // The recipe if it is ever wanted: a `kind: "control"` envelope on the IAM-gated `InvokeAgentRuntime`, which the
+  // forwarder never emits (the way `kind: "invoke"` runs a turn without the ingress secret). The envelope is
+  // request/response with a buffered body, so the long-lived `GET /control/sessions/{id}/events` stream a client
+  // renders from could not ride it.
   //
-  // It is NOT that the two callers cannot be told apart. AWS already separates them and we already use that:
-  // `InvokeAgentRuntime` is IAM-gated, the forwarder builds its own envelopes and emits exactly four kinds, so a
-  // kind it never sends can only have come from a direct IAM call — which is how `kind: "invoke"` runs a turn here
-  // without the ingress secret. Adding `kind: "control"` on the same footing is small, and is the recipe if this is
-  // ever wanted.
-  //
-  // It is not built because nothing asks for it: `connectSessionControl` has no caller in this repo, and the
-  // envelope is request/response with a buffered body (see the webhook reply), so the one route a GUI actually
-  // renders from — the long-lived `GET /control/sessions/{id}/events` stream — could not ride it anyway. Half a
-  // control plane, for nobody, on a third transport.
-  // Every config key that cannot mean anything on this host says so. Silence here is how an operator concludes a
-  // setting took effect — `sessionControl` was the one that already warned, and the other two were just as inert.
+  // Every config key that cannot mean anything on this host says so: silence is how an operator concludes a setting
+  // took effect.
   if (opened.http?.cors) {
     log.warn(
       "[fastagent] agentcore: http.cors has no effect here — no browser reaches this container. Its ingress is the " +
