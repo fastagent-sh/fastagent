@@ -233,11 +233,11 @@ export function terminalLoginIO(): LoginIO {
 
 /** Best-effort persist the picked model so the next run does not prompt. */
 async function persistModelChoice(agentDir: string, configPath: string | undefined, spec: string): Promise<void> {
-  const hint = (): void =>
+  const hint = (why = ""): void =>
     console.error(
       // The pick lives in THIS process's environment only, so it serves this run and nothing that outlives it: a
       // deployment resolves in the environment being deployed, where this machine's variables do not exist.
-      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
+      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist${why}`,
     );
   if (!configPath) return hint();
   try {
@@ -245,7 +245,8 @@ async function persistModelChoice(agentDir: string, configPath: string | undefin
     if (!replaced) return hint();
     await writeFile(configPath, replaced);
     console.error(`[fastagent] saved model ${JSON.stringify(spec)} to ${relative(agentDir, configPath)}`);
-  } catch {
-    hint();
+  } catch (error) {
+    // The run goes on with the pick either way; the reason the file was not written is what the author needs to fix.
+    hint(` (could not write ${configPath}: ${(error as Error).message})`);
   }
 }
