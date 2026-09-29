@@ -4,17 +4,10 @@
  */
 import { mkdir } from "node:fs/promises";
 import type { Agent } from "../../agent.ts";
-import {
-  type AuthLayers,
-  type FastagentConfig,
-  type LoadedConfig,
-  loadConfig,
-  resolveAuthLayers,
-  resolveModelSpec,
-} from "./config.ts";
+import { type AuthLayers, type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
-import { agentOf, assemblePiFromDefinition, definitionModelRuntime, resolveAgentTools } from "./create.ts";
+import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
@@ -25,7 +18,8 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
-import { type CredentialSourceOptions, type FastagentAuthOptions, assertOneCredentialSource } from "./auth.ts";
+import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
+import { createPiModelRuntime, resolveCredentials } from "./models.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -124,8 +118,10 @@ export interface AgentAssembly {
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** The credentials files it reads ({@link resolveAuthLayers}). */
-  auth: AuthLayers;
+  /** The store every credential is read through ({@link resolveCredentials}). */
+  credentials: CredentialStore;
+  /** The credentials files behind it; absent when the caller supplied its own store. */
+  auth?: AuthLayers;
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
   toolNames: string[];
@@ -137,7 +133,7 @@ export interface AgentAssembly {
 
 export async function resolveAgentAssembly(
   dir: string,
-  options: { model?: string; authPath?: string } = {},
+  options: { model?: string } & CredentialSourceOptions = {},
 ): Promise<AgentAssembly> {
   // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery; its parent.
   const { agentDir, workspace } = resolvePlacement(dir);
@@ -169,8 +165,8 @@ export async function resolveAgentAssembly(
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
-  // The credentials file: project-level by default (under `<agentDir>/.secrets`).
-  const auth = resolveAuthLayers(agentDir, options.authPath);
+  // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
+  const { credentials, auth } = resolveCredentials(options, { agentDir });
   return {
     config,
     configPath,
@@ -178,7 +174,8 @@ export async function resolveAgentAssembly(
     agentDir,
     workspace,
     stateRoot,
-    auth,
+    credentials,
+    ...(auth ? { auth } : {}),
     tools,
     toolNames,
     deferredToolNames,
@@ -200,13 +197,10 @@ export async function availableModelsFromDir(
   dir: string,
   options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<string[]> {
-  assertOneCredentialSource(options);
   const { agentDir } = resolvePlacement(dir);
-  const models = await definitionModelRuntime(agentDir, {
-    ...(options.credentialStore
-      ? { credentials: options.credentialStore }
-      : { auth: resolveAuthLayers(agentDir, options.authPath) }),
-    ...(options.warn ? { warn: options.warn } : {}),
+  const models = await createPiModelRuntime({
+    agentDir,
+    credentials: resolveCredentials(options, { agentDir }).credentials,
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
 }
@@ -252,8 +246,6 @@ export async function createPiAgentFromDir(
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
 }> {
-  assertOneCredentialSource(options);
-  const { credentialStore } = options;
   const {
     config,
     configPath,
@@ -261,6 +253,7 @@ export async function createPiAgentFromDir(
     agentDir,
     workspace,
     stateRoot,
+    credentials,
     auth,
     tools,
     toolNames,
@@ -280,7 +273,8 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    ...(credentialStore ? { credentialStore } : { auth }),
+    // The opener's resolved store, so L2 reads exactly the credentials this report describes.
+    credentialStore: credentials,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
   });
@@ -344,7 +338,7 @@ export async function createPiAgentFromDir(
     modelSpec,
     stateRoot,
     sessionsDir,
-    ...(credentialStore ? {} : { auth }),
+    ...(auth ? { auth } : {}),
     toolNames,
     deferredToolNames,
     toolCollisions,

@@ -29,6 +29,7 @@ import {
 import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
+import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
@@ -1407,7 +1408,9 @@ describe("session control: boundary mutations", () => {
       const { join } = await import("node:path");
       const cwd = await mkdtemp(join(tmpdir(), "fa-astra-thinking-"));
       try {
-        const modelRuntime = await createPiModelRuntime({ auth: { path: join(cwd, "auth.json") } });
+        const modelRuntime = await createPiModelRuntime({
+          credentials: fastagentCredentialStore(join(cwd, "auth.json")),
+        });
         const model = modelRuntime.getModel(provider, "gpt-6-astra")!;
         expect(model).toBeDefined();
         const sessions = piInMemorySessionRecordStore({ cwd });

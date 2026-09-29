@@ -14,6 +14,7 @@ import {
   probeAuthSource,
   providerAuthStatuses,
 } from "../src/engines/pi/models.ts";
+import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
@@ -132,7 +133,10 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
 
   it("a declared endpoint becomes a resolvable model, and its key comes from the environment", async () => {
     const dir = await agentWith(GATEWAY);
-    const runtime = await createPiModelRuntime({ agentDir: dir, auth: { path: join(dir, "auth.json") } });
+    const runtime = await createPiModelRuntime({
+      agentDir: dir,
+      credentials: fastagentCredentialStore(join(dir, "auth.json")),
+    });
 
     // The point of the feature: `<id>/<modelId>` resolves, carrying the AUTHOR's endpoint — not a
     // built-in's. contextWindow is the declared one; maxTokens is pi's documented default (16384),
@@ -224,7 +228,7 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
 
     const runtime = await createPiModelRuntime({
       agentDir: dir,
-      auth: { path: join(dir, "auth.json") },
+      credentials: fastagentCredentialStore(join(dir, "auth.json")),
       providers: [injected],
     });
     const model = resolveModel(runtime, "mygw/deepseek-v3");
@@ -237,14 +241,17 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     // so an unread error would surface later as a bare "unknown model" — the silent fallback this
     // codebase forbids. The throw must name the file so the typo is findable.
     const dir = await agentWith("{ not json");
-    await expect(createPiModelRuntime({ agentDir: dir, auth: { path: join(dir, "auth.json") } })).rejects.toThrow(
-      /models\.json/,
-    );
+    await expect(
+      createPiModelRuntime({ agentDir: dir, credentials: fastagentCredentialStore(join(dir, "auth.json")) }),
+    ).rejects.toThrow(/models\.json/);
   });
 
   it("no models.json is the normal case: built-ins load, nothing throws", async () => {
     const dir = await agentWith(undefined);
-    const runtime = await createPiModelRuntime({ agentDir: dir, auth: { path: join(dir, "auth.json") } });
+    const runtime = await createPiModelRuntime({
+      agentDir: dir,
+      credentials: fastagentCredentialStore(join(dir, "auth.json")),
+    });
     expect(runtime.getProvider("anthropic")).toBeDefined();
   });
 
@@ -254,7 +261,11 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     const dir = await agentWith(GATEWAY);
     const stateRoot = join(dir, ".state");
     await mkdir(stateRoot, { recursive: true });
-    await createPiModelRuntime({ agentDir: dir, auth: { path: join(dir, "auth.json") }, stateRoot });
+    await createPiModelRuntime({
+      agentDir: dir,
+      credentials: fastagentCredentialStore(join(dir, "auth.json")),
+      stateRoot,
+    });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
   });
 });
@@ -292,7 +303,7 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     );
     await writeFile(authPath, JSON.stringify({ localgw: { type: "api_key", key: "sk-stored" } }));
 
-    const models = await createPiModelRuntime({ agentDir, auth: { path: authPath } });
+    const models = await createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) });
 
     expect(resolveModel(models, "localgw/m").baseUrl).toBe("http://127.0.0.1:8000/v1");
     expect(await probeAuthSource(models, "localgw/m")).toBe("stored credential");
@@ -308,7 +319,7 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     const own = JSON.stringify({ providers: { localgw: endpoint("https://pinned.example.com/v1", { apiKey: "x" }) } });
     const { agentDir, authPath } = await layers(machine, own);
 
-    const models = await createPiModelRuntime({ agentDir, auth: { path: authPath } });
+    const models = await createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) });
 
     expect(resolveModel(models, "localgw/m").baseUrl).toBe("https://pinned.example.com/v1");
     expect(resolveModel(models, "other/m").baseUrl).toBe("http://other/v1");
@@ -320,7 +331,9 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     // `deploy` fail on it: both go through one reader.
     const commented = `{ // the machine's gateway\n "providers": { "localgw": ${JSON.stringify(endpoint("http://m/v1", { apiKey: "x" }))} } }`;
     const { agentDir, machinePath, authPath } = await layers(commented);
-    await expect(createPiModelRuntime({ agentDir, auth: { path: authPath } })).rejects.toThrow(machinePath);
+    await expect(createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) })).rejects.toThrow(
+      machinePath,
+    );
     await expect(machineModels(agentDir)).rejects.toThrow(machinePath);
   });
 
@@ -334,12 +347,12 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     const before = new Set(await readdir(cache).catch(() => []));
     const snapshots = async () => (await readdir(cache)).filter((name) => !before.has(name));
 
-    await createPiModelRuntime({ agentDir, auth: { path: authPath } });
+    await createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) });
     const [first] = await snapshots();
     const created = await stat(join(cache, first as string));
     expect((created.mode & 0o777).toString(8)).toBe("600");
 
-    await createPiModelRuntime({ agentDir, auth: { path: authPath } }); // same content: the same snapshot, untouched
+    await createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) }); // same content: the same snapshot, untouched
     expect(await snapshots()).toEqual([first]);
     expect((await stat(join(cache, first as string))).mtimeMs).toBe(created.mtimeMs);
 
@@ -347,7 +360,7 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
       machinePath,
       JSON.stringify({ providers: { localgw: endpoint("http://changed/v1", { apiKey: "x" }) } }),
     );
-    const changed = await createPiModelRuntime({ agentDir, auth: { path: authPath } });
+    const changed = await createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) });
     expect(resolveModel(changed, "localgw/m").baseUrl).toBe("http://changed/v1");
     expect(await snapshots()).toHaveLength(2); // a new snapshot; the one a running process reads stays
   });
@@ -355,7 +368,9 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
   it("a malformed machine file fails startup naming that file, alone or merged", async () => {
     for (const own of [undefined, JSON.stringify({ providers: {} })]) {
       const { agentDir, machinePath, authPath } = await layers("{ not json", own);
-      await expect(createPiModelRuntime({ agentDir, auth: { path: authPath } })).rejects.toThrow(machinePath);
+      await expect(createPiModelRuntime({ agentDir, credentials: fastagentCredentialStore(authPath) })).rejects.toThrow(
+        machinePath,
+      );
     }
   });
 });

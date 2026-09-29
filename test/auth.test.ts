@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fastagentCredentialStore } from "../src/index.ts";
@@ -17,6 +17,16 @@ async function authPath(contents?: string): Promise<string> {
 }
 
 describe("fastagentCredentialStore (read-write credential file; fail-visibly discipline)", () => {
+  it("a named path reads the way FASTAGENT_AUTH_PATH does: `~` is the home directory", async () => {
+    // Every rung (L1, L2, the opener, login, createPiModels) hands its `authPath` to this store, so the reading is
+    // tested here once: otherwise `~/auth.json` would name a directory called `~` under the process cwd.
+    const apiKey = { type: "api_key", key: "sk-home" };
+    await writeFile(join(homedir(), "auth.json"), JSON.stringify({ anthropic: apiKey }));
+    const store = fastagentCredentialStore("~/auth.json");
+    expect(await store.read("anthropic")).toEqual(apiKey);
+    expect(await store.layerOf("anthropic")).toBe(join(homedir(), "auth.json"));
+  });
+
   it("missing file → undefined, no warning (normal not-configured)", async () => {
     const warn = vi.fn();
     expect(await fastagentCredentialStore("/nonexistent/auth.json", { warn }).read("anthropic")).toBeUndefined();
