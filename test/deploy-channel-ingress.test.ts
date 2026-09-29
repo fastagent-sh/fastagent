@@ -42,6 +42,37 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
     expect(gate).toContain("the app itself deployed"); // the host's own words, not this module's
     expect(logs.join("\n")).toContain("url=https://x/telegram"); // the runbook line to do it by hand
   });
+
+  it("when a login follows, is asked without a webhook, and the manual route starts with the login", async () => {
+    const login = "fastagent login --deployment fly";
+    const probe = vi.fn(async () => false);
+    const alone = await publicHealthGate({
+      baseUrl: "https://x",
+      channels: [],
+      log: () => {},
+      inspectHint: "h",
+      login,
+      probe,
+    });
+    expect(probe).toHaveBeenCalled(); // the login needs the box ready: the CLI its first boot installs
+    expect(alone).toContain(`Once it answers, log it in: ${login}`);
+    expect(alone).not.toMatch(/lines above/); // there are none
+
+    const logs: string[] = [];
+    const withWebhook = await publicHealthGate({
+      baseUrl: "https://x",
+      channels: webhook("telegram"),
+      log: (m) => logs.push(m),
+      inspectHint: "h",
+      login,
+      probe,
+    });
+    expect(withWebhook).toMatch(/use the lines above/);
+    const loginAt = logs.findIndex((l) => l.includes(login));
+    expect(loginAt).toBeGreaterThanOrEqual(0);
+    // Before any channel is pointed at the box.
+    expect(logs.findIndex((l) => l.includes("url=https://x/telegram"))).toBeGreaterThan(loginAt);
+  });
 });
 
 describe("deploy/channel-ingress: which channels have a webhook", () => {

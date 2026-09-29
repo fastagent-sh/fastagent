@@ -182,7 +182,7 @@ export async function deployFlyRun(
       `the app itself deployed — inspect \`fly logs -a ${plan.appName}\`, then re-run once it answers ` +
       `(a re-run repeats the remote build)`,
     probe: healthProbe,
-    loginFollows: plan.boxLogin !== undefined,
+    ...(plan.boxLogin ? { login: "fastagent login --deployment fly" } : {}),
   });
   if (healthGate) return gate(healthGate);
   const notLoggedIn = await plan.boxLogin?.();

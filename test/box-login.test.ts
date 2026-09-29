@@ -98,13 +98,7 @@ describe("the box half of `login --deployment`", () => {
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
     await writeFile(join(root, ".secrets", "auth.json"), JSON.stringify({ "openai-codex": oauth }));
     const held = await relay(["openai-codex", "--if-missing", "--no-input"]);
-    expect(held.result, held.stderr).toEqual({
-      ok: true,
-      provider: "openai-codex",
-      method: "oauth",
-      path: join(root, ".secrets", "auth.json"),
-      stored: true,
-    });
+    expect(held.result, held.stderr).toEqual({ ok: true, provider: "openai-codex", kept: "OAuth" });
     expect(held.code).toBe(0);
   });
 
@@ -223,20 +217,34 @@ describe("what a redeploy keeps: a credential that still authenticates, not a li
     const authPath = join(dir, "auth.json");
     const write = (cred: unknown) => writeFile(authPath, JSON.stringify({ "openai-codex": cred }));
 
-    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ usable: false });
+    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({});
 
     await write({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 });
-    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ type: "oauth", usable: true });
+    expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ source: "OAuth", stored: "oauth" });
 
     // Expired, and the refresh is refused (a revoked grant): the box's startup report calls this unusable too.
     await write({ type: "oauth", access: "a", refresh: "revoked", expires: 1 });
     const refresh = vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 }));
     vi.stubGlobal("fetch", refresh);
     try {
-      expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ type: "oauth", usable: false });
+      expect(await heldCredential(authPath, "openai-codex", undefined)).toEqual({ stored: "oauth" });
       expect(refresh).toHaveBeenCalled(); // it asked the provider, rather than trusting the file
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("a box whose key is a platform variable", () => {
+  it("authenticates with no auth.json entry at all, and the kept source names the variable", async () => {
+    // A Fly/Railway secret set by hand (`fly secrets set OPENAI_API_KEY=…`): nothing on this machine to carry, so
+    // deploy asks the box, and the box answers from its environment exactly as its startup report does.
+    const authPath = join(await mkdtemp(join(tmpdir(), "fa-held-env-")), "auth.json");
+    vi.stubEnv("OPENAI_API_KEY", "sk-from-the-platform");
+    try {
+      expect(await heldCredential(authPath, "openai", undefined)).toEqual({ source: "OPENAI_API_KEY" });
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

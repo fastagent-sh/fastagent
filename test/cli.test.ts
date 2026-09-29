@@ -67,6 +67,24 @@ describe("cli papercuts", () => {
     expect(forced.stderr).toMatch(/excludes \.git/); // …and the pull\/push note
   });
 
+  it("deploy agentcore --run with a login to redo and no terminal stops before touching AWS", async () => {
+    // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
+    // runtime with one that cannot answer. Decided up front, so no AWS command runs at all.
+    const dir = await agentWorkspace("fa-deploy-ac-login-", {
+      "fastagent.config.ts": `export default { model: "openai-codex/gpt-5.5" };\n`,
+    });
+    const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
+    const called = join(bin, "called");
+    await writeFile(join(bin, "aws"), `#!/bin/sh\necho "$@" >> ${called}\nexit 1\n`, { mode: 0o755 });
+    const result = await run(["deploy", "agentcore", dir, "--run"], undefined, {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/wipes the runtime's openai-codex login.*run this deploy in a terminal/);
+    await expect(stat(called)).rejects.toThrow(); // no aws invocation
+  });
+
   it("deploy: generate mode succeeds with the WYSIWYG note; the agentDir config key is retired", async () => {
     const dir = await agentWorkspace("fa-deploy-gen-", {
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,

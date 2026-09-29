@@ -182,6 +182,18 @@ async function runDeployAgentcore(
   },
 ): Promise<void> {
   const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
+  // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
+  // to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving, with the webhooks
+  // a previous deploy registered still pointing at it.
+  if (params.boxLogin && !params.input) {
+    failStartup(
+      new Error(
+        `deploy stopped: every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
+          `nobody can log it in again — run this deploy in a terminal, or set ${params.boxLogin}'s API key in ` +
+          `${params.valueFile}`,
+      ),
+    );
+  }
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
     declared: params.declaredSecrets,

@@ -243,7 +243,7 @@ export async function deployRailwayRun(
     log,
     inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
     probe: healthProbe,
-    loginFollows: plan.boxLogin !== undefined,
+    ...(plan.boxLogin ? { login: "fastagent login --deployment railway" } : {}),
   });
   if (healthGate) return gate(healthGate);
   const notLoggedIn = await plan.boxLogin?.();

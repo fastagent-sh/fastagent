@@ -13,8 +13,13 @@ import type { IoOption, LoginIO, LoginMethod } from "../engines/pi/login.ts";
 
 /** How a login on the box ended, as the box reports it. */
 export type RelayResult =
-  /** `stored`: the box already held a credential for the provider, and `--if-missing` left it alone. */
-  | { ok: true; provider: string; method: LoginMethod; path: string; stored?: boolean }
+  /** Logged in now: `method` is how, `path` where the box saved it. */
+  | { ok: true; provider: string; method: LoginMethod; path: string }
+  /**
+   * `--if-missing`: the box already authenticates the provider and was left alone. `source` is what does it, as the
+   * box's startup report names it (`OAuth`, `stored credential`, or an environment variable such as `OPENAI_API_KEY`).
+   */
+  | { ok: true; provider: string; kept: string }
   | { ok: false; reason: "cancelled" | "missing" | "failed"; message: string };
 
 type BoxMessage =

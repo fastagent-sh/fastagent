@@ -227,10 +227,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
 
   it("secret values go over stdin (import), never argv", async () => {
     const { fly, calls } = fakeFly((a) => (a[0] === "apps" ? { stdout: "[]" } : {}));
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", FASTAGENT_AUTH_SEED: "b64" } }), fly);
+    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), fly);
     const importCall = calls.find((c) => c.args[0] === "secrets")!;
     expect(importCall.args.join(" ")).not.toContain("sk-x"); // not in argv
-    expect(importCall.input).toBe("OPENAI_API_KEY=sk-x\nFASTAGENT_AUTH_SEED=b64\n"); // on stdin
+    expect(importCall.input).toBe("OPENAI_API_KEY=sk-x\nGH_TOKEN=ghp_x\n"); // on stdin
   });
 
   it("idempotent re-run: an existing app is skipped, deploy still runs", async () => {

@@ -66,8 +66,10 @@ When the credential is missing or rejected later (revoked, volume lost), the box
 
 - **Railway** needs Railway CLI 5.x on `PATH`: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a
   signup URL instead of opening the shell (`railway --version`; an old Homebrew copy can shadow the installer's).
-- **AgentCore** resets its storage on every deploy, so every deploy of an agent that logs in ends with this login;
-  for frequent or CI deploys, use an API key. The shell needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
+- **AgentCore** resets its storage on every deploy, so every deploy of an agent that logs in ends with this login.
+  Without a terminal, `deploy agentcore --run` therefore stops before building anything, rather than replace a
+  serving runtime with one nobody can log in; for frequent or CI deploys, use an API key. The shell needs
+  `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
 
 ## Local Docker
 
@@ -230,7 +232,8 @@ What to know:
   runtime update (every deploy) and after 14 idle days: sessions, channel state and pending wake-ups start blank.
   For state that survives deploys, use Fly or Railway.
 - **A login on the runtime does not survive a deploy** (the same reset). `--run` logs the runtime in again after
-  every deploy; a provider API key in `.secrets/.env` avoids that.
+  every deploy, and refuses to start without a terminal to do it in; a provider API key in `.secrets/.env` avoids
+  both.
 - **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.

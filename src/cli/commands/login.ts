@@ -167,10 +167,10 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   const authPath = resolveAuthPath(agentDir ?? process.cwd());
   if (opts.ifMissing && provider) {
     const held = await heldCredential(authPath, provider, agentDir);
-    if (held.usable) return { ok: true, provider, method: held.type, path: authPath, stored: true };
+    if (held.source !== undefined) return { ok: true, provider, kept: held.source };
     if (opts.input === false) {
-      const what = held.type
-        ? `the stored ${provider} ${held.type} credential is expired or unusable`
+      const what = held.stored
+        ? `the stored ${provider} ${held.stored} credential is expired or unusable`
         : `no ${provider} credential`;
       return { ok: false, reason: "missing", message: `${what} in ${authPath}` };
     }
@@ -187,20 +187,19 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
 }
 
 /**
- * What the box holds for `provider`, and whether it still authenticates: the same answer the box's own startup report
- * gives (`probeAuthSource`, which refreshes an expired OAuth token). A stored entry alone is not a credential: a revoked
- * grant is still a line in the file, and keeping it would let `deploy --run` point webhooks at a box that fails every
- * message.
+ * Whether the box authenticates `provider` now, and with what: the same answer its own startup report gives
+ * (`probeAuthSource`, which refreshes an expired OAuth token). `source` decides; `stored` (what auth.json holds) only
+ * words the refusal. Neither alone would do: a revoked grant is still a line in the file, and a key the host sets as a
+ * platform variable is no line at all.
  */
 export async function heldCredential(
   authPath: string,
   provider: string,
   agentDir: string | undefined,
-): Promise<{ type: LoginMethod; usable: boolean } | { type?: undefined; usable: false }> {
-  const type = (await fastagentCredentialStore(authPath).list()).find((info) => info.providerId === provider)?.type;
-  if (type === undefined) return { usable: false };
+): Promise<{ source?: string; stored?: LoginMethod }> {
+  const stored = (await fastagentCredentialStore(authPath).list()).find((info) => info.providerId === provider)?.type;
   const models = await createPiModelRuntime({ ...(agentDir ? { agentDir } : {}), auth: { path: authPath } });
   const model = models.getProvider(provider)?.getModels()[0];
-  const usable = model !== undefined && (await probeAuthSource(models, `${provider}/${model.id}`)) !== undefined;
-  return { type, usable };
+  const source = model ? await probeAuthSource(models, `${provider}/${model.id}`) : undefined;
+  return { ...(source !== undefined ? { source } : {}), ...(stored !== undefined ? { stored } : {}) };
 }

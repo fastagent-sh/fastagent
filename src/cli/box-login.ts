@@ -59,8 +59,8 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   }
   if (result.ok) {
     console.error(
-      result.stored
-        ? `[fastagent] the deployment already holds its ${result.provider} credential (${result.method}, ${result.path}) — kept`
+      "kept" in result
+        ? `[fastagent] the deployment already authenticates ${result.provider} (${result.kept}) — kept`
         : `[fastagent] logged in to ${result.provider} (${result.method}) on the deployment — saved to ${result.path} there`,
     );
     return undefined;

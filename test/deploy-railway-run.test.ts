@@ -208,7 +208,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", FASTAGENT_AUTH_SEED: "b64" } }), railway);
+    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), railway);
     const setKey = calls.find((c) => c.args[0] === "variables" && c.args[2] === "OPENAI_API_KEY")!;
     expect(setKey.args.join(" ")).not.toContain("sk-x"); // not in argv
     expect(setKey.args).toContain("--stdin");

@@ -136,21 +136,30 @@ export async function publicHealthGate(input: {
   /** How THIS host is inspected and re-run — the only per-host words in the gate. */
   inspectHint: string;
   probe?: PublicHealthProbe;
-  /** A login on the box follows (`fastagent login --deployment`). */
-  loginFollows?: boolean;
+  /** The login that follows on the box (`fastagent login --deployment <host>`), when one does. */
+  login?: string;
 }): Promise<string | undefined> {
-  if (webhookKinds(input.channels).length === 0 && !input.loginFollows) return undefined;
+  if (webhookKinds(input.channels).length === 0 && input.login === undefined) return undefined;
   const healthUrl = `${input.baseUrl}/health`;
   input.log(`waiting for ${healthUrl} (up to ${PUBLIC_HEALTH_TIMEOUT_MS / 1000}s)…`);
   const probe =
     input.probe ?? ((url: string) => waitForHealth(url, PUBLIC_HEALTH_TIMEOUT_MS, 500, announce(input.log)));
   if (await probe(healthUrl)) return undefined;
-  // The infrastructure is up and only the webhook is missing, so hand over the manual route rather than leaving
-  // `re-run` as the only way out (a Fly re-run repeats the remote build).
-  for (const line of webhookRunbook(input.baseUrl, input.channels)) input.log(line);
+  // The infrastructure is up and only activation is missing, so hand over the manual route rather than leaving
+  // `re-run` as the only way out (a Fly re-run repeats the remote build). The login comes first: a channel pointed at
+  // a box with no model credential fails every message.
+  const steps = [
+    ...(input.login !== undefined ? [`# First, log the box in: ${input.login}`] : []),
+    ...webhookRunbook(input.baseUrl, input.channels),
+  ];
+  for (const line of steps) input.log(line);
+  const byHand =
+    webhookKinds(input.channels).length > 0
+      ? `To finish by hand once it answers, use the lines above.`
+      : `Once it answers, log it in: ${input.login}.`;
   return (
     `the deployed agent did not become healthy at ${healthUrl}, so it was not activated — ${input.inspectHint}. ` +
-    `To point the channels by hand instead, use the lines above.`
+    byHand
   );
 }
 
