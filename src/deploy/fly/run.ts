@@ -1,5 +1,11 @@
 /** `fastagent deploy fly --run` — drive flyctl to completion. */
-import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
+import {
+  type PublicHealthProbe,
+  type Registrars,
+  loginGate,
+  publicHealthGate,
+  registerWebhooks,
+} from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
@@ -186,7 +192,17 @@ export async function deployFlyRun(
   });
   if (healthGate) return gate(healthGate);
   const notLoggedIn = await plan.boxLogin?.();
-  if (notLoggedIn) return gate(notLoggedIn);
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        baseUrl,
+        afterLogin: "once it is, re-run `fastagent deploy fly --run` (it keeps the login)",
+      }),
+    );
+  }
 
   // 9.
   const registrationGateMsg = await registerWebhooks({

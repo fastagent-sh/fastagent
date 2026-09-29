@@ -125,7 +125,10 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       return "not logged in: …";
     };
     const out = await run(plan({ channels: declaredChannels(["telegram"]), boxLogin }), railway, tg, healthy);
-    expect(out).toEqual({ ok: false, gate: "not logged in: …" });
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/^not logged in: …\. No webhook was registered.*railway --run --into-linked/),
+    });
     expect(order).toEqual(["health", "login"]);
   });
 

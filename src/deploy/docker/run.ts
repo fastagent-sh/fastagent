@@ -1,5 +1,7 @@
 /** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
+import { loginGate } from "../channel-ingress.ts";
 import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
 import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
@@ -23,6 +25,8 @@ export interface DockerRunPlan {
   valueFile: string;
   /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
   announce: DockerAnnounce;
+  /** Every declared channel and its ingress: which of them a failed login leaves unregistered. */
+  channels: readonly DeclaredChannel[];
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
   /**
@@ -241,7 +245,13 @@ export async function deployDockerRun(
 
   // `url` travels with this gate: Compose is up, and the operator needs to know where.
   const notLoggedIn = await plan.boxLogin?.();
-  if (notLoggedIn) return { ok: false, gate: notLoggedIn, url };
+  if (notLoggedIn) {
+    // Only a tunnel is ours to announce; without one, the webhooks were never this run's to register.
+    const afterLogin =
+      "once it is, re-run `fastagent deploy docker --run` (it keeps the login and announces the tunnel)";
+    const channels = hasTunnel ? plan.channels : [];
+    return { ok: false, gate: loginGate({ notLoggedIn, channels, log, afterLogin }), url };
+  }
 
   if (!hasTunnel) return { ok: true, url };
   log("waiting for the Compose tunnel service to publish its Quick Tunnel URL…");

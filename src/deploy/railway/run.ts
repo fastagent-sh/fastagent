@@ -1,5 +1,11 @@
 /** `fastagent deploy railway --run` — drive the Railway CLI to completion. */
-import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
+import {
+  type PublicHealthProbe,
+  type Registrars,
+  loginGate,
+  publicHealthGate,
+  registerWebhooks,
+} from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
@@ -247,7 +253,17 @@ export async function deployRailwayRun(
   });
   if (healthGate) return gate(healthGate);
   const notLoggedIn = await plan.boxLogin?.();
-  if (notLoggedIn) return gate(notLoggedIn);
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        baseUrl: url,
+        afterLogin: "once it is, re-run `fastagent deploy railway --run --into-linked` (it keeps the login)",
+      }),
+    );
+  }
 
   // 7.
   const registrationGateMsg = await registerWebhooks({

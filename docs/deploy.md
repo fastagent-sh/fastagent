@@ -54,8 +54,11 @@ credential on its storage, so it is the only holder of that grant: your machine'
 side can log the other out. Logging in again replaces it.
 
 `deploy --run` starts this login once the box answers `/health` and before any webhook is pointed at it, when the
-box does not already hold a credential for the model's provider that still authenticates. A redeploy keeps the
-box's credential. Without a terminal (CI), `--run` stops there with `not logged in` and the command to run, exit 1.
+box does not already hold a credential for the model's provider that is unexpired (or refreshes). A redeploy keeps
+the box's credential. A credential revoked at the provider before it expires is not detected, and the first turn
+fails with the provider's error: run `fastagent login --deployment` to replace it. Without a terminal (CI), `--run`
+stops at the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point,
+so when the agent has any, the message also says what to re-run once the box is logged in.
 
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
 and routines fire on schedule, and each turn they start fails for want of a model credential. Only webhooks wait for

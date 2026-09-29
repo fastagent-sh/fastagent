@@ -174,7 +174,12 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       fakeCli().cli,
       tg,
     );
-    expect(out).toEqual({ ok: false, gate: "not logged in: …" });
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        /^not logged in: …\. No webhook was registered.*point the channels by hand.*lines above/,
+      ),
+    });
     // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
     expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
     expect(tg).not.toHaveBeenCalled();

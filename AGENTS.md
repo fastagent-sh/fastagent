@@ -162,7 +162,8 @@ src/
 │   ├── hosts.ts            # DEPLOY_HOSTS, the targets as a value + the add-a-host guide
 │   ├── residency.ts        # what forbids scaling to zero: ONE rule every host that can scale reads
 │   ├── channel-ingress.ts  # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL, the
-│   │                       # words when nobody can. Consumed by every host AND by the serving path
+│   │                       # words when nobody can (or when a box's login stopped registration). Consumed by
+│   │                       # every host AND by the serving path
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
 │   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
@@ -171,8 +172,8 @@ src/
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
 │                           # .secrets/ stay outside the definition)
-│   ├── secrets.ts          # both directions of the credential carry: the NAMES a runbook lists, the VALUES
-│   │                       # `--run` sends, and the seed the container reads back
+│   ├── secrets.ts          # both directions of the value carry: the NAMES a runbook lists, the VALUES
+│   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver

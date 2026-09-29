@@ -93,7 +93,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(order).toEqual(["health", "login", "register"]);
 
     order.length = 0;
-    expect(await run(p("not logged in: …"), fly, tg, healthy)).toEqual({ ok: false, gate: "not logged in: …" });
+    expect(await run(p("not logged in: …"), fly, tg, healthy)).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/^not logged in: …\. No webhook was registered.*re-run `fastagent deploy fly --run`/),
+    });
     expect(order).toEqual(["health", "login"]);
 
     // No webhook to point, but a login follows: the box must be up (workspace prepared, CLI installed) for it.

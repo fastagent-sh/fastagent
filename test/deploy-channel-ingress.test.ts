@@ -3,6 +3,7 @@ import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { planAgentcoreDeploy } from "../src/deploy/agentcore/plan.ts";
 import {
+  loginGate,
   publicHealthGate,
   registerWebhooks,
   webhookKinds,
@@ -72,6 +73,38 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
     expect(loginAt).toBeGreaterThanOrEqual(0);
     // Before any channel is pointed at the box.
     expect(logs.findIndex((l) => l.includes("url=https://x/telegram"))).toBeGreaterThan(loginAt);
+  });
+});
+
+describe("deploy/channel-ingress: a login that did not happen", () => {
+  const notLoggedIn = "not logged in: … — run `fastagent login --deployment fly` in a terminal";
+  const afterLogin = "once it is, re-run the deploy";
+
+  it("with no webhook to point, is the login's own refusal and nothing else", () => {
+    const logs: string[] = [];
+    const gate = loginGate({ notLoggedIn, channels: longConnection("feishu"), log: (m) => logs.push(m), afterLogin });
+    expect(gate).toBe(notLoggedIn);
+    expect(logs).toEqual([]);
+  });
+
+  it("with one, says logging in registers none, and how this host gets them registered", () => {
+    const logs: string[] = [];
+    const gate = loginGate({ notLoggedIn, channels: webhook("telegram"), log: (m) => logs.push(m), afterLogin });
+    expect(gate).toBe(`${notLoggedIn}. No webhook was registered, and logging in does not register one: ${afterLogin}`);
+    expect(logs).toEqual([]); // no URL yet: nothing to point by hand
+  });
+
+  it("with the URL known, prints the lines to point the channels by hand", () => {
+    const logs: string[] = [];
+    const gate = loginGate({
+      notLoggedIn,
+      channels: webhook("telegram"),
+      log: (m) => logs.push(m),
+      afterLogin,
+      baseUrl: "https://x",
+    });
+    expect(gate).toMatch(/The lines above point the channels by hand\.$/);
+    expect(logs.join("\n")).toContain("url=https://x/telegram");
   });
 });
 

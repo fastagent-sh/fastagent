@@ -1,7 +1,7 @@
 /** `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. */
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
+import { type Registrars, loginGate, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
@@ -504,7 +504,17 @@ export async function deployAgentcoreRun(
     log("runtime verified (workspace ready, channels constructed)");
   }
   const notLoggedIn = await plan.boxLogin?.(runtimeArn);
-  if (notLoggedIn) return gate(notLoggedIn);
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        baseUrl: url,
+        afterLogin: "once it is, point the channels by hand — a redeploy would wipe that login again",
+      }),
+    );
+  }
 
   // 9.
   const registrationGateMsg = url

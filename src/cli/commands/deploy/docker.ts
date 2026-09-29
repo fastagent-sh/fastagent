@@ -157,6 +157,7 @@ async function runDeployDocker(
       missingSecrets,
       valueFile: params.valueFile,
       requireTunnel,
+      channels,
       ...boxLoginStep("docker", params, () => composeShell(composeFile, workspace)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {

@@ -164,6 +164,31 @@ export async function publicHealthGate(input: {
 }
 
 /**
+ * The gate when the login on the box did not happen. It stops the run BEFORE registration (a channel pointed at a box
+ * with no model credential fails every message), so the login it asks for does not register anything by itself: with
+ * a webhook to point, the refusal says what comes after the login, and prints the lines to do it by hand when the
+ * URL is known.
+ */
+export function loginGate(input: {
+  /** What the login reported, ending with the command to run. */
+  notLoggedIn: string;
+  channels: readonly DeclaredChannel[];
+  log: (msg: string) => void;
+  /** How THIS host registers the webhooks once the box is logged in — the only per-host words in the gate. */
+  afterLogin: string;
+  /** Where the channels point; unset when the host has not minted it yet (Docker's tunnel is read after). */
+  baseUrl?: string;
+}): string {
+  if (webhookKinds(input.channels).length === 0) return input.notLoggedIn;
+  const byHand = input.baseUrl === undefined ? [] : webhookRunbook(input.baseUrl, input.channels);
+  for (const line of byHand) input.log(line);
+  return (
+    `${input.notLoggedIn}. No webhook was registered, and logging in does not register one: ${input.afterLogin}` +
+    (byHand.length > 0 ? `. The lines above point the channels by hand.` : ``)
+  );
+}
+
+/**
  * Keep the wait visible. This occupies `waitForHealth`'s liveness slot without answering it: neither Fly nor Railway
  * has a liveness question cheaper than the wait it would shorten (each is a CLI round trip, unlike docker's local
  * `compose ps`), so the hook reports progress and never cuts the budget short.

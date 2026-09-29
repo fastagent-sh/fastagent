@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { declaredChannels } from "../src/channels/discover.ts";
 import {
   type DockerRunPlan,
   deployDockerRun,
@@ -25,6 +26,7 @@ const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   missingSecrets: [],
   valueFile: "fastagent/.secrets/.env",
   requireTunnel: false,
+  channels: [],
   announce: async () => [],
   ...override,
 });
@@ -126,6 +128,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     const out = await deployDockerRun(
       plan({
         requireTunnel: true,
+        channels: declaredChannels(["telegram"]),
         boxLogin: async () => {
           order.push("login");
           return "not logged in: …";
@@ -142,8 +145,29 @@ describe("deploy/docker/run: local Compose journey", () => {
         return { url: "https://blue-cat.trycloudflare.com", connected: true };
       },
     );
-    expect(out).toEqual({ ok: false, gate: "not logged in: …", url: "http://127.0.0.1:8787" });
+    // The tunnel is announced only by a run, so the way to its webhooks after a login is another run.
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        /^not logged in: …\. No webhook was registered.*re-run `fastagent deploy docker --run`/,
+      ),
+      url: "http://127.0.0.1:8787",
+    });
     expect(order).toEqual(["health", "login"]);
+
+    // Without a tunnel the webhooks were never this run's to register, so the login is all there is to say.
+    const noTunnel = fakeDocker((args) => {
+      if (args.includes("--services")) return { stdout: "agent\n" };
+      if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
+      return {};
+    });
+    const bare = await deployDockerRun(
+      plan({ channels: declaredChannels(["telegram"]), boxLogin: async () => "not logged in: …" }),
+      noTunnel.docker,
+      () => {},
+      healthy,
+    );
+    expect(bare).toEqual({ ok: false, gate: "not logged in: …", url: "http://127.0.0.1:8787" });
   });
 
   it("with no published port, a login waits for /health inside the container; without one, nothing is probed", async () => {

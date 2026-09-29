@@ -187,10 +187,14 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
 }
 
 /**
- * Whether the box authenticates `provider` now, and with what: the same answer its own startup report gives
- * (`probeAuthSource`, which refreshes an expired OAuth token). `source` decides; `stored` (what auth.json holds) only
- * words the refusal. Neither alone would do: a revoked grant is still a line in the file, and a key the host sets as a
- * platform variable is no line at all.
+ * Whether the box has a credential for `provider` that is not expired, or refreshed when it was, and from where: the
+ * same answer its own startup report gives (`probeAuthSource`). `source` decides; `stored` (what auth.json holds) only
+ * words the refusal. The file alone would not do: an OAuth grant whose refresh the provider refuses is still a line in
+ * it, and a key the host sets as a platform variable is no line at all.
+ *
+ * Known ceiling: nothing is asked of the provider beyond a due refresh, so a revoked grant whose access token has not
+ * expired yet, or a revoked API key, reads as held; the first turn then fails with the provider's own error. Asking
+ * would spend a real model call on every redeploy, which the readiness checks deliberately never do.
  */
 export async function heldCredential(
   authPath: string,

@@ -101,7 +101,7 @@ export function deploymentBucketName(name: string, account: string): string {
 export const CARRIER_CHUNK_SIZE = 2000;
 export const CARRIER_MAX_CHUNKS = 4;
 
-/** The template's two chunked carriers: CloudFormation parameter prefix → container env-var name. */
+/** The template's chunked carrier: CloudFormation parameter prefix → container env-var name. */
 export const CARRIERS = [
   { param: "FastagentEnv", env: "FASTAGENT_ENV", what: "base64 JSON of the value file's variables" },
 ] as const;
