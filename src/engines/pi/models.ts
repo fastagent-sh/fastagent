@@ -198,7 +198,7 @@ export function modelCatalogPath(): string {
  */
 export async function seedModelCatalog(entries: Readonly<Record<string, ModelsStoreEntry>>): Promise<void> {
   const path = modelCatalogPath();
-  const held = existsSync(path) ? (JSON.parse(await readFile(path, "utf8")) as Record<string, ModelsStoreEntry>) : {};
+  const held = await readCatalogCache(path);
   for (const [provider, entry] of Object.entries(entries)) {
     const current = held[provider];
     const ids = new Set(entry.models.map((model) => model.id));
@@ -211,6 +211,21 @@ export async function seedModelCatalog(entries: Readonly<Record<string, ModelsSt
       : entry;
   }
   writeFileAtomic(path, `${JSON.stringify(held, null, 2)}\n`, 0o600, true);
+}
+
+/** The machine's catalog cache as pi writes it (entries by provider), or `{}` when there is none yet. */
+async function readCatalogCache(path: string): Promise<Record<string, ModelsStoreEntry>> {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as Record<string, ModelsStoreEntry>;
+  } catch (error) {
+    throw new Error(`the model catalog cache ${path} is not valid JSON (${(error as Error).message}): delete it`);
+  }
+}
+
+/** The model the machine's catalog cache holds under this provider and id, as pi fetched it. */
+export async function cachedCatalogModel(provider: string, id: string): Promise<Model<Api> | undefined> {
+  return (await readCatalogCache(modelCatalogPath()))[provider]?.models.find((model) => model.id === id);
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */
@@ -263,11 +278,24 @@ const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
  * Fetch the model catalog of every provider `runtime` can authenticate into the machine's cache
  * ({@link modelCatalogPath}): the refresh `pi update --models` runs. pi asks pi.dev only for a provider with a usable
  * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
- * that failed, when any part fails, when it outlasts 15 seconds, and when `PI_OFFLINE` is set.
+ * that failed, when any part fails, when it outlasts 15 seconds, when `PI_OFFLINE` is set, and when no provider has a
+ * usable credential (the refresh would ask for nothing).
  */
 export async function refreshCatalog(runtime: ModelRuntime, options: { signal?: AbortSignal } = {}): Promise<void> {
   // pi skips its own background refresh under PI_OFFLINE, but an explicit `allowNetwork: true` overrides that.
   if (process.env.PI_OFFLINE !== undefined) throw new Error("PI_OFFLINE is set, so the model catalog is not refreshed");
+  // pi skips a provider it cannot authenticate without recording anything, so with no usable credential at all the
+  // refresh would "succeed" having asked for nothing.
+  const refreshable = runtime.getProviders().filter((provider) => provider.refreshModels !== undefined);
+  const usable = await Promise.all(
+    refreshable.map(async (provider) => (await runtime.checkAuth(provider.id)) !== undefined),
+  );
+  if (!usable.includes(true)) {
+    throw new Error(
+      "no provider has a usable credential here, so there is no model catalog to fetch — log in " +
+        "(`fastagent login`) or set a provider's API key first",
+    );
+  }
   const timeout = AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const result = await runtime.refresh({ allowNetwork: true, force: true, signal });

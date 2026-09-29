@@ -1,18 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import { dirname, join } from "node:path";
+import { type Api, InMemoryCredentialStore, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   agentAuthStatus,
   createPiModelRuntime,
+  createPiModels,
   literalKeyProviders,
+  modelCatalogPath,
   machineModels,
   definitionKeyOf,
   probeApiKey,
   probeAuthSource,
   providerAuthStatuses,
+  refreshCatalog,
+  seedModelCatalog,
 } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
@@ -454,5 +459,45 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
       stored: "oauth",
       shadowed: "ANTHROPIC_API_KEY",
     });
+  });
+});
+
+describe("the machine's model catalog cache", () => {
+  it("seedModelCatalog keeps what the cache holds: other models stay, a same id is replaced, lastModified only grows", async () => {
+    const bundled = createPiModels().getProvider("anthropic")?.getModels()[0] as Model<Api>;
+    const later = Date.now() + 86_400_000;
+    const model = (id: string, name: string): Model<Api> => ({ ...bundled, id, name });
+    await mkdir(dirname(modelCatalogPath()), { recursive: true });
+    const held = { models: [model("claude-held", "held"), model("claude-both", "old")], lastModified: later + 1 };
+    await writeFile(modelCatalogPath(), JSON.stringify({ anthropic: held }));
+    try {
+      await seedModelCatalog({
+        anthropic: { models: [model("claude-both", "new"), model("claude-seeded", "seeded")], lastModified: later },
+      });
+      const entry = JSON.parse(await readFile(modelCatalogPath(), "utf8")).anthropic;
+      expect(entry.models.map((m: { id: string; name: string }) => `${m.id}:${m.name}`).sort()).toEqual([
+        "claude-both:new",
+        "claude-held:held",
+        "claude-seeded:seeded",
+      ]);
+      expect(entry.lastModified).toBe(later + 1);
+      const dir = await mkdtemp(join(tmpdir(), "fastagent-seeded-"));
+      const runtime = await createPiModelRuntime({ agentDir: dir, credentials: new InMemoryCredentialStore() });
+      expect(runtime.getModel("anthropic", "claude-held")).toBeDefined();
+      expect(runtime.getModel("anthropic", "claude-seeded")).toBeDefined();
+    } finally {
+      await rm(modelCatalogPath(), { force: true });
+    }
+  });
+
+  it("a refresh with no usable credential anywhere is refused instead of reporting a refresh that asked for nothing", async () => {
+    const refresh = vi.fn();
+    const runtime = {
+      getProviders: () => [{ id: "anthropic", refreshModels: async () => {} }, { id: "static" }],
+      checkAuth: async () => undefined,
+      refresh,
+    } as unknown as ModelRuntime;
+    await expect(refreshCatalog(runtime)).rejects.toThrow(/no provider has a usable credential/);
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

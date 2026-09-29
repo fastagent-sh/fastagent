@@ -88,7 +88,8 @@ fastagent models [search] [--refresh]
 Lists the model specs (`provider/modelId`) this machine offers, optionally filtered: pi's built-ins, the model
 catalog cached in `~/.pi/agent/models-store.json`, and `~/.fastagent/models.json`. `--refresh` first fetches the
 catalog from pi.dev with the credentials of the agent in the current directory, so models released after the
-installed pi appear; it fails, naming the provider, when the refresh does. The cache is pi's, so `pi update --models`
+installed pi appear; it fails, naming the provider, when the refresh does, and when the agent has no usable credential
+for any provider. The cache is pi's, so `pi update --models`
 refreshes it too. Serving never refreshes it. It does not ship; `deploy` carries the configured model's entry when the
 deployed pi would not know the model.
 

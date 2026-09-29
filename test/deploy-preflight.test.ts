@@ -838,12 +838,22 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       expect((await box()).getModel("anthropic", "claude-cached-only")).toBeUndefined();
       await seedModelCatalog(manifest.modelCatalog ?? {});
       expect((await box()).getModel("anthropic", "claude-cached-only")).toBeDefined();
-      expect((await box()).getModel("anthropic", bundled?.id as string)).toBeDefined(); // the rest stays
       vi.unstubAllEnvs(); // back on the builder
 
       // A model the bundled catalog has carries nothing.
       const plain = await call(await workspace(), { model: `anthropic/${bundled?.id}` });
       expect(plain.ok && plain.container.modelCatalog).toBeUndefined();
+
+      // A machine models.json that overrides the provider (a company gateway) without naming this model: the model
+      // still comes from the cache, so it is still carried.
+      const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
+      const gateway = { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "$CORP_PROXY_KEY" } };
+      await writeFile(machine, JSON.stringify({ providers: gateway }));
+      vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
+      const overridden = await call(await workspace(), { model: "anthropic/claude-cached-only" });
+      if (!overridden.ok) throw new Error(overridden.gate);
+      expect(overridden.container.modelCatalog?.anthropic?.models.map((m) => m.id)).toEqual(["claude-cached-only"]);
+      vi.unstubAllEnvs();
 
       // A kept hand-written Dockerfile never reads the manifest, so the entry would not arrive.
       await writeFile(join(dir, "Dockerfile"), "FROM node:22-slim\n");

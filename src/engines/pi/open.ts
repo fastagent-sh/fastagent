@@ -211,7 +211,8 @@ export async function availableModelsFromDir(
  * Only providers those credentials authenticate are fetched (pi asks pi.dev for no other). Nothing refreshes it on its
  * own. It does not ship: `deploy` carries the configured model's entry when the deployed pi would not know it.
  *
- * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set.
+ * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set, and
+ * when the credentials authenticate no provider at all.
  */
 export function refreshModelCatalog(
   dir: string,

@@ -566,7 +566,8 @@ only for the providers they authenticate, and may refresh an expired OAuth token
 after the installed pi is listed by `availableModelsFromDir` and runs for every agent on the machine. Nothing
 refreshes the cache on its own, so serving makes no catalog request. The cache does not ship; when the configured
 model is known only from it, `deploy` carries that model's entry in the release manifest instead. It rejects, naming each provider that failed, when the refresh fails,
-takes longer than 15 seconds, or `PI_OFFLINE` is set.
+takes longer than 15 seconds, or `PI_OFFLINE` is set, and when none of the credentials authenticates a provider (the
+refresh would fetch nothing).
 
 Auth:
 

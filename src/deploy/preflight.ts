@@ -21,6 +21,7 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
+  cachedCatalogModel,
   interactiveAuth,
   loginProviders,
 } from "../engines/pi/models.ts";
@@ -484,11 +485,12 @@ async function catalogEntryToCarry(
   const provider = providerOf(modelSpec);
   const id = modelSpec.slice(provider.length + 1);
   if (deployed.getModel(provider, id)) return undefined;
-  if ((await machineModels(agentDir))?.inherited.includes(provider)) return undefined;
-  const model = (await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() })).getModel(
-    provider,
-    id,
-  );
+  // The MODEL decides, not its provider: a machine models.json may override the provider (a company gateway) without
+  // naming this id, which still comes from the cache. One that resolves here from the machine file alone is not in the
+  // cache, and is checkMachineModels' to report.
+  const here = await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() });
+  if (!here.getModel(provider, id)) return undefined;
+  const model = await cachedCatalogModel(provider, id);
   if (!model) return undefined;
   // pi applies a cached entry only when it is newer than its bundled catalog, which the deploy moment always is.
   const now = Date.now();
