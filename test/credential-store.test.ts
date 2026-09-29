@@ -35,10 +35,22 @@ async function recordingStore(
   const calls: string[] = [];
   return {
     calls,
-    read: (id, options) => (calls.push(`read ${id}`), inner.read(id, options)),
-    list: (options) => (calls.push("list"), inner.list(options)),
-    modify: (id, fn, options) => (calls.push(`modify ${id}`), inner.modify(id, fn, options)),
-    delete: (id, options) => (calls.push(`delete ${id}`), inner.delete(id, options)),
+    read: (id, options) => {
+      calls.push(`read ${id}`);
+      return inner.read(id, options);
+    },
+    list: (options) => {
+      calls.push("list");
+      return inner.list(options);
+    },
+    modify: (id, fn, options) => {
+      calls.push(`modify ${id}`);
+      return inner.modify(id, fn, options);
+    },
+    delete: (id, options) => {
+      calls.push(`delete ${id}`);
+      return inner.delete(id, options);
+    },
   };
 }
 
