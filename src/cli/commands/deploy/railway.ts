@@ -14,7 +14,7 @@ import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import type { ResolvedPlacement } from "../../../paths.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
-import type { BoxShell } from "../../box-login.ts";
+import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
 import { isInteractive } from "../../shared.ts";
 import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
@@ -23,7 +23,7 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const railwayHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
   artifact: "railway.json",
-  shell: async ({ workspace }) => railwayShell(toRailwayName(basename(workspace))),
+  shell: async ({ workspace }) => railwayShell(toRailwayName(basename(workspace)), workspace),
   async deploy(ctx) {
     const { opts, agentDir, workspace, pre, channels, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
@@ -108,7 +108,7 @@ async function runDeployRailway(
       channels,
       intoLinked,
       dockerfilePath,
-      ...boxLoginStep("railway", params, railwayShell(name)),
+      ...boxLoginStep("railway", params, () => railwayShell(name, workspace)),
     },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
@@ -119,7 +119,7 @@ async function runDeployRailway(
 }
 
 /** `railway ssh` into the service, in the project and environment this directory is linked to. */
-function railwayShell(service: string): BoxShell {
+function railwayShell(service: string, workspace: string): BoxShell {
   // One quoted word: the command reaches the box as ONE line its shell parses, the way OpenSSH hands it over.
-  return { bin: "railway", args: (command) => ["ssh", "--service", service, "--", `sh -c '${command}'`] };
+  return processShell("railway", (command) => ["ssh", "--service", service, "--", `sh -c '${command}'`], workspace);
 }

@@ -14,17 +14,22 @@ const STORAGE_DIR = "/data";
  * The shell command that runs `fastagent login --stdio <args>` inside a running generated image, as the server there
  * would see it: in the deployed agent directory, with the storage and credential paths resolved by the same defaults
  * `prepareStartWorkspace` applies. A host's own shell does not reliably hand those over — its session may not start
- * in the server's directory, and the platform's variables are the only ones it inherits. The CLI is the one the server
- * runs: the agent's own install when it has one (under Bun when the image is Bun's), else the pinned global.
+ * in the server's directory, and the platform's variables are the only ones it inherits. `storage` names the root
+ * outright for a shell that inherits none of them. The CLI is the one the server runs: the agent's own install when
+ * it has one (under Bun when the image is Bun's), else the pinned global.
  */
-export function boxLoginCommand(agent: string, args: readonly string[]): string {
-  for (const value of [agent, ...args]) {
+export function boxLoginCommand(agent: string, args: readonly string[], storage?: string): string {
+  for (const value of [agent, ...args, ...(storage ? [storage] : [])]) {
     if (!/^[\w.@/-]+$/.test(value)) throw new Error(`cannot pass ${JSON.stringify(value)} to a shell on the box`);
   }
   return [
-    `root="\${FASTAGENT_STORAGE_DIR:-${STORAGE_DIR}}"`,
+    ...(storage
+      ? [`root="${storage}"`, `export FASTAGENT_SECRETS_DIR="$root/.secrets"`]
+      : [
+          `root="\${FASTAGENT_STORAGE_DIR:-${STORAGE_DIR}}"`,
+          `export FASTAGENT_SECRETS_DIR="\${FASTAGENT_SECRETS_DIR:-$root/.secrets}"`,
+        ]),
     `cd "$root/base/${agent}" || exit 1`,
-    `export FASTAGENT_SECRETS_DIR="\${FASTAGENT_SECRETS_DIR:-$root/.secrets}"`,
     `f=fastagent`,
     `if [ -x node_modules/.bin/fastagent ]; then f=node_modules/.bin/fastagent; if command -v bun >/dev/null; then f="bun run fastagent"; fi; fi`,
     `exec $f login --stdio ${args.join(" ")}`,

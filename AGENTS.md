@@ -174,17 +174,19 @@ src/
 │   ├── secrets.ts          # both directions of the credential carry: the NAMES a runbook lists, the VALUES
 │   │                       # `--run` sends, and the seed the container reads back
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, zip.ts, forwarder.js } # ONE stack:
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks) + EventBridge rules (schedules). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
 │                             # destroy.ts is the other direction, and it exists because three of the four
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result
 │                             # MEANS — there / gone / could not find out — because eleven call sites each
 │                             # deciding that produced the same defect five review rounds running. Every AWS
-│                             # read that asks "is it there, and could I tell" goes through it
+│                             # read that asks "is it there, and could I tell" goes through it. shell.ts is the
+│                             # command-shell WebSocket `login --deployment` speaks (SigV4 presigned, AWS CLI creds)
 ├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
 │   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
 │   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)

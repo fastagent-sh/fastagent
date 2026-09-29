@@ -32,7 +32,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | A provider API key in `.secrets/.env` travels as a variable. Nothing else travels: your `auth.json` stays on this machine. Otherwise the deployment logs in itself, see [Logging a deployment in](#logging-a-deployment-in). AgentCore cannot do that yet, so it needs the API key. |
+| **A model credential** | A provider API key in `.secrets/.env` travels as a variable. Nothing else travels: your `auth.json` stays on this machine. Otherwise the deployment logs in itself, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Durable storage** | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 
 ## Logging a deployment in
@@ -46,9 +46,11 @@ fastagent login openai-codex --deployment fly
 ```
 
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
-`railway ssh`). This terminal shows its prompts and opens the browser. After you sign in, the browser lands on a
-`localhost` page that does not load; paste that page's URL when asked. The box exchanges the code and keeps the
-credential on its volume, so it is the only holder of that grant: your machine's login is untouched, and neither
+`railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` signed with your AWS CLI credentials). This terminal
+shows its prompts and opens the browser. After you sign in, the browser returns to a `localhost` address; this
+terminal catches it and hands it to the box. If that port is taken (a local login in progress, another app), it
+says so, and you paste the address the browser landed on instead. The box exchanges the code and keeps the
+credential on its storage, so it is the only holder of that grant: your machine's login is untouched, and neither
 side can log the other out. Logging in again replaces it.
 
 `deploy --run` starts this login once the box answers `/health` and before any webhook is pointed at it, when the
@@ -58,8 +60,10 @@ terminal (CI), `--run` stops there with `not logged in` and the command to run, 
 When the credential is missing or rejected later (revoked, volume lost), the box's startup log names
 `fastagent login --deployment`.
 
-Railway: `railway ssh` from a terminal uses your SSH key, which must be linked to your Railway account; the first
-time, it prints a signup URL to open.
+- **Railway** needs Railway CLI 5.x: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a signup
+  URL instead of opening the shell.
+- **AgentCore** resets its storage on every deploy, so every deploy of an agent that logs in ends with this login;
+  for frequent or CI deploys, use an API key. The shell needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
 
 ## Local Docker
 
@@ -221,9 +225,8 @@ What to know:
 - **Every deploy resets the state.** Managed SessionStorage survives compute stop/resume but is wiped on every
   runtime update (every deploy) and after 14 idle days: sessions, channel state and pending wake-ups start blank.
   For state that survives deploys, use Fly or Railway.
-- **The model's credential is a provider API key** in `.secrets/.env`. A login on the box would not survive the
-  next deploy's reset, and `fastagent login --deployment` does not reach AgentCore yet; `deploy agentcore` refuses
-  a model whose key is not there.
+- **A login on the runtime does not survive a deploy** (the same reset). `--run` logs the runtime in again after
+  every deploy; a provider API key in `.secrets/.env` avoids that.
 - **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.

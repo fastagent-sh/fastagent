@@ -542,7 +542,7 @@ const login: CommandSpec = {
     {
       flags: "--deployment [host]",
       description:
-        "log in this agent's deployment instead, on the box itself (docker, fly, railway); the host may be left out " +
+        "log in this agent's deployment instead, on the box itself (docker, fly, railway, agentcore); the host may be left out " +
         "when the agent dir holds one host's deploy artifacts",
     },
     { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
@@ -558,9 +558,9 @@ const login: CommandSpec = {
   notes:
     "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. " +
     "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
-    "railway ssh); this terminal shows it and opens the browser. The box keeps the credential, so it is the only " +
-    "holder of that grant, and logging in again replaces it there. With OAuth, the browser then lands on a " +
-    "localhost page that does not load: paste that page's URL when asked.",
+    "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
+    "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
+    "so it is the only holder of that grant, and logging in again replaces it there.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0], {
       global: f.global === true,

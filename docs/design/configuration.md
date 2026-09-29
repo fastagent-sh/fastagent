@@ -156,10 +156,10 @@ The point of the ordering is that a run with no usable credential **opens no ent
 
 A credential that travels as a variable (a provider API key in the value file) is class D and needs nothing here. Every other one is **created on the deployment**, never carried:
 
-- `fastagent login --deployment [host]` runs the ordinary login on the box, through the host's own owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`). The owner's terminal renders it and opens the browser; the box holds the PKCE verifier, exchanges the code, and writes its own `auth.json`. The box is then the only holder of its grant, so neither side can log the other out, and logging in again replaces it. The mechanism is in [core.md](core.md) §9.
+- `fastagent login --deployment [host]` runs the ordinary login on the box, through the host's own owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`, AgentCore's `InvokeAgentRuntimeCommandShell`). The owner's terminal renders it and opens the browser; the box holds the PKCE verifier, exchanges the code, and writes its own `auth.json`. The box is then the only holder of its grant, so neither side can log the other out, and logging in again replaces it. The mechanism is in [core.md](core.md) §9.
 - `deploy --run` starts that login after readiness and before activation (§7), for the model's provider, keeping a credential the box already holds, so a redeploy leaves it alone. Without a terminal it stops with `not logged in` and the command to run: a CI run never reports success for an agent that cannot answer.
 - A box whose credential is missing or rejected later (revoked, a lost volume) names `fastagent login --deployment` in its startup report.
-- **AgentCore** has no shell fastagent can open yet (`InvokeAgentRuntimeCommandShell` is a SigV4 WebSocket), and its storage resets on every deploy anyway, so it takes the API key; the pre-flight refuses `--run` otherwise.
+- **AgentCore** resets its storage on every deploy, and the login with it, so every deploy of an agent that logs in ends with that login. The old grant goes with the old storage, so the new one is again the only holder.
 - A day-two environment's credential is `OPENAI_API_KEY` (or equivalent) in `.secrets/<env>/.env`: the ordinary static-variable path, **no special code**. An environment on OAuth anyway logs in its own deployment, with a grant of its own.
 
 Why not carry a copy of the local `auth.json`: one grant would have two holders that each refresh it, so a provider that rotates refresh tokens (both pi's OAuth providers do) logs out whichever refreshes second, and a copy written only when the box has none cannot replace a dead one.
@@ -249,7 +249,7 @@ step 4.
 - **Each login on a deployment is a new grant.** Replacing one does not revoke the grant it replaced at the provider.
 - **Loading a definition under a given env's values costs a subprocess.** Every plan/deploy pays one process start, and channel/schedule discovery errors have to cross a process boundary without losing their diagnosability (§12).
 - **A refresh and a storage write are not one transaction.** A crash after provider-side rotation can still require reauthentication, and each provider's grant issue/invalidate behavior must be verified rather than assumed.
-- **AgentCore resets its storage on every runtime version update**, and fastagent cannot log in on it yet, so it takes an API key.
+- **AgentCore resets its storage on every runtime version update**, so an OAuth agent there logs in after every deploy.
 
 ## 14. Acceptance
 

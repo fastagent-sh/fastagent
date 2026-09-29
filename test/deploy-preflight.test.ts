@@ -591,16 +591,10 @@ describe("preflight: a model credential that does not travel", () => {
     expect(pre.ok && pre.boxLogin).toBe("anthropic");
   });
 
-  it("a host that cannot open a shell on its box stops --run and names the key to set instead", async () => {
-    noAnthropicEnv();
-    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true, shell: false });
-    expect(pre).toMatchObject({ ok: false, gate: expect.stringMatching(/cannot log in on the deployment.*API key/) });
-  });
-
   it("a key in the value file travels, and nothing logs in", async () => {
     const dir = await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant"); // what `deploy` sees once it entered the agent's environment
-    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true, shell: false });
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     expect(pre.ok && pre.boxLogin).toBeUndefined();
     expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
   });

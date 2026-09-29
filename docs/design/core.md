@@ -707,12 +707,14 @@ the host's volume is the only storage.
 
 No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent
 login --deployment` runs `login --stdio` inside the running image through the host's own
-owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`; `HostDeploy.shell`),
-in the server's directory with the server's credential path (`boxLoginCommand` in
-`deploy/container.ts`). The wire is `LoginIO` as JSON lines (`cli/login-relay.ts`): the box sends what
+owner-authenticated shell (`HostDeploy.shell`, a byte channel in `deploy/box-shell.ts`: `docker compose
+exec`, `fly ssh console`, `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` WebSocket in
+`deploy/agentcore/shell.ts`), in the server's directory with the server's credential path
+(`boxLoginCommand` in `deploy/container.ts`). The wire is `LoginIO` as JSON lines (`cli/login-relay.ts`): the box sends what
 the flow asks and says, the terminal renders it and answers by id, and one `result` line ends it. The
 box holds the PKCE verifier and exchanges the code, so it is the only holder of its grant and nothing
-can log the builder's machine out. Success is read only from that line, because a host shell can drop
+can log the builder's machine out. The browser's return to the flow's `localhost` redirect is caught on
+the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
 a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
 credential the box already holds (`--if-missing`); without a terminal it exits 1 naming the command.
 
@@ -762,10 +764,11 @@ tried and removed: it cost a presign path in the forwarder, a refresh endpoint, 
 and a save-on-idle edge — roughly 700 lines whose failure modes were invisible until a deploy. A host
 without a volume promises no volume; Fly and Railway are where cross-deploy memory lives.
 
-The model credential is a provider API key in the value file, carried on every deploy. A login on the
-box would be wiped by the next deploy, and `login --deployment` has no shell into AgentCore yet
-(`InvokeAgentRuntimeCommandShell` needs a SigV4 WebSocket client), so the pre-flight refuses `--run`
-for a model whose key is not there.
+A model login on the runtime is wiped with the storage by the next deploy, so `deploy agentcore --run`
+logs the runtime in after every deploy (after the probe, before registration), and says so up front. The
+shell opens on the fixed ingress session, which is the one that sees the server's `/mnt/data`; it does
+not inherit the runtime's environment, so `boxLoginCommand` names the storage root outright. A provider
+API key in the value file avoids the login.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a

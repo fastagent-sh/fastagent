@@ -11,18 +11,22 @@ import {
   FORWARDER_FILE,
   TEMPLATE_FILE,
   agentcoreName,
+  agentcoreStackName,
   forwarderLogGroup,
   ingressSessionId,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
 } from "../../../deploy/agentcore/plan.ts";
-import { deployAgentcoreRun } from "../../../deploy/agentcore/run.ts";
+import { deployAgentcoreRun, pickStackOutputs } from "../../../deploy/agentcore/run.ts";
+import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
+import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadRoutines } from "../../../schedule/discover.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, registrarsFor } from "./shared.ts";
+import { isInteractive } from "../../shared.ts";
+import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 /** A copy/paste-safe POSIX shell argument for the command hints deploy prints. */
@@ -33,9 +37,29 @@ function shellArg(value: string): string {
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   artifact: TEMPLATE_FILE,
+  async shell({ workspace }) {
+    const name = agentcoreName(basename(workspace));
+    const stack = agentcoreStackName(name);
+    const aws = spawnRunner("aws", workspace);
+    const read = await awsCli(aws).read(
+      ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
+      awsJson(pickStackOutputs),
+    );
+    if ("absent" in read) throw new Error(`no AgentCore stack ${stack} in this account/region — deploy it first`);
+    if ("unreadable" in read) throw new Error(`could not read AgentCore stack ${stack}: ${read.unreadable}`);
+    const runtimeArn = read.ok.RuntimeArn;
+    if (!runtimeArn) throw new Error(`stack ${stack} has no RuntimeArn output — redeploy it`);
+    return agentcoreShell(runtimeArn, ingressSessionId(name), aws);
+  },
   async deploy(ctx) {
     const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
-    const { modelAuth, container, declaredSecrets, values, valueFile } = pre;
+    const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
+    if (boxLogin) {
+      console.error(
+        `[fastagent] note: AgentCore resets the runtime's storage on every deploy, so every deploy of this agent ` +
+          `ends with a login on the runtime (${boxLogin}). For frequent or CI deploys, set its API key in ${valueFile}.`,
+      );
+    }
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
     // has nothing to wake it.
     if (longConnectionChannels.length > 0) {
@@ -79,6 +103,7 @@ export const agentcoreHost: HostDeploy = {
     }
     const plan = planAgentcoreDeploy({
       name: acName,
+      boxLogin,
       channels,
       secrets: pre.secrets,
       // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, through this host's
@@ -125,6 +150,8 @@ export const agentcoreHost: HostDeploy = {
         agentPrefix: container.agentPrefix,
         name: acName,
         modelAuth,
+        boxLogin,
+        input: opts.input !== false && isInteractive(),
         channels,
         declaredSecrets,
         values,
@@ -143,6 +170,10 @@ async function runDeployAgentcore(
     agentPrefix: string;
     name: string;
     modelAuth: string | undefined;
+    /** The provider the runtime logs in to itself once it is verified (the pre-flight's `boxLogin`). */
+    boxLogin: string | undefined;
+    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+    input: boolean;
     channels: readonly DeclaredChannel[];
     declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
@@ -179,6 +210,9 @@ async function runDeployAgentcore(
         valueFile: params.valueFile,
         channels,
         topology,
+        ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
+          agentcoreShell(runtimeArn, ingressSessionId(name), spawnRunner("aws", workspace)),
+        ),
       },
       spawnRunner("aws", workspace),
       spawnRunner("docker", workspace),

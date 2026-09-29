@@ -125,21 +125,13 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     }
     host = found[0] as DeployHost;
   }
-  const shell = HOSTS[host].shell;
-  if (!shell) {
-    failStartup(
-      new Error(
-        `fastagent cannot log in on the ${host} deployment yet — set the provider's API key in the deployed value file`,
-      ),
-    );
-  }
   const input = opts.input !== false && isInteractive();
   if (!input) {
     failStartup(new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal`));
   }
   const failed = await loginOnBox({
     host,
-    shell: await shell(placement).catch(failStartup),
+    shell: await HOSTS[host].shell(placement).catch(failStartup),
     placement,
     ...(provider ? { provider } : {}),
     input,

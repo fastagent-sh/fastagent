@@ -49,6 +49,11 @@ export interface AgentcoreRunPlan {
    * forwarder (and its artifact bucket parameters) exists.
    */
   topology: AgentcoreTopology;
+  /**
+   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before any webhook points at
+   * it. Resolves a gate line, or undefined.
+   */
+  boxLogin?: (runtimeArn: string) => Promise<string | undefined>;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
@@ -498,6 +503,8 @@ export async function deployAgentcoreRun(
     if (!verdict.ok) return gate(verdict.gate);
     log("runtime verified (workspace ready, channels constructed)");
   }
+  const notLoggedIn = await plan.boxLogin?.(runtimeArn);
+  if (notLoggedIn) return gate(notLoggedIn);
 
   // 9.
   const registrationGateMsg = url

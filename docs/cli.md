@@ -102,8 +102,8 @@ refuses and says where to `cd`.
   serves every agent on the machine that has nothing else for that provider. A refresh is written back to the file
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
-- `--deployment [host]` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway)
-  and the credential stays there. `deploy` never carries `auth.json`. See
+- `--deployment [host]` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
+  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.

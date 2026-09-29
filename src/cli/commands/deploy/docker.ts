@@ -23,7 +23,7 @@ import {
 import { dotEnvPath } from "../../../env.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
-import type { BoxShell } from "../../box-login.ts";
+import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
 import { isInteractive } from "../../shared.ts";
 import { type HostDeploy, boxLoginStep } from "./shared.ts";
@@ -33,7 +33,7 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
   artifact: DOCKER_COMPOSE_FILE,
-  shell: async ({ agentDir }) => composeShell(`${basename(agentDir)}/${DOCKER_COMPOSE_FILE}`),
+  shell: async ({ agentDir, workspace }) => composeShell(`${basename(agentDir)}/${DOCKER_COMPOSE_FILE}`, workspace),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
@@ -157,7 +157,7 @@ async function runDeployDocker(
       missingSecrets,
       valueFile: params.valueFile,
       requireTunnel,
-      ...boxLoginStep("docker", params, composeShell(composeFile)),
+      ...boxLoginStep("docker", params, () => composeShell(composeFile, workspace)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {
           openUrl: openExternalUrl,
@@ -194,9 +194,10 @@ async function runDeployDocker(
 }
 
 /** `docker compose exec` into the running agent service. */
-function composeShell(composeFile: string): BoxShell {
-  return {
-    bin: "docker",
-    args: (command) => ["compose", "-f", composeFile, "exec", "-T", "agent", "sh", "-c", command],
-  };
+function composeShell(composeFile: string, workspace: string): BoxShell {
+  return processShell(
+    "docker",
+    (command) => ["compose", "-f", composeFile, "exec", "-T", "agent", "sh", "-c", command],
+    workspace,
+  );
 }

@@ -13,7 +13,7 @@ import { spawnRunner } from "../../../deploy/runner.ts";
 import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
-import type { BoxShell } from "../../box-login.ts";
+import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
 import { isInteractive } from "../../shared.ts";
 import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
@@ -24,7 +24,7 @@ export const flyHost: HostDeploy = {
   artifact: "fly.toml",
   async shell({ agentDir, workspace }) {
     const flyToml = await readTextIfExists(join(agentDir, "fly.toml"));
-    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(workspace)));
+    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(workspace)), workspace);
   },
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, pre, write } = ctx;
@@ -126,7 +126,7 @@ async function runDeployFly(
       channels,
       flyConfig: `${agentPrefix}fly.toml`,
       dockerfile: `${agentPrefix}Dockerfile`,
-      ...boxLoginStep("fly", params, flyShell(appName)),
+      ...boxLoginStep("fly", params, () => flyShell(appName, workspace)),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
@@ -137,10 +137,13 @@ async function runDeployFly(
 }
 
 /** `fly ssh console` into the app's machine, woken first: a suspended machine has no shell to open. */
-function flyShell(app: string): BoxShell {
+function flyShell(app: string, workspace: string): BoxShell {
   return {
-    bin: "fly",
-    args: (command) => ["ssh", "console", "--app", app, "--quiet", "--command", `sh -c '${command}'`],
+    ...processShell(
+      "fly",
+      (command) => ["ssh", "console", "--app", app, "--quiet", "--command", `sh -c '${command}'`],
+      workspace,
+    ),
     // `fly ssh` fails with "no started VMs" while the machine is suspended, and a request is what resumes it. The
     // answer is not the point: a machine that stays down makes the shell fail right after, with Fly's own reason.
     wake: async () => {

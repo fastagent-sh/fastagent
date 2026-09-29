@@ -37,6 +37,11 @@ export interface AgentcorePlanInput extends ContainerInput {
    * {@link DEFAULT_IDLE_TIMEOUT_SECONDS}.
    */
   idleTimeoutSeconds?: number;
+  /**
+   * The provider the runtime logs in to itself (`fastagent login --deployment`) after every deploy: its storage, and
+   * the login with it, resets each time.
+   */
+  boxLogin?: string;
 }
 
 export interface AgentcorePlan {
@@ -673,6 +678,15 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws logs put-retention-policy --log-group-name ${forwarderLogGroup(input.name)} --retention-in-days 14`,
   );
 
+  if (input.boxLogin) {
+    runbook.push(
+      ``,
+      `# Model auth: after EVERY deploy (the storage reset wipes the last login), log the runtime in to`,
+      `# ${input.boxLogin} from this workspace — before pointing any webhook at it:`,
+      `fastagent login --deployment agentcore`,
+    );
+  }
+
   // Post-deploy webhook registration — the shared channel-ingress steps, pointed at the forwarder's Function URL
   // (read from the stack outputs).
   const post = webhookRunbook(`<ForwarderUrl>`, channels);
@@ -722,7 +736,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
     `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,
-    `# The model's credential is therefore a provider API key in the value file, which every deploy carries.`,
+    `# A provider API key in the value file travels with every deploy; a login on the runtime does not survive one.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,

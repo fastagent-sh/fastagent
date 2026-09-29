@@ -15,7 +15,8 @@ import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
 import { type ResolvedPlacement, exists, resolveStateRoot } from "../../../paths.ts";
-import { type BoxShell, loginOnBox } from "../../box-login.ts";
+import type { BoxShell } from "../../../deploy/box-shell.ts";
+import { loginOnBox } from "../../box-login.ts";
 import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
@@ -53,8 +54,8 @@ export interface HostDeploy {
   isOurs(path: string, content: string): boolean;
   /** The file in the agent dir whose presence says this workspace deploys to the host. */
   artifact: string;
-  /** The shell into this workspace's running box, or absent where fastagent cannot open one yet. */
-  shell?(placement: ResolvedPlacement): Promise<BoxShell>;
+  /** The shell into this workspace's running box (`fastagent login --deployment`). */
+  shell(placement: ResolvedPlacement): Promise<BoxShell>;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
    * (`--run`) or print the runbook.
@@ -77,16 +78,18 @@ export function registrarsFor(agentDir: string): Registrars {
  * the model's provider, keeping a credential the box already holds (a redeploy), and asking only when a person can
  * answer. None when the model's credential travels as a variable.
  */
-export function boxLoginStep(
+export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
   params: ResolvedPlacement & { boxLogin: string | undefined; input: boolean },
-  shell: BoxShell,
-): { boxLogin?: () => Promise<string | undefined> } {
+  /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
+  shell: (...args: Args) => BoxShell,
+): { boxLogin?: (...args: Args) => Promise<string | undefined> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
   const placement = { agentDir: params.agentDir, workspace: params.workspace };
   return {
-    boxLogin: () => loginOnBox({ host, shell, placement, provider, ifMissing: true, input: params.input }),
+    boxLogin: (...args) =>
+      loginOnBox({ host, shell: shell(...args), placement, provider, ifMissing: true, input: params.input }),
   };
 }
 

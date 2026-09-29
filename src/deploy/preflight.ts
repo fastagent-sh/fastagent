@@ -111,8 +111,6 @@ interface PreflightInput {
    * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
    */
   publicUrl?: boolean;
-  /** The target can open a shell on its box, so the deployment can log in there (`fastagent login --deployment`). */
-  shell?: boolean;
 }
 
 /** Run the host-neutral pre-flight. */
@@ -141,7 +139,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     force,
     externalClock,
     publicUrl = true,
-    shell = true,
   } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
@@ -277,11 +274,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       report.issue(
         `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
           `its API key in ${valueFile}`,
-      );
-    } else if (!shell) {
-      report.issue(
-        `no credential for ${modelSpec} reaches the deployment, and this host cannot log in on the deployment yet ` +
-          `— set ${boxLogin}'s API key in ${valueFile}`,
       );
     } else {
       report.note(

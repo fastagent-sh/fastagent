@@ -3,10 +3,14 @@ import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { boxLoginCommand } from "../src/deploy/container.ts";
 import { relayLogin } from "../src/cli/login-relay.ts";
-import { loginOnBox } from "../src/cli/box-login.ts";
+import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
+import { processShell } from "../src/deploy/box-shell.ts";
+import type { LoginIO } from "../src/engines/pi/login.ts";
+import { createServer as createNetServer } from "node:net";
+import type { AddressInfo } from "node:net";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
@@ -107,7 +111,7 @@ describe("the box half of `login --deployment`", () => {
     const { root, agentDir } = await box();
     const failed = await loginOnBox({
       host: "fly",
-      shell: { bin: "fastagent-test-no-such-cli", args: (command) => ["-c", command] },
+      shell: processShell("fastagent-test-no-such-cli", (command) => ["-c", command], root),
       placement: { agentDir, workspace: root },
       input: false,
     });
@@ -118,10 +122,96 @@ describe("the box half of `login --deployment`", () => {
     const { root, agentDir } = await box();
     const failed = await loginOnBox({
       host: "railway",
-      shell: { bin: "sh", args: () => ["-c", "echo Connection closed; exit 0"] },
+      shell: processShell("sh", () => ["-c", "echo Connection closed; exit 0"], root),
       placement: { agentDir, workspace: root },
       input: false,
     });
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
+  });
+});
+
+/** A free loopback port, released for the code under test to take. */
+async function freePort(): Promise<number> {
+  const probe = createNetServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
+
+/** A terminal whose paste prompt waits until it is aborted, recording what it was told. */
+function waitingTerminal() {
+  const notes: string[] = [];
+  let aborted = false;
+  const io: LoginIO = {
+    select: async () => undefined,
+    prompt: (_m, opts) =>
+      new Promise((resolve) =>
+        opts?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          resolve(undefined);
+        }),
+      ),
+    note: (m) => void notes.push(m),
+    openUrl: () => {},
+  };
+  return { io, notes, aborted: () => aborted };
+}
+
+const authUrl = (port: number) =>
+  `https://auth.example/authorize?redirect_uri=${encodeURIComponent(`http://localhost:${port}/auth/callback`)}&state=s`;
+
+describe("catching the browser's redirect on this machine", () => {
+  it("answers the paste prompt with the address the browser came back to, and closes the terminal prompt", async () => {
+    const port = await freePort();
+    const terminal = waitingTerminal();
+    const io = catchingRedirect(terminal.io);
+    try {
+      io.openUrl(authUrl(port));
+      const answer = io.prompt("paste the redirect URL");
+      const page = await fetch(`http://127.0.0.1:${port}/auth/callback?code=abc&state=s`);
+      expect(page.status).toBe(200);
+      expect(await answer).toBe(`http://localhost:${port}/auth/callback?code=abc&state=s`);
+      expect(terminal.aborted()).toBe(true);
+      // Caught once: the listener is gone, so nothing else on this port is ours to answer.
+      await expect(fetch(`http://127.0.0.1:${port}/auth/callback?code=again`)).rejects.toThrow();
+    } finally {
+      io.close();
+    }
+  });
+
+  it("a browser that returns before the prompt is asked still answers it", async () => {
+    const port = await freePort();
+    const io = catchingRedirect(waitingTerminal().io);
+    try {
+      io.openUrl(authUrl(port));
+      await fetch(`http://127.0.0.1:${port}/auth/callback?code=early`);
+      expect(await io.prompt("paste")).toMatch(/code=early/);
+    } finally {
+      io.close();
+    }
+  });
+
+  it("a taken port says so and leaves the paste prompt as the way in", async () => {
+    const taken = createNetServer();
+    await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+    const { port } = taken.address() as AddressInfo;
+    const terminal = { ...waitingTerminal(), pasted: "http://localhost/pasted?code=p" };
+    const io = catchingRedirect({ ...terminal.io, prompt: async () => terminal.pasted });
+    try {
+      io.openUrl(authUrl(port));
+      await vi.waitFor(() => expect(terminal.notes.join("\n")).toMatch(new RegExp(`${port}.*EADDRINUSE.*paste`)));
+      expect(await io.prompt("paste")).toBe(terminal.pasted);
+    } finally {
+      io.close();
+      taken.close();
+    }
+  });
+
+  it("a URL with no localhost redirect (a device-code page) catches nothing", async () => {
+    const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "typed" });
+    io.openUrl("https://github.com/login/device");
+    expect(await io.prompt("code")).toBe("typed");
+    io.close();
   });
 });
