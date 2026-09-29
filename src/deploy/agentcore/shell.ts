@@ -14,6 +14,9 @@
  * the terminal's line editor) before handing it to `exec`.
  */
 import { createHash, createHmac, randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { SignatureV4 } from "@smithy/signature-v4";
 import { WebSocket, ping } from "undici";
@@ -189,10 +192,34 @@ export function openShellChannel(url: string, command: string): BoxChannel {
   return { output, input, closed };
 }
 
-/** The shell `login --deployment` opens on an AgentCore runtime, on the session its server runs in. */
+/**
+ * The shell `login --deployment` opens on an AgentCore runtime, on the session its server runs in. `wake` first sends
+ * that session an IAM `probe`: the runtime prepares its workspace only on an invocation, and after a deploy or an idle
+ * reset nothing may have invoked it yet, which would leave the login no agent directory to run in.
+ */
 export function agentcoreShell(runtimeArn: string, sessionId: string, aws: CliRunner): BoxShell {
   return {
     storage: MOUNT,
+    async wake() {
+      const dir = await mkdtemp(join(tmpdir(), "fastagent-agentcore-wake-"));
+      try {
+        const reply = join(dir, "reply.json");
+        const args = ["bedrock-agentcore", "invoke-agent-runtime", "--agent-runtime-arn", runtimeArn];
+        args.push("--runtime-session-id", sessionId, "--payload", '{"kind":"probe"}');
+        args.push("--cli-binary-format", "raw-in-base64-out", reply);
+        const sent = await awsCli(aws).present(args);
+        if (!("ok" in sent)) {
+          const why = "absent" in sent ? "the runtime is not there" : sent.unreadable;
+          throw new Error(`could not open the AgentCore runtime's workspace (${why})`);
+        }
+        const answer = await readFile(reply, "utf8");
+        if (!/"ok"\s*:\s*true/.test(answer)) {
+          throw new Error(`the AgentCore runtime did not open its workspace: ${answer.trim().slice(0, 300)}`);
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
     async open(command) {
       const credentials = await awsCliCredentials(aws);
       return openShellChannel(

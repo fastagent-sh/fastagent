@@ -3,7 +3,9 @@ import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { openShellChannel, presignShellUrl, shellExit } from "../src/deploy/agentcore/shell.ts";
+import { writeFile } from "node:fs/promises";
+import { agentcoreShell, openShellChannel, presignShellUrl, shellExit } from "../src/deploy/agentcore/shell.ts";
+import type { CliRunner } from "../src/deploy/runner.ts";
 
 /**
  * The service side of `InvokeAgentRuntimeCommandShell`, as far as a test needs it: an RFC 6455 handshake, masked
@@ -149,5 +151,37 @@ describe("the AgentCore shell channel", () => {
     expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
     expect(url.searchParams.get("X-Amz-Security-Token")).toBe("tok");
     expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("waking the AgentCore runtime before its shell opens", () => {
+  const ARN = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/fa_x-AbC";
+  const SESSION = "fastagent-ingress-x000000000000000";
+  /** `invoke-agent-runtime` writes the container's reply to its last argument, the outfile. */
+  const fakeAws = (reply: string, code = 0, stderr = "") => {
+    const calls: string[][] = [];
+    const aws: CliRunner = async (args) => {
+      calls.push(args);
+      if (code === 0) await writeFile(args.at(-1) as string, reply);
+      return { code, stdout: "", stderr };
+    };
+    return { aws, calls };
+  };
+
+  it("sends the ingress session an IAM probe, so the workspace exists before the login needs it", async () => {
+    const { aws, calls } = fakeAws('{"ok":true}');
+    await agentcoreShell(ARN, SESSION, aws).wake?.();
+    const args = calls[0] as string[];
+    expect(args.slice(0, 2)).toEqual(["bedrock-agentcore", "invoke-agent-runtime"]);
+    expect(args[args.indexOf("--agent-runtime-arn") + 1]).toBe(ARN);
+    expect(args[args.indexOf("--runtime-session-id") + 1]).toBe(SESSION);
+    expect(args[args.indexOf("--payload") + 1]).toBe('{"kind":"probe"}');
+  });
+
+  it("names why when the runtime could not open, or the call failed", async () => {
+    const failedInit = fakeAws('{"ok":false,"error":"initialization failed: no mount"}');
+    await expect(agentcoreShell(ARN, SESSION, failedInit.aws).wake?.()).rejects.toThrow(/no mount/);
+    const denied = fakeAws("", 254, "An error occurred (AccessDeniedException) when calling InvokeAgentRuntime");
+    await expect(agentcoreShell(ARN, SESSION, denied.aws).wake?.()).rejects.toThrow(/AccessDeniedException/);
   });
 });

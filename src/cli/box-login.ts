@@ -32,7 +32,8 @@ export interface BoxLoginRequest {
  */
 export async function loginOnBox(request: BoxLoginRequest): Promise<string | undefined> {
   const { host, shell, placement, provider } = request;
-  const retry = `fastagent login --deployment ${host}`;
+  // The provider when it is known (always, from `deploy --run`): the model needs THAT one, and a menu invites another.
+  const retry = `fastagent login ${provider ? `${provider} ` : ""}--deployment ${host}`;
   const args = [
     ...(provider ? [provider] : []),
     ...(request.ifMissing ? ["--if-missing"] : []),
@@ -44,7 +45,9 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   } catch (error) {
     return (error as Error).message;
   }
-  await shell.wake?.();
+  // A wake that fails is this login's answer, in one line, like an `open` that fails below.
+  const woken = await shell.wake?.().catch((error: Error) => error);
+  if (woken instanceof Error) return woken.message;
   const channel = await shell.open(command).catch((error: Error) => error);
   if (channel instanceof Error) return channel.message;
   const io = catchingRedirect(terminalLoginIO());

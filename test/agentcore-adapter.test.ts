@@ -130,10 +130,14 @@ describe("agentcore adapter: lazy channel construction", () => {
     expect(verdict.error).toContain("FEISHU_APP_SECRET");
   });
 
-  it("refuses an unauthenticated probe", async () => {
-    expect((await postUntrusted(adapter({ channels: () => ({ routes: health }) }), { kind: "probe" })).status).toBe(
-      403,
-    );
+  it("an IAM probe opens the workspace and reports it, without constructing the channels", async () => {
+    // `login --deployment agentcore` sends it: after a storage reset nothing has invoked the runtime, and the login
+    // needs the prepared workspace. Nothing in it is more than the `invoke` the same IAM caller may send.
+    const channels = vi.fn(() => ({ routes: health }));
+    const res = await postUntrusted(adapter({ channels }), { kind: "probe" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(channels).not.toHaveBeenCalled();
   });
 
   it("a routine run initializes the channels first, and a broken channel does NOT silence the clock", async () => {

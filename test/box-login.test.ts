@@ -123,6 +123,21 @@ describe("the box half of `login --deployment`", () => {
     });
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
   });
+
+  it("the command it hands back names the provider the model needs, so no menu offers another", async () => {
+    const { root, agentDir } = await box();
+    const missing = '{"type":"result","ok":false,"reason":"missing","message":"no openai-codex credential"}';
+    const failed = await loginOnBox({
+      host: "fly",
+      shell: processShell("sh", () => ["-c", `echo '${missing}'`], root),
+      placement: { agentDir, workspace: root },
+      provider: "openai-codex",
+      input: false,
+    });
+    expect(failed).toBe(
+      "not logged in: no openai-codex credential — run `fastagent login openai-codex --deployment fly` in a terminal",
+    );
+  });
 });
 
 /** A free loopback port, released for the code under test to take. */

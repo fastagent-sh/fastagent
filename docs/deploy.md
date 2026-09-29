@@ -72,7 +72,10 @@ When the credential is missing or rejected later (revoked, volume lost), the box
 - **AgentCore** resets its storage on every deploy, so every deploy of an agent that logs in ends with this login.
   Without a terminal, `deploy agentcore --run` therefore stops before building anything, rather than replace a
   serving runtime with one nobody can log in; for frequent or CI deploys, use an API key. The shell needs
-  `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
+  `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its workspace
+  exists (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
+  an egress proxy set in `.secrets/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
+  provider is reachable only through that proxy, use an API key on AgentCore.
 
 ## Local Docker
 

@@ -163,7 +163,11 @@ async function runStdioLogin(provider: string | undefined, opts: LoginOptions): 
 
 async function stdioLogin(io: LoginIO, provider: string | undefined, opts: LoginOptions): Promise<RelayResult> {
   const agentDir = findAgentDir(process.cwd());
-  if (agentDir) enterAgentEnv(agentDir); // the server's egress proxy, if its value file declares one
+  // A deployed box has no value file to read: its variables reach this process only as the host's shell hands them
+  // down (the container's for `docker compose exec`, the platform's over fly/railway ssh), and this installs the egress
+  // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
+  // FASTAGENT_ENV does not reach the login (docs/deploy.md).
+  if (agentDir) enterAgentEnv(agentDir);
   const authPath = resolveAuthPath(agentDir ?? process.cwd());
   if (opts.ifMissing && provider) {
     const held = await heldCredential(authPath, provider, agentDir);
