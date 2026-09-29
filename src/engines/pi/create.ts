@@ -13,8 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import { type AuthLayers, type FastagentConfig, resolveAuthLayers, resolveModel } from "./config.ts";
-import { type CredentialSourceOptions, type FastagentAuthOptions, assertOneCredentialSource } from "./auth.ts";
+import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
@@ -31,7 +30,7 @@ import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secre
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
-import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime, resolveCredentials } from "./models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 
@@ -266,12 +265,8 @@ function assemblePi(opts: {
   model: string;
   thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
-  /** The credentials files, when {@link models} is not given (default: the global file alone). */
-  auth?: AuthLayers;
-  /** The caller's own store, in place of {@link auth}. */
-  credentials?: CredentialStore;
-  /** The model registry to run on, used verbatim. */
-  models?: ModelRuntime;
+  /** The model registry to run on, resolved on first use. */
+  models: () => Promise<ModelRuntime>;
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   tools?: MountedTool[];
   /** Where conversations live. */
@@ -295,14 +290,7 @@ function assemblePi(opts: {
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
   const resolveEngine = () => {
     engine ??= (async () => {
-      // The caller's registry when there is one — the directory rung builds it from the agent's own models.json, so a
-      // custom endpoint declared there is the one a turn resolves against.
-      const modelRuntime =
-        opts.models ??
-        (await createPiModelRuntime({
-          auth: opts.auth,
-          ...(opts.credentials ? { credentials: opts.credentials } : {}),
-        }));
+      const modelRuntime = await opts.models();
       // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a gateway, a self-hosted
       // endpoint, a test fake) goes in through its native seam.
       for (const provider of opts.providers ?? []) modelRuntime.registerNativeProvider(provider);
@@ -373,14 +361,13 @@ export interface CreatePiAgentOptions {
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   const { instructions, skills = [] } = options;
-  assertOneCredentialSource(options);
+  const { credentials } = resolveCredentials(options);
   return agentOf(
     assemblePi({
       model: options.model,
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
-      ...(options.authPath !== undefined ? { auth: { path: options.authPath } } : {}),
-      ...(options.credentialStore ? { credentials: options.credentialStore } : {}),
+      models: () => createPiModelRuntime({ credentials }),
       readDefinition: () => ({
         systemPrompt: typeof instructions === "function" ? instructions() : instructions,
         skills,
@@ -427,24 +414,10 @@ export interface CreatePiAgentFromDefinitionOptions {
   observer?: SessionObserver;
 }
 
-/**
- * THE model registry an agent directory runs on: pi's built-ins, the directory's own `models.json` (custom endpoints
- * are definition data and travel with the artifact) layered over the machine's `~/.fastagent/models.json` (environment,
- * which does not travel), and any injected Provider instance, over the given credentials.
- * The directory rung assembles from it and `availableModelsFromDir` lists from it, so a layer added here reaches both.
- */
-export function definitionModelRuntime(
-  dir: string,
-  options: FastagentAuthOptions & { auth?: AuthLayers; credentials?: CredentialStore; providers?: Provider[] },
-): Promise<ModelRuntime> {
-  return createPiModelRuntime({ agentDir: dir, ...options });
-}
-
 /** L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. */
 export async function assemblePiFromDefinition(
   dir: string,
-  /** `auth` is the opener's already-resolved layers, which take the place of `authPath`. */
-  options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & { auth?: AuthLayers },
+  options: Omit<CreatePiAgentFromDefinitionOptions, "observer">,
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
   // and whose ancestors are walked for ② context.
@@ -459,17 +432,15 @@ export async function assemblePiFromDefinition(
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
-  assertOneCredentialSource(options);
-  const credentials = options.credentialStore
-    ? { credentials: options.credentialStore }
-    : { auth: options.auth ?? (options.authPath === undefined ? resolveAuthLayers(dir) : { path: options.authPath }) };
+  const { providers } = options;
+  const { credentials } = resolveCredentials(options, { agentDir: dir, ...(providers ? { providers } : {}) });
+  // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
+  // models.json is what a turn resolves against, layered over the machine's (models.ts).
+  const models = await createPiModelRuntime({ agentDir: dir, credentials, ...(providers ? { providers } : {}) });
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
-    models: await definitionModelRuntime(dir, {
-      ...credentials,
-      ...(options.providers ? { providers: options.providers } : {}),
-    }),
+    models: async () => models,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
     // are reserved for code (tools/channels/config, module cache).
