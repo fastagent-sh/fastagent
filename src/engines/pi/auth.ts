@@ -6,7 +6,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE } from "../../paths.ts";
+import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -199,7 +199,9 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
 
 /**
  * A read-write `CredentialStore` over the given credentials file (default {@link GLOBAL_AUTH_PATH}; the directory
- * opener passes the project-level `<root>/.secrets/auth.json`), optionally falling back to a second file.
+ * opener passes the project-level `<root>/.secrets/auth.json`), optionally falling back to a second file. A path is
+ * read like `FASTAGENT_AUTH_PATH` (`~` is the home directory, a relative one resolves against the cwd), so every
+ * caller that names a file names the same one.
  *
  * The fallback is PER PROVIDER, not per file: logging one provider into a project must not hide the others a person
  * already has globally. And the layer a credential was READ from is the layer its refresh is written back to —
@@ -210,7 +212,7 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
  * its own models.json) never reaches it — for reading, listing or writing back.
  */
 export function fastagentCredentialStore(
-  authPath: string = GLOBAL_AUTH_PATH,
+  path?: string,
   options: FastagentAuthOptions & {
     fallbackPath?: string;
     /** Whether the project authenticates this provider without the fallback; then the fallback is not read for it. */
@@ -218,8 +220,9 @@ export function fastagentCredentialStore(
   } = {},
 ): FastagentCredentialStore {
   const warn = options.warn ?? ((message: string) => log.warn(message));
-  const fallback =
-    options.fallbackPath !== undefined && options.fallbackPath !== authPath ? options.fallbackPath : undefined;
+  const authPath = resolveOverridePath(path) ?? GLOBAL_AUTH_PATH;
+  const fallbackPath = resolveOverridePath(options.fallbackPath);
+  const fallback = fallbackPath !== undefined && fallbackPath !== authPath ? fallbackPath : undefined;
   /** The fallback, when it may serve this provider at all. */
   const fallbackFor = async (providerId: string): Promise<string | undefined> =>
     fallback === undefined || (await options.projectAuthenticates?.(providerId)) ? undefined : fallback;
