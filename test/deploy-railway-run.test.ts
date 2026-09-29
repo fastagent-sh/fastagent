@@ -91,7 +91,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "whoami",
       "status --json",
       "init --name bot",
-      "add --service bot",
+      "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state", // a bare `add` prompts in a terminal
       "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets " +
         "RAILWAY_DOCKERFILE_PATH=/fastagent/Dockerfile --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
@@ -103,6 +103,41 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "domain --json --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
     ]);
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
+  });
+
+  it("the box logs in after it answers and before any webhook points at it", async () => {
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const order: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      order.push("register");
+      return "registered";
+    });
+    const healthy = async () => {
+      order.push("health");
+      return true;
+    };
+    const boxLogin = async () => {
+      order.push("login");
+      return "not logged in: …";
+    };
+    const out = await run(
+      plan({
+        channels: declaredChannels(["telegram"]),
+        boxLogin: { command: "fastagent login openai-codex --deployment railway", run: boxLogin },
+      }),
+      railway,
+      tg,
+      healthy,
+    );
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/^not logged in: …\. This deploy registered no webhook.*railway --run --into-linked/),
+    });
+    expect(order).toEqual(["health", "login"]);
   });
 
   it("RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
@@ -184,7 +219,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", FASTAGENT_AUTH_SEED: "b64" } }), railway);
+    await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", GH_TOKEN: "ghp_x" } }), railway);
     const setKey = calls.find((c) => c.args[0] === "variables" && c.args[2] === "OPENAI_API_KEY")!;
     expect(setKey.args.join(" ")).not.toContain("sk-x"); // not in argv
     expect(setKey.args).toContain("--stdin");
@@ -201,7 +236,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const out = await run(plan({ intoLinked: true }), railway);
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
     expect(cmds()).not.toContain("init --name bot"); // never re-create (would duplicate the project)
-    expect(cmds()).not.toContain("add --service bot");
+    expect(cmds().some((c) => c.startsWith("add --service"))).toBe(false);
     expect(cmds()).not.toContain("volume add --mount-path /data"); // volume already present → not re-added
     expect(cmds()).toContain("up --ci --service bot");
     expect(cmds()).not.toContain("domain list --json --service bot"); // never the destructive list subcommand

@@ -366,7 +366,8 @@ const deploy: CommandSpec = {
         "drive the target CLI to completion. Docker runs `docker compose up -d --build`; with a tunnel " +
         "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
         "secrets + deploy + webhook setup. AgentCore builds/pushes the arm64 image and deploys the " +
-        "stack (aws + docker CLIs). Carries your local credential (env key or OAuth auth.json). " +
+        "stack (aws + docker CLIs). A model key in the value file travels; any other credential is a login on " +
+        "the deployment itself, which --run starts once the box is up (fastagent login --deployment). " +
         "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
         "the runbook",
     },
@@ -538,14 +539,35 @@ const login: CommandSpec = {
       flags: "-g, --global",
       description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for a provider it has no other credential for`,
     },
+    {
+      flags: "--deployment [host]",
+      description:
+        "log in this agent's deployment instead, on the box itself (docker, fly, railway, agentcore); the host may be left out " +
+        "when the agent dir holds one host's deploy artifacts",
+    },
+    { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
+    { flags: "--if-missing", description: "with --stdio: keep a stored credential for the provider", hidden: true },
     NO_INPUT,
   ],
-  examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }, { cmd: "fastagent login openai -g" }],
-  notes: "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in.",
+  examples: [
+    { cmd: "fastagent login" },
+    { cmd: "fastagent login openai" },
+    { cmd: "fastagent login openai -g" },
+    { cmd: "fastagent login openai-codex --deployment fly", note: "on the box" },
+  ],
+  notes:
+    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. " +
+    "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
+    "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
+    "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
+    "so it is the only holder of that grant, and logging in again replaces it there.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0], {
       global: f.global === true,
       input: f.input !== false,
+      ...(f.deployment !== undefined ? { deployment: f.deployment as string | boolean } : {}),
+      stdio: f.stdio === true,
+      ifMissing: f.ifMissing === true,
     }),
 };
 

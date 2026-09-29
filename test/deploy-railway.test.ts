@@ -21,7 +21,7 @@ const base = {
 describe("deploy/railway: planRailwayDeploy", () => {
   it("the railway.json marker is a KEY (JSON cannot carry a comment) — that is what --force keys on", async () => {
     const { isGeneratedRailwayJson } = await import("../src/deploy/railway/plan.ts");
-    const generated = json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    const generated = json(planRailwayDeploy({ ...base, channels: [] }));
     expect(isGeneratedRailwayJson(generated)).toBe(true);
     expect(JSON.parse(generated)["x-generated-by"]).toBe("fastagent deploy railway"); // Railway ignores it
     expect(isGeneratedRailwayJson('{"build":{"builder":"DOCKERFILE"}}')).toBe(false); // the author's
@@ -29,16 +29,16 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("generates a thin railway.json — build from Dockerfile, healthcheck /health (no boot-race routing)", () => {
-    const j = JSON.parse(json(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] })));
+    const j = JSON.parse(json(planRailwayDeploy({ ...base, channels: [] })));
     expect(j.build.builder).toBe("DOCKERFILE");
     expect(j.deploy.healthcheckPath).toBe("/health");
     expect(j.deploy.restartPolicyType).toBe("ON_FAILURE");
     // Thin on purpose: no env/volume/sleeping in the file — those are CLI/dashboard service settings.
-    expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
+    expect(json(planRailwayDeploy({ ...base, channels: [] }))).not.toContain("FASTAGENT");
   });
 
   it("railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
-    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] });
+    const p = planRailwayDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
       "fastagent/Dockerfile",
@@ -59,7 +59,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
-    const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
+    const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
       "fastagent/railway.json",
       "fastagent/fastagent.release.json",
@@ -85,7 +85,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
     const out = runbook(
       planRailwayDeploy({
         ...base,
-        modelAuth: "OPENAI_API_KEY",
         channels: declaredChannels(["telegram"]),
         secrets: [
           { name: "OPENAI_API_KEY", hint: "your model provider key" },
@@ -106,7 +105,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
     const out = runbook(
       planRailwayDeploy({
         ...base,
-        modelAuth: undefined,
         channels: [...declaredChannels(["lark"], "long-connection")],
       }),
     );
@@ -118,7 +116,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
     const out = runbook(
       planRailwayDeploy({
         ...base,
-        modelAuth: undefined,
         channels: declaredChannels(["socket"], "long-connection"),
       }),
     );
@@ -126,7 +123,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("creates the service, and orders it before the service-scoped volume/variables/up (Railway model)", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
+    const out = runbook(planRailwayDeploy({ ...base, channels: [] }));
     // railway init makes only a project; the service must exist before volume/variables/up.
     expect(out).toContain("railway add --service bot");
     // Anchor to line-start commands (\n prefix): comments reference `railway up` in backticks, so a bare
@@ -141,9 +138,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
   // WHICH webhook steps a runbook carries is webhookRunbook's — deploy-channel-ingress owns that. What
   // is railway's is that they are spelled against a domain minted ONCE, never a precomputed URL.
   it("mints the domain ONCE and spells every webhook step at that placeholder", () => {
-    const out = runbook(
-      planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram", "slack", "feishu"]) }),
-    );
+    const out = runbook(planRailwayDeploy({ ...base, channels: declaredChannels(["telegram", "slack", "feishu"]) }));
     expect(out.match(/railway domain/g)).toHaveLength(1); // minted first, and not once per channel
     expect(out).toContain("https://<your-domain>/telegram"); // placeholder, not a deterministic guess
     expect(out).toContain("https://<your-domain>/slack");
@@ -153,21 +148,18 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("separates one-time setup from release regeneration and upload", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
+    const out = runbook(planRailwayDeploy({ ...base, channels: [] }));
     expect(out).toMatch(/one-time setup/i);
     expect(out).toMatch(/fastagent deploy railway[\s\S]*railway up/);
   });
 
   it("states App Sleeping as a manual dashboard step; forbids it for time triggers", () => {
-    expect(
-      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: declaredChannels(["telegram"]) })),
-    ).toContain("App Sleeping");
+    expect(runbook(planRailwayDeploy({ ...base, channels: declaredChannels(["telegram"]) }))).toContain("App Sleeping");
     // time triggers: cron/wake has no external wake-up — a sleeping service sleeps through them.
     expect(
       runbook(
         planRailwayDeploy({
           ...base,
-          modelAuth: undefined,
           channels: declaredChannels(["telegram"]),
           hasCron: true,
         }),
@@ -182,11 +174,9 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(toRailwayName("___")).toBe("agent"); // nothing left to name it with
   });
 
-  it("turns a non-env auth label into guidance, not a variable (shared secret logic)", () => {
-    for (const label of ["OAuth", "stored credential", "keychain"]) {
-      const out = runbook(planRailwayDeploy({ ...base, modelAuth: label, channels: [] }));
-      expect(out).not.toContain(`${label}=`); // never injected as a `variables set <label>=<value>` pair
-      expect(out).toContain("Model auth");
-    }
+  it("a credential that does not travel is a login on the box, after the deploy", () => {
+    const out = runbook(planRailwayDeploy({ ...base, boxLogin: "openai-codex", channels: [] }));
+    expect(out.indexOf("fastagent login openai-codex --deployment railway")).toBeGreaterThan(out.indexOf("railway up"));
+    expect(runbook(planRailwayDeploy({ ...base, channels: [] }))).not.toContain("login --deployment");
   });
 });

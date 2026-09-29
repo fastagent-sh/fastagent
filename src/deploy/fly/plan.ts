@@ -2,8 +2,9 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deploymentLoginCommand } from "../box-shell.ts";
 import { CRON_CAN_BE_EXTERNAL, type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
-import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
+import type { DeploymentSecret } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from ContainerInput.
@@ -11,8 +12,11 @@ export interface FlyPlanInput extends ContainerInput {
   appName: string;
   /** The port the app listens on (config.http.port ?? 8787); fly.toml routes to it. */
   port: number;
-  /** What satisfies model auth locally ({@link probeAuthSource}). */
-  modelAuth: string | undefined;
+  /**
+   * The provider the deployment logs in to itself (`fastagent login --deployment`): its credential is not a variable
+   * the plan carries.
+   */
+  boxLogin?: string;
   /**
    * Every declared channel and its ingress — the source of the webhook steps, and whether a machine
    * must stay up for an outbound connection.
@@ -59,7 +63,7 @@ primary_region = "iad"  # set your region (list: \`fly platform regions\`)
 
 [env]
   FASTAGENT_STATE_DIR = "/data/.state"      # mutable machine state — sessions, channel state, schedule
-  FASTAGENT_SECRETS_DIR = "/data/.secrets"  # seeded (and rotated) credentials — must persist across restarts
+  FASTAGENT_SECRETS_DIR = "/data/.secrets"  # credentials the box logged in with — must persist across restarts
   PORT = "${port}"
 
 [http_service]
@@ -90,7 +94,7 @@ export function isGeneratedFlyToml(content: string): boolean {
 
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
-  const { appName, port, modelAuth, channels } = input;
+  const { appName, port, channels } = input;
   // Artifacts sit under the agent prefix, so they never touch the workspace's own deploy files.
   const flyTomlPath = `${input.agentPrefix}fly.toml`;
   const artifacts: Artifact[] = [
@@ -149,14 +153,12 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
   );
 
-  // Model-auth guidance: an env key becomes a secret above.
-  if (!isEnvKey(modelAuth)) {
+  // The credential is created on the box, never carried: the box is then the only holder of its grant.
+  if (input.boxLogin) {
     runbook.push(
       ``,
-      modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; set FASTAGENT_AUTH_PATH (e.g. ~/.fastagent/.secrets/auth.json), or \`--run\` carries it automatically.`
-        : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a secret.`,
-      `#   Set your provider API key as a Fly secret (fly secrets set KEY=...), OR place auth.json at /data/.secrets/ on the volume.`,
+      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from this workspace):`,
+      `${deploymentLoginCommand("fly", input.boxLogin)}`,
     );
   }
 

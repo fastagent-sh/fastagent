@@ -14,11 +14,13 @@ import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
+  definitionKeyOf,
+  environmentAuthSource,
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
-  modelCredentialCarry,
-  probeAuthSource,
+  interactiveAuth,
+  loginProviders,
 } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -54,20 +56,22 @@ interface DeployFacts {
   values: ReadonlyMap<string, string>;
   /** That file, workspace-relative — the name every "set it here" message must use. */
   valueFile: string;
-  /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. */
+  /**
+   * The variable the value file carries the model's key in (the provider's own, or a models.json `"$NAME"`), or
+   * undefined when no key travels that way ({@link credentialRoute}).
+   */
   modelAuth: string | undefined;
   /**
-   * The definition itself carries the model key (a models.json literal `apiKey`, or a `!command` run on the host), so
-   * there is nothing for `--run` to carry AND nothing to gate: `fastagent login` cannot serve a custom provider, so
-   * gating on it would strand a correctly configured agent.
+   * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
+   * not travel, because it is neither a variable in the value file nor carried by the definition (a models.json
+   * literal `apiKey` or `!command`). Nothing from this machine's credentials file is ever copied, so a login on the
+   * box is its only holder.
    */
-  modelKeyInDefinition: boolean;
+  boxLogin: string | undefined;
   /** Every tool/routine/channel declaration — the names the value file must supply, by declaring file. */
   declaredSecrets: DeclaredSecret[];
   /** The runbook's variable list: the declared names, then everything else the value file carries. */
   secrets: DeploymentSecret[];
-  /** The project-level auth file `--run` reads to carry the credential (probed with the same path). */
-  authPath: string;
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
   container: ContainerInput;
   port: number;
@@ -253,28 +257,26 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   await checkMachineModels(agentDir, modelSpec, report);
 
-  // Probe auth from the SAME project-level file the opener/login use, on the registry the DEPLOYED agent has: the
-  // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
-  // how the credential reaches the host.
+  // The registry the DEPLOYED agent has (its own models.json, not the machine's), built here only so a malformed file
+  // stops the deploy with pi's own reason before anything below reads the file raw.
   const authPath = resolveAuthPath(agentDir);
-  const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
-  let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
-  let modelKeyInDefinition = false;
-  // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
-  // REACH the host").
-  if (modelSpec && !isEnvKey(modelAuth)) {
-    const carry = modelCredentialCarry(models, modelSpec);
-    if (carry.envVar) modelAuth = carry.envVar;
-    else modelKeyInDefinition = carry.inDefinition;
-  }
-  // The carry copies the whole auth.json, so the grant then has two holders that refresh independently.
-  if (modelAuth === "OAuth") {
-    report.warn(
-      `${modelSpec} authenticates with an OAuth login. Deploy carries a copy, and from then on this machine and the ` +
-        `deployment each refresh the same grant: a provider that rotates refresh tokens logs out whichever side ` +
-        `refreshes second, and on a host that keeps its volume a redeploy does not replace the auth.json already ` +
-        `there. Use a provider API key for a deployment.`,
-    );
+  await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
+  const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
+  const modelAuth = route.envVar;
+  const boxLogin = route.boxLogin;
+  if (boxLogin !== undefined) {
+    if (!hasLogin(boxLogin)) {
+      report.issue(
+        `no credential for ${modelSpec} reaches the deployment, and "${boxLogin}" has no login to run there — set ` +
+          `its API key in ${valueFile}`,
+      );
+    } else {
+      report.note(
+        `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
+          `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
+          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
+      );
+    }
   }
 
   // Reported, not refused. Whether a string is a credential is the AUTHOR's knowledge: pi's docs prescribe
@@ -381,13 +383,46 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     values,
     valueFile,
     modelAuth,
-    modelKeyInDefinition,
-    authPath,
+    boxLogin,
     container,
     port,
     declaredSecrets,
     secrets: deploymentSecrets(modelAuth, declaredSecrets, values, valueFile),
   };
+}
+
+/**
+ * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, from what the deploy ships and nothing else. The box is the one authority
+ * on what it authenticates with (pi ranks a stored login above the environment, and only the box knows what it has
+ * stored, which platform variables it was given, or what role it runs as), so this never asks what authenticates the
+ * model on THIS machine: its stored logins and the shell running deploy do not travel. In order:
+ *
+ * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (the values gate
+ *    asks for it by name), and a literal or `"!command"` travels in the image;
+ * 2. a credential pi reads for the provider from the value file alone: its key variable (which the values gate then
+ *    requires, as it does every declared name), or a keyless one such as `AWS_ACCESS_KEY_ID` — never one that needs a
+ *    file, which would be this machine's;
+ * 3. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
+ *    already authenticate the provider.
+ */
+async function credentialRoute(
+  agentDir: string,
+  spec: string,
+  values: ReadonlyMap<string, string>,
+): Promise<{ envVar?: string; boxLogin?: string }> {
+  const provider = providerOf(spec);
+  const declared = await definitionKeyOf(agentDir, provider);
+  if (declared) return "reference" in declared ? { envVar: declared.reference } : {};
+  // No file of this machine's travels, so a source that needs one (Google ADC, an AWS profile) is the box's to find.
+  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false);
+  if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
+  return { boxLogin: provider };
+}
+
+/** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
+function hasLogin(providerId: string): boolean {
+  const provider = loginProviders().find((p) => p.id === providerId);
+  return provider !== undefined && (["oauth", "api_key"] as const).some((method) => interactiveAuth(provider, method));
 }
 
 /**

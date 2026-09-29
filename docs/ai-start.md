@@ -426,7 +426,10 @@ an approved region, and local Docker/buildx for its arm64 image. `fastagent depl
 the CloudFormation topology, forwarder, and clock wiring required by the definition; `--run` provisions
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
-Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. CLI-managed
+Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. A
+model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
+`--run` starts `fastagent login --deployment` once the box is up, and without a terminal it stops and names that
+command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. AgentCore's public webhook URL belongs to its forwarder; direct runtime invocations use AWS IAM.
@@ -436,7 +439,7 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 |---|---|
 | Persona, skills, tools, config, and package lockfile | The image seeds the local workspace and installs only the agent package's dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
 | Runtime session journals, channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
-| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. AgentCore clears them on deploy and re-seeds model auth from the deployer. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
+| Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
 | Business notes, approvals, generated artifacts | Write ongoing work under the volume's `base/`, outside the release-managed definition. Docker, Fly, and Railway preserve it across deploys; AgentCore resets it. Use an external store when the host's retention is insufficient. |
 
 Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,

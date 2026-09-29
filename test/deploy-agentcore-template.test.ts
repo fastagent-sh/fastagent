@@ -44,7 +44,6 @@ interface Template {
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   releaseId: "release-one",
   name: "my-agent",
-  modelAuth: "OPENAI_API_KEY",
   channels: [],
   schedules: [],
   hasPackageJson: false,
@@ -188,7 +187,6 @@ describe("the agentcore template (parsed)", () => {
     const env = (runtime.Properties as { EnvironmentVariables: Record<string, unknown> }).EnvironmentVariables;
     expect(env.FASTAGENT_ENV).toEqual({ Ref: "FastagentEnv" });
     expect(env.FASTAGENT_ENV_4).toEqual({ Ref: "FastagentEnv4" });
-    expect(env.FASTAGENT_AUTH_SEED).toEqual({ Ref: "FastagentAuthSeed" });
     expect(env).not.toHaveProperty("TELEGRAM_BOT_TOKEN");
   });
 });

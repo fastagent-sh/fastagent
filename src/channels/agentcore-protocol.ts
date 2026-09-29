@@ -86,7 +86,8 @@ export type AgentcoreEnvelope = {
   | { kind: "wake-poke" }
   /**
    * The deploy driver's post-deploy verification (relayed by the forwarder's reserved probe path, which answers on
-   * EVERY forwarder topology — schedule-only URLs refuse ordinary public traffic).
+   * EVERY forwarder topology — schedule-only URLs refuse ordinary public traffic). Also accepted from the IAM door,
+   * where it only opens the workspace (`login --deployment` needs one) and does not construct the channels.
    */
   | { kind: "probe" }
 );

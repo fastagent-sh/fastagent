@@ -4,9 +4,8 @@
  * generated Dockerfile actually builds, the image boots, the credential carry arrives, `/health` and
  * `POST /invoke` answer, and the state volume outlives the container.
  *
- * Needs a model credential the way the product needs one: a provider env key in the environment, or
- * `FASTAGENT_AUTH_PATH` pointing at a stored auth.json. Without either, `--run` gates before it
- * builds and this test fails with that gate's own message.
+ * Needs the model's API key in the environment, under its provider's own variable: `stageModelKey`
+ * writes it into the agent's `.secrets/.env`, the one way a deployment carries a model credential.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -15,7 +14,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { exists } from "../../src/paths.ts";
-import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run, stageModelKey } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 const COMPOSE = "fastagent/fastagent.compose.yml";
@@ -49,6 +48,7 @@ beforeAll(async () => {
     join(agent, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,
   );
+  await stageModelKey(agent, MODEL);
   // The agent declares the fastagent it runs, which is what puts the CHECKOUT in the image. Without a
   // package.json the generated Dockerfile takes the markdown-agent path and bakes
   // `npm i -g @fastagent-sh/fastagent@<this version>` (src/deploy/container.ts) — a registry install,

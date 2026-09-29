@@ -20,7 +20,7 @@ the current directory.
 | `init [dir]` | Scaffold a runnable agent. |
 | `info [dir]` | Show what an agent assembles into, without serving. |
 | `models [search]` | List model specs. |
-| `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`. |
+| `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one turn and exit. |
@@ -90,7 +90,7 @@ Lists model specs (`provider/modelId`), optionally filtered.
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [-g|--global] [--no-input]
+fastagent login [provider] [-g|--global] [--deployment [host]] [--no-input]
 ```
 
 Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). `-g`, or
@@ -102,8 +102,9 @@ refuses and says where to `cd`.
   serves every agent on the machine that has nothing else for that provider. A refresh is written back to the file
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
-- `deploy` carries the project file only. After `login -g`, deploy with
-  `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`, or run `fastagent login` in the agent dir.
+- `--deployment [host]` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
+  AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
+  [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:
   each copy rotates the single-use refresh token and breaks the other.
 - An API-key login is checked with one request to pi's default model for the provider, before the key is written.

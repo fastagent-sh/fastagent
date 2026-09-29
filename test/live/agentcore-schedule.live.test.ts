@@ -54,7 +54,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentcoreName, forwarderLogGroup } from "../../src/deploy/agentcore/plan.ts";
 import { parseFireLine } from "../fire-line.ts";
 import { pickStackOutputs } from "../../src/deploy/agentcore/run.ts";
-import { aws, deployAgentcore, destroyAgentcoreDeployment, installSpec, requireAwsAccount, requireEnv } from "./env.ts";
+import {
+  aws,
+  deployAgentcore,
+  destroyAgentcoreDeployment,
+  installSpec,
+  requireAwsAccount,
+  requireEnv,
+  stageModelKey,
+} from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 
@@ -76,6 +84,7 @@ beforeAll(async () => {
   await mkdir(join(agentDir, "routines"), { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  await stageModelKey(agentDir, MODEL);
   // The ONE line that decides this deployment's topology: a schedule puts a forwarder, a Function URL
   // and an EventBridge rule into the template (plan.ts agentcoreTopology).
   // A plain default export, not `defineRoutine`: that helper is an identity function, so the loader

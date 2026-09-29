@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
+  type Credential,
   type Api,
   type CredentialStore,
   InMemoryCredentialStore,
@@ -27,7 +28,7 @@ import {
   assertOneCredentialSource,
   fastagentCredentialStore,
 } from "./auth.ts";
-import { type AuthLayers, providerOf } from "./config.ts";
+import type { AuthLayers } from "./config.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
@@ -237,18 +238,61 @@ async function credentialStoreFor(
  * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
  * that agent's variables too. What the shell shares outranks the global credentials file ({@link
  * agentCredentialStore}), so a global login for such a provider is not used.
+ *
+ * `fileExists` answers for the files a source points at (an AWS profile, Google ADC): this machine's by default, which
+ * is right wherever the answer is about THIS machine. A deployment passes one that finds nothing, because no file of
+ * the builder's travels with it.
  */
-export async function environmentAuthSource(providerId: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const ambient = defaultProviderAuthContext();
+export async function environmentAuthSource(
+  providerId: string,
+  env: NodeJS.ProcessEnv,
+  fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
+): Promise<string | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
     authContext: {
       // pi's own reading of a variable (a blank one is unset), over the given environment.
       env: async (name) => (env[name]?.trim() ? env[name] : undefined),
-      fileExists: ambient.fileExists,
+      fileExists,
     },
   });
   return (await models.checkAuth(providerId))?.source;
+}
+
+/**
+ * What authenticates `provider` for the agent in `agentDir`, resolved exactly as its serving runtime resolves it (the
+ * same store and registry `createPiAgentFromDir` builds): the ONE answer both the startup report and a deployed box's
+ * `login --if-missing` give, so they cannot disagree about whether the box is logged in.
+ *
+ * - `source`: what satisfies it now (`OAuth`, `stored credential`, an env variable's name), after a due refresh.
+ * - `path`: the file that holds the stored credential, or the one a login would write.
+ * - `stored`: the kind of credential the store holds for it, usable or not.
+ * - `shadowed`: an env variable that also authenticates it but goes unused, because pi lets a stored credential own
+ *   its provider — a key added to a deployment's value file after the box was logged in, typically.
+ *
+ * `modelId` picks the model to probe with; the provider's first one otherwise (auth is provider-scoped).
+ */
+export async function agentAuthStatus(options: {
+  agentDir: string;
+  auth: AuthLayers;
+  provider: string;
+  modelId?: string;
+}): Promise<{ source?: string; path: string; stored?: Credential["type"]; shadowed?: string }> {
+  const { agentDir, auth, provider } = options;
+  const credentials = await agentCredentialStore({ agentDir, auth });
+  const models = await createPiModelRuntime({ agentDir, auth, credentials });
+  const modelId = options.modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
+  const source = modelId === undefined ? undefined : await probeAuthSource(models, `${provider}/${modelId}`);
+  // `read` never refreshes: this is the kind on file, whatever became of it.
+  const stored = (await credentials.read(provider))?.type;
+  const fromEnvironment = stored === undefined ? undefined : await environmentAuthSource(provider, process.env);
+  const shadowed = source !== undefined && fromEnvironment !== source ? fromEnvironment : undefined;
+  return {
+    path: await credentials.layerOf(provider),
+    ...(source !== undefined ? { source } : {}),
+    ...(stored !== undefined ? { stored } : {}),
+    ...(shadowed !== undefined ? { shadowed } : {}),
+  };
 }
 
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
@@ -271,17 +315,6 @@ export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}):
   return runtime;
 }
 
-/** How a model's credential will REACH a deployed agent. */
-export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
-  const status = runtime.getProviderAuthStatus(providerOf(spec));
-  if (!status.configured) return { inDefinition: false };
-  // An env-var name is only useful downstream if it IS one.
-  if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
-    return { envVar: status.label, inDefinition: false };
-  }
-  return { inDefinition: status.source !== "stored" };
-}
-
 /**
  * EVERY provider whose `models.json` entry writes its key as a LITERAL rather than a `"$NAME"` reference or a
  * `"!cmd"`. The file ships inside the image, so a literal there is a credential in a readable layer.
@@ -297,21 +330,43 @@ export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { env
  * gates what IT causes; what the author wrote into their own committed file, it reports.
  */
 export async function literalKeyProviders(agentDir: string): Promise<string[]> {
+  return Object.entries(await definitionApiKeys(agentDir))
+    .filter(([, apiKey]) => isLiteralKey(apiKey))
+    .map(([id]) => id);
+}
+
+/**
+ * How the agent's OWN models.json supplies `providerId`'s key, read from the file for the reason
+ * {@link literalKeyProviders} gives: `reference` is the variable a `"$NAME"` reads (the value file must hold it),
+ * `inFile` a key that travels with the definition itself (a literal, or a `"!command"` run on the box), and undefined
+ * no apiKey there at all.
+ */
+export async function definitionKeyOf(
+  agentDir: string,
+  providerId: string,
+): Promise<{ reference: string } | { inFile: true } | undefined> {
+  const apiKey = (await definitionApiKeys(agentDir))[providerId];
+  if (typeof apiKey !== "string" || apiKey === "") return undefined;
+  if (apiKey.startsWith("!") || isLiteralKey(apiKey)) return { inFile: true };
+  // Not a literal, so isLiteralKey's own pattern matched: there is a name to read.
+  return { reference: apiKey.replaceAll("$$", "").match(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/)?.[1] as string };
+}
+
+/** Each provider's `apiKey` as the agent's own models.json writes it. */
+async function definitionApiKeys(agentDir: string): Promise<Record<string, unknown>> {
   const file = join(agentDir, AGENT_MODELS_FILE);
   let raw: string;
   try {
     raw = await readFile(file, "utf8");
   } catch (error) {
     // No custom endpoints is the normal case; anything else (unreadable, a directory) is the caller's problem.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw error;
   }
   // Malformed JSON already threw out of createPiModelRuntime before this runs, so a parse failure here would be a
   // genuine surprise and must not be swallowed.
   const providers = (JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> }).providers ?? {};
-  return Object.entries(providers)
-    .filter(([, provider]) => isLiteralKey(provider?.apiKey))
-    .map(([id]) => id);
+  return Object.fromEntries(Object.entries(providers).map(([id, provider]) => [id, provider?.apiKey]));
 }
 
 /**

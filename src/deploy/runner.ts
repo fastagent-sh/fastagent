@@ -61,3 +61,13 @@ export function spawnRunner(bin: string, cwd: string): CliRunner {
       child.on("error", () => res({ code: 127, stdout: "", stderr: opts?.captureStderr ? "" : undefined })); // ENOENT
     });
 }
+
+/**
+ * The AWS CLI, as every command here runs it: with its pager off. Given a terminal, AWS CLI v2 pipes any output it
+ * prints through `less`, so `deploy agentcore --run` stopped at `(END)` after `ecr create-repository` until someone
+ * pressed `q`. ONE runner rather than a `--no-cli-pager` at each call: a call site that forgets is how that hang ships.
+ */
+export function awsRunner(cwd: string): CliRunner {
+  const aws = spawnRunner("aws", cwd);
+  return (args, opts) => aws(args, { ...opts, env: { ...opts?.env, AWS_PAGER: "" } });
+}

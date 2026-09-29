@@ -124,7 +124,8 @@ export type PublicHealthProbe = (healthUrl: string) => Promise<boolean>;
  * report success. The channels that DO verify (Slack/Feishu challenge) would fail here too, but as "registration
  * failed" — a diagnosis that hides the actual cause.
  *
- * Asked ONLY when this deployment actually has a webhook to point. A definition with none (schedules only, the
+ * Asked ONLY when this deployment actually has a webhook to point, or a login on the box follows (the box must
+ * have prepared its workspace and installed the CLI the login runs). A definition with neither (schedules only, the
  * built-in `POST /invoke`, or long-connection channels) needs no inbound reachability at all, and demanding it would
  * invent a failure for a deploy run from a network that cannot reach the platform's edge.
  */
@@ -135,19 +136,58 @@ export async function publicHealthGate(input: {
   /** How THIS host is inspected and re-run — the only per-host words in the gate. */
   inspectHint: string;
   probe?: PublicHealthProbe;
+  /** The login that follows on the box (`fastagent login --deployment <host>`), when one does. */
+  login?: string;
 }): Promise<string | undefined> {
-  if (webhookKinds(input.channels).length === 0) return undefined;
+  if (webhookKinds(input.channels).length === 0 && input.login === undefined) return undefined;
   const healthUrl = `${input.baseUrl}/health`;
   input.log(`waiting for ${healthUrl} (up to ${PUBLIC_HEALTH_TIMEOUT_MS / 1000}s)…`);
   const probe =
     input.probe ?? ((url: string) => waitForHealth(url, PUBLIC_HEALTH_TIMEOUT_MS, 500, announce(input.log)));
   if (await probe(healthUrl)) return undefined;
-  // The infrastructure is up and only the webhook is missing, so hand over the manual route rather than leaving
-  // `re-run` as the only way out (a Fly re-run repeats the remote build).
-  for (const line of webhookRunbook(input.baseUrl, input.channels)) input.log(line);
+  // The infrastructure is up and only activation is missing, so hand over the manual route rather than leaving
+  // `re-run` as the only way out (a Fly re-run repeats the remote build). The login comes first: a channel pointed at
+  // a box with no model credential fails every message.
+  const steps = [
+    ...(input.login !== undefined ? [`# First, log the box in: ${input.login}`] : []),
+    ...webhookRunbook(input.baseUrl, input.channels),
+  ];
+  for (const line of steps) input.log(line);
+  const byHand =
+    webhookKinds(input.channels).length > 0
+      ? `To finish by hand once it answers, use the lines above.`
+      : `Once it answers, log it in: ${input.login}.`;
   return (
-    `the deployed agent did not become healthy at ${healthUrl}, so no webhook was registered — ${input.inspectHint}. ` +
-    `To point the channels by hand instead, use the lines above.`
+    `the deployed agent did not become healthy at ${healthUrl}, so it was not activated — ${input.inspectHint}. ` +
+    byHand
+  );
+}
+
+/**
+ * The gate when the login on the box did not happen. It stops the run BEFORE registration (a channel pointed at a box
+ * with no model credential fails every message), so the login it asks for does not register anything by itself: with
+ * a webhook to point, the refusal says what comes after the login, and prints the lines to do it by hand when the
+ * URL is known.
+ */
+export function loginGate(input: {
+  /** What the login reported, ending with the command to run. */
+  notLoggedIn: string;
+  channels: readonly DeclaredChannel[];
+  log: (msg: string) => void;
+  /** What THIS host does about its webhooks once the box is logged in — the only per-host words in the gate. */
+  afterLogin: string;
+  /** Where the channels point; unset when the host has not minted it yet (Docker's tunnel is read after). */
+  baseUrl?: string;
+}): string {
+  if (webhookKinds(input.channels).length === 0) return input.notLoggedIn;
+  const byHand = input.baseUrl === undefined ? [] : webhookRunbook(input.baseUrl, input.channels);
+  for (const line of byHand) input.log(line);
+  // "No webhook was registered" would be about THIS run only: one an earlier deploy registered still points here.
+  return (
+    `${input.notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
+    `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+    `${input.afterLogin}` +
+    (byHand.length > 0 ? `. The lines above point the channels by hand.` : ``)
   );
 }
 

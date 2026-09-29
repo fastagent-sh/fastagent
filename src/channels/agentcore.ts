@@ -140,8 +140,10 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     // The forwarder, or another IAM principal? See `fromForwarder` for what that actually decides.
     const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
-      // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted.
-      if (envelope.kind !== "invoke" && envelope.kind !== "routine-run") {
+      // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted. A `probe`
+      // here only opens the workspace (the deferred wrapper did that before this line) and says so: it is how
+      // `login --deployment` gets a workspace to log in, after a reset, on a runtime nothing has invoked yet.
+      if (envelope.kind !== "invoke" && envelope.kind !== "routine-run" && envelope.kind !== "probe") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);
         return text("forbidden\n", 403);
       }
@@ -251,7 +253,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         return json({ ok: true }, 200);
       }
       case "probe": {
-        // The structured verdict (transport-200 — see the envelope doc).
+        // The structured verdict (transport-200 — see the envelope doc). From the IAM door (untrusted) nothing was
+        // activated, so `ok` says only that the definition opened; channel construction is the forwarder probe's.
         return json(
           constructionError === undefined
             ? { ok: true }

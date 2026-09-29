@@ -25,7 +25,7 @@ One misreading to avoid: a Rails environment is a *behavior mode* of one codebas
 
 ## 2. Two tiers
 
-> **Day one** — one instance, one personal subscription → **no env concept at all**; OAuth credentials travel automatically.
+> **Day one** — one instance, one personal subscription → **no env concept at all**; the deployment logs in to that subscription itself (§8).
 > **Day two** — several instances, provider API keys → env is a **pure addition**; credentials degrade into ordinary static variables.
 
 These two arrive together, and not by coincidence: the hard requirement for several environments shows up in team/release settings, and that is exactly the setting that must stop using one person's coding-plan subscription (it dies when that person leaves). The consequence is the load-bearing simplification of this design: **the second tier introduces no credential machinery**, because a second environment's credential is an API key in its own `.env`.
@@ -49,7 +49,7 @@ Questions 2 and 3 give four boxes, and **only three are inhabited**. Something b
 | **B. Derived, non-sensitive** | FastAgent computes it and knows it is not sensitive | **Release manifest.** Rewritten by every deploy (cannot go stale), rides an immutable image (cannot go stale on the platform, cannot interpolate a shell), is JSON (no code-generation syntax to escape) | the resolved model, `releaseId`, the agent directory |
 | **C. Authored application defaults** | In git, identical in every deployment | **The definition itself.** It already ships; a second copy would be a second truth | `model`, `thinkingLevel`, `http.port`, `sessionControl` |
 | **D. Operator-supplied environment values** | Differs per deployment, not in git, **sensitivity known only to the author** | **The platform's secret storage.** Must not enter a readable artifact, and must be rotatable on the target without rebuilding the image | channel secrets, provider API keys, anything a `{ secrets: […] }` declaration names, the secrets `deploy` mints (`FASTAGENT_WAKE_SECRET`, `FASTAGENT_INGRESS_SECRET`) |
-| **E. Self-refreshing credentials** | The target rewrites it | Secret storage as a **seed**, the target's volume as the **authority** — the seed is written only when the target has none (`authSeedBytes`), because the target's copy is newer by definition | `auth.json` |
+| **E. Self-refreshing credentials** | The target rewrites it | **None: it is created on the target.** The deployment logs in itself (`fastagent login --deployment`, §8) and its volume holds the only copy. A carried copy would give one grant two holders that each refresh it | `auth.json` |
 
 **D is treated as sensitive wholesale**, even though members like a `SLACK_DIGEST_CHANNEL` are not credentials. That follows from question 4: `{ secrets: […] }` declares "this value comes from the environment", not "this value is a credential", and FastAgent has no basis to guess. The cost is bounded and real (a runbook lists it as required, AgentCore makes it a `NoEcho` parameter so `describe-stacks` cannot show it). The escape hatch is a `sensitive: false` on the declaration, and it is not built until the diagnosability actually hurts — the framework must not guess.
 
@@ -101,7 +101,7 @@ Two properties of the credential chain are not free choices, and both were paid 
 - **The fallback is per provider, not per file.** A file-level fallback would make every other provider in the global store vanish the instant `login anthropic` created a project `auth.json`.
 - **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthFallback` in `src/engines/pi/config.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
 
-`deploy` reads the project file only: the artifact is the truth, so a credential that exists only in the global store is not carried. `fastagent login` inside the agent directory, or `FASTAGENT_AUTH_PATH` naming the global file, are the two ways to hand it one — and the second makes one grant have two holders (§13).
+`deploy` carries no credentials file at all, project or global (§8).
 
 Two rules follow:
 
@@ -141,31 +141,30 @@ Availability is a property of **ordering**, not of how many commands the operato
 1. preflight      source files, effective model + its provider, declared variables, account/region/names → print the plan
 2. provision      storage and access; accepts no agent work yet
 3. static values  the selected value file → the platform's variable storage
-4. credential     credentials travel (§8); a failure stops here
-5. readiness      the deployed process answers /health (no real model request)
+4. readiness      the deployed process answers /health (no real model request)
+5. credential     the box logs in itself, unless it already holds one (§8); a failure stops here
 6. activate       register webhooks, enable schedules, take traffic  ← the only point a public entrance opens
 ```
 
-Step 5 is `publicHealthGate` (`src/deploy/channel-ingress.ts`), asked by the hosts whose public URL the platform mints — fly and railway — before they reach `registerWebhooks`: `fly deploy` and `railway up --ci` both exit 0 on a deployment that then crash-loops, and `setWebhook` does not verify that anything answers the URL. It is asked only when the deployment actually has a webhook to point; docker keeps probing the port it published locally, and agentcore its own runtime probe. It deliberately does not spend a real model call: it costs money and an unexpired access token **does not prove future refreshability**. A partial failure in step 3 is reported and stops the run — no success claim, no newly enabled scheduled work.
+Step 4 is `publicHealthGate` (`src/deploy/channel-ingress.ts`), asked by the hosts whose public URL the platform mints — fly and railway — before they reach `registerWebhooks`: `fly deploy` and `railway up --ci` both exit 0 on a deployment that then crash-loops, and `setWebhook` does not verify that anything answers the URL. It is asked only when the deployment actually has a webhook to point or a login on the box follows (the login runs the CLI the box installs on its first boot); docker keeps probing the port it published locally, and agentcore its own runtime probe. It deliberately does not spend a real model call: it costs money and an unexpired access token **does not prove future refreshability**. A partial failure in step 3 is reported and stops the run — no success claim, no newly enabled scheduled work.
 
-Step 4 needs no probe of its own, and `/health` must not grow a credential check. "A credential exists" is already guaranteed twice: `gateOnModelCredential` stops a `--run` with nothing to carry before the first side effect, and a failed seed write throws out of `maybeSeedAuth` on first boot, so the process never reaches a listening state. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key comes from a `models.json` `!command` be declared dead.
+Step 5 needs no probe of its own, and `/health` must not grow a credential check. The login reports its own outcome as one result line from the box (a credential for the provider now exists there, or not), and without a terminal to run it in, `--run` stops right there with the command to run. Re-deriving it inside `/health` would add no coverage and would let a healthy deployment whose key comes from a `models.json` `!command` be declared dead.
 
-The point of the ordering is that a run with no usable credential **opens no entrance at all**, instead of reporting success and failing on the first real message.
+The point of the ordering is that a run with no usable credential **registers no webhook**, instead of reporting success and failing on the first real message. What the box starts by itself is not gated: a long-connection channel connects and the resident scheduler runs from boot, so on a host that stays up without a login (a first `--run` from CI) those turns fail until someone logs the box in. The alternative, holding them back until a credential exists, would put a credential check in the serving path, which step 5 rules out.
 
 ## 8. Credentials
 
-The existing mechanism is kept; only the surface around it is corrected.
+A credential that travels as a variable (a provider API key in the value file) is class D and needs nothing here. Every other one is **created on the deployment**, never carried:
 
-- The payload is the **whole effective `auth.json`** (every provider). A deployed session can change its model (`src/engines/pi/session-settings.ts` treats model and thinking level as one setting), so trimming the payload to the currently effective provider would manufacture a "switch and it breaks" failure — and trimming it *correctly* would require the author to restate runtime intent, which is the new configuration dimension conventions exist to avoid.
-- Delivery stays `FASTAGENT_AUTH_SEED` (chunked). A platform secret store is built for this. The real hazard — every deploy silently resetting the remote refresh chain — is already handled by `authSeedBytes(seed, fileExists)` in `src/deploy/secrets.ts`, which leaves an existing remote credential alone. **No per-host credential management API is introduced**; that was the single largest piece of implementation work in the RFC and its benefit does not hold up.
-- A day-two environment's credential is `OPENAI_API_KEY` (or equivalent) in `.secrets/<env>/.env`: the ordinary static-variable path, **no special code**.
-- Someone running several environments on OAuth anyway falls back to the project or global store (all envs share one person's subscription). That is **visible, not blocked**, and nothing is built for it:
+- `fastagent login --deployment [host]` runs the ordinary login on the box, through the host's own owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`, AgentCore's `InvokeAgentRuntimeCommandShell`). The owner's terminal renders it and opens the browser; the box holds the PKCE verifier, exchanges the code, and writes its own `auth.json`. The box is then the only holder of its grant, so neither side can log the other out, and logging in again replaces it. The mechanism is in [core.md](core.md) §9.
+- `deploy --run` starts that login after readiness and before activation (§7), for the model's provider, keeping a credential the box already holds, so a redeploy leaves it alone. Without a terminal it stops with `not logged in` and the command to run: a CI run never reports success for an agent that cannot answer.
+- A box whose credential is missing or rejected later (revoked, a lost volume) names `fastagent login --deployment` in its startup report.
+- **Two questions, two owners.** The builder decides only what the deploy ships (`credentialRoute` in `src/deploy/preflight.ts`): a key the definition references or the value file holds travels; otherwise the box is asked. It never asks what authenticates the model on the builder's machine — its stored logins and the shell running deploy do not travel, and every earlier attempt to infer the box from them was wrong in a new way. Whether the box authenticates, and with what, is the box's own answer, the same function its startup report uses (`agentAuthStatus`), because only the box knows what it has stored, which platform variables it was given, or what role it runs as.
+- **A stored login outranks a key** (pi's rule: a stored credential owns its provider). A key added to the value file after the box logged in is therefore unused; the box's startup report says so and names the switch (log in with the key), rather than deploy deleting a login on the owner's behalf.
+- **AgentCore** resets its storage on every deploy and after 14 idle days, and the login with it, so every deploy of an agent that logs in ends with that login. The old grant goes with the old storage, so the new one is again the only holder. Without a terminal the outcome is known before anything is built (nobody can redo the login), so `--run` gates there instead of replacing a serving runtime with a logged-out one.
+- A day-two environment's credential is `OPENAI_API_KEY` (or equivalent) in `.secrets/<env>/.env`: the ordinary static-variable path, **no special code**. An environment on OAuth anyway logs in its own deployment, with a grant of its own.
 
-```
-target      production → agentcore  (123456789012 / ap-southeast-1)
-model       openai-codex/gpt-6-astra   (source: .secrets/production/.env)
-credential  openai-codex               (source: ~/.fastagent/.secrets/auth.json — the global store)
-```
+Why not carry a copy of the local `auth.json`: one grant would have two holders that each refresh it, so a provider that rotates refresh tokens (both pi's OAuth providers do) logs out whichever refreshes second, and a copy written only when the box has none cannot replace a dead one.
 
 ## 9. Variable delivery
 
@@ -199,9 +198,10 @@ Dropped from the RFC, and from earlier drafts of this document:
 |---|---|
 | A binding record (`deploy.targets`) the tool writes into its own config | Buys only "type `--host fly` less often". Costs: programmatic TS rewriting; either an invisible local state (the "implicit current environment" the RFC rightly rejects) or a `deploy` that rewrites authored configuration rather than only regenerating its own marked artifacts. CI wants the flag spelled out anyway |
 | `deploy.<env>.ts`, an env registry, a second config extension, config-merging DSL, env inheritance | Conventions must not require restating what a filename or a flag already says |
-| `login --env`, `auth push`, per-host credential management, per-provider merge | Day two uses API keys; day one has no choice to make |
+| `login --env`, `auth push`, per-host credential management, per-provider merge | Day two uses API keys. `login --deployment` names its target the way `deploy` does, so when `--env` lands it takes `--env` with it rather than a login-only selector |
 | A credential account/alias dimension, `config.accounts` | `--env` plus the two credential layers already covers "different account per environment" |
-| Cross-env value fallback, importing pi's credentials, copying an OAuth grant between local and remote | §5 |
+| Cross-env value fallback, importing pi's credentials | §5 |
+| Copying an OAuth grant between local and remote | §8: the deployment logs in itself |
 | Reporting remote variables outside the ownership union as **unmanaged** | §9: writing a subset gives no standing to audit the rest |
 | Moving `.env` out of `.secrets/` | `.secrets/` is the one directory the `.gitignore` and the image excludes already cover |
 | Removing `FASTAGENT_SECRETS_DIR` / `FASTAGENT_STATE_DIR` / `FASTAGENT_AUTH_PATH` | The fly/railway/agentcore plans point them at the mounted volume, and the deployed container locates `auth.json` through that chain. Only the corresponding CLI flags can go |
@@ -220,10 +220,10 @@ Dropped from the RFC, and from earlier drafts of this document:
 | report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
 | carry the resolved model to the deployed environment | the release manifest (`DeploymentRelease.model` in `src/deploy/workspace.ts`), projected into `process.env` beside `FASTAGENT_AGENT` by `prepareStartWorkspace`. It is rewritten unconditionally by every deploy, so it cannot go stale, and nothing on the way in can interpolate the operator's shell. **Non-credential configuration only** — the manifest rides inside a readable image and is rebuilt every deploy, both of which are the opposite of what a credential needs (§8) |
 | class D reads the **value file only** (§9), so `assembleSecrets` takes that Map instead of `env: NodeJS.ProcessEnv` | `src/deploy/secrets.ts` + `src/cli/commands/deploy/shared.ts`; every host's runbook then tells CI to write the file rather than export variables. Docker reaches it through Compose's own `env_file`, not per-name interpolation — interpolation resolves from the shell, the one source §9 excludes |
-| a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list, not in `modelKeyInDefinition` | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
+| a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list; only a literal or a `!command` counts as carried by the definition. Which path the model's credential takes (a definition reference, the value file, an ambient credential, or a login on the box) is decided in ONE place, `credentialRoute` in `src/deploy/preflight.ts`, from what travels and never from what authenticates the builder's machine | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
-| Unchanged | `FASTAGENT_AUTH_SEED` + chunking + `collectAuthSeed` + `authSeedBytes`, `.secrets/` 0600 files, `secrets-gate`, `deploy.apt` (`deploy.secrets` was removed: the value file travels whole) |
+| Unchanged | `.secrets/` 0600 files, `secrets-gate`, `deploy.apt` (`deploy.secrets` was removed: the value file travels whole) |
 
 | # | Step | Independent value | State |
 |---|---|---|---|
@@ -247,12 +247,11 @@ step 4.
 
 - **`--host` is typed every time.** Bought with zero binding machinery and a more explicit CI command.
 - **"Which account does prod use" is not in committed FastAgent config.** The review point moves to the CI workflow, which also has branch protection and environment protection rules — a better home for it.
-- **Local and remote hold the same OAuth grant, which both providers rotate.** Verified in pi's flows (`auth/oauth/anthropic.js`, `auth/oauth/openai-codex.js`): every refresh returns a new refresh token. OpenAI's [CI/CD auth guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth) says to use one `auth.json` "per runner or per serialized workflow stream" and lists "another machine or concurrent job rotated the token first" as a reason to reseed. So a deployment running on the same grant as the developer's machine is a posture both providers advise against, and the only tools available are not overwriting implicitly (`authSeedBytes`, which is exactly the "seed only if missing" rule that guide calls the critical detail) and reporting the source. `proper-lockfile` makes concurrent refreshes safe *within one filesystem* only.
-- **The deployed box never writes its refreshed `auth.json` back.** OpenAI's ephemeral-runner pattern requires a round trip (restore → run → persist the refreshed file). Hosts with a persistent volume behave like their "persistent runner" case and are fine; **AgentCore is the ephemeral case without the write-back**, so every runtime version update returns to the seed, which by then may already have been rotated away. Use an API key there.
-- **`FASTAGENT_AUTH_SEED` chunking is ugly but effective**, and `auth.json` keeps growing with providers.
+- **An OAuth deployment needs a person at a terminal once.** The login on the box is interactive; a first deploy from CI stops at `not logged in`. Both providers ask for an API key in automation anyway (§2).
+- **Each login on a deployment is a new grant.** Replacing one does not revoke the grant it replaced at the provider.
 - **Loading a definition under a given env's values costs a subprocess.** Every plan/deploy pays one process start, and channel/schedule discovery errors have to cross a process boundary without losing their diagnosability (§12).
 - **A refresh and a storage write are not one transaction.** A crash after provider-side rotation can still require reauthentication, and each provider's grant issue/invalidate behavior must be verified rather than assumed.
-- **AgentCore resets its storage on every runtime version update**, so OAuth credentials are re-delivered on each deploy. That scenario should use an API key; no special-case clause is written for it.
+- **AgentCore resets its storage on every runtime version update and after 14 idle days**, so an OAuth agent there logs in after every deploy, and again after an idle reset, which only the runtime's own log reports.
 
 ## 14. Acceptance
 
@@ -266,6 +265,6 @@ Checked boxes are covered by a test in the offline suite. The unchecked ones are
 - [ ] Value files, secret values, and credentials appear in no build context, image, manifest, command argument, or log.
 - [x] With no project credential, the global one is used and its source is printed; a credential read from the global store refreshes back into it and leaves no project copy.
 - [x] Concurrent local projects share the global credential file safely.
-- [x] With no usable credential, **no public entrance is activated**; a redeploy against a host that already holds one does not overwrite it.
+- [x] With no usable credential, **no webhook is registered**; a redeploy against a host that already holds one does not overwrite it (`--if-missing`).
 - [ ] Redeploy, rollback, restart, and session-snapshot restore all preserve the latest credentials.
-- [x] Every supported host has an end-to-end check (`test/live/{docker,fly-deploy,railway-deploy,agentcore-deploy}`: provision, serve a turn, destroy) — of deployment itself, not of the `--env` items above.
+- [x] Every supported host has an end-to-end check (`test/live/{docker,fly-deploy,railway-deploy,agentcore-deploy}`: provision, serve a turn, destroy) — of deployment itself, not of the `--env` items above. They deploy an API-key model: a login on the box needs a person, so the OAuth path has no unattended check and was verified by hand on all four hosts (#656).

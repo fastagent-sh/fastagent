@@ -10,7 +10,7 @@
  * is genuinely DOWN is a different case — that belongs in the probe that talks to it.)
  */
 import { execFile } from "node:child_process";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -19,12 +19,33 @@ import type { AgentEvent } from "../../src/agent.ts";
 import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
 import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
+import { environmentAuthSource } from "../../src/engines/pi/models.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`live probes need ${name} (${hint})`);
   return value;
+}
+
+/**
+ * A deploy probe's model credential, carried the way a deployment carries one: the provider's API key, from THIS
+ * environment into the agent's `.secrets/.env`, which `deploy --run` sends to the host. A stored login does not
+ * travel (the box logs in itself, which needs a person at a browser), so an unattended probe can only deploy a model
+ * that authenticates with a key. Which variable is the provider's own is pi's answer, the one the box will ask.
+ */
+export async function stageModelKey(agentDir: string, model: string): Promise<void> {
+  const provider = model.slice(0, model.indexOf("/"));
+  const name = await environmentAuthSource(provider, process.env);
+  const value = name === undefined ? undefined : process.env[name];
+  if (name === undefined || !/^[A-Z][A-Z0-9_]*$/.test(name) || !value) {
+    throw new Error(
+      `deploy probes need ${model}'s API key in the environment (its provider's own variable, e.g. OPENAI_API_KEY): ` +
+        `it travels through .secrets/.env, and a login on the box would need a person`,
+    );
+  }
+  await mkdir(join(agentDir, ".secrets"), { recursive: true });
+  await writeFile(join(agentDir, ".secrets", ".env"), `${name}=${value}\n`, { mode: 0o600 });
 }
 
 /**

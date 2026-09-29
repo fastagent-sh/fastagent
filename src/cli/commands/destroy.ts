@@ -2,7 +2,7 @@
 import { basename, resolve } from "node:path";
 import { destroyAgentcoreDeployment } from "../../deploy/agentcore/destroy.ts";
 import { agentcoreName } from "../../deploy/agentcore/plan.ts";
-import { spawnRunner } from "../../deploy/runner.ts";
+import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
@@ -21,7 +21,7 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
   const name = agentcoreName(basename(placement.workspace));
   const outcome = await destroyAgentcoreDeployment(
     { name, run: opts.run === true },
-    spawnRunner("aws", placement.workspace),
+    awsRunner(placement.workspace),
     (message) => console.error(`[fastagent] destroy: ${message}`),
   );
   if (!outcome.ok) {

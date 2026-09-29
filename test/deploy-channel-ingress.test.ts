@@ -3,6 +3,7 @@ import { declaredChannels } from "../src/channels/discover.ts";
 import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { planAgentcoreDeploy } from "../src/deploy/agentcore/plan.ts";
 import {
+  loginGate,
   publicHealthGate,
   registerWebhooks,
   webhookKinds,
@@ -41,6 +42,73 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
     expect(gate).toContain("https://x/health");
     expect(gate).toContain("the app itself deployed"); // the host's own words, not this module's
     expect(logs.join("\n")).toContain("url=https://x/telegram"); // the runbook line to do it by hand
+  });
+
+  it("when a login follows, is asked without a webhook, and the manual route starts with the login", async () => {
+    const login = "fastagent login openai-codex --deployment fly";
+    const probe = vi.fn(async () => false);
+    const alone = await publicHealthGate({
+      baseUrl: "https://x",
+      channels: [],
+      log: () => {},
+      inspectHint: "h",
+      login,
+      probe,
+    });
+    expect(probe).toHaveBeenCalled(); // the login needs the box ready: the CLI its first boot installs
+    expect(alone).toContain(`Once it answers, log it in: ${login}`);
+    expect(alone).not.toMatch(/lines above/); // there are none
+
+    const logs: string[] = [];
+    const withWebhook = await publicHealthGate({
+      baseUrl: "https://x",
+      channels: webhook("telegram"),
+      log: (m) => logs.push(m),
+      inspectHint: "h",
+      login,
+      probe,
+    });
+    expect(withWebhook).toMatch(/use the lines above/);
+    const loginAt = logs.findIndex((l) => l.includes(login));
+    expect(loginAt).toBeGreaterThanOrEqual(0);
+    // Before any channel is pointed at the box.
+    expect(logs.findIndex((l) => l.includes("url=https://x/telegram"))).toBeGreaterThan(loginAt);
+  });
+});
+
+describe("deploy/channel-ingress: a login that did not happen", () => {
+  const notLoggedIn = "not logged in: … — run `fastagent login openai-codex --deployment fly` in a terminal";
+  const afterLogin = "re-run the deploy";
+
+  it("with no webhook to point, is the login's own refusal and nothing else", () => {
+    const logs: string[] = [];
+    const gate = loginGate({ notLoggedIn, channels: longConnection("feishu"), log: (m) => logs.push(m), afterLogin });
+    expect(gate).toBe(notLoggedIn);
+    expect(logs).toEqual([]);
+  });
+
+  it("with one, says logging in registers none, and how this host gets them registered", () => {
+    const logs: string[] = [];
+    const gate = loginGate({ notLoggedIn, channels: webhook("telegram"), log: (m) => logs.push(m), afterLogin });
+    expect(gate).toBe(
+      `${notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
+        `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+        afterLogin,
+    );
+    expect(logs).toEqual([]); // no URL yet: nothing to point by hand
+  });
+
+  it("with the URL known, prints the lines to point the channels by hand", () => {
+    const logs: string[] = [];
+    const gate = loginGate({
+      notLoggedIn,
+      channels: webhook("telegram"),
+      log: (m) => logs.push(m),
+      afterLogin,
+      baseUrl: "https://x",
+    });
+    expect(gate).toMatch(/The lines above point the channels by hand\.$/);
+    expect(logs.join("\n")).toContain("url=https://x/telegram");
   });
 });
 
@@ -127,7 +195,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      modelAuth: undefined,
       channels,
     }).runbook.join("\n");
 
@@ -141,7 +208,6 @@ describe("every host's runbook reads the same answer", () => {
       hasLockfile: true,
       version: "9.9.9",
       hasCron: false,
-      modelAuth: undefined,
       channels,
     }).runbook.join("\n");
 
@@ -149,7 +215,6 @@ describe("every host's runbook reads the same answer", () => {
     planAgentcoreDeploy({
       releaseId: "release-one",
       name: "bot",
-      modelAuth: undefined,
       channels,
       schedules: [],
       hasPackageJson: true,

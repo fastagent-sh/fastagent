@@ -19,18 +19,13 @@ import {
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import {
-  agentCredentialStore,
-  createPiModelRuntime,
-  probeAuthSource,
-  providerAuthStatuses,
-} from "../engines/pi/models.ts";
+import { agentAuthStatus, createPiModelRuntime, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
 import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
-import type { ResolvedPlacement } from "../paths.ts";
+import { type ResolvedPlacement, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -133,18 +128,11 @@ export async function reportAuth(agentDir: string, modelSpec: string, auth: Auth
     log.info(`[fastagent] auth:   the caller's credential store (${provider})`);
     return;
   }
-  // ONE store for the runtime and for this report: which file holds the credential is the store's own answer, so the
-  // line cannot name a file other than the one the runtime reads.
-  const store = await agentCredentialStore({ agentDir, auth });
-  const models = await createPiModelRuntime({ agentDir, auth, credentials: store }).catch(failStartup);
-  const source = await probeAuthSource(models, modelSpec);
-  // "Which file do I edit" is the question this line answers, and a global credential lives in a file the agent dir
-  // does not contain. With neither layer holding it, the answer is the file the recommended `fastagent login` writes.
-  const found = await store.layerOf(provider);
-  // Only when nothing satisfies auth does the stored credential matter: it tells "nothing stored" from "stored but
-  // unusable". `read` never refreshes.
-  const stored = source === undefined ? await store.read(provider) : undefined;
-  const report = formatAuthReport(provider, found, source, stored);
+  // The runtime's own resolution, and the one a deployed box's `login --if-missing` asks: the line cannot name a file,
+  // or a source, other than the ones the runtime uses.
+  const modelId = modelSpec.slice(provider.length + 1);
+  const status = await agentAuthStatus({ agentDir, auth, provider, modelId }).catch(failStartup);
+  const report = formatAuthReport({ provider, ...status, deployed: isDeployedWorkspace() });
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }

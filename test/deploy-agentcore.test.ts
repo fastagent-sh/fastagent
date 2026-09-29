@@ -28,7 +28,6 @@ import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   releaseId: "release-one",
   name: "my-agent",
-  modelAuth: "OPENAI_API_KEY",
   channels: [],
   schedules: [],
   hasPackageJson: false,
@@ -379,7 +378,7 @@ describe("deploy agentcore: the plan", () => {
     const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
     expect(runbook).toContain("across compute stop/resume");
     expect(runbook).toContain("RESETS it on every runtime version update");
-    expect(runbook).toContain("Deploying IS re-authenticating");
+    expect(runbook).toContain("provider API key in the value file");
     expect(runbook).toContain(ingressSessionId("my-agent"));
   });
 
@@ -459,12 +458,5 @@ describe("deploy agentcore: the plan", () => {
       expect(names("deploy check")).not.toBe(names("deploy-check"));
       expect(names(`${"a".repeat(120)}1`)).not.toBe(names(`${"a".repeat(120)}2`));
     });
-  });
-
-  it("OAuth model auth (non-env) gets the FastagentAuthSeed guidance instead of a fake secret", () => {
-    const plan = planAgentcoreDeploy(baseInput({ modelAuth: "OAuth" }));
-    const template = plan.artifacts[0]!.content;
-    expect(template).not.toContain("Oauth:"); // no fabricated parameter from the label
-    expect(plan.runbook.join("\n")).toContain("FastagentAuthSeed");
   });
 });

@@ -1,6 +1,6 @@
 /**
- * What every host's deploy command shares: the context the dispatcher hands a host, the artifact writer with its
- * ownership rule, and the `--run` credential carry.
+ * What every host's deploy command shares: the context the dispatcher hands a host and the artifact writer with its
+ * ownership rule.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -13,11 +13,11 @@ import type { Registrars } from "../../../deploy/channel-ingress.ts";
 import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
 import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
-import { assembleSecrets } from "../../../deploy/secrets.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
-import { exists, resolveStateRoot } from "../../../paths.ts";
-import { failStartup } from "../../fail.ts";
-import type { DeclaredSecret } from "../../../declared-secrets.ts";
+import { type ResolvedPlacement, exists, resolveStateRoot } from "../../../paths.ts";
+import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
+import { loginOnBox } from "../../box-login.ts";
+import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
   run?: boolean;
@@ -52,6 +52,10 @@ interface DeployContext {
 export interface HostDeploy {
   /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
+  /** The file in the agent dir whose presence says this workspace deploys to the host. */
+  artifact: string;
+  /** The shell into this workspace's running box (`fastagent login --deployment`). */
+  shell(placement: ResolvedPlacement): Promise<BoxShell>;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
    * (`--run`) or print the runbook.
@@ -70,35 +74,26 @@ export function registrarsFor(agentDir: string): Registrars {
 }
 
 /**
- * The `--run` carry, for every host: the value file's variables plus the local model credential (an env key, or the
- * whole auth.json as a `FASTAGENT_AUTH_SEED`).
+ * The login `--run` starts on the box it just deployed, before any webhook is pointed at it (a host driver's `boxLogin`): for
+ * the model's provider, keeping a credential the box already holds (a redeploy), and asking only when a person can
+ * answer. None when the model's credential travels as a variable.
  */
-export async function carryCredentials(params: {
-  modelAuth: string | undefined;
-  modelKeyInDefinition: boolean;
-  authPath: string;
-  declaredSecrets: readonly DeclaredSecret[];
-  /** The deployed environment's declaration, from the pre-flight's single read. */
-  values: ReadonlyMap<string, string>;
-}): Promise<{ secrets: Record<string, string>; missingSecrets: string[]; needsModelCredential: boolean }> {
-  const { modelAuth, modelKeyInDefinition, authPath, declaredSecrets, values } = params;
-  return assembleSecrets({
-    modelAuth,
-    modelKeyInDefinition,
-    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
-    declared: declaredSecrets,
-    values,
-  });
-}
-
-/** Gate a `--run` that has no model credential to carry. */
-export function gateOnModelCredential(needsModelCredential: boolean): void {
-  if (!needsModelCredential) return;
-  failStartup(
-    new Error(
-      `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
-    ),
-  );
+export function boxLoginStep<Args extends unknown[]>(
+  host: DeployHost,
+  params: ResolvedPlacement & { boxLogin: string | undefined; input: boolean },
+  /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
+  shell: (...args: Args) => BoxShell,
+): { boxLogin?: BoxLoginStep<Args> } {
+  const provider = params.boxLogin;
+  if (provider === undefined) return {};
+  const placement = { agentDir: params.agentDir, workspace: params.workspace };
+  return {
+    boxLogin: {
+      command: deploymentLoginCommand(host, provider),
+      run: (...args) =>
+        loginOnBox({ host, shell: shell(...args), placement, provider, ifMissing: true, input: params.input }),
+    },
+  };
 }
 
 /** One artifact's verdict under the ownership rule: the bytes to write, or `undefined` to keep what is there. */

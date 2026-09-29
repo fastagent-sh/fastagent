@@ -1,7 +1,8 @@
 /** `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. */
+import type { BoxLoginStep } from "../box-shell.ts";
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { type Registrars, registerWebhooks } from "../channel-ingress.ts";
+import { type Registrars, loginGate, registerWebhooks } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
@@ -36,7 +37,7 @@ export interface AgentcoreRunPlan {
    * region`.
    */
   region?: string;
-  /** Env-var name → value: the value file's carried variables, plus FASTAGENT_AUTH_SEED for a file credential. */
+  /** Env-var name → value: the value file's carried variables. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -49,6 +50,11 @@ export interface AgentcoreRunPlan {
    * forwarder (and its artifact bucket parameters) exists.
    */
   topology: AgentcoreTopology;
+  /**
+   * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before any webhook points at
+   * it. Resolves a gate line, or undefined.
+   */
+  boxLogin?: BoxLoginStep<[runtimeArn: string]>;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
@@ -147,11 +153,10 @@ const MINTED_PARAMS: Record<string, string> = {
   FASTAGENT_WAKE_SECRET: "FastagentWakeSecret",
 };
 
-/** What each carrier holds for this deploy: the credential seed, and every other variable as one encoded object. */
+/** What each carrier holds for this deploy: every variable but the minted ones, as one encoded object. */
 function carrierValues(secrets: Record<string, string>): Record<(typeof CARRIERS)[number]["env"], string> {
-  const { FASTAGENT_AUTH_SEED: seed = "", ...rest } = secrets;
-  const carried = Object.fromEntries(Object.entries(rest).filter(([name]) => !(name in MINTED_PARAMS)));
-  return { FASTAGENT_AUTH_SEED: seed, FASTAGENT_ENV: encodeCarriedEnv(carried) };
+  const carried = Object.fromEntries(Object.entries(secrets).filter(([name]) => !(name in MINTED_PARAMS)));
+  return { FASTAGENT_ENV: encodeCarriedEnv(carried) };
 }
 
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
@@ -240,12 +245,6 @@ export async function deployAgentcoreRun(
   // 3b.
   const capacity = CARRIER_CHUNK_SIZE * CARRIER_MAX_CHUNKS;
   const carried = carrierValues(plan.secrets);
-  if (carried.FASTAGENT_AUTH_SEED.length > capacity) {
-    return gate(
-      `your auth.json is too large to carry (${carried.FASTAGENT_AUTH_SEED.length} chars base64 > ${capacity}) — ` +
-        `slim it (keep only the model's credential), or set a provider API key in .env instead`,
-    );
-  }
   if (carried.FASTAGENT_ENV.length > capacity) {
     return gate(
       `the variables in ${plan.valueFile} are too large to carry (${carried.FASTAGENT_ENV.length} chars encoded > ` +
@@ -307,6 +306,8 @@ export async function deployAgentcoreRun(
     );
   const stackStatus = await readStackStatus();
   const status = "ok" in stackStatus ? stackStatus.ok : "";
+  // A stack that held state: an earlier deploy served from it, and may have registered webhooks at its forwarder.
+  const redeploy = status !== "" && !EMPTY_STACK_STATUSES.has(status);
   // The only answers the build can invalidate: one still in flight (a first create rolling back is exactly what step 7
   // exists for, and minutes of arm64 build are long enough for it to settle), and one we never got.
   const settling = status.endsWith("_IN_PROGRESS") || "unreadable" in stackStatus;
@@ -317,12 +318,10 @@ export async function deployAgentcoreRun(
       `warn: could not read stack ${stack} (${stackStatus.unreadable}) — if it exists, this deploy resets its ` +
         `managed SessionStorage (${MOUNT}) and a failed first create will not be cleared`,
     );
-  } else if (status !== "" && !EMPTY_STACK_STATUSES.has(status)) {
+  } else if (redeploy) {
     log(
       `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
-        `sessions, channel state and pending wake-ups start blank` +
-        // Only the carried auth.json is re-seeded; a provider API key deployment has no such step to blame.
-        `${carried.FASTAGENT_AUTH_SEED ? ", and the model credential is re-seeded from FASTAGENT_AUTH_SEED" : ""}. ` +
+        `sessions, channel state and pending wake-ups start blank. ` +
         `Cross-deploy memory needs a real volume: \`deploy fly\` or \`deploy railway\`.`,
     );
   }
@@ -506,6 +505,20 @@ export async function deployAgentcoreRun(
     );
     if (!verdict.ok) return gate(verdict.gate);
     log("runtime verified (workspace ready, channels constructed)");
+  }
+  const notLoggedIn = await plan.boxLogin?.run(runtimeArn);
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        // The forwarder URL outlives a redeploy, so the webhooks an earlier deploy registered already point at it.
+        ...(redeploy
+          ? { afterLogin: "they work again: the forwarder URL is unchanged, so nothing needs pointing" }
+          : { baseUrl: url, afterLogin: "point the channels by hand (a redeploy would wipe that login again)" }),
+      }),
+    );
   }
 
   // 9.

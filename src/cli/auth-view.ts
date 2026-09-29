@@ -1,26 +1,40 @@
 /** CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). */
 
-/** A stored credential as `reportAuth` needs it: just its kind, for the status line. */
-export interface StoredCredentialInfo {
-  type: string;
-}
-
-/** Format the auth status for `spec`'s provider. */
-export function formatAuthReport(
-  provider: string,
-  authPath: string,
-  source: string | undefined,
-  stored: StoredCredentialInfo | undefined,
-): { line: string; warn?: string } {
-  if (source !== undefined) return { line: `auth:   ${source} (${provider}) — ${authPath}` };
+/**
+ * Format the auth status for a provider, from {@link agentAuthStatus}'s answer. `deployed`: this process is a
+ * deployed box, which logs in from the owner's workspace (`fastagent login --deployment`), never by a login run on it
+ * by hand.
+ */
+export function formatAuthReport(status: {
+  provider: string;
+  path: string;
+  source?: string;
+  stored?: string;
+  shadowed?: string;
+  deployed?: boolean;
+}): { line: string; warn?: string } {
+  const { provider, path, source, stored, shadowed, deployed = false } = status;
+  const login = (name: string) =>
+    deployed ? `\`${name} --deployment\` from the workspace this was deployed from` : `\`${name}\``;
+  if (source !== undefined) {
+    const line = `auth:   ${source} (${provider}) — ${path}`;
+    if (shadowed === undefined) return { line };
+    // A stored credential owns its provider in pi, so a key added to the environment later is silently unused.
+    return {
+      line,
+      warn:
+        `${shadowed} is set but unused: the stored ${provider} ${stored} credential in ${path} outranks it. To run ` +
+        `on ${shadowed}, log in with it instead: ${login(`fastagent login ${provider}`)}, choosing "API key"`,
+    };
+  }
   if (stored) {
     return {
-      line: `auth:   stored ${provider} ${stored.type}, expired/unusable — ${authPath}`,
-      warn: `the "${provider}" login is expired or unusable — run \`fastagent login\` to refresh it`,
+      line: `auth:   stored ${provider} ${stored}, expired/unusable — ${path}`,
+      warn: `the "${provider}" login is expired or unusable — run ${login("fastagent login")} to replace it`,
     };
   }
   return {
-    line: `auth:   (none found) — ${authPath}`,
-    warn: `no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
+    line: `auth:   (none found) — ${path}`,
+    warn: `no credentials for "${provider}" — run ${login("fastagent login")}, or set the provider's API key in ${deployed ? "the deployment's value file" : ".env"}; invokes will fail until then`,
   };
 }

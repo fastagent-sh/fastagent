@@ -1,5 +1,8 @@
 /** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
+import type { BoxLoginStep } from "../box-shell.ts";
+import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
+import { loginGate } from "../channel-ingress.ts";
 import { TUNNEL_DNS_LAG_MS, hasTunnelConnection, parseTunnelUrl } from "../../tunnel.ts";
 import type { RegistrationOutcome } from "../../channels/registration.ts";
 import { registrationGate } from "../registration-gate.ts";
@@ -13,21 +16,25 @@ export interface DockerRunPlan {
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
   /**
-   * What `--run` assembled. The container reads the value file itself through the generated `env_file`, so the only
-   * entry that has to travel through this process is `FASTAGENT_AUTH_SEED`, which is minted here; the rest is
-   * reported to the operator and otherwise unused.
+   * What `--run` assembled. The container reads the value file itself through the generated `env_file`, so nothing
+   * travels through this process: the names are reported to the operator and otherwise unused.
    */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
   /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
-  /** Neither an env-key credential nor a readable auth.json is available. */
-  needsModelCredential: boolean;
   /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
   announce: DockerAnnounce;
+  /** Every declared channel and its ingress: which of them a failed login leaves unregistered. */
+  channels: readonly DeclaredChannel[];
   /** `--tunnel` was requested for this run; a kept Compose file must actually contain that service. */
   requireTunnel: boolean;
+  /**
+   * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
+   * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
+   */
+  boxLogin?: BoxLoginStep;
 }
 
 export type DockerRunOutcome =
@@ -51,11 +58,7 @@ export interface ComposeTunnel {
   url: string;
   connected: boolean;
 }
-export type DockerTunnelUrlProbe = (
-  docker: CliRunner,
-  composeFile: string,
-  env: NodeJS.ProcessEnv,
-) => Promise<ComposeTunnel | undefined>;
+export type DockerTunnelUrlProbe = (docker: CliRunner, composeFile: string) => Promise<ComposeTunnel | undefined>;
 
 /** Resolve Docker Compose's `host:port` output to a loopback URL (safe for 0.0.0.0/[::] bindings too). */
 export function localUrlFromComposePort(stdout: string): string | undefined {
@@ -82,14 +85,13 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function waitForComposeTunnelUrl(
   docker: CliRunner,
   composeFile: string,
-  env: NodeJS.ProcessEnv,
   options: { attempts?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<ComposeTunnel | undefined> {
   const compose = ["compose", "-f", composeFile];
   const attempts = options.attempts ?? 60;
   let assigned: string | undefined;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const logs = await docker([...compose, "logs", "--no-color", "tunnel"], { capture: true, env });
+    const logs = await docker([...compose, "logs", "--no-color", "tunnel"], { capture: true });
     if (logs.code === 0) {
       assigned ??= parseTunnelUrl(logs.stdout);
       if (assigned && hasTunnelConnection(logs.stdout)) {
@@ -102,8 +104,31 @@ export async function waitForComposeTunnelUrl(
   return assigned ? { url: assigned, connected: false } : undefined;
 }
 
-const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile, env) =>
-  waitForComposeTunnelUrl(docker, composeFile, env);
+const defaultTunnelUrlProbe: DockerTunnelUrlProbe = (docker, composeFile) =>
+  waitForComposeTunnelUrl(docker, composeFile);
+
+/**
+ * `/health` asked from inside the agent container, for a topology that publishes no host port. The image always has
+ * node or bun (the generated Dockerfile's base), and both have `fetch`; nothing else is assumed installed.
+ */
+async function containerHealthy(
+  docker: CliRunner,
+  compose: string[],
+  port: number,
+  stillStarting: () => Promise<boolean>,
+): Promise<boolean> {
+  const probe =
+    `r=$(command -v node || command -v bun) && "$r" -e ` +
+    `"fetch('http://127.0.0.1:${port}/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"`;
+  const deadline = Date.now() + 180_000; // the same first-boot budget as the published-port probe
+  while (Date.now() < deadline) {
+    if ((await docker([...compose, "exec", "-T", "agent", "sh", "-c", probe], { capture: true })).code === 0)
+      return true;
+    if (!(await stillStarting())) return false;
+    await sleep(1_000);
+  }
+  return false;
+}
 
 export async function deployDockerRun(
   plan: DockerRunPlan,
@@ -114,10 +139,6 @@ export async function deployDockerRun(
 ): Promise<DockerRunOutcome> {
   const gate = (message: string): DockerRunOutcome => ({ ok: false, gate: message });
   const compose = ["compose", "-f", plan.composeFile];
-  // The ONE value that is not in the value file, so the ONE that has to cross this process. Set even when absent, so
-  // a same-named variable in the builder's shell cannot interpolate into the container in its place — `spawnRunner`
-  // merges over `process.env`.
-  const env: Record<string, string> = { FASTAGENT_AUTH_SEED: plan.secrets.FASTAGENT_AUTH_SEED ?? "" };
 
   // CLI/plugin gate first: unlike a daemon error, spawn ENOENT becomes 127 at the shared runner seam.
   const version = await docker(["compose", "version"], { capture: true });
@@ -128,17 +149,14 @@ export async function deployDockerRun(
     return gate("Docker Compose plugin is unavailable — install/enable `docker compose`, then re-run");
   }
 
-  // Credential gates precede the first side effect (build/create), with distinct remediation.
-  if (plan.needsModelCredential) {
-    return gate("no model credential — run `fastagent login`, or set a provider API key in .env, then re-run");
-  }
+  // The values gate precedes the first side effect (build/create).
   const missingValues = missingValuesGate(plan.missingSecrets, plan.valueFile);
   if (missingValues) return gate(missingValues);
 
   // Name what the container must find, and WHERE — the generated Compose reads the value file itself, so this run
-  // hands Compose nothing but the seed. Saying "passing N secrets to Compose" would be false, and doubly so on a
-  // hand-owned Compose file that has no `env_file` entry at all.
-  const secretNames = Object.keys(plan.secrets).filter((name) => name !== "FASTAGENT_AUTH_SEED");
+  // hands Compose nothing. Saying "passing N secrets to Compose" would be false, and doubly so on a hand-owned
+  // Compose file that has no `env_file` entry at all.
+  const secretNames = Object.keys(plan.secrets);
   if (secretNames.length > 0) {
     log(`${secretNames.length} value(s) the container reads from ${plan.valueFile}: ${secretNames.join(", ")}`);
   }
@@ -148,7 +166,7 @@ export async function deployDockerRun(
   }
 
   // The file on disk is authoritative.
-  const configured = await docker([...compose, "config", "--services"], { capture: true, env });
+  const configured = await docker([...compose, "config", "--services"], { capture: true });
   if (configured.code !== 0) {
     return gate(
       `could not load ${plan.composeFile} — generated files require Docker Compose >= ` +
@@ -170,21 +188,18 @@ export async function deployDockerRun(
   // Quick Tunnel logs are the control-plane output (the assigned URL).
   if (hasTunnel) {
     log("recreating the ephemeral tunnel service…");
-    if ((await docker([...compose, "rm", "-s", "-f", "tunnel"], { env })).code !== 0) {
+    if ((await docker([...compose, "rm", "-s", "-f", "tunnel"])).code !== 0) {
       return gate(`could not recreate the tunnel service — inspect \`docker compose -f ${plan.composeFile} ps\``);
     }
   }
 
   log(`building and reconciling ${plan.composeFile}…`);
-  if ((await docker([...compose, "up", "-d", "--build"], { env })).code !== 0) {
+  if ((await docker([...compose, "up", "-d", "--build"])).code !== 0) {
     return gate(`\`docker compose up\` failed — see the Docker output above; fix ${plan.composeFile} and re-run`);
   }
 
   // Detached `up` can return 0 just before a bad command exits.
-  const running = await docker([...compose, "ps", "--status", "running", "--services"], {
-    capture: true,
-    env,
-  });
+  const running = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
   const runningServices = running.stdout.split(/\s+/).filter(Boolean);
   if (running.code !== 0 || !runningServices.includes("agent")) {
     return gate(
@@ -198,21 +213,30 @@ export async function deployDockerRun(
   }
 
   // A user-owned topology may deliberately remove the host port and expose only through its own ingress.
-  const published = await docker([...compose, "port", "agent", String(plan.port)], { capture: true, env });
+  const published = await docker([...compose, "port", "agent", String(plan.port)], { capture: true });
   const url = published.code === 0 ? localUrlFromComposePort(published.stdout) : undefined;
-  if (!url) {
+  // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a second, and a
+  // `compose ps` per poll would cost more than the wait it shortens.
+  let lastCheck = Date.now();
+  const stillStarting = async (): Promise<boolean> => {
+    if (Date.now() - lastCheck < 5_000) return true;
+    lastCheck = Date.now();
+    const ps = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true });
+    return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
+  };
+  if (!url && plan.boxLogin) {
+    // The login runs in the prepared workspace, with the CLI the first boot installs: it needs the box READY, and
+    // with no published port the only place to ask `/health` is inside the container.
+    log("agent is running (no host-published port found); waiting for /health inside the container before login…");
+    if (!(await containerHealthy(docker, compose, plan.port, stillStarting))) {
+      return gate(
+        `agent did not become healthy inside the container — inspect \`docker compose -f ${plan.composeFile} logs agent\``,
+      );
+    }
+  } else if (!url) {
     log("agent is running (no host-published port found; using the Compose ingress readiness floor)");
   } else {
     const healthUrl = `${url}/health`;
-    // Throttled, and an unreadable answer reads as "still starting": the health poll runs twice a second, and a
-    // `compose ps` per poll would cost more than the wait it shortens.
-    let lastCheck = Date.now();
-    const stillStarting = async (): Promise<boolean> => {
-      if (Date.now() - lastCheck < 5_000) return true;
-      lastCheck = Date.now();
-      const ps = await docker([...compose, "ps", "--status", "running", "--services"], { capture: true, env });
-      return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
-    };
     if (!(await healthProbe(healthUrl, stillStarting))) {
       return gate(
         `agent did not become healthy at ${healthUrl} — inspect \`docker compose -f ${plan.composeFile} logs agent\``,
@@ -220,9 +244,18 @@ export async function deployDockerRun(
     }
   }
 
+  // `url` travels with this gate: Compose is up, and the operator needs to know where.
+  const notLoggedIn = await plan.boxLogin?.run();
+  if (notLoggedIn) {
+    // Only a tunnel is ours to announce; without one, the webhooks were never this run's to register.
+    const afterLogin = "re-run `fastagent deploy docker --run` (it keeps the login and announces the tunnel)";
+    const channels = hasTunnel ? plan.channels : [];
+    return { ok: false, gate: loginGate({ notLoggedIn, channels, log, afterLogin }), url };
+  }
+
   if (!hasTunnel) return { ok: true, url };
   log("waiting for the Compose tunnel service to publish its Quick Tunnel URL…");
-  const tunnel = await tunnelUrlProbe(docker, plan.composeFile, env);
+  const tunnel = await tunnelUrlProbe(docker, plan.composeFile);
   if (!tunnel) {
     return gate(
       `tunnel did not publish a Quick Tunnel URL — inspect \`docker compose -f ${plan.composeFile} logs tunnel\``,

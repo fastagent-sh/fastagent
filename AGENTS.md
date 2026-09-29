@@ -46,6 +46,8 @@ src/
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
+│   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
+│   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
 │   └── commands/           # one module per command; `deploy` dispatches to one commands/deploy/<host>.ts each
 ├── telegram.ts, slack.ts,  # subpath-export shims (@fastagent-sh/fastagent/telegram etc.)
 │   feishu.ts, lark.ts
@@ -56,7 +58,8 @@ src/
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
-├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL)
+├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
+│                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
@@ -160,28 +163,32 @@ src/
 │   ├── hosts.ts            # DEPLOY_HOSTS, the targets as a value + the add-a-host guide
 │   ├── residency.ts        # what forbids scaling to zero: ONE rule every host that can scale reads
 │   ├── channel-ingress.ts  # HOW A RUNNING CHANNEL IS REACHED: default route, who can set that URL, the
-│   │                       # words when nobody can. Consumed by every host AND by the serving path
+│   │                       # words when nobody can (or when a box's login stopped registration). Consumed by
+│   │                       # every host AND by the serving path
 │   ├── registration-gate.ts # host-neutral step-7 gate policy over the registrars' facts
 │   ├── preflight.ts        # host-neutral pre-flight: model-travel gate, channel discovery, auth probe, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
-│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral)
+│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
+│   │                       # that runs `login --stdio` inside that image where its server runs
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
 │                           # .secrets/ stay outside the definition)
-│   ├── secrets.ts          # both directions of the credential carry: the NAMES a runbook lists, the VALUES
-│   │                       # `--run` sends, and the seed the container reads back
+│   ├── secrets.ts          # both directions of the value carry: the NAMES a runbook lists, the VALUES
+│   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
-│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, zip.ts, forwarder.js } # ONE stack:
+│   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks) + EventBridge rules (schedules). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
 │                             # destroy.ts is the other direction, and it exists because three of the four
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result
 │                             # MEANS — there / gone / could not find out — because eleven call sites each
 │                             # deciding that produced the same defect five review rounds running. Every AWS
-│                             # read that asks "is it there, and could I tell" goes through it
+│                             # read that asks "is it there, and could I tell" goes through it. shell.ts is the
+│                             # command-shell WebSocket `login --deployment` speaks (SigV4 presigned, AWS CLI creds)
 ├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
 │   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
 │   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)

@@ -2,16 +2,20 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deploymentLoginCommand } from "../box-shell.ts";
 import { CRON_CAN_BE_EXTERNAL, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
-import { type DeploymentSecret, isEnvKey } from "../secrets.ts";
+import type { DeploymentSecret } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's internal_port) —
   // the server binds $PORT at runtime.
   /** The service name to create (`railway add --service`). */
   serviceName: string;
-  /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
-  modelAuth: string | undefined;
+  /**
+   * The provider the deployment logs in to itself (`fastagent login --deployment`): its credential is not a variable
+   * the plan carries.
+   */
+  boxLogin?: string;
   /**
    * Every declared channel and its ingress — the source of the secret list, the webhook steps, and whether App
    * Sleeping must stay off for an outbound connection.
@@ -74,7 +78,7 @@ function railwayJson(prefix: string): string {
 
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
-  const { serviceName, modelAuth, channels } = input;
+  const { serviceName, channels } = input;
   // railway.json is namespaced under the agent dir too (the workspace may carry its own railway.toml/json for the
   // product).
   const configPath = `${input.agentPrefix}railway.json`;
@@ -103,7 +107,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# the later commands resolve it without --service (--run passes --service to stay non-interactive).`,
     `railway add --service ${serviceName}`,
     ``,
-    `# Persistent volume at ${MOUNT} — .state (sessions, channel state) + .secrets (seeded auth).`,
+    `# Persistent volume at ${MOUNT} — .state (sessions, channel state) + .secrets (the box's own login).`,
     `railway volume add --mount-path ${MOUNT}`,
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
@@ -117,16 +121,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       `# Secrets:`,
       `#   ${secrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
       `railway variables set ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
-    );
-  }
-
-  // Model-auth guidance: an env key becomes a variable above.
-  if (!isEnvKey(modelAuth)) {
-    runbook.push(
-      modelAuth === undefined
-        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; set FASTAGENT_AUTH_PATH (e.g. ~/.fastagent/.secrets/auth.json), or \`--run\` carries it automatically.`
-        : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a variable.`,
-      `#   Set your provider API key as a variable (railway variables set KEY=...), OR place auth.json on the ${MOUNT} volume.`,
     );
   }
 
@@ -144,6 +138,14 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Upload this workspace and build on Railway (no local Docker needed):`,
     `railway up`,
   );
+  // The credential is created on the box, never carried: the box is then the only holder of its grant.
+  if (input.boxLogin) {
+    runbook.push(
+      ``,
+      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from this workspace):`,
+      `${deploymentLoginCommand("railway", input.boxLogin)}`,
+    );
+  }
   runbook.push(
     ``,
     `# The volume keeps /data/base (including uncommitted work), .state and .secrets across restarts and deploys.`,

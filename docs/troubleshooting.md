@@ -106,7 +106,7 @@ Use `--no-watch` to serve once without the supervisor.
 ## Sessions disappear after redeploy
 
 By default, machine state (sessions, channel state, schedule state) lives under the agent's
-`.state/`, and the seeded/rotated credentials (`auth.json`) under its `.secrets/`:
+`.state/`, and the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`:
 
 ```txt
 <state root>    # default <agent dir>/.state

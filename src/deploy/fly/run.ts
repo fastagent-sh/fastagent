@@ -1,12 +1,19 @@
 /** `fastagent deploy fly --run` — drive flyctl to completion. */
-import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
+import type { BoxLoginStep } from "../box-shell.ts";
+import {
+  type PublicHealthProbe,
+  type Registrars,
+  loginGate,
+  publicHealthGate,
+  registerWebhooks,
+} from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
   appName: string;
-  /** `KEY=value` secrets to set on Fly: the value file's variables + `FASTAGENT_AUTH_SEED` for a file credential. */
+  /** `KEY=value` secrets to set on Fly: the value file's variables. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -21,6 +28,11 @@ export interface FlyRunPlan {
    * resolve it relative to the config's own directory).
    */
   dockerfile: string;
+  /**
+   * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
+   * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
+   */
+  boxLogin?: BoxLoginStep;
 }
 
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
@@ -177,8 +189,21 @@ export async function deployFlyRun(
       `the app itself deployed — inspect \`fly logs -a ${plan.appName}\`, then re-run once it answers ` +
       `(a re-run repeats the remote build)`,
     probe: healthProbe,
+    ...(plan.boxLogin ? { login: plan.boxLogin.command } : {}),
   });
   if (healthGate) return gate(healthGate);
+  const notLoggedIn = await plan.boxLogin?.run();
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        baseUrl,
+        afterLogin: "re-run `fastagent deploy fly --run` (it keeps the login)",
+      }),
+    );
+  }
 
   // 9.
   const registrationGateMsg = await registerWebhooks({

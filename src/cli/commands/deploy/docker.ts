@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
+  DOCKER_COMPOSE_FILE,
   composeHasTunnelService,
   isGeneratedCompose,
   planDockerDeploy,
@@ -21,16 +22,21 @@ import {
 } from "../../../paths.ts";
 import { dotEnvPath } from "../../../env.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
+import { assembleSecrets } from "../../../deploy/secrets.ts";
+import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import { failStartup } from "../../fail.ts";
-import { type HostDeploy, carryCredentials } from "./shared.ts";
+import { isInteractive } from "../../shared.ts";
+import { type HostDeploy, boxLoginStep } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const dockerHost: HostDeploy = {
-  isOurs: (path, content) => path.endsWith("fastagent.compose.yml") && isGeneratedCompose(content),
+  isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
+  artifact: DOCKER_COMPOSE_FILE,
+  shell: async ({ agentDir, workspace }) => composeShell(`${basename(agentDir)}/${DOCKER_COMPOSE_FILE}`, workspace),
   async deploy(ctx) {
     const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
-    const { modelAuth, modelKeyInDefinition, authPath, container, port, declaredSecrets, values, valueFile } = pre;
+    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // The generated Compose names `<agent>/.secrets/.env` unconditionally, so it has to be there — Compose refuses
     // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
     // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
@@ -68,7 +74,7 @@ export const dockerHost: HostDeploy = {
       planDockerDeploy({
         projectName,
         port,
-        modelAuth,
+        boxLogin,
         channels,
         tunnel,
         secrets: pre.secrets,
@@ -101,8 +107,8 @@ export const dockerHost: HostDeploy = {
         port,
         requireTunnel: requestedTunnel,
         modelAuth,
-        modelKeyInDefinition,
-        authPath,
+        boxLogin,
+        input: opts.input !== false && isInteractive(),
         channels,
         declaredSecrets,
         values,
@@ -120,18 +126,17 @@ export const dockerHost: HostDeploy = {
   },
 };
 
-/**
- * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the user-owned local
- * topology.
- */
+/** `deploy docker --run`: reconcile the user-owned local topology, then log the box in if it must. */
 async function runDeployDocker(
   params: ResolvedPlacement & {
     composeFile: string;
     port: number;
     requireTunnel: boolean;
     modelAuth: string | undefined;
-    modelKeyInDefinition: boolean;
-    authPath: string;
+    /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
+    boxLogin: string | undefined;
+    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+    input: boolean;
     channels: readonly DeclaredChannel[];
     declaredSecrets: readonly DeclaredSecret[];
     values: ReadonlyMap<string, string>;
@@ -139,7 +144,11 @@ async function runDeployDocker(
   },
 ): Promise<void> {
   const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;
-  const { secrets, missingSecrets, needsModelCredential } = await carryCredentials(params);
+  const { secrets, missingSecrets } = assembleSecrets({
+    modelAuth: params.modelAuth,
+    declared: params.declaredSecrets,
+    values: params.values,
+  });
   const outcome = await deployDockerRun(
     {
       composeFile,
@@ -147,8 +156,9 @@ async function runDeployDocker(
       secrets,
       missingSecrets,
       valueFile: params.valueFile,
-      needsModelCredential,
       requireTunnel,
+      channels,
+      ...boxLoginStep("docker", params, () => composeShell(composeFile, workspace)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {
           openUrl: openExternalUrl,
@@ -182,4 +192,13 @@ async function runDeployDocker(
         `default webhook path(s): ${paths.join(", ")} (or your remapped channel routes)`,
     );
   }
+}
+
+/** `docker compose exec` into the running agent service. */
+function composeShell(composeFile: string, workspace: string): BoxShell {
+  return processShell(
+    "docker",
+    (command) => ["compose", "-f", composeFile, "exec", "-T", "agent", "sh", "-c", command],
+    workspace,
+  );
 }

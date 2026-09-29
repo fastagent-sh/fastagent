@@ -158,6 +158,66 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
 });
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
+  it("the runtime logs in after the probe verified it and before any webhook points at it; a failed login registers none", async () => {
+    const order: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      order.push("register");
+      return "registered";
+    });
+    const boxLogin = async (runtimeArn: string) => {
+      order.push(`login ${runtimeArn}`);
+      return "not logged in: …";
+    };
+    const out = await run(
+      plan({
+        channels: declaredChannels(["telegram"]),
+        topology: FORWARDER,
+        boxLogin: { command: "fastagent login p --deployment agentcore", run: boxLogin },
+      }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      tg,
+    );
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        /^not logged in: …\. This deploy registered no webhook.*point the channels by hand.*lines above/,
+      ),
+    });
+    // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
+    expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
+    expect(tg).not.toHaveBeenCalled();
+  });
+
+  it("a redeploy's failed login says the webhooks an earlier deploy registered are still live, not missing", async () => {
+    // Every deploy wipes the runtime's login, and the forwarder URL outlives it: the channels are already delivering
+    // to a runtime with no model credential, which "point the channels by hand" would misreport.
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
+        ? { stdout: "UPDATE_COMPLETE\n" }
+        : happyAws(a),
+    );
+    const logs: string[] = [];
+    const out = await deployAgentcoreRun(
+      plan({
+        channels: declaredChannels(["telegram"]),
+        topology: FORWARDER,
+        boxLogin: { command: "fastagent login p --deployment agentcore", run: async () => "not logged in: …" },
+      }),
+      aws,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: vi.fn() },
+    );
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/still points here, and every message it brings fails.*forwarder URL is unchanged/),
+    });
+    expect(logs.some((l) => l.includes("url=https://"))).toBe(false); // nothing to point by hand
+  });
+
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
     const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
     const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();
@@ -223,10 +283,6 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         "ImageUri=123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728",
         "ForwarderBucket=fa-my-agent-123456789012",
         `ForwarderS3Key=${forwarderKey}`,
-        "FastagentAuthSeed=",
-        "FastagentAuthSeed2=",
-        "FastagentAuthSeed3=",
-        "FastagentAuthSeed4=",
         `FastagentEnv=${encodeCarriedEnv({ TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" })}`,
         "FastagentEnv2=",
         "FastagentEnv3=",
@@ -426,27 +482,9 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       expect(logs[warned]).toContain("/mnt/data");
       expect(logs.findIndex((l) => l.includes("building + pushing"))).toBeGreaterThan(warned);
     });
-
-    it("blames FASTAGENT_AUTH_SEED only when this deploy carries one", async () => {
-      const carried = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { FASTAGENT_AUTH_SEED: "seed" } });
-      expect(carried.logs.join("\n")).toContain("re-seeded from FASTAGENT_AUTH_SEED");
-
-      // A provider API key deployment re-seeds nothing; saying it would send the operator after a credential
-      // problem that does not exist.
-      const apiKey = await withStack({ stdout: "UPDATE_COMPLETE\n" }, { secrets: { OPENAI_API_KEY: "k" } });
-      expect(apiKey.logs.join("\n")).toContain("REDEPLOY");
-      expect(apiKey.logs.join("\n")).not.toContain("FASTAGENT_AUTH_SEED");
-    });
   });
 
-  it("gates an auth seed or a value file beyond the chunk ceiling", async () => {
-    const tooBigSeed = await run(
-      plan({ secrets: { FASTAGENT_AUTH_SEED: "x".repeat(8001) } }),
-      fakeCli(happyAws).cli,
-      fakeCli().cli,
-    );
-    expect(tooBigSeed).toMatchObject({ ok: false, gate: expect.stringContaining("auth.json is too large") });
-
+  it("gates a value file beyond the chunk ceiling", async () => {
     const tooBigValues = await run(
       plan({ secrets: { SOME_BLOB: "x".repeat(6000) } }),
       fakeCli(happyAws).cli,
@@ -620,23 +658,13 @@ describe("deploy/agentcore/run: helpers", () => {
   it("paramsFileContent: minted secrets by name, the value file as one carrier, every unused chunk cleared", () => {
     const FWD = { bucket: "b", key: "k" };
     const params = JSON.parse(
-      paramsFileContent(
-        "img:1",
-        { OPENAI_API_KEY: "sk", FASTAGENT_AUTH_SEED: "b64", FASTAGENT_INGRESS_SECRET: "in" },
-        FWD,
-      ),
+      paramsFileContent("img:1", { OPENAI_API_KEY: "sk", FASTAGENT_INGRESS_SECRET: "in" }, FWD),
     ) as string[];
     expect(params.slice(0, 4)).toEqual([
       "ImageUri=img:1",
       "ForwarderBucket=b",
       "ForwarderS3Key=k",
       "FastagentIngressSecret=in",
-    ]);
-    expect(params.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
-      "FastagentAuthSeed=b64",
-      "FastagentAuthSeed2=",
-      "FastagentAuthSeed3=",
-      "FastagentAuthSeed4=",
     ]);
     // Everything else rides FastagentEnv, and reads back as exactly what was carried.
     const env = Object.fromEntries(
@@ -647,21 +675,13 @@ describe("deploy/agentcore/run: helpers", () => {
     applyCarriedEnv(env);
     expect(env).toMatchObject({ OPENAI_API_KEY: "sk" });
 
-    // A real OAuth-size seed (2756+) rides across the chunks, reassemblable in order.
-    const seed = "a".repeat(2000) + "b".repeat(2000) + "c".repeat(756);
-    const chunked = JSON.parse(paramsFileContent("img:1", { FASTAGENT_AUTH_SEED: seed }, FWD)) as string[];
-    expect(chunked.filter((p) => p.startsWith("FastagentAuthSeed"))).toEqual([
-      `FastagentAuthSeed=${"a".repeat(2000)}`,
-      `FastagentAuthSeed2=${"b".repeat(2000)}`,
-      `FastagentAuthSeed3=${"c".repeat(756)}`,
-      "FastagentAuthSeed4=",
-    ]);
-    for (const param of chunked) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentAuthSeed0=".length);
-
-    // Switching to an API key clears a previously deployed seed rather than leaving it behind.
-    const cleared = JSON.parse(paramsFileContent("img:1", { OPENAI_API_KEY: "sk" }, FWD)) as string[];
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed"))).toHaveLength(CARRIER_MAX_CHUNKS);
-    expect(cleared.filter((param) => param.startsWith("FastagentAuthSeed")).every((p) => p.endsWith("="))).toBe(true);
+    // A value file past one env value's 2048-char cap rides across the chunks; an unused chunk is cleared.
+    const long = JSON.parse(paramsFileContent("img:1", { BLOB: "x".repeat(3000) }, FWD)) as string[];
+    const chunks = long.filter((p) => p.startsWith("FastagentEnv"));
+    expect(chunks).toHaveLength(CARRIER_MAX_CHUNKS);
+    expect(chunks[1]).not.toBe("FastagentEnv2=");
+    expect(chunks.at(-1)).toBe("FastagentEnv4=");
+    for (const param of chunks) expect(param.length).toBeLessThanOrEqual(2048 + "FastagentEnv0=".length);
   });
 });
 

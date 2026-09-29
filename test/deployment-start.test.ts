@@ -118,7 +118,6 @@ fi
       INSTALL_ATTEMPTS: attempts,
       FASTAGENT_RELEASE_FILE: manifest,
       FASTAGENT_STORAGE_DIR: root,
-      FASTAGENT_AUTH_SEED: Buffer.from('{"openai":{"type":"api_key","key":"old"}}').toString("base64"),
     });
     const workspaceUrl = pathToFileURL(join(packageDir, "dist/deploy/workspace.js")).href;
     const startUrl = pathToFileURL(join(packageDir, "dist/cli/commands/start.js")).href;

@@ -566,28 +566,130 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 });
 
-describe("preflight: an OAuth model credential", () => {
+describe("preflight: a model credential that does not travel", () => {
   afterEach(() => vi.unstubAllEnvs());
+  const noAnthropicEnv = () => {
+    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(name, "");
+  };
 
-  it("warns that the deployment and this machine would share one grant, and says nothing for an API key", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
+  it("a stored login, OAuth or key, is never carried: the deployment logs in to that provider itself", async () => {
+    noAnthropicEnv();
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
-    const shared = (pre: Awaited<ReturnType<typeof call>>) => {
+    for (const stored of [oauth, { type: "api_key", key: "k" }]) {
+      const dir = await workspace({ ".secrets/auth.json": JSON.stringify({ anthropic: stored }) });
+      const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
       if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
-      return pre.messages.some((m) => m.level === "warn" && /OAuth login/.test(m.text));
-    };
+      expect(pre.boxLogin).toBe("anthropic");
+      expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
+      expect(pre.messages).toContainEqual({
+        level: "note",
+        text: expect.stringMatching(/login anthropic --deployment/),
+      });
+    }
+  });
 
-    const withLogin = await workspace({ ".secrets/auth.json": JSON.stringify({ anthropic: oauth }) });
-    const pre = await call(withLogin, { model: "anthropic/claude-sonnet-4-5" });
-    expect(pre.ok && pre.modelAuth).toBe("OAuth");
-    expect(shared(pre)).toBe(true);
+  it("with nothing stored here either: the box still logs in, since this machine's login was never the source", async () => {
+    noAnthropicEnv();
+    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    expect(pre.ok && pre.boxLogin).toBe("anthropic");
+  });
 
-    const withKey = await workspace({
-      ".secrets/auth.json": JSON.stringify({ anthropic: { type: "api_key", key: "k" } }),
+  it("a key in the value file travels, and nothing logs in", async () => {
+    noAnthropicEnv(); // the value file alone decides (§9), not the shell running deploy
+    const dir = await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    expect(pre.ok && pre.boxLogin).toBeUndefined();
+    expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+  });
+
+  it("a key exported in the shell running deploy does not travel: the box logs in, and nothing asks for that key", async () => {
+    // §9: the shell is not a source. A developer's ANTHROPIC_API_KEY for local tools must not turn a subscription
+    // deploy into a "no value for ANTHROPIC_API_KEY" refusal, nor decide which path the deploy takes at all.
+    noAnthropicEnv();
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
+    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.boxLogin).toBe("anthropic");
+    expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
+  });
+
+  it('a built-in provider the definition keys by its own "$NAME" carries that variable, even over a local login', async () => {
+    // environmentAuthSource knows only the built-in variable (ANTHROPIC_API_KEY); the deployed registry reads the
+    // definition's reference instead, so that is what the value file must hold and what travels.
+    noAnthropicEnv();
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    const keyedBy = (env: string) =>
+      workspace({
+        "models.json": JSON.stringify({ providers: { anthropic: { apiKey: "$MY_ANT_KEY" } } }),
+        ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
+        ".secrets/.env": env,
+      });
+    const held = await call(
+      await keyedBy("MY_ANT_KEY=sk-ant\n"),
+      { model: "anthropic/claude-sonnet-4-5" },
+      { run: true },
+    );
+    if (!held.ok) throw new Error(held.gate);
+    expect(held.boxLogin).toBeUndefined();
+    expect(held.modelAuth).toBe("MY_ANT_KEY");
+
+    // Declared but not set yet: still that variable, which the values gate then asks for by name.
+    const unset = await call(await keyedBy(""), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!unset.ok) throw new Error(unset.gate);
+    expect(unset.boxLogin).toBeUndefined();
+    expect(unset.secrets.map((s) => s.name)).toContain("MY_ANT_KEY");
+  });
+
+  it("a credential that points at a FILE on this machine does not travel: the box is asked", async () => {
+    // The value file names a path; the file exists here and nowhere else. pi finds it and reports ADC, which read
+    // with this machine's file system would ship a deploy with no credential and no login.
+    const adc = join(await mkdtemp(join(tmpdir(), "fa-adc-")), "adc.json");
+    await writeFile(adc, "{}");
+    const vertex = createPiModels().getProvider("google-vertex")?.getModels()[0]?.id as string;
+    const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
+    const pre = await call(
+      await workspace({ ".secrets/.env": env }),
+      { model: `google-vertex/${vertex}` },
+      { run: true },
+    );
+    expect(pre.ok && pre.boxLogin).toBe("google-vertex");
+  });
+
+  it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {
+    // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. From the value file they
+    // reach the box; from the shell they are this machine's, and whether the box has a role is the box's answer.
+    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
+    const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
+    const carried = await call(
+      await workspace({ ".secrets/.env": aws }),
+      { model: `amazon-bedrock/${bedrock}` },
+      { run: true },
+    );
+    if (!carried.ok) throw new Error(carried.gate);
+    expect(carried.boxLogin).toBeUndefined();
+    expect(carried.modelAuth).toBeUndefined(); // nothing more for the values gate to ask
+
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    const shellOnly = await call(await workspace(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    expect(shellOnly.ok && shellOnly.boxLogin).toBe("amazon-bedrock");
+  });
+
+  it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {
+    // pi ranks a stored credential above the environment, which answers "what authenticates HERE". The deploy asks
+    // what reaches the box, and a key the author put in the value file for the deployment is exactly that.
+    noAnthropicEnv();
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    const dir = await workspace({
+      ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
+      ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n",
     });
-    expect(shared(await call(withKey, { model: "anthropic/claude-sonnet-4-5" }))).toBe(false);
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.boxLogin).toBeUndefined();
+    expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+    expect(pre.messages.some((m) => /login --deployment/.test(m.text))).toBe(false);
   });
 });
 
@@ -609,7 +711,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       expect(pre.ok).toBe(true);
       if (pre.ok) {
         expect(pre.modelAuth).toBe("FA_PREFLIGHT_GW_KEY"); // the name, not "configured API key"
-        expect(pre.modelKeyInDefinition).toBe(false);
+        expect(pre.boxLogin).toBeUndefined();
       }
     } finally {
       delete process.env.FA_PREFLIGHT_GW_KEY;
@@ -626,7 +728,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
         const pre = await call(dir, { model: "mygw/m1" }, { run: true });
         expect(pre.ok).toBe(true);
         if (pre.ok) {
-          expect(pre.modelKeyInDefinition).toBe(true); // still nothing for `--run` to carry
+          expect(pre.boxLogin).toBeUndefined(); // the definition carries it: nothing to carry, nothing to log in
           expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/literal apiKey/) });
         }
       }
@@ -652,6 +754,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
         },
       }),
     });
+    vi.stubEnv("K", "sk-k"); // the selected model resolves its key, so the run is not refused for that
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
     if (pre.ok) expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/"unused"/) });
@@ -662,7 +765,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.modelKeyInDefinition).toBe(true);
+      expect(pre.boxLogin).toBeUndefined();
       expect(pre.messages.some((m) => /literal apiKey/.test(m.text))).toBe(false);
     }
   });
@@ -687,8 +790,6 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
-      // Its literal key is the machine's, not the definition's: it reaches no host.
-      expect(pre.modelKeyInDefinition).toBe(false);
     }
     // No built-in "localgw" to fall back on, so running the deployment is refused, not warned about.
     const running = await call(await workspace(), { model: "localgw/m" }, { run: true });
@@ -724,9 +825,13 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     );
     vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
     vi.stubEnv("CORP_PROXY_KEY", "proxy");
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant");
 
-    const pre = await call(await workspace(), { model: `anthropic/${anthropic}` }, { run: true });
+    // The deployment's key, where a deployment's key lives: the value file.
+    const pre = await call(
+      await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" }),
+      { model: `anthropic/${anthropic}` },
+      { run: true },
+    );
 
     expect(pre.ok).toBe(true); // the deployed agent still resolves pi's built-in anthropic
     if (pre.ok) {
@@ -736,7 +841,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       });
       // Judged on the deployed registry: the host needs ANTHROPIC_API_KEY, not the machine's proxy key.
       expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
-      expect(pre.modelKeyInDefinition).toBe(false);
+      expect(pre.boxLogin).toBeUndefined();
       expect(pre.secrets.map((secret) => secret.name)).toContain("ANTHROPIC_API_KEY");
     }
   });

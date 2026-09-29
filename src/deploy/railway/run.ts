@@ -1,5 +1,12 @@
 /** `fastagent deploy railway --run` — drive the Railway CLI to completion. */
-import { type PublicHealthProbe, type Registrars, publicHealthGate, registerWebhooks } from "../channel-ingress.ts";
+import type { BoxLoginStep } from "../box-shell.ts";
+import {
+  type PublicHealthProbe,
+  type Registrars,
+  loginGate,
+  publicHealthGate,
+  registerWebhooks,
+} from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import type { CliRunner } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
@@ -12,10 +19,7 @@ export interface RailwayRunPlan {
    * in lockstep).
    */
   mountPath: string;
-  /**
-   * `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables + `FASTAGENT_AUTH_SEED` for a
-   * file credential.
-   */
+  /** `KEY=value` secrets set one-per-`variable set --stdin`: the value file's variables. */
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
@@ -27,6 +31,11 @@ export interface RailwayRunPlan {
   intoLinked: boolean;
   /** `RAILWAY_DOCKERFILE_PATH` value (`/fastagent/Dockerfile`). */
   dockerfilePath: string;
+  /**
+   * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
+   * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
+   */
+  boxLogin?: BoxLoginStep;
 }
 
 /**
@@ -159,7 +168,10 @@ export async function deployRailwayRun(
     // Create + link the service (init makes only a project); it precedes the volume, which has no --service flag and
     // rides the linked service.
     log(`creating service ${plan.name}…`);
-    if ((await railway(["add", "--service", plan.name])).code !== 0) {
+    // `--variables` with one of the machinery variables set just below: in a terminal, a bare `railway add` stops at
+    // "Enter a variable <esc to skip>" (5.62.1) and waits for a key nobody was told to press.
+    const addArgs = ["add", "--service", plan.name, "--variables", `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`];
+    if ((await railway(addArgs)).code !== 0) {
       // Precise recovery, not "fix and re-run": init already created + linked the project, so a plain re-run hits the
       // linked-gate, and --into-linked SKIPS `add` and then fails at the volume (no service to ride).
       return gate(
@@ -238,8 +250,21 @@ export async function deployRailwayRun(
     log,
     inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
     probe: healthProbe,
+    ...(plan.boxLogin ? { login: plan.boxLogin.command } : {}),
   });
   if (healthGate) return gate(healthGate);
+  const notLoggedIn = await plan.boxLogin?.run();
+  if (notLoggedIn) {
+    return gate(
+      loginGate({
+        notLoggedIn,
+        channels: plan.channels,
+        log,
+        baseUrl: url,
+        afterLogin: "re-run `fastagent deploy railway --run --into-linked` (it keeps the login)",
+      }),
+    );
+  }
 
   // 7.
   const registrationGateMsg = await registerWebhooks({

@@ -646,8 +646,9 @@ an operator's capacity decision (size the volume, prune deliberately), not a ret
 project may impose on someone's data.
 
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because
-the deploy lifecycle differs: secrets ride the host's secret store or the auth seed, state rides the
-volume. A deployed box points both knobs at its volume so a rotated OAuth credential persists.
+the deploy lifecycle differs: values ride the host's secret store, a model login is made on the box
+itself, and state rides the volume. A deployed box points both knobs at its volume so its login, and
+every OAuth refresh of it, persists.
 
 The shipped file-backed implementations are single-process, and the cost of ignoring that is specific
 rather than general — measured, not assumed:
@@ -701,8 +702,24 @@ storage preserves unfinished work without commits or pushes.
 `.secrets/` and `.deployment/`, and a generated release manifest selects the definition. A
 process-lifetime lease precedes initialization; staged trees and a pending journal make definition
 replacement recoverable. The same release preserves agent edits; a new one removes obsolete definition
-files while keeping everything outside the definition. Credentials seed only when absent. Nothing is
-mounted or unmounted by fastagent: the host's volume is the only storage.
+files while keeping everything outside the definition. Nothing is mounted or unmounted by fastagent:
+the host's volume is the only storage.
+
+No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent
+login --deployment` runs `login --stdio` inside the running image through the host's own
+owner-authenticated shell (`HostDeploy.shell`, a byte channel in `deploy/box-shell.ts`: `docker compose
+exec`, `fly ssh console`, `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` WebSocket in
+`deploy/agentcore/shell.ts`), in the server's directory with the server's credential path
+(`boxLoginCommand` in `deploy/container.ts`). The wire is `LoginIO` as JSON lines (`cli/login-relay.ts`): the box sends what
+the flow asks and says, the terminal renders it and answers by id, and one `result` line ends it. The
+box holds the PKCE verifier and exchanges the code, so it is the only holder of its grant and nothing
+can log the builder's machine out. The browser's return to the flow's `localhost` redirect is caught on
+the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
+a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
+credential the box already authenticates with (`--if-missing`, answered by `agentAuthStatus`, the same
+resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
+builder never predicts that answer from its own credentials: `credentialRoute` decides only what the
+deploy ships.
 
 `start` loads the actual service from the persistent definition's installed package, because its tools
 and session context must use the same runtime module instance — reusing the image's engine after
@@ -750,10 +767,13 @@ tried and removed: it cost a presign path in the forwarder, a refresh endpoint, 
 and a save-on-idle edge — roughly 700 lines whose failure modes were invisible until a deploy. A host
 without a volume promises no volume; Fly and Railway are where cross-deploy memory lives.
 
-Credentials need no extra rule: `maybeSeedAuth` is absent-only, so a restart within a release keeps
-what the box rotated and a deploy re-seeds from `FASTAGENT_AUTH_SEED`. Deploying IS re-authenticating.
-The caveat is OAuth's: a refresh token is single-use and shared with the builder machine, so the box
-can lose model access between deploys and the fix is another deploy.
+A model login on the runtime is wiped with the storage by the next deploy and by a 14-day idle reset, so
+`deploy agentcore --run` logs the runtime in after every deploy (after the probe, before registration),
+and says up front that an idle reset needs the same login again (nothing on this host notices it but
+the runtime's own startup report). An unattended agent there takes an API key. The
+shell opens on the fixed ingress session, which is the one that sees the server's `/mnt/data`; it does
+not inherit the runtime's environment, so `boxLoginCommand` names the storage root outright. A provider
+API key in the value file avoids the login.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a
