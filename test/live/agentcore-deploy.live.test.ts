@@ -48,6 +48,7 @@ import {
   installSpec,
   requireAwsAccount,
   requireEnv,
+  stageModelKey,
 } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
@@ -74,6 +75,7 @@ beforeAll(async () => {
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  await stageModelKey(agentDir, MODEL);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(

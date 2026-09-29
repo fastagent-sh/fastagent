@@ -158,6 +158,28 @@ describe("the deployment bucket (the agent's memory outlives the stack)", () => 
 });
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
+  it("the runtime logs in after the probe verified it and before any webhook points at it; a failed login registers none", async () => {
+    const order: string[] = [];
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => {
+      order.push("register");
+      return "registered";
+    });
+    const boxLogin = async (runtimeArn: string) => {
+      order.push(`login ${runtimeArn}`);
+      return "not logged in: …";
+    };
+    const out = await run(
+      plan({ channels: declaredChannels(["telegram"]), topology: FORWARDER, boxLogin }),
+      fakeCli(happyAws).cli,
+      fakeCli().cli,
+      tg,
+    );
+    expect(out).toEqual({ ok: false, gate: "not logged in: …" });
+    // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
+    expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
+    expect(tg).not.toHaveBeenCalled();
+  });
+
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
     const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
     const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();

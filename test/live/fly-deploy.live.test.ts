@@ -12,7 +12,8 @@
  * unique, and teardown runs even when the deploy failed — a half-provisioned app still holds the
  * model credential that `fly secrets import` just staged into it.
  *
- * Needs `FLY_API_TOKEN` with write scope, a model credential (`FASTAGENT_AUTH_PATH`), and `flyctl`.
+ * Needs `FLY_API_TOKEN` with write scope, the model's API key in the environment (`stageModelKey`), and
+ * `flyctl`.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -22,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { waitForHealth } from "../../src/channels/wait-health.ts";
 import { toFlyAppName } from "../../src/deploy/fly/plan.ts";
 import { listHasName } from "../../src/deploy/fly/run.ts";
-import { CLI, answerOf, expectCompleted, invoke, installSpec, requireEnv, run } from "./env.ts";
+import { CLI, answerOf, expectCompleted, invoke, installSpec, requireEnv, run, stageModelKey } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
 requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe creates and destroys an app");
@@ -43,6 +44,7 @@ beforeAll(async () => {
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
+  await stageModelKey(agentDir, MODEL);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(

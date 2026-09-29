@@ -36,7 +36,7 @@ jobs:
     # most expensive probe, in the one place where the sweeps below are all that stand between a kill
     # and a billing leak. Observed run time is ~20 minutes; the gap is worst-case ceilings, not slack.
     timeout-minutes: 120
-    environment: live # holds FASTAGENT_LIVE_MODEL and the provider key
+    environment: live # holds FASTAGENT_LIVE_MODEL (an API-key model) and that provider's key
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -57,7 +57,7 @@ jobs:
       # we shell out to changes. Pinning it here would retire the only check that would notice.
       #
       # Through Cloudflare's apt repo rather than a raw .deb from releases/latest: still that latest
-      # build, but signed and verified by apt — this job stages an OAuth grant on the same runner.
+      # build, but signed and verified by apt — this job holds a model provider key on the same runner.
       - name: Install cloudflared
         run: |
           sudo mkdir -p --mode=0755 /usr/share/keyrings
@@ -113,36 +113,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
-      # ONE credential mechanism for both probes: an auth.json, named by the product's own
-      # FASTAGENT_AUTH_PATH. It carries an OAuth grant (openai-codex) as readily as an API key, and
-      # `deploy docker --run` turns the same file into the container's FASTAGENT_AUTH_SEED.
-      #
-      # The secret holds a grant minted FOR CI and used nowhere else
-      # (`FASTAGENT_AUTH_PATH=/tmp/ci-auth.json fastagent login openai-codex`, then set the secret from
-      # that file and delete it). That isolation is the point: pi persists a NEW refresh token on every
-      # refresh, so any file sharing this grant goes stale the moment another one refreshes it — a
-      # maintainer's laptop and this workflow must not be the same grant.
-      #
-      # An OAuth grant here is SINGLE-USE unless it is carried back: the provider returns a new refresh
-      # token on every refresh and voids the old one, while the runner's copy dies with the job. Runs
-      # therefore succeed for as long as the stored ACCESS token lasts, and the first run past its
-      # expiry spends the stored refresh token — after which every run fails `refresh_token_reused`.
-      # The "Persist a refreshed credential" step below closes that loop; the digest recorded here is
-      # how it knows a refresh happened. (An API-key credential in the same variable has no refresh at
-      # all, and needs neither step.)
-      - name: Stage the model credential
-        id: stage
-        env:
-          FASTAGENT_AUTH_JSON: ${{ secrets.FASTAGENT_AUTH_JSON }}
-        run: |
-          # An unset secret would write an EMPTY auth.json, and the probes would then report the
-          # product's own "no model credential" gate — a CI misconfiguration wearing a product bug's
-          # face. Same rule as test/live/env.ts: missing configuration fails here, loudly.
-          test -n "$FASTAGENT_AUTH_JSON" || { echo "secrets.FASTAGENT_AUTH_JSON is not set for this environment"; exit 1; }
-          install -d -m 700 "$RUNNER_TEMP/secrets"
-          umask 077 && printf '%s' "$FASTAGENT_AUTH_JSON" > "$RUNNER_TEMP/secrets/auth.json"
-          echo "digest=$(sha256sum "$RUNNER_TEMP/secrets/auth.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
       # The ONE version both probes land on, resolved here so they cannot land on two. `latest`
       # rather than this checkout's version: between a `chore(release)` merge and the Release that
       # triggers publish.yml, this checkout names a version npm does not serve, and a nightly that is
@@ -159,8 +129,14 @@ jobs:
 
       - name: Run live probes
         env:
+          # An API-KEY model, and its key under the provider's own variable (set the one FASTAGENT_LIVE_MODEL
+          # needs; an unset secret expands to "", which pi reads as absent). Not a subscription login: a
+          # deployment never receives one (the box logs itself in, which needs a person at a browser), so
+          # the deploy probes carry this key through the agent's .secrets/.env (test/live/env.ts
+          # stageModelKey), and the local probes read it from here as the product does.
           FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
-          FASTAGENT_AUTH_PATH: ${{ runner.temp }}/secrets/auth.json
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
           # down whatever traffic a shared bot was serving.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -210,59 +186,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npm run test:live
-
-      # THE OTHER HALF of staging: a refresh that happened during this run exists only on this runner,
-      # and the token it consumed is already void at the provider. Not writing it back is what makes the
-      # stored grant single-use.
-      #
-      # `always()`, because a refresh that already happened must be kept even when a later probe failed
-      # or the job was cancelled — the alternative is a secret whose refresh token the provider has
-      # already voided. Only when the file CHANGED, so an ordinary run (access token still valid, no
-      # refresh) touches nothing.
-      #
-      # This is safe here for one reason worth stating: the `live` concurrency group serializes runs, so
-      # there is never a second job holding the same grant. Two concurrent runs would each refresh and
-      # void the other's token, which is why this pattern belongs to a serialized workflow and not to a
-      # matrix. A LOCAL run against the same grant is the case nothing here can prevent — mint CI its
-      # own (`FASTAGENT_AUTH_PATH=… fastagent login`), never share a developer's.
-      #
-      # The PAT needs exactly one fine-grained permission: **Environments: Read and write**. Not
-      # "Secrets" — that one governs REPOSITORY secrets, while this writes an ENVIRONMENT secret, and
-      # GitHub says so itself in the `x-accepted-github-permissions` response header
-      # (`environments=read` for the public key, `environments=write` for the PUT). It cannot be
-      # GITHUB_TOKEN, which cannot write secrets at all.
-      #
-      # Verify a replacement token WITHOUT waiting for a refresh — this step only runs when the
-      # credential actually changed, so a wrong permission would otherwise surface on the one night it
-      # matters, after the stored refresh token has already been spent:
-      #
-      #   curl -sS -D- -o/dev/null -X PUT -H "Authorization: Bearer $PAT" \
-      #     -d '{"encrypted_value":"x","key_id":"1"}' \
-      #     https://api.github.com/repos/$GITHUB_REPOSITORY/environments/live/secrets/PROBE
-      #
-      # 403 with `x-accepted-github-permissions: environments=write` means the permission is missing;
-      # 422 means it is present and only the payload was junk.
-      #
-      # A failure here FAILS THE RUN rather than warning: the next run would break with a
-      # `refresh_token_reused` that points at the provider instead of at this step.
-      - name: Persist a refreshed credential
-        if: always() && steps.stage.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.LIVE_AUTH_WRITEBACK_TOKEN }}
-        run: |
-          test -n "$GH_TOKEN" || {
-            echo "secrets.LIVE_AUTH_WRITEBACK_TOKEN is not set — a refreshed credential cannot be kept," \
-                 "and this grant becomes single-use (see the staging step)"
-            exit 1
-          }
-          after=$(sha256sum "$RUNNER_TEMP/secrets/auth.json" | cut -d' ' -f1)
-          if [ "$after" = "${{ steps.stage.outputs.digest }}" ]; then
-            echo "credential unchanged (no refresh this run)"
-            exit 0
-          fi
-          gh secret set FASTAGENT_AUTH_JSON --env live --repo "$GITHUB_REPOSITORY" \
-            < "$RUNNER_TEMP/secrets/auth.json"
-          echo "refreshed credential written back to secrets.FASTAGENT_AUTH_JSON"
 
       # The deploy probe destroys its own app in afterAll, which a job timeout or a cancelled run
       # never reaches — and what it leaves behind is a running Fly app holding the model credential

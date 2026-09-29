@@ -5,12 +5,14 @@ logic the offline suite already covers — that is what the offline suite is for
 still pass with the third party replaced by a fake, it does not belong here.
 
 Excluded from `npm test`. `npm run test:live` (`vitest.live.config.ts`) opts in, and a missing
-credential **fails** rather than skips — you asked for them. Credentials arrive the product's way
-(`FASTAGENT_AUTH_PATH` → an `auth.json`), which is what lets an OAuth-only provider be the model.
-
-Running these LOCALLY against the same grant CI holds will break CI: an OAuth refresh voids the token
-the other copy still has. Give a local run its own (`FASTAGENT_AUTH_PATH=… fastagent login`), which is
-also what `.github/workflows/live.yml` does for CI.
+credential **fails** rather than skips — you asked for them. Credentials arrive the product's way.
+`FASTAGENT_LIVE_MODEL` is an API-key model and its key is in the environment under the provider's own
+variable (`OPENAI_API_KEY`, …): the local probes read it there, and the deploy probes write it into the
+agent's `.secrets/.env` (`stageModelKey` in `env.ts`), which is how a deployment carries a model
+credential. A subscription login cannot be the model of an unattended deploy probe: it never travels,
+the box logs itself in (`fastagent login --deployment`), and that needs a person at a browser. So the
+OAuth deployment path has no live probe; it was verified by hand on all four hosts when it landed
+(#656).
 
 ## Two rules
 
