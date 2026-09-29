@@ -70,7 +70,7 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  * (a local Ollama, a company gateway), which every agent here inherits the way it inherits the machine's skills.
  * `FASTAGENT_MODELS_PATH` moves it. It never ships: a deployed agent has only its definition's file.
  */
-export function machineModelsPath(env: NodeJS.ProcessEnv = process.env): string {
+function machineModelsPath(env: NodeJS.ProcessEnv = process.env): string {
   return resolveOverridePath(env.FASTAGENT_MODELS_PATH) ?? join(homedir(), GLOBAL_HOME_DIR, AGENT_MODELS_FILE);
 }
 
