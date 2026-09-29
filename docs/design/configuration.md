@@ -161,7 +161,7 @@ A credential that travels as a variable (a provider API key in the value file) i
 - A box whose credential is missing or rejected later (revoked, a lost volume) names `fastagent login --deployment` in its startup report.
 - **Two questions, two owners.** The builder decides only what the deploy ships (`credentialRoute` in `src/deploy/preflight.ts`): a key the definition references or the value file holds travels; otherwise the box is asked. It never asks what authenticates the model on the builder's machine — its stored logins and the shell running deploy do not travel, and every earlier attempt to infer the box from them was wrong in a new way. Whether the box authenticates, and with what, is the box's own answer, the same function its startup report uses (`agentAuthStatus`), because only the box knows what it has stored, which platform variables it was given, or what role it runs as.
 - **A stored login outranks a key** (pi's rule: a stored credential owns its provider). A key added to the value file after the box logged in is therefore unused; the box's startup report says so and names the switch (log in with the key), rather than deploy deleting a login on the owner's behalf.
-- **AgentCore** resets its storage on every deploy, and the login with it, so every deploy of an agent that logs in ends with that login. The old grant goes with the old storage, so the new one is again the only holder. Without a terminal the outcome is known before anything is built (nobody can redo the login), so `--run` gates there instead of replacing a serving runtime with a logged-out one.
+- **AgentCore** resets its storage on every deploy and after 14 idle days, and the login with it, so every deploy of an agent that logs in ends with that login. The old grant goes with the old storage, so the new one is again the only holder. Without a terminal the outcome is known before anything is built (nobody can redo the login), so `--run` gates there instead of replacing a serving runtime with a logged-out one.
 - A day-two environment's credential is `OPENAI_API_KEY` (or equivalent) in `.secrets/<env>/.env`: the ordinary static-variable path, **no special code**. An environment on OAuth anyway logs in its own deployment, with a grant of its own.
 
 Why not carry a copy of the local `auth.json`: one grant would have two holders that each refresh it, so a provider that rotates refresh tokens (both pi's OAuth providers do) logs out whichever refreshes second, and a copy written only when the box has none cannot replace a dead one.
@@ -251,7 +251,7 @@ step 4.
 - **Each login on a deployment is a new grant.** Replacing one does not revoke the grant it replaced at the provider.
 - **Loading a definition under a given env's values costs a subprocess.** Every plan/deploy pays one process start, and channel/schedule discovery errors have to cross a process boundary without losing their diagnosability (§12).
 - **A refresh and a storage write are not one transaction.** A crash after provider-side rotation can still require reauthentication, and each provider's grant issue/invalidate behavior must be verified rather than assumed.
-- **AgentCore resets its storage on every runtime version update**, so an OAuth agent there logs in after every deploy.
+- **AgentCore resets its storage on every runtime version update and after 14 idle days**, so an OAuth agent there logs in after every deploy, and again after an idle reset, which only the runtime's own log reports.
 
 ## 14. Acceptance
 

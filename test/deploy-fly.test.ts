@@ -113,7 +113,7 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("a credential that does not travel is a login on the box, after the deploy", () => {
     const out = runbook(planFlyDeploy({ ...base, boxLogin: "openai-codex", channels: [] }));
-    expect(out.indexOf("fastagent login --deployment fly")).toBeGreaterThan(out.indexOf("fly deploy"));
+    expect(out.indexOf("fastagent login openai-codex --deployment fly")).toBeGreaterThan(out.indexOf("fly deploy"));
     expect(runbook(planFlyDeploy({ ...base, channels: [] }))).not.toContain("login --deployment");
   });
 

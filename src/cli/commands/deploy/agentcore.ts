@@ -56,8 +56,10 @@ export const agentcoreHost: HostDeploy = {
     const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
     if (boxLogin) {
       console.error(
-        `[fastagent] note: AgentCore resets the runtime's storage on every deploy, so every deploy of this agent ` +
-          `ends with a login on the runtime (${boxLogin}). For frequent or CI deploys, set its API key in ${valueFile}.`,
+        `[fastagent] note: AgentCore resets the runtime's storage on every deploy AND after 14 idle days, and the ` +
+          `${boxLogin} login with it: every deploy of this agent ends with a login on the runtime, and after an idle ` +
+          `reset every turn fails until \`fastagent login ${boxLogin} --deployment agentcore\` (the runtime's log says ` +
+          `so). For an agent that must keep answering unattended, set ${boxLogin}'s API key in ${valueFile}.`,
       );
     }
     // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session

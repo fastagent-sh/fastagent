@@ -7,6 +7,16 @@ export interface Artifact {
   content: string;
 }
 
+/** The result line for a box CLI that refused `login --stdio` as an unknown option (see {@link boxLoginCommand}). */
+const STDIO_PREDATED = JSON.stringify({
+  type: "result",
+  ok: false,
+  reason: "failed",
+  message:
+    "the fastagent installed in the agent on the box predates login --stdio: align the @fastagent-sh/fastagent " +
+    "version in the agent package.json with the CLI that deploys it, then redeploy",
+}).replaceAll('"', '\\"');
+
 /** Where a generated image keeps its storage (`FASTAGENT_STORAGE_DIR`); every host mounts its volume here. */
 const STORAGE_DIR = "/data";
 
@@ -17,6 +27,11 @@ const STORAGE_DIR = "/data";
  * in the server's directory, and the platform's variables are the only ones it inherits. `storage` names the root
  * outright for a shell that inherits none of them. The CLI is the one the server runs: the agent's own install when
  * it has one (under Bun when the image is Bun's), else the pinned global.
+ *
+ * That own install may predate `login --stdio` (an agent pinned to an older release, deployed by a newer CLI). It then
+ * refuses the flag as a usage error, exit 2, which a `login --stdio` that ran never gives (it answers 0 or 1 after its
+ * result line), so the command answers for it: one result line naming the mismatch, instead of a shell that ended
+ * with nothing to say. No quote or backtick in it: hosts wrap this whole line in `sh -c '…'`.
  */
 export function boxLoginCommand(agent: string, args: readonly string[], storage?: string): string {
   for (const value of [agent, ...args, ...(storage ? [storage] : [])]) {
@@ -32,7 +47,10 @@ export function boxLoginCommand(agent: string, args: readonly string[], storage?
     `cd "$root/base/${agent}" || exit 1`,
     `f=fastagent`,
     `if [ -x node_modules/.bin/fastagent ]; then f=node_modules/.bin/fastagent; if command -v bun >/dev/null; then f="bun run fastagent"; fi; fi`,
-    `exec $f login --stdio ${args.join(" ")}`,
+    `$f login --stdio ${args.join(" ")}`,
+    `code=$?`,
+    `if [ $code -eq 2 ]; then printf "%s\\n" "${STDIO_PREDATED}"; fi`,
+    `exit $code`,
   ].join("; ");
 }
 

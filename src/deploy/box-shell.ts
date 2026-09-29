@@ -45,3 +45,21 @@ export function processShell(bin: string, args: (command: string) => string[], c
     },
   };
 }
+
+/**
+ * The command that logs a deployment in, as every message and runbook names it: with the provider when it is known,
+ * because the model needs THAT one, and a menu invites another.
+ */
+export function deploymentLoginCommand(host: string, provider?: string): string {
+  return `fastagent login ${provider ? `${provider} ` : ""}--deployment ${host}`;
+}
+
+/**
+ * The login a host driver runs on the box it just deployed, before any webhook points at it. `run` resolves a gate line,
+ * or undefined once the box authenticates; `command` is how a person runs the same login, for the manual route.
+ * ONE value, so a driver cannot have the step without its command.
+ */
+export interface BoxLoginStep<Args extends unknown[] = []> {
+  command: string;
+  run: (...args: Args) => Promise<string | undefined>;
+}

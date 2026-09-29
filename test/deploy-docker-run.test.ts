@@ -129,9 +129,12 @@ describe("deploy/docker/run: local Compose journey", () => {
       plan({
         requireTunnel: true,
         channels: declaredChannels(["telegram"]),
-        boxLogin: async () => {
-          order.push("login");
-          return "not logged in: …";
+        boxLogin: {
+          command: "fastagent login p --deployment docker",
+          run: async () => {
+            order.push("login");
+            return "not logged in: …";
+          },
         },
       }),
       docker,
@@ -162,7 +165,10 @@ describe("deploy/docker/run: local Compose journey", () => {
       return {};
     });
     const bare = await deployDockerRun(
-      plan({ channels: declaredChannels(["telegram"]), boxLogin: async () => "not logged in: …" }),
+      plan({
+        channels: declaredChannels(["telegram"]),
+        boxLogin: { command: "fastagent login p --deployment docker", run: async () => "not logged in: …" },
+      }),
       noTunnel.docker,
       () => {},
       healthy,
@@ -186,7 +192,14 @@ describe("deploy/docker/run: local Compose journey", () => {
       order.push("login");
       return undefined;
     };
-    expect(await deployDockerRun(plan({ boxLogin }), docker, () => {}, healthy)).toEqual({ ok: true, url: undefined });
+    expect(
+      await deployDockerRun(
+        plan({ boxLogin: { command: "fastagent login p --deployment docker", run: boxLogin } }),
+        docker,
+        () => {},
+        healthy,
+      ),
+    ).toEqual({ ok: true, url: undefined });
     expect(order).toEqual(["probe", "probe", "login"]);
     expect(commands().find((c) => c.includes("exec"))).toMatch(/exec -T agent sh -c .*127\.0\.0\.1:8787\/health/);
 

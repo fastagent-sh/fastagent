@@ -1,4 +1,5 @@
 /** `fastagent deploy docker --run` — reconcile the generated/user-owned Compose application locally. */
+import type { BoxLoginStep } from "../box-shell.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { waitForHealth } from "../../channels/wait-health.ts";
 import { loginGate } from "../channel-ingress.ts";
@@ -33,7 +34,7 @@ export interface DockerRunPlan {
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
-  boxLogin?: () => Promise<string | undefined>;
+  boxLogin?: BoxLoginStep;
 }
 
 export type DockerRunOutcome =
@@ -244,7 +245,7 @@ export async function deployDockerRun(
   }
 
   // `url` travels with this gate: Compose is up, and the operator needs to know where.
-  const notLoggedIn = await plan.boxLogin?.();
+  const notLoggedIn = await plan.boxLogin?.run();
   if (notLoggedIn) {
     // Only a tunnel is ours to announce; without one, the webhooks were never this run's to register.
     const afterLogin =

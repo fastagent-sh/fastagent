@@ -124,7 +124,15 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       order.push("login");
       return "not logged in: …";
     };
-    const out = await run(plan({ channels: declaredChannels(["telegram"]), boxLogin }), railway, tg, healthy);
+    const out = await run(
+      plan({
+        channels: declaredChannels(["telegram"]),
+        boxLogin: { command: "fastagent login openai-codex --deployment railway", run: boxLogin },
+      }),
+      railway,
+      tg,
+      healthy,
+    );
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(/^not logged in: …\. No webhook was registered.*railway --run --into-linked/),

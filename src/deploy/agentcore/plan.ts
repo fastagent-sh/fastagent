@@ -7,6 +7,7 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
 /** The one schedule fact the plan needs (from loadRoutines) — name + cron + tz. */
@@ -38,7 +39,8 @@ export interface AgentcorePlanInput extends ContainerInput {
    */
   idleTimeoutSeconds?: number;
   /**
-   * The provider the runtime logs in to itself (`fastagent login --deployment`) after every deploy: its storage, and
+   * The provider the runtime logs in to itself (`fastagent login --deployment`) after every deploy and every 14-day
+   * idle reset: its storage, and
    * the login with it, resets each time.
    */
   boxLogin?: string;
@@ -681,9 +683,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   if (input.boxLogin) {
     runbook.push(
       ``,
-      `# Model auth: after EVERY deploy (the storage reset wipes the last login), log the runtime in to`,
-      `# ${input.boxLogin} from this workspace — before pointing any webhook at it:`,
-      `fastagent login --deployment agentcore`,
+      `# Model auth: after EVERY deploy and after 14 idle days (each storage reset wipes the last login),`,
+      `# log the runtime in to ${input.boxLogin} from this workspace — before pointing any webhook at it:`,
+      `${deploymentLoginCommand("agentcore", input.boxLogin)}`,
     );
   }
 
@@ -736,7 +738,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
     `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,
-    `# A provider API key in the value file travels with every deploy; a login on the runtime does not survive one.`,
+    `# A provider API key in the value file travels with every deploy; a login on the runtime survives neither reset.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
     `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,

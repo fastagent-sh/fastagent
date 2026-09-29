@@ -123,6 +123,31 @@ describe("the box half of `login --deployment`", () => {
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
   });
 
+  it("an agent whose own fastagent predates login --stdio says so, through the quoting a host wraps it in", async () => {
+    // The agent pins an older release; a newer CLI deploys it. The old CLI refuses the flag as a usage error (exit 2),
+    // and without an answer for it the owner saw only "ended without a login result".
+    const { root, agentDir } = await box();
+    await mkdir(join(agentDir, "node_modules", ".bin"), { recursive: true });
+    await executable(
+      join(agentDir, "node_modules", ".bin", "fastagent"),
+      `echo "error: unknown option '--stdio'" >&2; exit 2`,
+    );
+    vi.stubEnv("FASTAGENT_STORAGE_DIR", root);
+    try {
+      const failed = await loginOnBox({
+        host: "fly",
+        // As `fly ssh console --command` and `railway ssh` receive it: one single-quoted word.
+        shell: processShell("sh", (command) => ["-c", `sh -c '${command}'`], root),
+        placement: { agentDir, workspace: root },
+        provider: "openai-codex",
+        input: false,
+      });
+      expect(failed).toMatch(/^login on the deployment failed: .*predates login --stdio: align .*redeploy$/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("the command it hands back names the provider the model needs, so no menu offers another", async () => {
     const { root, agentDir } = await box();
     const missing = '{"type":"result","ok":false,"reason":"missing","message":"no openai-codex credential"}';

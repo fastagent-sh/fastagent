@@ -2,6 +2,7 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deploymentLoginCommand } from "../box-shell.ts";
 import { CRON_CAN_BE_EXTERNAL, type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
@@ -157,7 +158,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from this workspace):`,
-      `fastagent login --deployment fly`,
+      `${deploymentLoginCommand("fly", input.boxLogin)}`,
     );
   }
 

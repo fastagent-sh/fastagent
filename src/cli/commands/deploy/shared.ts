@@ -15,7 +15,7 @@ import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
 import { type ResolvedPlacement, exists, resolveStateRoot } from "../../../paths.ts";
-import type { BoxShell } from "../../../deploy/box-shell.ts";
+import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox } from "../../box-login.ts";
 import type { DeployHost } from "../../../deploy/hosts.ts";
 
@@ -83,13 +83,16 @@ export function boxLoginStep<Args extends unknown[]>(
   params: ResolvedPlacement & { boxLogin: string | undefined; input: boolean },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
-): { boxLogin?: (...args: Args) => Promise<string | undefined> } {
+): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
   const placement = { agentDir: params.agentDir, workspace: params.workspace };
   return {
-    boxLogin: (...args) =>
-      loginOnBox({ host, shell: shell(...args), placement, provider, ifMissing: true, input: params.input }),
+    boxLogin: {
+      command: deploymentLoginCommand(host, provider),
+      run: (...args) =>
+        loginOnBox({ host, shell: shell(...args), placement, provider, ifMissing: true, input: params.input }),
+    },
   };
 }
 

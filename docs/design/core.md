@@ -767,8 +767,10 @@ tried and removed: it cost a presign path in the forwarder, a refresh endpoint, 
 and a save-on-idle edge — roughly 700 lines whose failure modes were invisible until a deploy. A host
 without a volume promises no volume; Fly and Railway are where cross-deploy memory lives.
 
-A model login on the runtime is wiped with the storage by the next deploy, so `deploy agentcore --run`
-logs the runtime in after every deploy (after the probe, before registration), and says so up front. The
+A model login on the runtime is wiped with the storage by the next deploy and by a 14-day idle reset, so
+`deploy agentcore --run` logs the runtime in after every deploy (after the probe, before registration),
+and says up front that an idle reset needs the same login again (nothing on this host notices it but
+the runtime's own startup report). An unattended agent there takes an API key. The
 shell opens on the fixed ingress session, which is the one that sees the server's `/mnt/data`; it does
 not inherit the runtime's environment, so `boxLoginCommand` names the storage root outright. A provider
 API key in the value file avoids the login.

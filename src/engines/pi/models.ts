@@ -238,15 +238,22 @@ async function credentialStoreFor(
  * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
  * that agent's variables too. What the shell shares outranks the global credentials file ({@link
  * agentCredentialStore}), so a global login for such a provider is not used.
+ *
+ * `fileExists` answers for the files a source points at (an AWS profile, Google ADC): this machine's by default, which
+ * is right wherever the answer is about THIS machine. A deployment passes one that finds nothing, because no file of
+ * the builder's travels with it.
  */
-export async function environmentAuthSource(providerId: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const ambient = defaultProviderAuthContext();
+export async function environmentAuthSource(
+  providerId: string,
+  env: NodeJS.ProcessEnv,
+  fileExists: (path: string) => Promise<boolean> = defaultProviderAuthContext().fileExists,
+): Promise<string | undefined> {
   const models = builtinModels({
     credentials: new InMemoryCredentialStore(),
     authContext: {
       // pi's own reading of a variable (a blank one is unset), over the given environment.
       env: async (name) => (env[name]?.trim() ? env[name] : undefined),
-      fileExists: ambient.fileExists,
+      fileExists,
     },
   });
   return (await models.checkAuth(providerId))?.source;

@@ -274,7 +274,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       report.note(
         `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
           `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
-          `(\`fastagent login --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
+          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
       );
     }
   }
@@ -399,8 +399,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
  *
  * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (the values gate
  *    asks for it by name), and a literal or `"!command"` travels in the image;
- * 2. a credential pi reads for the provider from the value file: its key variable (which the values gate then
- *    requires, as it does every declared name), or a keyless one such as `AWS_ACCESS_KEY_ID`;
+ * 2. a credential pi reads for the provider from the value file alone: its key variable (which the values gate then
+ *    requires, as it does every declared name), or a keyless one such as `AWS_ACCESS_KEY_ID` — never one that needs a
+ *    file, which would be this machine's;
  * 3. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
  *    already authenticate the provider.
  */
@@ -412,7 +413,8 @@ async function credentialRoute(
   const provider = providerOf(spec);
   const declared = await definitionKeyOf(agentDir, provider);
   if (declared) return "reference" in declared ? { envVar: declared.reference } : {};
-  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values));
+  // No file of this machine's travels, so a source that needs one (Google ADC, an AWS profile) is the box's to find.
+  const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false);
   if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
   return { boxLogin: provider };
 }

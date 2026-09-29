@@ -169,7 +169,11 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       return "not logged in: …";
     };
     const out = await run(
-      plan({ channels: declaredChannels(["telegram"]), topology: FORWARDER, boxLogin }),
+      plan({
+        channels: declaredChannels(["telegram"]),
+        topology: FORWARDER,
+        boxLogin: { command: "fastagent login p --deployment agentcore", run: boxLogin },
+      }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
       tg,

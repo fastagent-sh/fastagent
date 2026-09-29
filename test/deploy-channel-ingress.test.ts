@@ -45,7 +45,7 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
   });
 
   it("when a login follows, is asked without a webhook, and the manual route starts with the login", async () => {
-    const login = "fastagent login --deployment fly";
+    const login = "fastagent login openai-codex --deployment fly";
     const probe = vi.fn(async () => false);
     const alone = await publicHealthGate({
       baseUrl: "https://x",
@@ -77,7 +77,7 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
 });
 
 describe("deploy/channel-ingress: a login that did not happen", () => {
-  const notLoggedIn = "not logged in: … — run `fastagent login --deployment fly` in a terminal";
+  const notLoggedIn = "not logged in: … — run `fastagent login openai-codex --deployment fly` in a terminal";
   const afterLogin = "once it is, re-run the deploy";
 
   it("with no webhook to point, is the login's own refusal and nothing else", () => {

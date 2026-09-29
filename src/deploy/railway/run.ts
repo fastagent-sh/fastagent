@@ -1,4 +1,5 @@
 /** `fastagent deploy railway --run` — drive the Railway CLI to completion. */
+import type { BoxLoginStep } from "../box-shell.ts";
 import {
   type PublicHealthProbe,
   type Registrars,
@@ -34,7 +35,7 @@ export interface RailwayRunPlan {
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
    */
-  boxLogin?: () => Promise<string | undefined>;
+  boxLogin?: BoxLoginStep;
 }
 
 /**
@@ -249,10 +250,10 @@ export async function deployRailwayRun(
     log,
     inspectHint: "the service itself deployed — inspect `railway logs`, then re-run once it answers",
     probe: healthProbe,
-    ...(plan.boxLogin ? { login: "fastagent login --deployment railway" } : {}),
+    ...(plan.boxLogin ? { login: plan.boxLogin.command } : {}),
   });
   if (healthGate) return gate(healthGate);
-  const notLoggedIn = await plan.boxLogin?.();
+  const notLoggedIn = await plan.boxLogin?.run();
   if (notLoggedIn) {
     return gate(
       loginGate({

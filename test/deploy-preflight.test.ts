@@ -581,7 +581,10 @@ describe("preflight: a model credential that does not travel", () => {
       if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
       expect(pre.boxLogin).toBe("anthropic");
       expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
-      expect(pre.messages).toContainEqual({ level: "note", text: expect.stringMatching(/login --deployment/) });
+      expect(pre.messages).toContainEqual({
+        level: "note",
+        text: expect.stringMatching(/login anthropic --deployment/),
+      });
     }
   });
 
@@ -635,6 +638,21 @@ describe("preflight: a model credential that does not travel", () => {
     if (!unset.ok) throw new Error(unset.gate);
     expect(unset.boxLogin).toBeUndefined();
     expect(unset.secrets.map((s) => s.name)).toContain("MY_ANT_KEY");
+  });
+
+  it("a credential that points at a FILE on this machine does not travel: the box is asked", async () => {
+    // The value file names a path; the file exists here and nowhere else. pi finds it and reports ADC, which read
+    // with this machine's file system would ship a deploy with no credential and no login.
+    const adc = join(await mkdtemp(join(tmpdir(), "fa-adc-")), "adc.json");
+    await writeFile(adc, "{}");
+    const vertex = createPiModels().getProvider("google-vertex")?.getModels()[0]?.id as string;
+    const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
+    const pre = await call(
+      await workspace({ ".secrets/.env": env }),
+      { model: `google-vertex/${vertex}` },
+      { run: true },
+    );
+    expect(pre.ok && pre.boxLogin).toBe("google-vertex");
   });
 
   it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {

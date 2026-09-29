@@ -71,6 +71,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
   });
 
+  const LOGIN = "fastagent login openai-codex --deployment fly";
   it("the box logs in after it answers and before any webhook points at it; a box left logged out stays dark", async () => {
     const order: string[] = [];
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
@@ -87,7 +88,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       return verdict;
     };
     const p = (verdict: string | undefined) =>
-      plan({ channels: declaredChannels(["telegram"]), boxLogin: () => login(verdict) });
+      plan({ channels: declaredChannels(["telegram"]), boxLogin: { command: LOGIN, run: () => login(verdict) } });
 
     expect(await run(p(undefined), fly, tg, healthy)).toEqual({ ok: true });
     expect(order).toEqual(["health", "login", "register"]);
@@ -101,8 +102,21 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
 
     // No webhook to point, but a login follows: the box must be up (workspace prepared, CLI installed) for it.
     order.length = 0;
-    await run(plan({ boxLogin: () => login(undefined) }), fly, tg, healthy);
+    await run(plan({ boxLogin: { command: LOGIN, run: () => login(undefined) } }), fly, tg, healthy);
     expect(order).toEqual(["health", "login"]);
+  });
+
+  it("a box that never answers hands over the login it was about to run, provider included", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
+    const logs: string[] = [];
+    const out = await deployFlyRun(
+      plan({ boxLogin: { command: LOGIN, run: async () => undefined } }),
+      fly,
+      (m) => logs.push(m),
+      { telegram: vi.fn() },
+      async () => false,
+    );
+    expect(out).toMatchObject({ ok: false, gate: expect.stringContaining(`log it in: ${LOGIN}`) });
   });
 
   it("an app that already has both families is not allocated a second address", async () => {

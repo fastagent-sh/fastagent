@@ -1,4 +1,5 @@
 /** `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. */
+import type { BoxLoginStep } from "../box-shell.ts";
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type Registrars, loginGate, registerWebhooks } from "../channel-ingress.ts";
@@ -53,7 +54,7 @@ export interface AgentcoreRunPlan {
    * Log the runtime in (`fastagent login --deployment`) once the probe verified it and before any webhook points at
    * it. Resolves a gate line, or undefined.
    */
-  boxLogin?: (runtimeArn: string) => Promise<string | undefined>;
+  boxLogin?: BoxLoginStep<[runtimeArn: string]>;
 }
 
 export type AgentcoreRunOutcome = { ok: true; runtimeArn: string; url?: string } | { ok: false; gate: string };
@@ -503,7 +504,7 @@ export async function deployAgentcoreRun(
     if (!verdict.ok) return gate(verdict.gate);
     log("runtime verified (workspace ready, channels constructed)");
   }
-  const notLoggedIn = await plan.boxLogin?.(runtimeArn);
+  const notLoggedIn = await plan.boxLogin?.run(runtimeArn);
   if (notLoggedIn) {
     return gate(
       loginGate({

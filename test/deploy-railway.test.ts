@@ -176,7 +176,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
 
   it("a credential that does not travel is a login on the box, after the deploy", () => {
     const out = runbook(planRailwayDeploy({ ...base, boxLogin: "openai-codex", channels: [] }));
-    expect(out.indexOf("fastagent login --deployment railway")).toBeGreaterThan(out.indexOf("railway up"));
+    expect(out.indexOf("fastagent login openai-codex --deployment railway")).toBeGreaterThan(out.indexOf("railway up"));
     expect(runbook(planRailwayDeploy({ ...base, channels: [] }))).not.toContain("login --deployment");
   });
 });

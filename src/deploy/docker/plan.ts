@@ -2,6 +2,7 @@
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 
@@ -184,7 +185,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     ...(input.boxLogin
       ? [
           `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself:`,
-          `fastagent login --deployment docker`,
+          `${deploymentLoginCommand("docker", input.boxLogin)}`,
         ]
       : []),
     ``,

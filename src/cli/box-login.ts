@@ -6,7 +6,7 @@
  */
 import { type Server, createServer } from "node:http";
 import { basename } from "node:path";
-import type { BoxShell } from "../deploy/box-shell.ts";
+import { type BoxShell, deploymentLoginCommand } from "../deploy/box-shell.ts";
 import { boxLoginCommand } from "../deploy/container.ts";
 import type { DeployHost } from "../deploy/hosts.ts";
 import type { LoginIO } from "../engines/pi/login.ts";
@@ -32,8 +32,7 @@ export interface BoxLoginRequest {
  */
 export async function loginOnBox(request: BoxLoginRequest): Promise<string | undefined> {
   const { host, shell, placement, provider } = request;
-  // The provider when it is known (always, from `deploy --run`): the model needs THAT one, and a menu invites another.
-  const retry = `fastagent login ${provider ? `${provider} ` : ""}--deployment ${host}`;
+  const retry = deploymentLoginCommand(host, provider);
   const args = [
     ...(provider ? [provider] : []),
     ...(request.ifMissing ? ["--if-missing"] : []),
