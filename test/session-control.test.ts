@@ -127,7 +127,7 @@ describe("session control: observation plane", () => {
     expect(types.lastIndexOf("message_finished")).toBeLessThan(types.indexOf("run_settled"));
   });
 
-  it("tool events cross both planes; tool_finished projects to tool_ended", async () => {
+  it("tool events cross both planes; tool_finished projects to tool_ended; entries() keeps the call's args", async () => {
     const { agent, control } = await makeObserved([
       fauxAssistantMessage(fauxToolCall("echo", { value: "ping" }, { id: "call-1" })),
       fauxAssistantMessage("done"),
@@ -136,9 +136,15 @@ describe("session control: observation plane", () => {
     const invoked = await drain(agent.invoke({ session: "sT" }, { text: "go" }));
     const rich = await watched;
 
-    const toolStarted = rich.find((e) => e.type === "tool_started")?.data as { name: string };
+    const toolStarted = rich.find((e) => e.type === "tool_started")?.data as { name: string; args: unknown };
     const toolFinished = rich.find((e) => e.type === "tool_finished")?.data as { isError: boolean };
     expect(toolStarted.name).toBe("echo");
+    // A reopened conversation shows the same call a live watcher saw.
+    const call = (await control.sessions.get("sT").entries()).entries.find((e) => e.kind === "assistant")?.data as {
+      toolCalls: unknown[];
+    };
+    expect(call.toolCalls).toEqual([{ id: "call-1", name: "echo", args: { value: "ping" } }]);
+    expect(toolStarted.args).toEqual({ value: "ping" });
     expect(toolFinished.isError).toBe(false);
     expect(invoked.some((e) => e.type === "tool_started" && e.name === "echo")).toBe(true);
     expect(invoked.some((e) => e.type === "tool_ended" && e.id === "call-1")).toBe(true);

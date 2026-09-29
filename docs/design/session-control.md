@@ -405,7 +405,10 @@ Entries are append-ordered with stable ids, including pre-compaction records and
 where the engine preserves them — `parentId` exists because branches objectively occur. The `since`
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
-`leafEntryId`. Engine-specific kinds may appear beyond the guaranteed minimum and MUST be skippable.
+`leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text }`; `assistant`
+`{ text, toolCalls?: { id, name, args }[] }`, where `args` is the same value `tool_started` carries live;
+`tool` `{ toolCallId, toolName, isError, text }`. Engine-specific kinds may appear beyond the guaranteed
+minimum and MUST be skippable.
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
 its content was replaced (the replacement is not published). pi writes omissions for its own abandoned
