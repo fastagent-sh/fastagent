@@ -353,10 +353,11 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const imported = join(root, "other-session.jsonl");
       await writeFile(
         imported,
-        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: other })}\n`,
+        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: join(root, "agent-b") })}\n`,
       );
 
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      const workspace = join(root, "agent-a");
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, sessionsDir));
       try {
         let invalidated = false;
         rt.setBeforeSessionInvalidate(() => {
@@ -364,9 +365,12 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         });
         // A session that EXPLICITLY records another workspace is rejected before pi tears the live
         // session down — independent of process.cwd().
-        await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent sessions are workspace-scoped/);
+        await expect(rt.importFromJsonl(imported, join(root, "agent-b"))).rejects.toThrow(
+          /fastagent sessions are workspace-scoped/,
+        );
         expect(invalidated).toBe(false);
-        expect(rt.cwd).toBe(realpathSync(dir)); // runtime cwd is canonical (symlink-free)
+        // The workspace (the agent dir's parent, as serving uses), canonical (symlink-free).
+        expect(rt.cwd).toBe(realpathSync(workspace));
       } finally {
         rt.session.dispose?.();
       }
@@ -395,9 +399,10 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
           `${JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "hi" } })}\n`,
       );
 
-      process.chdir(dir);
-      const realDir = realpathSync(dir); // pi binds the realpath via process.cwd()
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      const workspace = join(root, "agent");
+      process.chdir(workspace);
+      const realDir = realpathSync(workspace); // pi binds the realpath via process.cwd()
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, sessionsDir));
       try {
         // Import the cwd-less session: no foreign cwd, so it runs in the chat workspace.
         await expect(rt.importFromJsonl(legacy)).resolves.toMatchObject({ cancelled: false });
@@ -420,7 +425,8 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
   it("binds the turn context to the canonical workspace when a resumed session records a symlinked one", async () => {
     // Different parents expose lexical ../ resolution through the symlink rather than the workspace.
     const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-symlink-")));
-    const dir = join(root, "agent", "fastagent");
+    const workspace = join(root, "project", "ws");
+    const dir = join(workspace, "fastagent");
     const observedKey = "__fastagent_chat_tool_cwd_test__";
     const piUrl = new URL("../src/pi.ts", import.meta.url).href;
     const originalCwd = process.cwd();
@@ -443,10 +449,10 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
            })],
          };\n`,
       );
-      const linked = join(root, "link", "fastagent");
+      const linked = join(root, "link", "ws");
       await mkdir(join(root, "link"));
-      symlinkSync(dir, linked);
-      await writeFile(join(root, "agent", "parent.txt"), "canonical parent");
+      symlinkSync(workspace, linked);
+      await writeFile(join(root, "project", "parent.txt"), "canonical parent");
       await writeFile(join(root, "link", "parent.txt"), "linked parent");
       const recorded = join(root, "linked-session.jsonl");
       await writeFile(
@@ -454,8 +460,8 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
         `${JSON.stringify({ type: "session", version: 3, id: "linked", timestamp: new Date().toISOString(), cwd: linked })}\n`,
       );
 
-      process.chdir(dir);
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, join(root, "sessions")));
+      process.chdir(workspace);
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, join(root, "sessions")));
       try {
         const readParent = () =>
           rt.session.agent.state.tools
@@ -467,7 +473,7 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
         const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_cwd");
         expect(tool).toBeDefined();
         await tool!.execute("inspect-cwd-1", {});
-        expect((globalThis as Record<string, unknown>)[observedKey]).toBe(dir);
+        expect((globalThis as Record<string, unknown>)[observedKey]).toBe(workspace);
         expect((await readParent()).content).toEqual(before.content);
 
         await rt.session.agent.state.tools
@@ -476,12 +482,12 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
             path: "../parent.txt",
             edits: [{ oldText: "canonical parent", newText: "edited parent" }],
           });
-        expect(await readFile(join(root, "agent", "parent.txt"), "utf8")).toBe("edited parent");
+        expect(await readFile(join(root, "project", "parent.txt"), "utf8")).toBe("edited parent");
         expect(await readFile(join(root, "link", "parent.txt"), "utf8")).toBe("linked parent");
         await rt.session.agent.state.tools
           .find((tool) => tool.name === "write")!
           .execute("write-parent", { path: "../written.txt", content: "new file" });
-        expect(await readFile(join(root, "agent", "written.txt"), "utf8")).toBe("new file");
+        expect(await readFile(join(root, "project", "written.txt"), "utf8")).toBe("new file");
         expect(existsSync(join(root, "link", "written.txt"))).toBe(false);
       } finally {
         delete (globalThis as Record<string, unknown>)[observedKey];

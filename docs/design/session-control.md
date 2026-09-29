@@ -501,8 +501,8 @@ FastAgent auth (never implicit `~/.pi` state), model policy from config, and hos
 directory and session repository — never client-provided paths.
 
 `src/engines/pi/session-builder.ts` proves this assembly seam: it builds a resident pi
-`AgentSessionRuntime` with FastAgent's prompt, skills, tools, auth, and agent boundary; the TUI
-(`chat.ts`) is one consumer of it.
+`AgentSessionRuntime` over the same `PiAssembly` serving runs on (prompt, skills, tools, auth, reasoning
+effort, workspace), so only the session's shape differs; the TUI (`chat.ts`) is one consumer of it.
 
 ## 11. Pi capability selection
 
