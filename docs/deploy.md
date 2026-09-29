@@ -32,7 +32,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | A provider API key in `.secrets/.env` travels as a variable. Nothing else travels: your `auth.json` stays on this machine. Otherwise the deployment logs in itself, see [Logging a deployment in](#logging-a-deployment-in). |
+| **A model credential** | A provider API key in `.secrets/.env` travels as a variable, even when this machine is logged in to that provider. Nothing else travels: your `auth.json` stays on this machine. Otherwise the deployment logs in itself, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Durable storage** | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 
 ## Logging a deployment in

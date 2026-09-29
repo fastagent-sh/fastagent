@@ -592,11 +592,27 @@ describe("preflight: a model credential that does not travel", () => {
   });
 
   it("a key in the value file travels, and nothing logs in", async () => {
+    noAnthropicEnv(); // the value file alone decides (§9), not the shell running deploy
     const dir = await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant"); // what `deploy` sees once it entered the agent's environment
     const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     expect(pre.ok && pre.boxLogin).toBeUndefined();
     expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+  });
+
+  it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {
+    // pi ranks a stored credential above the environment, which answers "what authenticates HERE". The deploy asks
+    // what reaches the box, and a key the author put in the value file for the deployment is exactly that.
+    noAnthropicEnv();
+    const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+    const dir = await workspace({
+      ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
+      ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n",
+    });
+    const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    if (!pre.ok) throw new Error(pre.gate);
+    expect(pre.boxLogin).toBeUndefined();
+    expect(pre.modelAuth).toBe("ANTHROPIC_API_KEY");
+    expect(pre.messages.some((m) => /login --deployment/.test(m.text))).toBe(false);
   });
 });
 

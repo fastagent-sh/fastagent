@@ -14,6 +14,7 @@ import { resolveAgentTools } from "../engines/pi/create.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
+  environmentAuthSource,
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
@@ -259,7 +260,17 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // how the credential reaches the host.
   const authPath = resolveAuthPath(agentDir);
   const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
-  let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
+  // The value file first: a provider key the author put there is what reaches the box, whatever authenticates the
+  // provider on THIS machine. Asking the machine first let a local login (pi ranks stored above the environment)
+  // outrank that key, and the deploy then logged the box in with a subscription instead of carrying the key.
+  const valueFileKey = modelSpec
+    ? await environmentAuthSource(providerOf(modelSpec), Object.fromEntries(values))
+    : undefined;
+  let modelAuth = isEnvKey(valueFileKey)
+    ? valueFileKey
+    : modelSpec
+      ? await probeAuthSource(models, modelSpec)
+      : undefined;
   let boxLogin: string | undefined;
   // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the credential
   // REACH the host").
