@@ -637,15 +637,25 @@ describe("preflight: a model credential that does not travel", () => {
     expect(unset.secrets.map((s) => s.name)).toContain("MY_ANT_KEY");
   });
 
-  it("a keyless environment credential (an AWS role) is the host's own: nothing travels, nothing logs in", async () => {
+  it("a keyless credential in the value file travels; the same credential only in this shell leaves it to the box", async () => {
+    // AWS keys are what pi reads for amazon-bedrock, with no single key variable to require. From the value file they
+    // reach the box; from the shell they are this machine's, and whether the box has a role is the box's answer.
+    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
+    const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
+    const carried = await call(
+      await workspace({ ".secrets/.env": aws }),
+      { model: `amazon-bedrock/${bedrock}` },
+      { run: true },
+    );
+    if (!carried.ok) throw new Error(carried.gate);
+    expect(carried.boxLogin).toBeUndefined();
+    expect(carried.modelAuth).toBeUndefined(); // nothing more for the values gate to ask
+
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_REGION", "us-east-1");
-    const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
-    const pre = await call(await workspace(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
-    if (!pre.ok) throw new Error(pre.gate);
-    expect(pre.boxLogin).toBeUndefined();
-    expect(pre.modelAuth).toBeUndefined();
+    const shellOnly = await call(await workspace(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    expect(shellOnly.ok && shellOnly.boxLogin).toBe("amazon-bedrock");
   });
 
   it("the value file's key wins over this machine's own login: that login stays here, the key is what travels", async () => {

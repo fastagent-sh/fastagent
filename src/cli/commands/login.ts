@@ -7,12 +7,12 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { resolveAuthPath } from "../../engines/pi/config.ts";
-import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../../engines/pi/auth.ts";
+import { resolveAuthLayers, resolveAuthPath } from "../../engines/pi/config.ts";
+import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, type LoginMethod, loginFlow } from "../../engines/pi/login.ts";
-import { createPiModelRuntime, environmentAuthSource, probeAuthSource } from "../../engines/pi/models.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
+import { agentAuthStatus, environmentAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -162,52 +162,33 @@ async function runStdioLogin(provider: string | undefined, opts: LoginOptions): 
 }
 
 async function stdioLogin(io: LoginIO, provider: string | undefined, opts: LoginOptions): Promise<RelayResult> {
+  // `boxLoginCommand` starts this in the deployed agent directory; anywhere else there is no box to log in.
   const agentDir = findAgentDir(process.cwd());
+  if (!agentDir) throw new Error(`login --stdio: ${process.cwd()} is not an agent directory`);
   // A deployed box has no value file to read: its variables reach this process only as the host's shell hands them
   // down (the container's for `docker compose exec`, the platform's over fly/railway ssh), and this installs the egress
   // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
   // FASTAGENT_ENV does not reach the login (docs/deploy.md).
-  if (agentDir) enterAgentEnv(agentDir);
-  const authPath = resolveAuthPath(agentDir ?? process.cwd());
+  enterAgentEnv(agentDir);
+  // The layers the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will use.
+  const auth = resolveAuthLayers(agentDir);
   if (opts.ifMissing && provider) {
-    const held = await heldCredential(authPath, provider, agentDir);
+    // The server's own answer (agentAuthStatus), the one its startup report prints. Known ceiling: nothing is asked of
+    // the provider beyond a due refresh, so a revoked grant whose access token has not expired yet, or a revoked API
+    // key, reads as held and the first turn fails with the provider's error. Asking would spend a real model call on
+    // every redeploy, which the readiness checks deliberately never do.
+    const held = await agentAuthStatus({ agentDir, auth, provider });
     if (held.source !== undefined) return { ok: true, provider, kept: held.source };
     if (opts.input === false) {
       const what = held.stored
         ? `the stored ${provider} ${held.stored} credential is expired or unusable`
         : `no ${provider} credential`;
-      return { ok: false, reason: "missing", message: `${what} in ${authPath}` };
+      return { ok: false, reason: "missing", message: `${what} in ${held.path}` };
     }
   }
   if (opts.input === false) {
-    return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${authPath}` };
+    return { ok: false, reason: "missing", message: `no ${provider ?? "model"} credential in ${auth.path}` };
   }
-  const result = await loginFlow(io, {
-    authPath,
-    ...(provider ? { provider } : {}),
-    ...(agentDir ? { agentDir } : {}),
-  });
-  return { ok: true, provider: result.provider, method: result.method, path: authPath };
-}
-
-/**
- * Whether the box has a credential for `provider` that is not expired, or refreshed when it was, and from where: the
- * same answer its own startup report gives (`probeAuthSource`). `source` decides; `stored` (what auth.json holds) only
- * words the refusal. The file alone would not do: an OAuth grant whose refresh the provider refuses is still a line in
- * it, and a key the host sets as a platform variable is no line at all.
- *
- * Known ceiling: nothing is asked of the provider beyond a due refresh, so a revoked grant whose access token has not
- * expired yet, or a revoked API key, reads as held; the first turn then fails with the provider's own error. Asking
- * would spend a real model call on every redeploy, which the readiness checks deliberately never do.
- */
-export async function heldCredential(
-  authPath: string,
-  provider: string,
-  agentDir: string | undefined,
-): Promise<{ source?: string; stored?: LoginMethod }> {
-  const stored = (await fastagentCredentialStore(authPath).list()).find((info) => info.providerId === provider)?.type;
-  const models = await createPiModelRuntime({ ...(agentDir ? { agentDir } : {}), auth: { path: authPath } });
-  const model = models.getProvider(provider)?.getModels()[0];
-  const source = model ? await probeAuthSource(models, `${provider}/${model.id}`) : undefined;
-  return { ...(source !== undefined ? { source } : {}), ...(stored !== undefined ? { stored } : {}) };
+  const result = await loginFlow(io, { authPath: auth.path, ...(provider ? { provider } : {}), agentDir });
+  return { ok: true, provider: result.provider, method: result.method, path: auth.path };
 }

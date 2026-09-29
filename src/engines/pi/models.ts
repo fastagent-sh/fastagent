@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
+  type Credential,
   type Api,
   type CredentialStore,
   InMemoryCredentialStore,
@@ -27,7 +28,7 @@ import {
   assertOneCredentialSource,
   fastagentCredentialStore,
 } from "./auth.ts";
-import { type AuthLayers, providerOf } from "./config.ts";
+import type { AuthLayers } from "./config.ts";
 import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
@@ -251,6 +252,42 @@ export async function environmentAuthSource(providerId: string, env: NodeJS.Proc
   return (await models.checkAuth(providerId))?.source;
 }
 
+/**
+ * What authenticates `provider` for the agent in `agentDir`, resolved exactly as its serving runtime resolves it (the
+ * same store and registry `createPiAgentFromDir` builds): the ONE answer both the startup report and a deployed box's
+ * `login --if-missing` give, so they cannot disagree about whether the box is logged in.
+ *
+ * - `source`: what satisfies it now (`OAuth`, `stored credential`, an env variable's name), after a due refresh.
+ * - `path`: the file that holds the stored credential, or the one a login would write.
+ * - `stored`: the kind of credential the store holds for it, usable or not.
+ * - `shadowed`: an env variable that also authenticates it but goes unused, because pi lets a stored credential own
+ *   its provider — a key added to a deployment's value file after the box was logged in, typically.
+ *
+ * `modelId` picks the model to probe with; the provider's first one otherwise (auth is provider-scoped).
+ */
+export async function agentAuthStatus(options: {
+  agentDir: string;
+  auth: AuthLayers;
+  provider: string;
+  modelId?: string;
+}): Promise<{ source?: string; path: string; stored?: Credential["type"]; shadowed?: string }> {
+  const { agentDir, auth, provider } = options;
+  const credentials = await agentCredentialStore({ agentDir, auth });
+  const models = await createPiModelRuntime({ agentDir, auth, credentials });
+  const modelId = options.modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
+  const source = modelId === undefined ? undefined : await probeAuthSource(models, `${provider}/${modelId}`);
+  // `read` never refreshes: this is the kind on file, whatever became of it.
+  const stored = (await credentials.read(provider))?.type;
+  const fromEnvironment = stored === undefined ? undefined : await environmentAuthSource(provider, process.env);
+  const shadowed = source !== undefined && fromEnvironment !== source ? fromEnvironment : undefined;
+  return {
+    path: await credentials.layerOf(provider),
+    ...(source !== undefined ? { source } : {}),
+    ...(stored !== undefined ? { stored } : {}),
+    ...(shadowed !== undefined ? { shadowed } : {}),
+  };
+}
+
 /** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}): Promise<ModelRuntime> {
   const { models, create } = await runtimeFiles(options);
@@ -269,17 +306,6 @@ export async function createPiModelRuntime(options: PiModelRuntimeOptions = {}):
   }
   for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
   return runtime;
-}
-
-/** How a model's credential will REACH a deployed agent. */
-export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
-  const status = runtime.getProviderAuthStatus(providerOf(spec));
-  if (!status.configured) return { inDefinition: false };
-  // An env-var name is only useful downstream if it IS one.
-  if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
-    return { envVar: status.label, inDefinition: false };
-  }
-  return { inDefinition: status.source !== "stored" };
 }
 
 /**

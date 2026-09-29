@@ -21,7 +21,6 @@ import {
   machineModels,
   interactiveAuth,
   loginProviders,
-  modelCredentialCarry,
 } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -258,12 +257,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   await checkMachineModels(agentDir, modelSpec, report);
 
-  // Probe auth from the SAME project-level file the opener/login use, on the registry the DEPLOYED agent has: the
-  // machine's models.json does not ship, so an entry there (a gateway over a built-in provider, a key) must not decide
-  // how the credential reaches the host.
+  // The registry the DEPLOYED agent has (its own models.json, not the machine's), built here only so a malformed file
+  // stops the deploy with pi's own reason before anything below reads the file raw.
   const authPath = resolveAuthPath(agentDir);
-  const models = await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
-  const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values, models) : {};
+  await createPiModelRuntime({ agentDir, auth: { path: authPath }, machineLayer: false });
+  const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
   const boxLogin = route.boxLogin;
   if (boxLogin !== undefined) {
@@ -274,9 +272,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       );
     } else {
       report.note(
-        `${modelSpec}: this machine's credentials stay here — the deployment logs in to ${boxLogin} itself ` +
-          `(\`fastagent login --deployment\`, which \`--run\` starts once the box is up), or set its API key in ` +
-          `${valueFile}`,
+        `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
+          `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
+          `(\`fastagent login --deployment\`). Or set ${boxLogin}'s API key in ${valueFile}`,
       );
     }
   }
@@ -394,30 +392,28 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 }
 
 /**
- * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, decided from what travels and never from what authenticates it HERE:
- * `probeAuthSource` and pi's `getProviderAuthStatus` rank this machine's stored login above the environment and read
- * the shell running deploy, and three fixes in a row came from asking them a deployment's question. In order:
+ * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, from what the deploy ships and nothing else. The box is the one authority
+ * on what it authenticates with (pi ranks a stored login above the environment, and only the box knows what it has
+ * stored, which platform variables it was given, or what role it runs as), so this never asks what authenticates the
+ * model on THIS machine: its stored logins and the shell running deploy do not travel. In order:
  *
- * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (whether or not
- *    it does yet: the values gate asks), and a literal or `"!command"` travels in the image;
- * 2. the provider's own key variable, in the value file;
- * 3. an ambient credential with no key (an AWS role, Google ADC), which is the host's own environment wherever it runs;
- * 4. otherwise a login on the box — `boxLogin` — and the pre-flight says so, or that the provider has none.
+ * 1. the definition's own models.json: a `"$NAME"` reference is a variable the value file must hold (the values gate
+ *    asks for it by name), and a literal or `"!command"` travels in the image;
+ * 2. a credential pi reads for the provider from the value file: its key variable (which the values gate then
+ *    requires, as it does every declared name), or a keyless one such as `AWS_ACCESS_KEY_ID`;
+ * 3. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
+ *    already authenticate the provider.
  */
 async function credentialRoute(
   agentDir: string,
   spec: string,
   values: ReadonlyMap<string, string>,
-  models: Awaited<ReturnType<typeof createPiModelRuntime>>,
 ): Promise<{ envVar?: string; boxLogin?: string }> {
   const provider = providerOf(spec);
   const declared = await definitionKeyOf(agentDir, provider);
   if (declared) return "reference" in declared ? { envVar: declared.reference } : {};
   const fromValues = await environmentAuthSource(provider, Object.fromEntries(values));
-  if (isEnvKey(fromValues)) return { envVar: fromValues };
-  // Past steps 1 and 2 an `envVar` here is this machine's (the shell's) and does not travel; only a keyless
-  // environment credential says anything about the box.
-  if (modelCredentialCarry(models, spec).inDefinition) return {};
+  if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
   return { boxLogin: provider };
 }
 

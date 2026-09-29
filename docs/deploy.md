@@ -32,7 +32,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | A provider API key in `.secrets/.env` travels as a variable, even when this machine is logged in to that provider. Nothing else travels: your `auth.json` stays on this machine. Otherwise the deployment logs in itself, see [Logging a deployment in](#logging-a-deployment-in). |
+| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Durable storage** | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 
 ## Logging a deployment in
@@ -53,12 +53,17 @@ says so, and you paste the address the browser landed on instead. The box exchan
 credential on its storage, so it is the only holder of that grant: your machine's login is untouched, and neither
 side can log the other out. Logging in again replaces it.
 
-`deploy --run` starts this login once the box answers `/health` and before any webhook is pointed at it, when the
-box does not already hold a credential for the model's provider that is unexpired (or refreshes). A redeploy keeps
-the box's credential. A credential revoked at the provider before it expires is not detected, and the first turn
-fails with the provider's error: run `fastagent login --deployment` to replace it. Without a terminal (CI), `--run`
-stops at the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point,
-so when the agent has any, the message also says what to re-run once the box is logged in.
+`deploy --run` asks the box once it answers `/health` and before any webhook is pointed at it: the box keeps a
+credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
+variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
+credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
+the provider's error: run `fastagent login --deployment` to replace it. Without a terminal (CI), `--run` stops at
+the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point, so when
+the agent has any, the message also says what to re-run once the box is logged in.
+
+A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
+added to `.secrets/.env` after the box was logged in is not used; the box's startup log says so and names the
+command that switches it to the key (`fastagent login <provider> --deployment`, choosing "API key").
 
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
 and routines fire on schedule, and each turn they start fails for want of a model credential. Only webhooks wait for

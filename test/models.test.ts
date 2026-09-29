@@ -5,10 +5,11 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import {
+  agentAuthStatus,
   createPiModelRuntime,
   literalKeyProviders,
   machineModels,
-  modelCredentialCarry,
+  definitionKeyOf,
   probeApiKey,
   probeAuthSource,
   providerAuthStatuses,
@@ -148,34 +149,23 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     process.env.FASTAGENT_TEST_GW_KEY = "sk-from-env";
     try {
       // Assert the SHAPE, not just presence: probeAuthSource flattens every models.json endpoint to this
-      // display label, which is why `deploy` cannot branch on it (see modelCredentialCarry below).
+      // display label, which is why `deploy` cannot branch on it (it reads the file: definitionKeyOf below).
       expect(await probeAuthSource(runtime, "mygw/deepseek-v3")).toBe("configured API key");
-      // The deploy-facing question — how does the credential REACH the host — answers with the env-var
-      // NAME, the shape assembleSecrets already carries.
-      expect(modelCredentialCarry(runtime, "mygw/deepseek-v3")).toEqual({
-        envVar: "FASTAGENT_TEST_GW_KEY",
-        inDefinition: false,
-      });
     } finally {
       delete process.env.FASTAGENT_TEST_GW_KEY;
     }
   });
 
-  it("a key written into models.json (literal or command) is carried BY the definition, not by deploy", async () => {
-    // These travel inside the image with the file itself. Reported as such so the deploy gate does not
-    // demand a credential that is already there — its remedies (`fastagent login`, a provider env key)
-    // are both impossible for a custom provider.
+  it("definitionKeyOf reads how the FILE supplies a provider's key: a variable to carry, or a key that travels in it", async () => {
+    // What deploy asks, answered from the definition alone: the file ships, and nothing on this machine does.
+    const keyed = (apiKey: string) =>
+      agentWith(JSON.stringify({ providers: { mygw: { baseUrl: "http://x/v1", api: "openai-completions", apiKey } } }));
     for (const apiKey of ["sk-literal-in-file", "!echo sk-from-command"]) {
-      const dir = await agentWith(
-        JSON.stringify({
-          providers: {
-            mygw: { baseUrl: "http://x/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
-          },
-        }),
-      );
-      const runtime = await createPiModelRuntime({ agentDir: dir, auth: { path: join(dir, "auth.json") } });
-      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
+      expect(await definitionKeyOf(await keyed(apiKey), "mygw")).toEqual({ inFile: true });
     }
+    expect(await definitionKeyOf(await keyed("$GW_KEY"), "mygw")).toEqual({ reference: "GW_KEY" });
+    expect(await definitionKeyOf(await keyed("${GW_KEY}"), "mygw")).toEqual({ reference: "GW_KEY" });
+    expect(await definitionKeyOf(await keyed("$GW_KEY"), "anthropic")).toBeUndefined(); // not declared there
   });
 
   it("literalKeyProviders reads the FILE, so a stored credential cannot hide a literal that still ships", async () => {
@@ -398,5 +388,60 @@ describe("models.json on the serving path (createPiAgentFromDir)", () => {
     // that its default derivation keeps pi's catalog cache out of what `deploy` bakes into the image.
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
     expect(stateRoot.startsWith(dir)).toBe(true);
+  });
+});
+
+describe("agentAuthStatus: the one answer to what authenticates a provider for an agent", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+  const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+  /** An agent dir whose credentials file holds `stored` (the file is the only layer, as on a deployed box). */
+  async function agentStoring(stored: Record<string, unknown>) {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-status-"));
+    const path = join(agentDir, "auth.json");
+    await writeFile(path, JSON.stringify(stored));
+    return { agentDir, auth: { path }, path };
+  }
+
+  it("a live stored login, or nothing: what the startup report and a box's --if-missing both read", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
+    const empty = await agentStoring({});
+    expect(await agentAuthStatus({ ...empty, provider: "anthropic" })).toEqual({ path: empty.path });
+    const held = await agentStoring({ anthropic: oauth });
+    expect(await agentAuthStatus({ ...held, provider: "anthropic" })).toEqual({
+      path: held.path,
+      source: "OAuth",
+      stored: "oauth",
+    });
+  });
+
+  it("an expired login whose refresh the provider refuses is on file but authenticates nothing", async () => {
+    const dir = await agentStoring({ "openai-codex": { ...oauth, refresh: "revoked", expires: 1 } });
+    const refresh = vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 }));
+    vi.stubGlobal("fetch", refresh);
+    expect(await agentAuthStatus({ ...dir, provider: "openai-codex" })).toEqual({ path: dir.path, stored: "oauth" });
+    expect(refresh).toHaveBeenCalled(); // it asked the provider, rather than trusting the file
+  });
+
+  it("a key in the environment authenticates with nothing on file, and goes unused beside a stored login", async () => {
+    // A platform variable (`fly secrets set …`), or a key added to the value file after the box was logged in: pi lets
+    // the stored credential own its provider, which is the case a deployment needs spelled out.
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-environment");
+    const bare = await agentStoring({});
+    expect(await agentAuthStatus({ ...bare, provider: "anthropic" })).toEqual({
+      path: bare.path,
+      source: "ANTHROPIC_API_KEY",
+    });
+    const held = await agentStoring({ anthropic: oauth });
+    expect(await agentAuthStatus({ ...held, provider: "anthropic" })).toEqual({
+      path: held.path,
+      source: "OAuth",
+      stored: "oauth",
+      shadowed: "ANTHROPIC_API_KEY",
+    });
   });
 });
