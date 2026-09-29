@@ -1,6 +1,6 @@
 import { retryWhile, type RegistrationOutcome } from "../registration.ts";
 import {
-  SLACK_ROTATING_APP_UPGRADE,
+  SLACK_ROTATING_APP_REMEDY,
   isSlackRequestUrlUnverified,
   isSlackRotationLocked,
   updateSlackAppManifest,
@@ -86,7 +86,7 @@ export async function registerSlackWebhook(
     return "registered";
   } catch (error) {
     if (isSlackRotationLocked(error)) {
-      note(`[fastagent] slack: ${SLACK_ROTATING_APP_UPGRADE}, or ${consoleFallback}`);
+      note(`[fastagent] slack: ${SLACK_ROTATING_APP_REMEDY}, or ${consoleFallback}`);
       return "failed";
     }
     note(

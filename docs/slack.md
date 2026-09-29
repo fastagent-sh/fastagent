@@ -43,6 +43,14 @@ Three things, in three places:
 Bot-token rotation is off in the manifest. Do not turn it on: it cannot be turned off again, and FastAgent does not
 support it.
 
+### If token rotation is on
+
+Two symptoms name it: `slackChannel` refuses the `xoxe.…` token at startup, and `dev --tunnel` / `deploy --run`
+report that the app's manifest update was refused (`cannot_disable_once_enabled`). Create a new app: delete
+`channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*` lines in `.secrets/.env`, then run
+`fastagent add slack` again; the runtime secrets it writes are `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone.
+Remove the old app in the Slack console when the new one answers.
+
 ## Internal-app onboarding
 
 Slack's [App Manifest API](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/) requires a user/workspace **App Configuration Token**. The command opens
@@ -354,16 +362,6 @@ console action. App Configuration tokens stay on the builder. Docker's optional 
 ephemeral; resident hosts need durable storage and one replica. [AgentCore resets its storage on
 every deploy](deploy.md#aws-bedrock-agentcore), so thread state and delivery dedup start blank after
 each one; both secrets ride the runtime environment and are unaffected.
-
-## Upgrading from a rotating-token app (releases up to 0.20)
-
-Apps created by earlier releases have token rotation on, and Slack does not let it be turned off. Two
-symptoms name it: `slackChannel` refuses the `xoxe.…` token at startup, and `dev --tunnel` / `deploy
---run` report that the app's manifest update was refused (`cannot_disable_once_enabled`). Create a new
-app: delete `channels/slack.ts`, `<state root>/channels/slack/onboarding.json` and the `SLACK_*`
-lines in `.secrets/.env`, then run `fastagent add slack` again; the runtime secrets it writes are
-`SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` alone. Remove the app in the Slack console when the new one
-answers.
 
 ## Current boundaries
 

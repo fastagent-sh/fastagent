@@ -51,9 +51,9 @@ export function isSlackRotationLocked(error: unknown): boolean {
   );
 }
 
-/** The upgrade every rotating-app refusal points at. */
-export const SLACK_ROTATING_APP_UPGRADE =
-  'this app has token rotation on, which this release no longer uses and Slack cannot turn off — create a new app (docs/slack.md → "Upgrading from a rotating-token app")';
+/** The remedy every rotating-app refusal points at. */
+export const SLACK_ROTATING_APP_REMEDY =
+  'this app has token rotation on, which FastAgent does not support and Slack cannot turn off — create a new app (docs/slack.md → "If token rotation is on")';
 
 async function slackJson<T>(
   method: string,
