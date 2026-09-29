@@ -252,10 +252,19 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 export interface PiAssembly {
   lease: Lease;
   sessionFactory: PiAgentSessionFactory;
+  /**
+   * The registry alone, with injected providers registered. `chat` resolves its model against it only after its
+   * extensions have loaded, because there an extension may register the provider (serving refuses that).
+   */
+  modelRuntime: () => Promise<ModelRuntime>;
   /** The registry and configured model, resolved on first use (a credential read is async). */
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
+  /** The tools every session mounts. */
+  tools: MountedTool[];
+  /** The prompt and skills a session runs on, read when a session is bound. */
+  readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   /** The extension entry points every session loads, discovered once with the assembly. */
   extensionPaths: readonly string[];
 }
@@ -287,15 +296,19 @@ function assemblePi(opts: {
   const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   // The model and its runtime resolve on FIRST USE.
-  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
-  const resolveEngine = () => {
-    engine ??= (async () => {
-      const modelRuntime = await opts.models();
+  let registry: Promise<ModelRuntime> | undefined;
+  const modelRuntime = () => {
+    registry ??= opts.models().then((runtime) => {
       // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a gateway, a self-hosted
       // endpoint, a test fake) goes in through its native seam.
-      for (const provider of opts.providers ?? []) modelRuntime.registerNativeProvider(provider);
-      return { modelRuntime, model: resolveModel(modelRuntime, opts.model) };
-    })();
+      for (const provider of opts.providers ?? []) runtime.registerNativeProvider(provider);
+      return runtime;
+    });
+    return registry;
+  };
+  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
+  const resolveEngine = () => {
+    engine ??= modelRuntime().then((runtime) => ({ modelRuntime: runtime, model: resolveModel(runtime, opts.model) }));
     return engine;
   };
   const sessionFactory = piAgentSessionFactory({
@@ -313,8 +326,11 @@ function assemblePi(opts: {
   return {
     lease,
     sessionFactory,
+    modelRuntime,
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+    tools: opts.tools ?? [],
+    readDefinition: opts.readDefinition,
     extensionPaths: opts.extensionPaths ?? [],
   };
 }
