@@ -60,8 +60,8 @@ terminal (CI), `--run` stops there with `not logged in` and the command to run, 
 When the credential is missing or rejected later (revoked, volume lost), the box's startup log names
 `fastagent login --deployment`.
 
-- **Railway** needs Railway CLI 5.x: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a signup
-  URL instead of opening the shell.
+- **Railway** needs Railway CLI 5.x on `PATH`: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a
+  signup URL instead of opening the shell (`railway --version`; an old Homebrew copy can shadow the installer's).
 - **AgentCore** resets its storage on every deploy, so every deploy of an agent that logs in ends with this login;
   for frequent or CI deploys, use an API key. The shell needs `bedrock-agentcore:InvokeAgentRuntimeCommandShell`.
 

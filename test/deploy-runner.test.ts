@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { spawnRunner } from "../src/deploy/runner.ts";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { awsRunner, spawnRunner } from "../src/deploy/runner.ts";
 
 /** Real child processes: the seam under test is the spawn wiring itself, which a fake would erase. */
 describe("spawnRunner", () => {
@@ -31,5 +34,23 @@ describe("spawnRunner", () => {
     const run = spawnRunner("sh", process.cwd());
     const result = await run(["-c", "exit 0"], { input: "x".repeat(1 << 20) });
     expect(result.code).toBe(1);
+  });
+});
+
+describe("awsRunner", () => {
+  it("runs the AWS CLI with its pager off, whatever the operator's environment says", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "fa-aws-"));
+    await writeFile(join(bin, "aws"), '#!/bin/sh\nprintf "pager=[%s] %s" "$AWS_PAGER" "$*"\n');
+    await chmod(join(bin, "aws"), 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("AWS_PAGER", "less");
+    try {
+      const run = awsRunner(process.cwd());
+      expect((await run(["ecr", "create-repository"], { capture: true })).stdout).toBe(
+        "pager=[] ecr create-repository",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

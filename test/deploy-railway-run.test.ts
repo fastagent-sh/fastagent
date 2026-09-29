@@ -91,7 +91,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "whoami",
       "status --json",
       "init --name bot",
-      "add --service bot",
+      "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state", // a bare `add` prompts in a terminal
       "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets " +
         "RAILWAY_DOCKERFILE_PATH=/fastagent/Dockerfile --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
@@ -225,7 +225,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     const out = await run(plan({ intoLinked: true }), railway);
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
     expect(cmds()).not.toContain("init --name bot"); // never re-create (would duplicate the project)
-    expect(cmds()).not.toContain("add --service bot");
+    expect(cmds().some((c) => c.startsWith("add --service"))).toBe(false);
     expect(cmds()).not.toContain("volume add --mount-path /data"); // volume already present → not re-added
     expect(cmds()).toContain("up --ci --service bot");
     expect(cmds()).not.toContain("domain list --json --service bot"); // never the destructive list subcommand

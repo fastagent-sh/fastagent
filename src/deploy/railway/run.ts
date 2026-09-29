@@ -161,7 +161,10 @@ export async function deployRailwayRun(
     // Create + link the service (init makes only a project); it precedes the volume, which has no --service flag and
     // rides the linked service.
     log(`creating service ${plan.name}…`);
-    if ((await railway(["add", "--service", plan.name])).code !== 0) {
+    // `--variables` with one of the machinery variables set just below: in a terminal, a bare `railway add` stops at
+    // "Enter a variable <esc to skip>" (5.62.1) and waits for a key nobody was told to press.
+    const addArgs = ["add", "--service", plan.name, "--variables", `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`];
+    if ((await railway(addArgs)).code !== 0) {
       // Precise recovery, not "fix and re-run": init already created + linked the project, so a plain re-run hits the
       // linked-gate, and --into-linked SKIPS `add` and then fails at the volume (no service to ride).
       return gate(

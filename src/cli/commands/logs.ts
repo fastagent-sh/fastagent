@@ -2,7 +2,7 @@
 import { basename, resolve } from "node:path";
 import { agentcoreName } from "../../deploy/agentcore/plan.ts";
 import { type AgentcoreLogSource, tailAgentcoreLogs } from "../../deploy/agentcore/logs.ts";
-import { spawnRunner } from "../../deploy/runner.ts";
+import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 
@@ -28,7 +28,7 @@ export async function runLogs(host: string, dirArg: string, opts: AgentcoreLogsO
       since: opts.since,
       follow: opts.follow === true,
     },
-    spawnRunner("aws", placement.workspace),
+    awsRunner(placement.workspace),
     (message) => console.error(`[fastagent] logs: ${message}`),
   );
   if (!outcome.ok) failStartup(new Error(`logs stopped: ${outcome.gate}`));

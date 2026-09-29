@@ -20,7 +20,7 @@ import {
 import { deployAgentcoreRun, pickStackOutputs } from "../../../deploy/agentcore/run.ts";
 import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
-import { spawnRunner } from "../../../deploy/runner.ts";
+import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, type ResolvedPlacement, exists } from "../../../paths.ts";
 import { loadRoutines } from "../../../schedule/discover.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
@@ -40,7 +40,7 @@ export const agentcoreHost: HostDeploy = {
   async shell({ workspace }) {
     const name = agentcoreName(basename(workspace));
     const stack = agentcoreStackName(name);
-    const aws = spawnRunner("aws", workspace);
+    const aws = awsRunner(workspace);
     const read = await awsCli(aws).read(
       ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
       awsJson(pickStackOutputs),
@@ -211,10 +211,10 @@ async function runDeployAgentcore(
         channels,
         topology,
         ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
-          agentcoreShell(runtimeArn, ingressSessionId(name), spawnRunner("aws", workspace)),
+          agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(workspace)),
         ),
       },
-      spawnRunner("aws", workspace),
+      awsRunner(workspace),
       spawnRunner("docker", workspace),
       (m) => console.error(`[fastagent] ${m}`),
       async (content) => {
