@@ -65,9 +65,9 @@ function closeWithin(
 export interface ServingSurface {
   /**
    * The routes that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /run` where the definition
-   * declares routines, minus what a channel took over or `http.invoke: false` withheld. Kept APART from the channels' rather than merged with a list of which keys are
-   * which: three separate decisions read this (browser reachability, the JSON body gate, what the startup line
-   * calls unauthenticated), and while it was a derived list each of them could answer differently.
+   * declares routines, minus what a channel took over or `http.invoke: false` withheld. Kept APART from the
+   * channels' table rather than derived from it, because three decisions read it (browser reachability, the JSON
+   * body gate, what the startup line calls unauthenticated) and must give the same answer.
    */
   unverified: Routes;
   /**
@@ -304,11 +304,8 @@ export interface AgentService {
    */
   channels: { routes: string[]; longConnections: string[] };
   /**
-   * The route keys on this port that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /run` where
-   * the definition declares routines, minus what a channel took over or `http.invoke: false` withheld. The FACT a caller needs to describe this surface: reading it off
-   * `routes` instead answers a different question, since a channel may serve one of those paths with a protocol of
-   * its own. That mistake ran in both directions here — a try-it curl for a route that 404s, and a warning about an
-   * unauthenticated `/invoke` that was really a signature-checked channel.
+   * The keys of {@link ServingSurface.unverified}: what a caller reads to describe this surface. Not derivable from
+   * `routes`, where a channel may serve one of those paths behind its own signature check.
    */
   unverifiedRoutes: readonly string[];
   /**

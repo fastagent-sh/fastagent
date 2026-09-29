@@ -131,7 +131,7 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
  * Stage two — RUN in the prepared workspace: install the agent's dependencies, then open through the workspace's own
  * FastAgent install.
  */
-export async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
+async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
   let open = openPreparedStartService;
   if (prepared.deployed) {
     const { root, agent } = prepared.deployed;
