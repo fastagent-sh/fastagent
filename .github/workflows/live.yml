@@ -36,7 +36,7 @@ jobs:
     # most expensive probe, in the one place where the sweeps below are all that stand between a kill
     # and a billing leak. Observed run time is ~20 minutes; the gap is worst-case ceilings, not slack.
     timeout-minutes: 120
-    environment: live # holds FASTAGENT_LIVE_MODEL (an API-key model) and that provider's key
+    environment: live # holds FASTAGENT_LIVE_MODEL (an OpenRouter model) and OPENROUTER_API_KEY
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -129,14 +129,12 @@ jobs:
 
       - name: Run live probes
         env:
-          # An API-KEY model, and its key under the provider's own variable (set the one FASTAGENT_LIVE_MODEL
-          # needs; an unset secret expands to "", which pi reads as absent). Not a subscription login: a
-          # deployment never receives one (the box logs itself in, which needs a person at a browser), so
-          # the deploy probes carry this key through the agent's .secrets/.env (test/live/env.ts
-          # stageModelKey), and the local probes read it from here as the product does.
+          # An OpenRouter model (`openrouter/<id>`), and the key under OpenRouter's own variable. An API key,
+          # not a subscription login: a deployment never receives one (the box logs itself in, which needs a
+          # person at a browser), so the deploy probes carry this key through the agent's .secrets/.env
+          # (test/live/env.ts stageModelKey), and the local probes read it from here as the product does.
           FASTAGENT_LIVE_MODEL: ${{ vars.FASTAGENT_LIVE_MODEL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # A bot of the probe's OWN: it sets and then deletes that bot's webhook, which would take
           # down whatever traffic a shared bot was serving.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
