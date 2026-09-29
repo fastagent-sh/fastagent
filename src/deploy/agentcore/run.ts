@@ -306,6 +306,8 @@ export async function deployAgentcoreRun(
     );
   const stackStatus = await readStackStatus();
   const status = "ok" in stackStatus ? stackStatus.ok : "";
+  // A stack that held state: an earlier deploy served from it, and may have registered webhooks at its forwarder.
+  const redeploy = status !== "" && !EMPTY_STACK_STATUSES.has(status);
   // The only answers the build can invalidate: one still in flight (a first create rolling back is exactly what step 7
   // exists for, and minutes of arm64 build are long enough for it to settle), and one we never got.
   const settling = status.endsWith("_IN_PROGRESS") || "unreadable" in stackStatus;
@@ -316,7 +318,7 @@ export async function deployAgentcoreRun(
       `warn: could not read stack ${stack} (${stackStatus.unreadable}) — if it exists, this deploy resets its ` +
         `managed SessionStorage (${MOUNT}) and a failed first create will not be cleared`,
     );
-  } else if (status !== "" && !EMPTY_STACK_STATUSES.has(status)) {
+  } else if (redeploy) {
     log(
       `warn: this is a REDEPLOY and AWS resets managed SessionStorage (${MOUNT}) on every runtime version update — ` +
         `sessions, channel state and pending wake-ups start blank. ` +
@@ -511,8 +513,10 @@ export async function deployAgentcoreRun(
         notLoggedIn,
         channels: plan.channels,
         log,
-        baseUrl: url,
-        afterLogin: "once it is, point the channels by hand — a redeploy would wipe that login again",
+        // The forwarder URL outlives a redeploy, so the webhooks an earlier deploy registered already point at it.
+        ...(redeploy
+          ? { afterLogin: "they work again: the forwarder URL is unchanged, so nothing needs pointing" }
+          : { baseUrl: url, afterLogin: "point the channels by hand (a redeploy would wipe that login again)" }),
       }),
     );
   }

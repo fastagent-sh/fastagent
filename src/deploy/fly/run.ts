@@ -200,7 +200,7 @@ export async function deployFlyRun(
         channels: plan.channels,
         log,
         baseUrl,
-        afterLogin: "once it is, re-run `fastagent deploy fly --run` (it keeps the login)",
+        afterLogin: "re-run `fastagent deploy fly --run` (it keeps the login)",
       }),
     );
   }

@@ -248,8 +248,7 @@ export async function deployDockerRun(
   const notLoggedIn = await plan.boxLogin?.run();
   if (notLoggedIn) {
     // Only a tunnel is ours to announce; without one, the webhooks were never this run's to register.
-    const afterLogin =
-      "once it is, re-run `fastagent deploy docker --run` (it keeps the login and announces the tunnel)";
+    const afterLogin = "re-run `fastagent deploy docker --run` (it keeps the login and announces the tunnel)";
     const channels = hasTunnel ? plan.channels : [];
     return { ok: false, gate: loginGate({ notLoggedIn, channels, log, afterLogin }), url };
   }

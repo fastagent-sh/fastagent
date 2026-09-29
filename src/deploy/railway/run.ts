@@ -261,7 +261,7 @@ export async function deployRailwayRun(
         channels: plan.channels,
         log,
         baseUrl: url,
-        afterLogin: "once it is, re-run `fastagent deploy railway --run --into-linked` (it keeps the login)",
+        afterLogin: "re-run `fastagent deploy railway --run --into-linked` (it keeps the login)",
       }),
     );
   }

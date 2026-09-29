@@ -78,7 +78,7 @@ describe("deploy/channel-ingress: the readiness floor before registration", () =
 
 describe("deploy/channel-ingress: a login that did not happen", () => {
   const notLoggedIn = "not logged in: … — run `fastagent login openai-codex --deployment fly` in a terminal";
-  const afterLogin = "once it is, re-run the deploy";
+  const afterLogin = "re-run the deploy";
 
   it("with no webhook to point, is the login's own refusal and nothing else", () => {
     const logs: string[] = [];
@@ -90,7 +90,11 @@ describe("deploy/channel-ingress: a login that did not happen", () => {
   it("with one, says logging in registers none, and how this host gets them registered", () => {
     const logs: string[] = [];
     const gate = loginGate({ notLoggedIn, channels: webhook("telegram"), log: (m) => logs.push(m), afterLogin });
-    expect(gate).toBe(`${notLoggedIn}. No webhook was registered, and logging in does not register one: ${afterLogin}`);
+    expect(gate).toBe(
+      `${notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
+        `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+        afterLogin,
+    );
     expect(logs).toEqual([]); // no URL yet: nothing to point by hand
   });
 

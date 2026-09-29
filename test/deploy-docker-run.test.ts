@@ -152,7 +152,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. No webhook was registered.*re-run `fastagent deploy docker --run`/,
+        /^not logged in: …\. This deploy registered no webhook.*re-run `fastagent deploy docker --run`/,
       ),
       url: "http://127.0.0.1:8787",
     });

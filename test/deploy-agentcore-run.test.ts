@@ -181,12 +181,41 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
     expect(out).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^not logged in: …\. No webhook was registered.*point the channels by hand.*lines above/,
+        /^not logged in: …\. This deploy registered no webhook.*point the channels by hand.*lines above/,
       ),
     });
     // The shell opens on the runtime this deploy just produced, and nothing is pointed at it.
     expect(order).toEqual(["login arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc"]);
     expect(tg).not.toHaveBeenCalled();
+  });
+
+  it("a redeploy's failed login says the webhooks an earlier deploy registered are still live, not missing", async () => {
+    // Every deploy wipes the runtime's login, and the forwarder URL outlives it: the channels are already delivering
+    // to a runtime with no model credential, which "point the channels by hand" would misreport.
+    const { cli: aws } = fakeCli((a) =>
+      a[0] === "cloudformation" && a[1] === "describe-stacks" && a.includes("Stacks[0].StackStatus")
+        ? { stdout: "UPDATE_COMPLETE\n" }
+        : happyAws(a),
+    );
+    const logs: string[] = [];
+    const out = await deployAgentcoreRun(
+      plan({
+        channels: declaredChannels(["telegram"]),
+        topology: FORWARDER,
+        boxLogin: { command: "fastagent login p --deployment agentcore", run: async () => "not logged in: …" },
+      }),
+      aws,
+      fakeCli().cli,
+      (m) => logs.push(m),
+      writeParams,
+      writeZip,
+      { telegram: vi.fn() },
+    );
+    expect(out).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/still points here, and every message it brings fails.*forwarder URL is unchanged/),
+    });
+    expect(logs.some((l) => l.includes("url=https://"))).toBe(false); // nothing to point by hand
   });
 
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {

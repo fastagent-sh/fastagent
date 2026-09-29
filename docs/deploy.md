@@ -65,6 +65,14 @@ A login stored on the box outranks a key in its environment (pi lets a stored cr
 added to `.secrets/.env` after the box was logged in is not used; the box's startup log says so and names the
 command that switches it to the key (`fastagent login <provider> --deployment`, choosing "API key").
 
+**A deployment made before this login existed** still holds a copy of this machine's `auth.json`: `--run` used to
+carry it as `FASTAGENT_AUTH_SEED`, which nothing reads any more, and the copy it seeded is still on the volume,
+where `--run` now keeps it as the box's credential. That copy shares its grant with this machine, so either side can
+still log the other out. Replace it once: delete the old secret (`fly secrets unset FASTAGENT_AUTH_SEED`, or
+`railway variable delete FASTAGENT_AUTH_SEED`, plus any `_2`, `_3`… it was split into), then run `fastagent login
+<provider> --deployment <host>`, which overwrites the copy with a grant of the box's own. Docker needs only the
+login (its Compose no longer passes the seed); AgentCore needs nothing, its storage is reset by every deploy.
+
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
 and routines fire on schedule, and each turn they start fails for want of a model credential. Only webhooks wait for
 the login. For an unattended first deploy of such an agent, use an API key.

@@ -174,7 +174,7 @@ export function loginGate(input: {
   notLoggedIn: string;
   channels: readonly DeclaredChannel[];
   log: (msg: string) => void;
-  /** How THIS host registers the webhooks once the box is logged in — the only per-host words in the gate. */
+  /** What THIS host does about its webhooks once the box is logged in — the only per-host words in the gate. */
   afterLogin: string;
   /** Where the channels point; unset when the host has not minted it yet (Docker's tunnel is read after). */
   baseUrl?: string;
@@ -182,8 +182,11 @@ export function loginGate(input: {
   if (webhookKinds(input.channels).length === 0) return input.notLoggedIn;
   const byHand = input.baseUrl === undefined ? [] : webhookRunbook(input.baseUrl, input.channels);
   for (const line of byHand) input.log(line);
+  // "No webhook was registered" would be about THIS run only: one an earlier deploy registered still points here.
   return (
-    `${input.notLoggedIn}. No webhook was registered, and logging in does not register one: ${input.afterLogin}` +
+    `${input.notLoggedIn}. This deploy registered no webhook, and logging in registers none; any an earlier deploy ` +
+    `registered still points here, and every message it brings fails until the box is logged in. Once it is, ` +
+    `${input.afterLogin}` +
     (byHand.length > 0 ? `. The lines above point the channels by hand.` : ``)
   );
 }

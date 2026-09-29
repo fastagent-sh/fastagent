@@ -214,12 +214,40 @@ describe("catching the browser's redirect on this machine", () => {
     }
   });
 
+  it("only the flow's own state is taken: a forged hit gets a 404 and the port stays open for the real one", async () => {
+    // Any page open in the browser can request a loopback URL. Taken as the answer, it would end the login in pi's
+    // "State mismatch" and close the port before the real redirect arrives.
+    const port = await freePort();
+    const terminal = waitingTerminal();
+    const io = catchingRedirect(terminal.io);
+    try {
+      io.openUrl(authUrl(port));
+      const answer = io.prompt("paste the redirect URL");
+      for (const forged of ["code=x", "code=x&state=guessed"]) {
+        expect((await fetch(`http://127.0.0.1:${port}/auth/callback?${forged}`)).status, forged).toBe(404);
+      }
+      expect((await fetch(`http://127.0.0.1:${port}/auth/callback?code=real&state=s`)).status).toBe(200);
+      expect(await answer).toMatch(/code=real&state=s$/);
+    } finally {
+      io.close();
+    }
+  });
+
+  it("an authorization URL with no state catches nothing: the paste is the way in", async () => {
+    const port = await freePort();
+    const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "pasted" });
+    io.openUrl(`https://auth.example/authorize?redirect_uri=${encodeURIComponent(`http://localhost:${port}/cb`)}`);
+    await expect(fetch(`http://127.0.0.1:${port}/cb?code=x`)).rejects.toThrow(); // nothing listens
+    expect(await io.prompt("paste")).toBe("pasted");
+    io.close();
+  });
+
   it("a browser that returns before the prompt is asked still answers it", async () => {
     const port = await freePort();
     const io = catchingRedirect(waitingTerminal().io);
     try {
       io.openUrl(authUrl(port));
-      await fetch(`http://127.0.0.1:${port}/auth/callback?code=early`);
+      await fetch(`http://127.0.0.1:${port}/auth/callback?code=early&state=s`);
       expect(await io.prompt("paste")).toMatch(/code=early/);
     } finally {
       io.close();

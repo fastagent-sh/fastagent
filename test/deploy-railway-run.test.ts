@@ -135,7 +135,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     );
     expect(out).toMatchObject({
       ok: false,
-      gate: expect.stringMatching(/^not logged in: …\. No webhook was registered.*railway --run --into-linked/),
+      gate: expect.stringMatching(/^not logged in: …\. This deploy registered no webhook.*railway --run --into-linked/),
     });
     expect(order).toEqual(["health", "login"]);
   });

@@ -96,16 +96,27 @@ export function catchingRedirect(io: LoginIO): LoginIO & { close(): void } {
   };
   const listen = (authUrl: string): void => {
     let redirect: URL;
+    let state: string | null;
     try {
-      redirect = new URL(new URL(authUrl).searchParams.get("redirect_uri") ?? "");
+      const authorize = new URL(authUrl);
+      redirect = new URL(authorize.searchParams.get("redirect_uri") ?? "");
+      state = authorize.searchParams.get("state");
     } catch {
       return; // no redirect to catch (a device-code page, or not a URL we can read)
     }
     if (redirect.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(redirect.hostname)) return;
+    // The flow's `state` is what tells its redirect from anything else that can reach a loopback port: any page open
+    // in the browser can request it, and a forged hit taken as the answer would end this login in "State mismatch" and
+    // close the port before the real one arrives. Without one there is nothing to tell them apart: leave it to pasting.
+    if (!state) return;
     close();
     const listening = createServer((req, res) => {
       const got = new URL(req.url ?? "/", redirect);
-      if (got.pathname !== redirect.pathname || !got.searchParams.has("code")) {
+      if (
+        got.pathname !== redirect.pathname ||
+        !got.searchParams.has("code") ||
+        got.searchParams.get("state") !== state
+      ) {
         res.writeHead(404).end();
         return;
       }
