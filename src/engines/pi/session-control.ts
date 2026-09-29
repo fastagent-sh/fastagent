@@ -136,9 +136,11 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
     const m = entry.message;
     if (m.role === "user") return { ...base, kind: "user", data: { text: contentText(m.content, "") } };
     if (m.role === "assistant") {
-      const toolCalls = (m.content as Array<{ type: string; id?: string; name?: string }>)
+      // `args` is what `tool_started` carries live (pi emits the call's recorded `arguments` there), so a reopened
+      // conversation shows the same call a watcher saw.
+      const toolCalls = (m.content as Array<{ type: string; id?: string; name?: string; arguments?: Json }>)
         .filter((b) => b.type === "toolCall")
-        .map((b) => ({ id: b.id ?? "", name: b.name ?? "" }));
+        .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args: b.arguments ?? {} }));
       const data: Json = { text: contentText(m.content, "") };
       if (toolCalls.length > 0) (data as { toolCalls?: Json }).toolCalls = toolCalls;
       return { ...base, kind: "assistant", data };
