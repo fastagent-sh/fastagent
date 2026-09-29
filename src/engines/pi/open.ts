@@ -209,7 +209,7 @@ export async function availableModelsFromDir(
  * Refresh this machine's model catalog with the credentials `createPiAgentFromDir(dir, { authPath })` would use, so a
  * model released after the installed pi appears in {@link availableModelsFromDir} and resolves for every agent here.
  * Only providers those credentials authenticate are fetched (pi asks pi.dev for no other). Nothing refreshes it on its
- * own, and a deployed agent never reads it: it runs on the catalog bundled with pi.
+ * own. It does not ship: `deploy` carries the configured model's entry when the deployed pi would not know it.
  *
  * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set.
  */

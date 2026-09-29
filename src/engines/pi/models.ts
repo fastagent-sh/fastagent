@@ -17,6 +17,7 @@ import {
   InMemoryModelsStore,
   type Model,
   type Models,
+  type ModelsStoreEntry,
   type Provider,
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
@@ -185,6 +186,31 @@ export interface PiModelRuntimeOptions {
  */
 export function modelCatalogPath(): string {
   return join(getAgentDir(), "models-store.json");
+}
+
+/**
+ * Add catalog entries to this machine's cache, keeping what it already holds: how a deployed agent receives the model
+ * its release names when the catalog bundled with its pi does not know it (the deploy side is `preflightDeploy`). A
+ * model id in `entries` replaces the held one; the rest of the provider's entry stays.
+ *
+ * ponytail: written without pi's file lock. It runs at container start, before anything on the box reads the file;
+ * take the lock if a second writer ever shares that moment.
+ */
+export async function seedModelCatalog(entries: Readonly<Record<string, ModelsStoreEntry>>): Promise<void> {
+  const path = modelCatalogPath();
+  const held = existsSync(path) ? (JSON.parse(await readFile(path, "utf8")) as Record<string, ModelsStoreEntry>) : {};
+  for (const [provider, entry] of Object.entries(entries)) {
+    const current = held[provider];
+    const ids = new Set(entry.models.map((model) => model.id));
+    held[provider] = current
+      ? {
+          ...current,
+          models: [...current.models.filter((model) => !ids.has(model.id)), ...entry.models],
+          lastModified: Math.max(current.lastModified ?? 0, entry.lastModified ?? 0),
+        }
+      : entry;
+  }
+  writeFileAtomic(path, `${JSON.stringify(held, null, 2)}\n`, 0o600, true);
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */

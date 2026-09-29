@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { createPiModels, modelCatalogPath } from "../src/engines/pi/models.ts";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { containerArtifacts } from "../src/deploy/container.ts";
+import { RELEASE_FILE, parseDeploymentRelease } from "../src/deploy/workspace.ts";
+import { createPiModelRuntime, createPiModels, modelCatalogPath, seedModelCatalog } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -813,7 +816,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
   });
 
-  it("a model known only from the machine's cached model catalog is refused under --run: the cache does not ship", async () => {
+  it("a model known only from the machine's cached catalog reaches the box through the release manifest", async () => {
     // pi's cache, as `pi update --models` or `fastagent models --refresh` leaves it: one anthropic model newer than
     // the bundled catalog.
     const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
@@ -821,14 +824,33 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const later = Date.now() + 86_400_000;
     const entry = { models: [{ ...bundled, id: "claude-cached-only" }], checkedAt: Date.now(), lastModified: later };
     await writeFile(modelCatalogPath(), JSON.stringify({ anthropic: entry }));
+    const dir = await workspace();
     try {
-      const running = await call(await workspace(), { model: "anthropic/claude-cached-only" }, { run: true });
-      expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/cached catalog.*does not ship/) });
-      // A model the bundled catalog has is not this check's business.
-      const bundledSpec = `anthropic/${bundled?.id}`;
-      const pre = await call(await workspace(), { model: bundledSpec });
-      if (pre.ok) expect(pre.messages.some((m) => /cached catalog/.test(m.text))).toBe(false);
+      const pre = await call(dir, { model: "anthropic/claude-cached-only" }, { run: true });
+      if (!pre.ok) throw new Error(pre.gate);
+      const release = containerArtifacts(pre.container).find((a) => a.path.endsWith(RELEASE_FILE));
+      const manifest = parseDeploymentRelease(release?.content ?? "");
+      expect(manifest.modelCatalog?.anthropic?.models.map((m) => m.id)).toEqual(["claude-cached-only"]);
+
+      // The box: a fresh machine whose pi knows only its bundled catalog, seeded from the manifest at start.
+      vi.stubEnv("HOME", await mkdtemp(join(tmpdir(), "fa-box-home-")));
+      const box = () => createPiModelRuntime({ agentDir: dir, credentials: new InMemoryCredentialStore() });
+      expect((await box()).getModel("anthropic", "claude-cached-only")).toBeUndefined();
+      await seedModelCatalog(manifest.modelCatalog ?? {});
+      expect((await box()).getModel("anthropic", "claude-cached-only")).toBeDefined();
+      expect((await box()).getModel("anthropic", bundled?.id as string)).toBeDefined(); // the rest stays
+      vi.unstubAllEnvs(); // back on the builder
+
+      // A model the bundled catalog has carries nothing.
+      const plain = await call(await workspace(), { model: `anthropic/${bundled?.id}` });
+      expect(plain.ok && plain.container.modelCatalog).toBeUndefined();
+
+      // A kept hand-written Dockerfile never reads the manifest, so the entry would not arrive.
+      await writeFile(join(dir, "Dockerfile"), "FROM node:22-slim\n");
+      const kept = await call(dir, { model: "anthropic/claude-cached-only" }, { run: true });
+      expect(kept).toMatchObject({ ok: false, gate: expect.stringMatching(/FASTAGENT_RELEASE_FILE.*newer than/) });
     } finally {
+      vi.unstubAllEnvs();
       await rm(modelCatalogPath(), { force: true });
     }
   });

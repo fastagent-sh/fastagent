@@ -168,6 +168,11 @@ describe("deployed workspace lifecycle", () => {
     await expect(applyDeploymentRelease(source, root, release("two"))).rejects.toThrow();
     // The manifest names a directory the container joins onto the workspace root.
     expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
+    // A carried catalog entry is seeded into pi's cache on the box, so a malformed one stops at the manifest.
+    const catalog = (modelCatalog: unknown) => JSON.stringify({ ...release("one"), modelCatalog });
+    expect(() => parseDeploymentRelease(catalog({ anthropic: { models: [{ name: "no id" }] } }))).toThrow();
+    expect(() => parseDeploymentRelease(catalog([]))).toThrow();
+    expect(parseDeploymentRelease(catalog({ anthropic: { models: [{ id: "m" }] } })).modelCatalog).toBeDefined();
   });
 });
 

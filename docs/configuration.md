@@ -169,8 +169,10 @@ provider's key can be stored instead of written into the file.
 
 **A model newer than pi's bundled catalog** is known once the machine's catalog cache has it:
 `fastagent models --refresh` (or `pi update --models`) fetches it, and every agent here can then name it. The cache
-does not ship: `deploy` refuses a model that only the cache knows. Declare the model under its provider in the agent's
-own `models.json`, or deploy with a FastAgent release whose pi bundles it.
+itself does not ship, but the configured model does: when only the cache knows it, `deploy` records its catalog entry
+in the release manifest and the deployed agent seeds its own cache from it at start, with no network call. A
+hand-written Dockerfile must set `FASTAGENT_RELEASE_FILE` for that entry to arrive, as for a model named in the
+value file.
 
 ## What the machine lends the agent
 

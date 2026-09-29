@@ -564,8 +564,8 @@ it instead.
 `pi update --models` refreshes), with the credentials `createPiAgentFromDir(dir, { authPath })` would use: pi asks
 only for the providers they authenticate, and may refresh an expired OAuth token to do so. Afterwards a model released
 after the installed pi is listed by `availableModelsFromDir` and runs for every agent on the machine. Nothing
-refreshes the cache on its own, so serving makes no catalog request. A deployed agent does not read it, and `deploy`
-refuses a model that only the cache knows. It rejects, naming each provider that failed, when the refresh fails,
+refreshes the cache on its own, so serving makes no catalog request. The cache does not ship; when the configured
+model is known only from it, `deploy` carries that model's entry in the release manifest instead. It rejects, naming each provider that failed, when the refresh fails,
 takes longer than 15 seconds, or `PI_OFFLINE` is set.
 
 Auth:

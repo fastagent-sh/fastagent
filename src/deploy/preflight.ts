@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type ModelsStoreEntry } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
@@ -21,7 +21,6 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
-  modelCatalogPath,
   interactiveAuth,
   loginProviders,
 } from "../engines/pi/models.ts";
@@ -268,7 +267,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     credentials: new InMemoryCredentialStore(),
     machineLayer: false,
   });
-  if (modelSpec) await checkCatalogModel(agentDir, modelSpec, deployed, report);
+  const modelCatalog = modelSpec ? await catalogEntryToCarry(agentDir, modelSpec, deployed) : undefined;
+  if (modelCatalog) {
+    report.note(
+      `model "${modelSpec}" is newer than the model catalog bundled with pi; its catalog entry travels in the ` +
+        "release manifest, so the deployed agent knows it without fetching anything",
+    );
+  }
   const authPath = resolveAuthPath(agentDir);
   const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
@@ -361,6 +366,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     version: await fastagentVersion(),
     apt,
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
+    ...(modelCatalog ? { modelCatalog } : {}),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
@@ -384,7 +390,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     ...allSecrets(loadedRoutines.secrets),
     ...allSecrets(inspected.secrets),
   ];
-  await checkKeptDockerfile(agentDir, config, model.envValue, valueFile, report);
+  await checkKeptDockerfile(agentDir, config, { model: model.envValue, modelCatalog }, valueFile, report);
 
   return {
     channels,
@@ -464,35 +470,36 @@ async function checkMachineModels(
 }
 
 /**
- * A model newer than the catalog bundled with pi resolves here through the machine's cached model catalog, which does
- * not ship: the deployed agent would not know it. A model unknown here too is not this check's to report, and one the
- * machine's models.json supplies is {@link checkMachineModels}'.
+ * The catalog entry the release must carry for the model: set when the catalog bundled with pi does not know it and
+ * this machine's cached catalog does (a model released after the installed pi). The cache itself is machine
+ * environment and does not ship; the model the definition names does, so its entry travels in the release manifest
+ * and the box seeds its own cache with it (`seedModelCatalog`). A model unknown here too is not this function's to
+ * carry, and one the machine's models.json supplies is {@link checkMachineModels}'.
  */
-async function checkCatalogModel(
+async function catalogEntryToCarry(
   agentDir: string,
   modelSpec: string,
   deployed: ModelRuntime,
-  report: DeployReport,
-): Promise<void> {
+): Promise<Record<string, ModelsStoreEntry> | undefined> {
   const provider = providerOf(modelSpec);
   const id = modelSpec.slice(provider.length + 1);
-  if (deployed.getModel(provider, id)) return;
-  const here = await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() });
-  if (!here.getModel(provider, id)) return;
-  if ((await machineModels(agentDir))?.inherited.includes(provider)) return;
-  report.issue(
-    `model "${modelSpec}" is newer than the model catalog bundled with this FastAgent's pi: this machine knows it ` +
-      `from its cached catalog (${modelCatalogPath()}), which does not ship, so the deployed agent would fail with ` +
-      `an unknown model. Declare the model under "${provider}" in the agent's own ${AGENT_MODELS_FILE}, or deploy ` +
-      "with a FastAgent release whose pi bundles it.",
+  if (deployed.getModel(provider, id)) return undefined;
+  if ((await machineModels(agentDir))?.inherited.includes(provider)) return undefined;
+  const model = (await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() })).getModel(
+    provider,
+    id,
   );
+  if (!model) return undefined;
+  // pi applies a cached entry only when it is newer than its bundled catalog, which the deploy moment always is.
+  const now = Date.now();
+  return { [provider]: { models: [model], lastModified: now, checkedAt: now } };
 }
 
 /**
  * What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
  * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
  * FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
- * ONLY in the value file would be reported here and absent on the box.
+ * ONLY in the value file, or a catalog entry the release carries, would be reported here and absent on the box.
  *
  * NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
  * hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
@@ -501,8 +508,8 @@ async function checkCatalogModel(
 async function checkKeptDockerfile(
   agentDir: string,
   config: FastagentConfig,
-  /** The model the release manifest carries (set only when the value file named it). */
-  modelFromValueFile: string | undefined,
+  /** What the release manifest carries for the box: the model (only when the value file named it) and its entry. */
+  manifest: { model?: string; modelCatalog?: Record<string, ModelsStoreEntry> },
   valueFile: string,
   report: DeployReport,
 ): Promise<void> {
@@ -522,12 +529,20 @@ async function checkKeptDockerfile(
   // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
   // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
   // (covering it means joining lines first) — the remaining over-strict edge.
-  if (modelFromValueFile !== undefined && !/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) {
-    const issue =
+  if (/^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText)) return;
+  if (manifest.model !== undefined) {
+    report.issue(
       `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
-      `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
-      `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`;
-    report.issue(issue);
+        `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
+        `Dockerfile), or set \`model\` in fastagent.config.ts so it ships in the config instead.`,
+    );
+  }
+  if (manifest.modelCatalog !== undefined) {
+    report.issue(
+      "your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model is newer than the catalog bundled with " +
+        "pi — its catalog entry travels in the release manifest, which is only read when that ENV points at it. " +
+        `Add it (see a generated Dockerfile), or declare the model in the agent's own ${AGENT_MODELS_FILE}.`,
+    );
   }
 }
 

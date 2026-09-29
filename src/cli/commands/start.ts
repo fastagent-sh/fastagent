@@ -14,6 +14,7 @@ import {
 import { resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import { seedModelCatalog } from "../../engines/pi/models.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
@@ -123,6 +124,9 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // `enterAgentEnv` reads the workspace's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
   applyReleaseEnv(manifest);
+  // The model the release names but the box's bundled pi catalog does not know: seeded before anything opens a
+  // registry, so every one on the box resolves it.
+  if (manifest.modelCatalog) await seedModelCatalog(manifest.modelCatalog);
   process.chdir(dir);
   return { dir, deployed: { root, agent: manifest.agent } };
 }

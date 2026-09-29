@@ -198,7 +198,7 @@ const models: CommandSpec = {
   notes:
     "A refresh asks pi.dev for the providers the agent's credentials authenticate, and caches the answer in pi's " +
     "~/.pi/agent/models-store.json, which every agent on this machine and pi itself read (`pi update --models` " +
-    "refreshes the same file). Serving never refreshes it, and a deployed agent does not read it.",
+    "refreshes the same file). Serving never refreshes it, and deploy carries only the configured model's entry.",
   run: async (args, f) => (await import("./commands/models.ts")).runModels(args[0], { refresh: f.refresh === true }),
 };
 
