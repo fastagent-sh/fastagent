@@ -4,8 +4,12 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { createPiModelRuntime, machineModelRuntime } from "../src/engines/pi/models.ts";
+import { availableModelsFromDir, createPiAgentFromDir, refreshModelCatalogOver } from "../src/engines/pi/open.ts";
 
 /** A workspace whose agent sits one level inside, with no model set and two custom endpoints. */
 async function workspace(auth: string): Promise<{ dir: string; authPath: string }> {
@@ -85,5 +89,67 @@ describe("availableModelsFromDir", () => {
         },
       }),
     ).rejects.toThrow(/credentials:/);
+  });
+});
+
+describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
+  const NEW = "claude-from-the-catalog";
+
+  /** A catalog server that lists one model the bundled catalog lacks for anthropic, answering `status` for it. */
+  async function catalogServer(status = 200): Promise<{ url: string; close: () => void }> {
+    const [bundled] = (await machineModelRuntime()).getModels("anthropic");
+    const server = createServer((req, res) => {
+      if (req.url !== "/api/models/providers/anthropic") return void res.writeHead(404).end();
+      // Newer than the bundled catalog, or pi ignores the entry.
+      const lastModified = new Date(Date.now() + 86_400_000).toUTCString();
+      res.writeHead(status, { "content-type": "application/json", "last-modified": lastModified });
+      res.end(status === 200 ? JSON.stringify([{ ...bundled, id: NEW }]) : "denied");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() };
+  }
+
+  it("reaches every agent's list and `fastagent models`, and never the registry a deployed agent has", async () => {
+    // pi fetches a provider's catalog only with a usable credential for it.
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    const a = await workspace("{}");
+    const b = await workspace("{}");
+    expect(await availableModelsFromDir(a.dir, { authPath: a.authPath })).not.toContain(`anthropic/${NEW}`);
+
+    const catalog = await catalogServer();
+    try {
+      await refreshModelCatalogOver(a.dir, { authPath: a.authPath }, catalog.url);
+    } finally {
+      catalog.close();
+    }
+
+    expect(await availableModelsFromDir(a.dir, { authPath: a.authPath })).toContain(`anthropic/${NEW}`);
+    expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).toContain(`anthropic/${NEW}`);
+    const opened = await createPiAgentFromDir(b.dir, { model: `anthropic/${NEW}`, authPath: b.authPath });
+    expect(opened.modelSpec).toBe(`anthropic/${NEW}`); // listed, so it runs
+    expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
+    const deployed = await createPiModelRuntime({
+      agentDir: join(a.dir, "agent"),
+      credentials: new InMemoryCredentialStore(),
+      machineLayer: false,
+    });
+    expect(deployed.getModel("anthropic", NEW)).toBeUndefined(); // the cache does not ship
+  });
+
+  it("a refresh that fails names the provider and why, instead of leaving the list silently stale", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    const { dir, authPath } = await workspace("{}");
+    const catalog = await catalogServer(403);
+    try {
+      await expect(refreshModelCatalogOver(dir, { authPath }, catalog.url)).rejects.toThrow(/anthropic: .*403/);
+    } finally {
+      catalog.close();
+    }
+  });
+
+  it("PI_OFFLINE refuses the refresh rather than pretending it ran", async () => {
+    vi.stubEnv("PI_OFFLINE", "1");
+    const { dir, authPath } = await workspace("{}");
+    await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(/PI_OFFLINE/);
   });
 });

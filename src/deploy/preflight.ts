@@ -8,6 +8,7 @@ import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
@@ -20,6 +21,7 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
+  modelCatalogPath,
   interactiveAuth,
   loginProviders,
 } from "../engines/pi/models.ts";
@@ -258,9 +260,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   await checkMachineModels(agentDir, modelSpec, report);
 
-  // The registry the DEPLOYED agent has (its own models.json, not the machine's), built here only so a malformed file
-  // stops the deploy with pi's own reason before anything below reads the file raw. No credential is read for that.
-  await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore(), machineLayer: false });
+  // The registry the DEPLOYED agent has (its own models.json over pi's bundled catalog, nothing of this machine's),
+  // built first so a malformed file stops the deploy with pi's own reason before anything below reads the file raw.
+  // No credential is read for that.
+  const deployed = await createPiModelRuntime({
+    agentDir,
+    credentials: new InMemoryCredentialStore(),
+    machineLayer: false,
+  });
+  if (modelSpec) await checkCatalogModel(agentDir, modelSpec, deployed, report);
   const authPath = resolveAuthPath(agentDir);
   const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
@@ -453,6 +461,31 @@ async function checkMachineModels(
       `${AGENT_MODELS_FILE} to deploy it.`;
     report.issue(issue);
   }
+}
+
+/**
+ * A model newer than the catalog bundled with pi resolves here through the machine's cached model catalog, which does
+ * not ship: the deployed agent would not know it. A model unknown here too is not this check's to report, and one the
+ * machine's models.json supplies is {@link checkMachineModels}'.
+ */
+async function checkCatalogModel(
+  agentDir: string,
+  modelSpec: string,
+  deployed: ModelRuntime,
+  report: DeployReport,
+): Promise<void> {
+  const provider = providerOf(modelSpec);
+  const id = modelSpec.slice(provider.length + 1);
+  if (deployed.getModel(provider, id)) return;
+  const here = await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() });
+  if (!here.getModel(provider, id)) return;
+  if ((await machineModels(agentDir))?.inherited.includes(provider)) return;
+  report.issue(
+    `model "${modelSpec}" is newer than the model catalog bundled with this FastAgent's pi: this machine knows it ` +
+      `from its cached catalog (${modelCatalogPath()}), which does not ship, so the deployed agent would fail with ` +
+      `an unknown model. Declare the model under "${provider}" in the agent's own ${AGENT_MODELS_FILE}, or deploy ` +
+      "with a FastAgent release whose pi bundles it.",
+  );
 }
 
 /**

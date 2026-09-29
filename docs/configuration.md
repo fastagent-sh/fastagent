@@ -164,7 +164,13 @@ provider's key can be stored instead of written into the file.
   only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
   which the deployed agent then runs without that entry.
 
-`fastagent models` lists the built-in catalog only; `fastagent info` shows what an agent resolved.
+`fastagent models` lists what the machine offers (built-ins, the cached model catalog, `~/.fastagent/models.json`);
+`fastagent info` shows what an agent resolved.
+
+**A model newer than pi's bundled catalog** is known once the machine's catalog cache has it:
+`fastagent models --refresh` (or `pi update --models`) fetches it, and every agent here can then name it. The cache
+does not ship: `deploy` refuses a model that only the cache knows. Declare the model under its provider in the agent's
+own `models.json`, or deploy with a FastAgent release whose pi bundles it.
 
 ## What the machine lends the agent
 

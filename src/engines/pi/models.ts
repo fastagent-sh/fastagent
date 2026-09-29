@@ -14,13 +14,14 @@ import {
   type Api,
   type CredentialStore,
   InMemoryCredentialStore,
+  InMemoryModelsStore,
   type Model,
   type Models,
   type Provider,
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   type CredentialSourceOptions,
   type FastagentAuthOptions,
@@ -30,7 +31,7 @@ import {
   fastagentCredentialStore,
 } from "./auth.ts";
 import { type AuthLayers, resolveAuthLayers } from "./config.ts";
-import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath, resolveStateRoot } from "../../paths.ts";
+import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
 /** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md). */
@@ -165,36 +166,96 @@ export interface PiModelRuntimeOptions {
   /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
   agentDir?: string;
   /**
-   * Layer the machine's models.json under the agent's (default). Off for the registry a DEPLOYED agent has, which
-   * `deploy` must judge by: the machine's file does not ship.
+   * Layer the machine under the agent (default): its models.json, and its cached model catalog
+   * ({@link modelCatalogPath}). Off for the registry a DEPLOYED agent has, which `deploy` must judge by: neither ships,
+   * so that registry is the agent's own file over the catalog bundled with pi.
    */
   machineLayer?: boolean;
-  /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
-  stateRoot?: string;
   /** Extra providers for the ids the built-ins do not cover. */
   providers?: readonly Provider[];
+  /** Where a catalog refresh asks instead of pi.dev: a test seam. */
+  catalogBaseUrl?: string;
 }
 
-/** The models.json a runtime for these options loads, and where its catalog cache goes. */
+/**
+ * pi's own cache of the model catalog: the models pi.dev lists that are newer than the catalog bundled with pi, kept by
+ * `pi` itself (its TUI refreshes it in the background, `pi update --models` on demand) and by
+ * `refreshModelCatalog`. Machine environment, like the skills an agent inherits: read, never shipped. pi's file
+ * store locks it, so every process on the machine can share it.
+ */
+export function modelCatalogPath(): string {
+  return join(getAgentDir(), "models-store.json");
+}
+
+/** The models.json a runtime for these options loads, and which model catalog it reads. */
 async function runtimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">) {
   const { agentDir } = options;
+  const machine = options.machineLayer !== false;
   const models = !agentDir
     ? undefined
-    : options.machineLayer === false
-      ? { path: join(agentDir, AGENT_MODELS_FILE) }
-      : await modelsFileFor(agentDir);
+    : machine
+      ? await modelsFileFor(agentDir)
+      : { path: join(agentDir, AGENT_MODELS_FILE) };
   return {
     models,
     create: {
       modelsPath: models?.path ?? null,
-      // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`, which would
-      // write a generated cache INTO the author's agent dir.
+      // MUST be set whenever modelsPath is: pi defaults the store to `<dirname(modelsPath)>/models-store.json`, which
+      // would write a cache INTO the author's agent dir. Without a directory, pi keeps the catalog in memory.
       ...(agentDir
-        ? { modelsStorePath: join(options.stateRoot ?? resolveStateRoot(agentDir), "models-store.json") }
+        ? machine
+          ? { modelsStorePath: modelCatalogPath() }
+          : { modelsStore: new InMemoryModelsStore() }
         : {}),
+      // Never fetched while a runtime is built: serving stays offline and reproducible. A refresh is asked for.
       allowModelNetwork: false,
+      ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
     },
   };
+}
+
+/**
+ * This machine's registry, without an agent: pi's built-ins, the machine's models.json and its model catalog. What
+ * `fastagent models` lists — every spec an agent here can name without a models.json of its own.
+ */
+export async function machineModelRuntime(): Promise<ModelRuntime> {
+  const runtime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
+    modelsPath: machineModelsPath(),
+    modelsStorePath: modelCatalogPath(),
+    allowModelNetwork: false,
+  });
+  const error = runtime.getError();
+  if (error) throw new Error(error);
+  return runtime;
+}
+
+/** How long a catalog refresh may take, as `pi update --models` allows. */
+const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
+
+/**
+ * Fetch the model catalog of every provider `runtime` can authenticate into the machine's cache
+ * ({@link modelCatalogPath}): the refresh `pi update --models` runs. pi asks pi.dev only for a provider with a usable
+ * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
+ * that failed, when any part fails, when it outlasts 15 seconds, and when `PI_OFFLINE` is set.
+ */
+export async function refreshCatalog(runtime: ModelRuntime, options: { signal?: AbortSignal } = {}): Promise<void> {
+  // pi skips its own background refresh under PI_OFFLINE, but an explicit `allowNetwork: true` overrides that.
+  if (process.env.PI_OFFLINE !== undefined) throw new Error("PI_OFFLINE is set, so the model catalog is not refreshed");
+  const timeout = AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const result = await runtime.refresh({ allowNetwork: true, force: true, signal });
+  if (result.aborted) {
+    throw new Error(
+      options.signal?.aborted
+        ? "model catalog refresh cancelled"
+        : `model catalog refresh did not finish within ${CATALOG_REFRESH_TIMEOUT_MS / 1000}s`,
+    );
+  }
+  if (result.errors.size > 0) {
+    const details = [...result.errors].map(([provider, error]) => `${provider}: ${error.message}`).join("; ");
+    throw new Error(`could not refresh the model catalog: ${details}`);
+  }
 }
 
 /**

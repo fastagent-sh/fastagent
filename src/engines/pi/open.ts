@@ -19,7 +19,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
-import { createPiModelRuntime, resolveCredentials } from "./models.ts";
+import { createPiModelRuntime, refreshCatalog, resolveCredentials } from "./models.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -203,6 +203,36 @@ export async function availableModelsFromDir(
     credentials: resolveCredentials(options, { agentDir }).credentials,
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
+}
+
+/**
+ * Refresh this machine's model catalog with the credentials `createPiAgentFromDir(dir, { authPath })` would use, so a
+ * model released after the installed pi appears in {@link availableModelsFromDir} and resolves for every agent here.
+ * Only providers those credentials authenticate are fetched (pi asks pi.dev for no other). Nothing refreshes it on its
+ * own, and a deployed agent never reads it: it runs on the catalog bundled with pi.
+ *
+ * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set.
+ */
+export function refreshModelCatalog(
+  dir: string,
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal } = {},
+): Promise<void> {
+  return refreshModelCatalogOver(dir, options);
+}
+
+/** {@link refreshModelCatalog} against another catalog server. Not public: a test seam. */
+export async function refreshModelCatalogOver(
+  dir: string,
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal },
+  catalogBaseUrl?: string,
+): Promise<void> {
+  const { agentDir } = resolvePlacement(dir);
+  const runtime = await createPiModelRuntime({
+    agentDir,
+    credentials: resolveCredentials(options, { agentDir }).credentials,
+    ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+  });
+  await refreshCatalog(runtime, options.signal ? { signal: options.signal } : {});
 }
 
 /**

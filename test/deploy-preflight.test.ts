@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { createPiModels } from "../src/engines/pi/models.ts";
+import { createPiModels, modelCatalogPath } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -811,6 +811,26 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const shipped = await call(own, { model: "localgw/m" });
     expect(shipped.ok).toBe(true);
     if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
+  });
+
+  it("a model known only from the machine's cached model catalog is refused under --run: the cache does not ship", async () => {
+    // pi's cache, as `pi update --models` or `fastagent models --refresh` leaves it: one anthropic model newer than
+    // the bundled catalog.
+    const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
+    await mkdir(dirname(modelCatalogPath()), { recursive: true });
+    const later = Date.now() + 86_400_000;
+    const entry = { models: [{ ...bundled, id: "claude-cached-only" }], checkedAt: Date.now(), lastModified: later };
+    await writeFile(modelCatalogPath(), JSON.stringify({ anthropic: entry }));
+    try {
+      const running = await call(await workspace(), { model: "anthropic/claude-cached-only" }, { run: true });
+      expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/cached catalog.*does not ship/) });
+      // A model the bundled catalog has is not this check's business.
+      const bundledSpec = `anthropic/${bundled?.id}`;
+      const pre = await call(await workspace(), { model: bundledSpec });
+      if (pre.ok) expect(pre.messages.some((m) => /cached catalog/.test(m.text))).toBe(false);
+    } finally {
+      await rm(modelCatalogPath(), { force: true });
+    }
   });
 
   it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {

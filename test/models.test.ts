@@ -255,18 +255,13 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     expect(runtime.getProvider("anthropic")).toBeDefined();
   });
 
-  it("pi's generated catalog cache lands in the state root, never in the agent dir", async () => {
-    // pi defaults modelsStorePath to `<dirname(modelsPath)>/models-store.json` — i.e. inside the agent
-    // dir, which `deploy` bakes wholesale into the image. The definition dir holds authored files only.
+  it("pi's catalog cache is the machine's: never written into the agent dir or its state root", async () => {
+    // pi defaults the store to `<dirname(modelsPath)>/models-store.json` — inside the agent dir, which `deploy`
+    // bakes wholesale into the image. The definition dir holds authored files only.
     const dir = await agentWith(GATEWAY);
-    const stateRoot = join(dir, ".state");
-    await mkdir(stateRoot, { recursive: true });
-    await createPiModelRuntime({
-      agentDir: dir,
-      credentials: fastagentCredentialStore(join(dir, "auth.json")),
-      stateRoot,
-    });
+    await createPiModelRuntime({ agentDir: dir, credentials: fastagentCredentialStore(join(dir, "auth.json")) });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+    expect(existsSync(join(dir, ".state", "models-store.json"))).toBe(false);
   });
 });
 

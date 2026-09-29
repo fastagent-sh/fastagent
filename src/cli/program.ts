@@ -181,13 +181,25 @@ const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
   description:
-    'List every registered "provider/modelId" spec — use one with --model or as `model` in fastagent.config.ts.',
+    'List every "provider/modelId" spec this machine offers (pi\'s built-ins, the model catalog pi.dev has refreshed ' +
+    "here, and ~/.fastagent/models.json) — use one with --model or as `model` in fastagent.config.ts.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
+  flags: [
+    {
+      flags: "--refresh",
+      description: "fetch the model catalog first, with the credentials of the agent in this directory",
+    },
+  ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter; provider-name matches rank first" },
+    { cmd: "fastagent models --refresh", note: "models newer than the installed pi" },
   ],
-  run: async (args) => (await import("./commands/models.ts")).runModels(args[0]),
+  notes:
+    "A refresh asks pi.dev for the providers the agent's credentials authenticate, and caches the answer in pi's " +
+    "~/.pi/agent/models-store.json, which every agent on this machine and pi itself read (`pi update --models` " +
+    "refreshes the same file). Serving never refreshes it, and a deployed agent does not read it.",
+  run: async (args, f) => (await import("./commands/models.ts")).runModels(args[0], { refresh: f.refresh === true }),
 };
 
 const start: CommandSpec = {
