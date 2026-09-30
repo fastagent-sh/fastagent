@@ -2,9 +2,10 @@
  * `retryable` classification — the one bit every SPEC failure carries, and the reason a channel
  * either retries or reports. Structured status/code first, prose only as the last-resort ceiling.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import { attachedFilesManifest } from "../src/channels/kit/invoke-turn-kit.ts";
-import { classifyRetryable, errorToTerminal, toTerminal } from "../src/engines/pi/turn-kit.ts";
+import { classifyRetryable, errorToTerminal, toPiPromptOptions, toTerminal } from "../src/engines/pi/turn-kit.ts";
 
 describe("classifyRetryable (structured signal first, prose as the ceiling)", () => {
   it("a status decides, whatever the prose says", () => {
@@ -86,5 +87,30 @@ describe("attachedFilesManifest: states, does not instruct", () => {
 
   it("renders nothing for no files", () => {
     expect(attachedFilesManifest([])).toBe("");
+  });
+});
+
+describe("toPiPromptOptions: a queued image pi cannot resize is sent as given, and said", () => {
+  it("resizes what it can decode; keeps what it cannot, with a warning naming the image", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const garbage = Buffer.from("not an image").toString("base64");
+    const said: string[] = [];
+    const warn = vi.spyOn(log, "warn").mockImplementation((message: string) => void said.push(message));
+    try {
+      const out = await toPiPromptOptions(
+        {
+          text: "look",
+          images: [
+            { data: png, mimeType: "image/png" },
+            { data: garbage, mimeType: "image/png" },
+          ],
+        },
+        "queued",
+      );
+      expect(out?.images?.map((image) => image.data)).toEqual([png, garbage]);
+      expect(said).toEqual([expect.stringContaining("queued image 2 (image/png) could not be resized")]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
