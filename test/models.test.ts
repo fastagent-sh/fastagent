@@ -505,7 +505,13 @@ describe("the model catalogs: the agent's own over the machine's", () => {
       checkAuth: async () => undefined,
       refresh,
     } as unknown as ModelRuntime;
-    await expect(refreshCatalog(runtime)).rejects.toThrow(/no provider has a usable credential/);
+    const built: boolean[] = [];
+    const build = async (catalogFile: boolean) => {
+      built.push(catalogFile);
+      return runtime;
+    };
+    await expect(refreshCatalog(build)).rejects.toThrow(/no provider has a usable credential/);
     expect(refresh).not.toHaveBeenCalled();
+    expect(built).toEqual([false]); // the file-backed runtime, which would create the file, is never built
   });
 });

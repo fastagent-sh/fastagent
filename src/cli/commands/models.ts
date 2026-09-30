@@ -15,15 +15,19 @@ import {
   refreshGlobalModelCatalog,
 } from "../../engines/pi/models.ts";
 import { refreshModelCatalog } from "../../engines/pi/open.ts";
-import { AGENT_MODEL_CATALOG_FILE, GLOBAL_HOME_DIR, findAgentDir } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, placementOrExit } from "../fail.ts";
 
 export async function runModels(
   search: string | undefined,
   opts: { refresh?: boolean; global?: boolean } = {},
 ): Promise<void> {
-  const agentDir = opts.global ? undefined : findAgentDir(process.cwd());
+  const cwd = process.cwd();
+  const agentDir = opts.global ? undefined : findAgentDir(cwd);
+  // "Outside an agent" must mean exactly that, as for `login`: inside an agent's subdirectory, or among several agents
+  // with no default, falling back to the machine would record the models where no deploy carries them.
+  if (!opts.global && !agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
   if (opts.refresh) {
     // pi fetches a provider's catalog only with a usable credential for it: the scope's own credentials and `.env`
     // keys, as `login` reads them.

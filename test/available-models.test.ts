@@ -173,9 +173,18 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     }
   });
 
-  it("PI_OFFLINE refuses the refresh rather than pretending it ran", async () => {
-    vi.stubEnv("PI_OFFLINE", "1");
+  it("a refused refresh writes nothing: no models-store.json appears for PI_OFFLINE or a missing credential", async () => {
     const { dir, authPath } = await workspace("{}");
+    const file = join(dir, "agent", "models-store.json");
+    vi.stubEnv("PI_OFFLINE", "1");
     await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(/PI_OFFLINE/);
+    expect(existsSync(file)).toBe(false);
+    vi.unstubAllEnvs();
+    // No credential anywhere: every provider's variables unset, nothing stored.
+    for (const name of Object.keys(process.env)) if (/_(API_KEY|TOKEN|KEY)$/.test(name)) vi.stubEnv(name, undefined);
+    await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(
+      /no provider has a usable credential/,
+    );
+    expect(existsSync(file)).toBe(false);
   });
 });

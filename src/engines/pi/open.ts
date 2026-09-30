@@ -230,13 +230,17 @@ export async function refreshModelCatalogOver(
   catalogBaseUrl?: string,
 ): Promise<void> {
   const { agentDir } = resolvePlacement(dir);
-  const runtime = await createPiModelRuntime({
-    agentDir,
-    credentials: resolveCredentials(options, { agentDir }).credentials,
-    catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE),
-    ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
-  });
-  await refreshCatalog(runtime, options.signal ? { signal: options.signal } : {});
+  const { credentials } = resolveCredentials(options, { agentDir });
+  await refreshCatalog(
+    (catalogFile) =>
+      createPiModelRuntime({
+        agentDir,
+        credentials,
+        ...(catalogFile ? { catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE) } : {}),
+        ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+      }),
+    options.signal ? { signal: options.signal } : {},
+  );
 }
 
 /**

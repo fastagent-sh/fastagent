@@ -297,32 +297,42 @@ export async function machineModelRuntime(
 export async function refreshGlobalModelCatalog(
   options: { signal?: AbortSignal; catalogBaseUrl?: string } = {},
 ): Promise<void> {
-  const runtime = await machineModelRuntime({
-    credentials: fastagentCredentialStore(GLOBAL_AUTH_PATH),
-    catalogFile: globalCatalogPath(),
-    ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
-  });
-  await refreshCatalog(runtime, options.signal ? { signal: options.signal } : {});
+  const credentials = fastagentCredentialStore(GLOBAL_AUTH_PATH);
+  await refreshCatalog(
+    (catalogFile) =>
+      machineModelRuntime({
+        credentials,
+        ...(catalogFile ? { catalogFile: globalCatalogPath() } : {}),
+        ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
+      }),
+    options.signal ? { signal: options.signal } : {},
+  );
 }
 
 /** How long a catalog refresh may take, as `pi update --models` allows. */
 const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch the model catalog of every provider `runtime` can authenticate into the catalog file it was built over: the
- * refresh `pi update --models` runs. pi asks pi.dev only for a provider with a usable
+ * Fetch the model catalog of every provider the runtime can authenticate into its catalog file: the refresh
+ * `pi update --models` runs. `runtime(true)` is built over that file, `runtime(false)` over the read-only layers; the
+ * file-backed one is built only once the refresh is known to run, because pi's file store creates the file on read and
+ * a refused refresh must leave nothing behind. pi asks pi.dev only for a provider with a usable
  * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
  * that failed, when any part fails, when it outlasts 15 seconds, when `PI_OFFLINE` is set, and when no provider has a
  * usable credential (the refresh would ask for nothing).
  */
-export async function refreshCatalog(runtime: ModelRuntime, options: { signal?: AbortSignal } = {}): Promise<void> {
+export async function refreshCatalog(
+  runtime: (catalogFile: boolean) => Promise<ModelRuntime>,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
   // pi skips its own background refresh under PI_OFFLINE, but an explicit `allowNetwork: true` overrides that.
   if (process.env.PI_OFFLINE !== undefined) throw new Error("PI_OFFLINE is set, so the model catalog is not refreshed");
   // pi skips a provider it cannot authenticate without recording anything, so with no usable credential at all the
   // refresh would "succeed" having asked for nothing.
-  const refreshable = runtime.getProviders().filter((provider) => provider.refreshModels !== undefined);
+  const probe = await runtime(false);
+  const refreshable = probe.getProviders().filter((provider) => provider.refreshModels !== undefined);
   const usable = await Promise.all(
-    refreshable.map(async (provider) => (await runtime.checkAuth(provider.id)) !== undefined),
+    refreshable.map(async (provider) => (await probe.checkAuth(provider.id)) !== undefined),
   );
   if (!usable.includes(true)) {
     throw new Error(
@@ -332,7 +342,7 @@ export async function refreshCatalog(runtime: ModelRuntime, options: { signal?: 
   }
   const timeout = AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  const result = await runtime.refresh({ allowNetwork: true, force: true, signal });
+  const result = await (await runtime(true)).refresh({ allowNetwork: true, force: true, signal });
   if (result.aborted) {
     throw new Error(
       options.signal?.aborted
