@@ -50,10 +50,11 @@ export async function agentCommands(
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(workspace);
   const { extensionPaths } = served;
-  const extensionCommands =
-    extensionPaths.length === 0
-      ? []
-      : await servedExtensionCommands({ cwd: workspace, modelRuntime: await served.modelRuntime(), extensionPaths });
+  const extensionCommands = await servedExtensionCommands({
+    cwd: workspace,
+    modelRuntime: await served.modelRuntime(),
+    extensionPaths,
+  });
   // pi dispatches an extension command before it expands a template, so a template it shadows never runs.
   const shadowed = new Set(extensionCommands.map((command) => command.invocationName));
   return [
@@ -122,7 +123,7 @@ export interface AgentAssembly {
   stateRoot: string;
   /** The credential store and model registry every turn and every report reads ({@link agentModels}). */
   models: AgentModels;
-  /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
+  /** The full mounted tool surface (all coding tools + config.tools + discovered tools/). */
   tools: MountedTool[];
   toolNames: string[];
   deferredToolNames: string[];
@@ -158,7 +159,7 @@ export async function resolveAgentAssembly(
   // definition and must survive both faults; every path through this function is about to run ALL of the tools, so
   // no `owner`.
   //
-  // DEFERRED tools gate too, deliberately: `search_tools` can activate one mid-turn, so "registered"
+  // DEFERRED tools gate too, deliberately: native discovery can activate one mid-turn, so "registered"
   // means "may run in this process" — letting it start would put the empty-credential failure back
   // inside a turn. An author who does not want that opts out per tool by not declaring.
   gateSecrets({ declared: toolSecrets, failures: [] });
@@ -173,7 +174,7 @@ export async function resolveAgentAssembly(
     workspace,
     stateRoot,
     // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
-    models: agentModels(agentDir, options),
+    models: agentModels(agentDir, options, { cwd: workspace }),
     tools,
     toolNames,
     deferredToolNames,
@@ -214,8 +215,8 @@ export async function availableModelsFromDir(
   dir: string,
   options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<string[]> {
-  const { agentDir } = resolvePlacement(dir);
-  const models = await agentModels(agentDir, options).runtime();
+  const { agentDir, workspace } = resolvePlacement(dir);
+  const models = await agentModels(agentDir, options, { cwd: workspace }).runtime();
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
 }
 
@@ -290,7 +291,7 @@ export async function createPiAgentFromDir(
   http?: HttpSurface;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
-  /** Tools registered but not initially active (deferred) — activated via search_tools. */
+  /** Tools with native deferred exposure, loaded on demand through tool_search (activated for them). */
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
 }> {
@@ -348,7 +349,7 @@ export async function createPiAgentFromDir(
       commands: () =>
         agentCommands(agentDir, workspace, {
           extensionPaths: assembly.extensionPaths,
-          modelRuntime: async () => (await assembly.engine()).modelRuntime,
+          modelRuntime: assembly.createModelRuntime,
         }),
       // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
       // data plane's observer seam.

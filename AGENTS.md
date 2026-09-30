@@ -220,13 +220,13 @@ src/
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent (its own records,
     │                       # in pi's per-workspace location — a SERVED record belongs to the process serving it)
-    ├── tool.ts             # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
+    ├── tool.ts             # defineTool (Zod input/output + native exposure) + tools/ filesystem discovery
     ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
-    ├── search-tools.ts     # built-in search_tools loader for deferred tools
     ├── wake-tool.ts        # the built-in `wake` tool; withWakeTool mounts it (serving path only)
     ├── definition.ts       # AGENTS.md + skills loading and bundling
     ├── machine.ts          # the machine an agent inherits: its skills, prompt templates (installed pi packages
-    │                       # included — never installed by us) and engine settings, read once per process
+    │                       # included — never installed by us), engine settings and which Pi built-in extensions
+    │                       # (codemode, tool-search; never mcp) stay enabled, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
     ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
     ├── models.ts           # the registry: the agent's OWN models.json and models-store.json (definition-local,

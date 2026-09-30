@@ -7,6 +7,8 @@
  */
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { definitionServices } from "./agent-session-factory.ts";
+import { loadExtensionPaths } from "./definition.ts";
 import {
   type AuthLayers,
   type CredentialSourceOptions,
@@ -18,6 +20,7 @@ import {
   resolveAuthLayers,
 } from "./auth.ts";
 import {
+  type ModelFiles,
   createPiModelRuntime,
   environmentAuthSource,
   modelRuntimeFiles,
@@ -48,9 +51,12 @@ export interface AgentModels {
   credentials: CredentialStore;
   /**
    * The registry: pi's built-ins, plus (with a directory) the agent's `models.json` and model catalog over the
-   * machine's, plus `providers`. Built on first use and shared after, so a malformed file fails the first reader.
+   * machine's, plus `providers` and extension model declarations. An unbound catalog, built on first use and shared
+   * after; session bindings use createRuntime and their own extension instances.
    */
   runtime(): Promise<ModelRuntime>;
+  /** A session-local registry, before its extensions are loaded. Credentials remain shared. */
+  createRuntime(): Promise<ModelRuntime>;
   /**
    * What authenticates `provider` here, resolved exactly as a turn resolves it: the ONE answer the startup report and a
    * deployed box's `login --if-missing` both give. `modelId` picks the model to probe with; the provider's first one
@@ -60,6 +66,8 @@ export interface AgentModels {
 }
 
 export interface AgentModelsOptions {
+  /** Workspace for extension model registration; defaults to agentDir for standalone definitions. */
+  cwd?: string;
   /** Extra providers registered on top of the built-ins (a same id replaces one). */
   providers?: readonly Provider[];
   /**
@@ -96,17 +104,38 @@ export function agentModels(
     : agentDir
       ? resolveAuthLayers(agentDir, source.authPath)
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
+  // The model files, read once for every runtime this agent builds: a session's and the control plane's.
+  let modelFiles: Promise<ModelFiles> | undefined;
+  const readModelFiles = (): Promise<ModelFiles> =>
+    (modelFiles ??= modelRuntimeFiles({
+      ...(agentDir ? { agentDir } : {}),
+      ...(machineLayer !== undefined ? { machineLayer } : {}),
+    }));
   const store: FastagentCredentialStore | undefined = files
-    ? agentCredentialStore(files, { agentDir, providers, machineLayer, warn: source.warn })
+    ? agentCredentialStore(files, readModelFiles, { providers, warn: source.warn })
     : undefined;
   const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
-  let registry: Promise<ModelRuntime> | undefined;
-  const runtime = (): Promise<ModelRuntime> => {
-    registry ??= createPiModelRuntime({
+  const createRuntime = async (): Promise<ModelRuntime> =>
+    createPiModelRuntime({
       credentials,
+      files: await readModelFiles(),
       ...(agentDir ? { agentDir } : {}),
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
+    });
+  let registry: Promise<ModelRuntime> | undefined;
+  const runtime = (): Promise<ModelRuntime> => {
+    registry ??= createRuntime().then(async (models) => {
+      if (agentDir) {
+        const cwd = options.cwd ?? agentDir;
+        await definitionServices({
+          cwd,
+          modelRuntime: models,
+          definition: { skills: [] },
+          extensionPaths: await loadExtensionPaths(agentDir, { cwd }),
+        });
+      }
+      return models;
     });
     return registry;
   };
@@ -114,6 +143,7 @@ export function agentModels(
     ...(files ? { auth: files } : {}),
     credentials,
     runtime,
+    createRuntime,
     async authStatus(provider, modelId) {
       const models = await runtime();
       const id = modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
@@ -161,7 +191,8 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
  */
 function agentCredentialStore(
   auth: AuthLayers,
-  options: FastagentAuthOptions & AgentModelsOptions & { agentDir?: string },
+  modelFiles: () => Promise<ModelFiles>,
+  options: FastagentAuthOptions & Pick<AgentModelsOptions, "providers">,
 ): FastagentCredentialStore {
   const { warn, providers = [] } = options;
   const fallback = auth.fallback;
@@ -171,7 +202,7 @@ function agentCredentialStore(
     project ??= (async () => {
       const runtime = await ModelRuntime.create({
         credentials: fastagentCredentialStore(auth.path, { warn }),
-        ...(await modelRuntimeFiles(options)).create,
+        ...(await (await modelFiles()).create()),
         refreshOnCreate: false,
       });
       for (const provider of providers) runtime.registerNativeProvider(provider);

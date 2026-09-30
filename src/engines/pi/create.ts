@@ -18,16 +18,8 @@ import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import {
-  type FastagentTool,
-  type ToolCollision,
-  isDeferredTool,
-  loadTools,
-  mergeDiscoveredTools,
-  type MountedTool,
-} from "./tool.ts";
+import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
-import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
@@ -79,6 +71,12 @@ function omittedBuiltinNames(mounted: readonly MountedTool[], cwd: string): stri
   return [...new Set(piRegisteredToolNames(cwd))].filter((name) => !mountedNames.has(name));
 }
 
+function isDefaultActiveTool(tool: MountedTool): boolean {
+  return (
+    (!tool.exposure || tool.exposure === "direct" || tool.exposure === "model-only") && tool.defaultActive !== false
+  );
+}
+
 /**
  * The full directory-agent tool set: all pi coding tools + `config.tools` + discovered `tools/` (deduped, existing
  * win), plus the authored names and collisions to report.
@@ -91,8 +89,7 @@ export async function resolveAgentTools(
   tools: MountedTool[];
   toolNames: string[];
   /**
-   * Tools registered but not initially active (defineTool `deferred: true`) — discovered/activated via the built-in
-   * `search_tools` loader.
+   * Tools with native deferred exposure, loaded on demand through tool_search (activated for them).
    */
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
@@ -125,27 +122,18 @@ export async function resolveAgentTools(
     mountedConfigTools.push(tool);
   }
   const merged = mergeDiscoveredTools(configured, discovered.tools);
-  // The built-in `search_tools` loader mounts here.
-  const tools = withSearchTool(merged.tools);
-  // Builtin = a search_tools that was ABSENT before withSearchTool (a reference compare would misfire on the
-  // deferred-authored-loader case, where withSearchTool returns a new array without adding one).
-  const builtinLoaderMounted =
-    !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
+  const tools = merged.tools;
   const toolCollisions = [...discovered.collisions, ...configuredCollisions, ...merged.collisions];
   // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/).
   // The discovered tools that were DROPPED (a coding tool or config.tools already owns the name):
   // asking the mounted set instead would read the winner's name as proof the loser is mounted.
   const shadowed = new Set(merged.collisions.map((c) => c.name));
   const defaultNames = new Set<string>(CODING_TOOL_NAMES);
-  const toolNames = tools
-    .filter(
-      (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
-    )
-    .map((t) => t.name);
+  const toolNames = tools.filter((t) => !defaultNames.has(t.name) && isDefaultActiveTool(t)).map((t) => t.name);
   return {
     tools,
     toolNames,
-    deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
+    deferredToolNames: tools.filter((t) => t.exposure === "deferred").map((t) => t.name),
     toolCollisions,
     toolFailures: discovered.failures,
     // Mounted only, and config.tools are FastagentTools too, so a programmatic tool declares the
@@ -173,8 +161,10 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
   const mounted = options.tools ?? [];
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so naming them here
   // would invite calls to tools that don't exist yet.
-  const tools = mounted.filter((t) => !isDeferredTool(t));
-  const deferredCount = mounted.length - tools.length;
+  const tools = mounted.filter(isDefaultActiveTool);
+  // Only `deferred` tools are tool_search's to load (the session activates it for them); `codemode` ones are listed
+  // in codemode's own description, and an inactive direct tool is reached only through an authored activation.
+  const deferredCount = mounted.filter((tool) => tool.exposure === "deferred").length;
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line (core.md §2),
@@ -188,7 +178,7 @@ export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string 
       : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
   const deferredNote =
     deferredCount > 0
-      ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
+      ? `\n\n${deferredCount} additional tool(s) are registered but not loaded — use tool_search to find and load them before concluding a capability is missing.`
       : "";
   // What takes effect when, and the agent's own path to a new capability, are the same on every host; only how long
   // the storage lives differs, below. The skill it writes lives in the definition directory, which the next
@@ -253,17 +243,18 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 export interface PiAssembly {
   lease: Lease;
   sessionFactory: PiAgentSessionFactory;
-  /**
-   * The registry alone, with injected providers registered. `chat` resolves its model against it only after its
-   * extensions have loaded, because there an extension may register the provider (serving refuses that).
-   */
+  /** Extension-aware catalog for startup reporting and control-plane validation; never bound to a session. */
   modelRuntime: () => Promise<ModelRuntime>;
+  /** A fresh runtime for every session, before loading its extensions. */
+  createModelRuntime: () => Promise<ModelRuntime>;
   /** The registry and configured model, resolved on first use (a credential read is async). */
   engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
   /** The tools every session mounts. */
   tools: MountedTool[];
+  /** Pi built-ins the mounted tools leave out, denied in every session so discovery cannot bring them back. */
+  excludedToolNames: readonly string[];
   /** The prompt and skills a session runs on, read when a session is bound. */
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   /** The extension entry points every session loads, discovered once with the assembly. */
@@ -274,9 +265,9 @@ export interface PiAssembly {
 function assemblePi(opts: {
   model: string;
   thinkingLevel?: ThinkingLevel;
-  providers?: Provider[];
   /** The model registry to run on, resolved on first use. */
   models: () => Promise<ModelRuntime>;
+  catalog: () => Promise<ModelRuntime>;
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
   tools?: MountedTool[];
   /** Where conversations live. */
@@ -296,15 +287,10 @@ function assemblePi(opts: {
   // — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
-  // The model and its runtime resolve on FIRST USE.
+  const createModelRuntime = opts.models;
   let registry: Promise<ModelRuntime> | undefined;
   const modelRuntime = () => {
-    registry ??= opts.models().then((runtime) => {
-      // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a gateway, a self-hosted
-      // endpoint, a test fake) goes in through its native seam.
-      for (const provider of opts.providers ?? []) runtime.registerNativeProvider(provider);
-      return runtime;
-    });
+    registry ??= opts.catalog();
     return registry;
   };
   let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
@@ -312,25 +298,28 @@ function assemblePi(opts: {
     engine ??= modelRuntime().then((runtime) => ({ modelRuntime: runtime, model: resolveModel(runtime, opts.model) }));
     return engine;
   };
+  // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
+  const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    engine: resolveEngine,
+    engine: async () => ({ modelRuntime: await createModelRuntime() }),
+    modelSpec: opts.model,
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
     readDefinition: opts.readDefinition,
     cwd,
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
-    // `noTools: "builtin"` leaves pi's built-ins in the registry; a lower-level replacement must also deny every
-    // omitted coding name so a loader cannot reactivate one later.
-    excludedToolNames: omittedBuiltinNames(opts.tools ?? [], cwd),
+    excludedToolNames,
   });
   return {
     lease,
     sessionFactory,
     modelRuntime,
+    createModelRuntime,
     engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     tools: opts.tools ?? [],
+    excludedToolNames,
     readDefinition: opts.readDefinition,
     extensionPaths: opts.extensionPaths ?? [],
   };
@@ -378,18 +367,18 @@ export interface CreatePiAgentOptions {
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   const { instructions, skills = [] } = options;
+  const models = agentModels(undefined, options, { providers: options.providers });
   return agentOf(
     assemblePi({
       model: options.model,
       thinkingLevel: options.thinkingLevel,
-      providers: options.providers,
-      models: agentModels(undefined, options).runtime,
+      models: models.createRuntime,
+      catalog: models.runtime,
       readDefinition: () => ({
         systemPrompt: typeof instructions === "function" ? instructions() : instructions,
         skills,
       }),
-      // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
-      tools: options.tools ? withSearchTool(options.tools) : options.tools,
+      tools: options.tools,
       sessions: options.sessions,
       env: options.env,
       lease: options.lease,
@@ -446,21 +435,20 @@ export async function assemblePiFromDefinition(
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to report
   // (skills/diagnostics/collisions).
   const definition = await loadAgentDefinition(dir, { cwd, env });
-  // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied it; a caller's
-  // own search_tools wins).
-  const tools = withSearchTool(options.tools ?? piAllCodingTools(cwd));
+  const tools = options.tools ?? piAllCodingTools(cwd);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
   const { providers } = options;
-  const models = options.models ?? agentModels(dir, options, providers ? { providers } : {});
+  const models = options.models ?? agentModels(dir, options, { cwd, ...(providers ? { providers } : {}) });
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
   await models.runtime();
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
-    models: models.runtime,
+    models: models.createRuntime,
+    catalog: models.runtime,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
     // are reserved for code (tools/channels/config, module cache).

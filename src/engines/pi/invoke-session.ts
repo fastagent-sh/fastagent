@@ -1,5 +1,5 @@
 /** Pi's per-invoke binding over a durable session record. */
-import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { type AssistantMessage, contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -46,6 +46,12 @@ export interface CreatePiAgentFromSessionOptions {
   observer?: SessionObserver;
 }
 
+// Structured output is for scripts. Observation publishes Pi's display result, including bounded nested traces.
+function displayToolResult(result: AgentToolResult<unknown>): Json {
+  const { structuredContent: _internal, ...display } = result;
+  return display as unknown as Json;
+}
+
 function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (event.type) {
@@ -75,21 +81,36 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
         type: "tool_started",
         timestamp: at,
         runId,
-        data: { id: event.toolCallId, name: event.toolName, args: event.args as Json },
+        data: {
+          id: event.toolCallId,
+          name: event.toolName,
+          args: event.args as Json,
+          ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
+        },
       };
     case "tool_execution_update":
       return {
         type: "tool_progress",
         timestamp: at,
         runId,
-        data: { id: event.toolCallId, name: event.toolName, partialResult: event.partialResult as Json },
+        data: {
+          id: event.toolCallId,
+          name: event.toolName,
+          partialResult: displayToolResult(event.partialResult),
+          ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
+        },
       };
     case "tool_execution_end":
       return {
         type: "tool_finished",
         timestamp: at,
         runId,
-        data: { id: event.toolCallId, isError: event.isError, content: event.result as Json },
+        data: {
+          id: event.toolCallId,
+          isError: event.isError,
+          content: displayToolResult(event.result),
+          ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
+        },
       };
     case "queue_update":
       return {

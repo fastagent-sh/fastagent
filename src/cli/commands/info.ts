@@ -81,7 +81,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDir(agentDir);
   // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
   // a file the agent dir does not contain.
-  const models = agentModels(agentDir);
+  const models = agentModels(agentDir, {}, { cwd: workspace });
   const { auth } = models;
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
@@ -160,7 +160,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("persona", definition.persona ? "persona.md" : "(none)");
   line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
-  if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
+  if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (loaded on demand via tool_search)`);
   line("channels", channels.join(", ") || "(none)");
   line(
     "routines",

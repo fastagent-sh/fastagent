@@ -5,7 +5,7 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { type AgentSession, type AgentSessionEvent, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -329,7 +329,7 @@ describe("session control: observation plane", () => {
       await mkdir(join(dir, "fastagent", "skills", "broken"), { recursive: true });
       await writeFile(join(dir, "fastagent", "skills", "broken", "SKILL.md"), `no frontmatter here\n`);
       // The broken file cannot be listed — so this read is the only place that can say it exists.
-      expect(await control.commands()).toEqual([]);
+      expect((await control.commands()).filter((command) => command.source === "skill")).toEqual([]);
       expect(warn.mock.calls.flat().join(" ")).toContain("broken");
       // … once: a composer opening twice must not spam a finding that has not changed.
       warn.mockClear();
@@ -402,8 +402,9 @@ describe("session control: observation plane", () => {
       const opened = await createPiAgentFromDir(dir, { sessionControl: true });
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
 
+      const skills = async () => (await control.commands()).filter((command) => command.source === "skill");
       // Empty is a complete answer …
-      expect(await control.commands()).toEqual([]);
+      expect(await skills()).toEqual([]);
       // … and the read is LIVE, like the definition itself: a skill written while serving is
       // invocable on the next turn, so it must be listable NOW — a boot snapshot would advertise a
       // command set the running agent has already left behind.
@@ -412,7 +413,7 @@ describe("session control: observation plane", () => {
         join(dir, "fastagent", "skills", "triage", "SKILL.md"),
         `---\nname: triage\ndescription: Sort an inbox\n---\n\nDo the thing.\n`,
       );
-      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      expect(await skills()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
       // The RESOLVED set, which is the reason this read exists: a same-name collision is decided
       // first-wins at assembly, and a client reading the directory would list the name twice.
       await mkdir(join(dir, "fastagent", "skills", "triage-copy"), { recursive: true });
@@ -420,10 +421,10 @@ describe("session control: observation plane", () => {
         join(dir, "fastagent", "skills", "triage-copy", "SKILL.md"),
         `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
       );
-      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      expect(await skills()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
       // Live in BOTH directions — a cached read would only ever grow the list.
       await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
-      expect(await control.commands()).toEqual([]);
+      expect(await skills()).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1618,7 +1619,7 @@ describe("session control: boundary mutations", () => {
       fauxAssistantMessage("one"),
       fauxAssistantMessage("two"),
       (context) => {
-        thirdTurnContext = JSON.stringify(context.messages);
+        thirdTurnContext = JSON.stringify(context.messages.filter((message) => message.role !== "system"));
         return fauxAssistantMessage("three");
       },
     ]);
@@ -2297,7 +2298,7 @@ describe("session control: boundary mutations", () => {
   });
 
   it("usage: after a turn, the context size is exactly pi's own, and a state_changed carries it", async () => {
-    const { agent, control, sessions, faux } = await makeBoundary([fauxAssistantMessage("an answer")]);
+    const { agent, control, sessions, faux, models } = await makeBoundary([fauxAssistantMessage("an answer")]);
     expect(control.capabilities().usage).toBe(true);
     const handle = control.sessions.get("sUsage");
     await sessions.openOrCreate("sUsage");
@@ -2313,7 +2314,9 @@ describe("session control: boundary mutations", () => {
     >;
     const model = faux.getModel();
     // pi's own number for the same record and model: what a live session would report.
-    const expected = AgentSession.prototype.getContextUsage.call({ model, sessionManager: record } as never);
+    const { session: bound } = await createAgentSession({ sessionManager: record, model, modelRuntime: models });
+    const expected = bound.getContextUsage();
+    bound.dispose();
     const { usage } = await handle.state();
     expect(expected?.tokens).toBeGreaterThan(0);
     expect(usage).toMatchObject({ contextTokens: expected?.tokens, contextWindow: model.contextWindow });
@@ -2358,7 +2361,7 @@ describe("session control: boundary mutations", () => {
   });
 
   it("usage: mid-run, what followed the answer is estimated the way pi estimates it", async () => {
-    const { control, sessions, faux } = await makeBoundary([]);
+    const { control, sessions, faux, models } = await makeBoundary([]);
     const record = await sessions.openOrCreate("sTrailing");
     record.appendMessage({ role: "user", content: "run it", timestamp: 1 });
     record.appendMessage({
@@ -2381,10 +2384,13 @@ describe("session control: boundary mutations", () => {
       timestamp: 2,
     } as never);
 
-    const expected = AgentSession.prototype.getContextUsage.call({
+    const { session: bound } = await createAgentSession({
       model: faux.getModel(),
       sessionManager: record,
-    } as never);
+      modelRuntime: models,
+    });
+    const expected = bound.getContextUsage();
+    bound.dispose();
     const { usage } = await control.sessions.get("sTrailing").state();
     expect(expected?.tokens).toBeGreaterThan(15);
     expect(usage?.contextTokens).toBe(expected?.tokens);

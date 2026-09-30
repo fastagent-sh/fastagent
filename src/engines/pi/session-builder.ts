@@ -10,11 +10,9 @@ import {
   SessionManager,
   SettingsManager,
   createAgentSessionRuntime,
-  createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
-import { readMachine } from "./machine.ts";
+import { bindPiSession, definitionServices } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { canonicalPath } from "./definition.ts";
 import { reportToolCollisions } from "./report.ts";
@@ -64,30 +62,15 @@ export async function buildAgentSessionRuntime(
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
     const { modelSpec, assembly, definition } = await assemblyFor(cwd);
     // Per session, NOT memoized with the assembly.
-    const [modelRuntime, machine] = await Promise.all([assembly.modelRuntime(), readMachine(cwd)]);
-    const loaded = await createAgentSessionServices({
-      cwd,
-      // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth unification point.
-      modelRuntime,
-      // PACKAGELESS, for the loader: fastagent never installs a pi package (machine.ts). Handed pi's own settings, the
-      // loader resolves `packages` itself — installing a missing one, and failing chat's start when that fails.
-      settingsManager: machine.settingsManager(),
-      resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => definition.systemPrompt,
-        skills: () => definition.skills,
-        machine,
-        extensionPaths: assembly.extensionPaths,
-      }),
-    });
+    const modelRuntime = await assembly.createModelRuntime();
+    const loaded = await definitionServices({ cwd, modelRuntime, definition, extensionPaths: assembly.extensionPaths });
     // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
     // re-reading the file under its lock and writing only the fields that changed, so `packages` there is untouched.
     const services = { ...loaded, settingsManager: SettingsManager.create(cwd, loaded.agentDir) };
-    reportExtensionErrors(services);
 
     // AFTER the services, because an extension may be what defines the model.
     const model = resolveModel(modelRuntime, modelSpec);
-    // The same bind serving performs, minus the activation record: pi's chat session has nowhere to put one, which is
-    // the documented divergence.
+    // Serving and chat restore the same native transcript declarations.
     const result = await bindPiSession({
       services,
       sessionManager,
@@ -97,9 +80,9 @@ export async function buildAgentSessionRuntime(
       // is the definition's (`thinkingLevel` in fastagent.config.ts), like serving's.
       thinkingLevel: assembly.thinkingLevel,
       tools: assembly.tools,
+      excludedToolNames: assembly.excludedToolNames,
       // A tool must see one spelling of the workspace, including when opened through a symlink.
       cwd: rootCwd,
-      recordActivations: false,
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };

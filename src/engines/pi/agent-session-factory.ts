@@ -3,7 +3,7 @@
  * durable record, per invoke.
  */
 import { dirname } from "node:path";
-import { type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
+import { BUILTIN_EXTENSIONS, type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -11,6 +11,7 @@ import {
   type CompactionResult,
   type CreateAgentSessionServicesOptions,
   type ExtensionCommandContextActions,
+  type ExtensionFactory,
   type InlineExtension,
   ExtensionRunner,
   type LoadExtensionsResult,
@@ -19,7 +20,9 @@ import {
   type ResolvedCommand,
   SessionManager,
   type ToolDefinition,
-  DefaultResourceLoader,
+  createAgentSessionServices,
+  createCodemodeExtension,
+  createToolSearchExtension,
   createAgentSessionFromServices,
   getAgentDir,
   initTheme,
@@ -27,9 +30,11 @@ import {
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
-import { isDeferredTool, type MountedTool } from "./tool.ts";
+import type { MountedTool } from "./tool.ts";
+import { getCurrentSystemMessage, getDeclaredTools } from "@earendil-works/pi-ai";
+import { resolveModel } from "./config.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
-import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
 interface PiSessionDefinition {
@@ -40,8 +45,10 @@ interface PiSessionDefinition {
 export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. */
   sessions: PiSessionRecordStore;
-  /** The model to run and the hub that authenticates it, resolved on FIRST USE and kept. */
-  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
+  /** A fresh model runtime per binding: extension routers and provider registrations belong to this session. */
+  engine: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
+  /** Resolved after extensions register their models. */
+  modelSpec?: string;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
   /** Read once per binding; prompt and skills come from the same definition read. */
@@ -53,38 +60,6 @@ export interface PiAgentSessionFactoryOptions {
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
 }
-
-/**
- * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred tools a loader
- * activated in that call.
- *
- * Not replaceable by pi's own transcript record. Since 0.86 the journal carries `toolsAdded` system messages and
- * `getCurrentTools()` replays them, but that answers a different question: it reports every tool ever DECLARED to
- * the model, which cannot tell a tool this conversation DISCOVERED from one that merely happened to be in the
- * initial set at the time. Restoring from it would keep a tool later flipped to `deferred` active in sessions that
- * never discovered it. This entry holds only what a loader activated, which is what makes the restore below
- * "today's non-deferred tools PLUS what this conversation found".
- */
-const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
-
-/** Every deferred tool this session has ever discovered, oldest first. */
-function recordedActivations(session: AgentSession): string[] {
-  const names: string[] = [];
-  for (const entry of session.sessionManager.getBranch()) {
-    const record = entry as { type?: string; customType?: string; data?: { names?: unknown } };
-    if (record.type !== "custom" || record.customType !== TOOL_ACTIVATION_ENTRY) continue;
-    if (Array.isArray(record.data?.names)) {
-      for (const name of record.data.names) if (typeof name === "string") names.push(name);
-    }
-  }
-  return names;
-}
-
-/**
- * Warned once per session+missing set: a fresh session is built per invoke and channel sessions run for weeks, so an
- * un-deduped warn would repeat every turn and dilute its own signal.
- */
-const warnedDroppedActivations = new Set<string>();
 
 type ToolBinding = { session: AgentSession; context: TurnContext };
 
@@ -134,18 +109,29 @@ export interface BindPiSessionOptions {
   excludedToolNames?: readonly string[];
   /** The CALLER's session id — what a tool asking which conversation it is in hears. */
   sessionId?: string;
-  /** Record each discovered activation on the session, so the next bind restores it. */
-  recordActivations: boolean;
 }
 
 /**
- * Bind ONE pi session to a record: the definition's tools as pi definitions over one turn context, pi's own tool
- * copies kept off, and deferral applied.
+ * The discovery tool each non-declared authored exposure needs, the rule Pi's MCP extension applies to its own tools
+ * (`ensureDiscoveryActive`): a `codemode` tool is reached by codemode scripts, a `deferred` one is loaded by tool_search. Without it the tool has
+ * no way in at all.
+ */
+function discoveryToolNames(tools: readonly MountedTool[]): string[] {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (tool.exposure === "codemode") names.add("codemode");
+    if (tool.exposure === "deferred") names.add("tool_search");
+  }
+  return [...names];
+}
+
+/**
+ * Bind ONE pi session to a record: authored tools replace same-name built-ins; Pi owns exposure and discovery.
  */
 export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
-  const { services, sessionManager, model, thinkingLevel, tools, cwd, recordActivations } = options;
+  const { services, sessionManager, model, thinkingLevel, tools, cwd } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
-  const deferred = tools.filter(isDeferredTool).map((t) => t.name);
+  const history = sessionManager.buildSessionContext().messages;
   const bound: { current?: ToolBinding } = {};
   const sessionId = options.sessionId ?? sessionManager.getSessionId();
   const result = await createAgentSessionFromServices({
@@ -154,8 +140,6 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     ...(options.sessionStartEvent ? { sessionStartEvent: options.sessionStartEvent } : {}),
     model,
     thinkingLevel,
-    // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
-    noTools: "builtin",
     ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
     customTools: toolDefinitions(tools, bound, sessionId),
   });
@@ -166,37 +150,30 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     context: {
       cwd,
       sessionManager: agentSessionManager(session, sessionId),
-      // Persist each discovery so a served session can restore it on its next turn.
-      tools: sessionToolActivation(
-        session,
-        recordActivations
-          ? (added) => session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added })
-          : undefined,
-      ),
+      tools: sessionToolActivation(session),
     },
   };
-  // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the deferred names
-  // (robust to pi mounting tools of its own, unlike an exact-set replacement), then add back what THIS session has
-  // already discovered.
-  if (deferred.length > 0) {
-    const active = session.getActiveToolNames();
+  // The SDK always supplies an initial loadout (settings' defaultTools applied), bypassing AgentSession's native
+  // transcript restore. The conversation keeps what its transcript declares — discoveries and removals alike — and
+  // gains the defaults it never saw, so a tool the author added since joins it, as the base prompt says it does.
+  // Replayed through Pi's public APIs, for serving and chat alike.
+  const defaults = [...session.getActiveToolNames(), ...discoveryToolNames(tools)];
+  const current = getCurrentSystemMessage(history);
+  if (current) {
     const mounted = new Set(session.getAllTools().map((tool) => tool.name));
-    const recorded = recordActivations ? recordedActivations(session) : [];
-    // A recorded name that is no longer mounted is dropped rather than replayed.
-    const restored = recorded.filter((name) => mounted.has(name));
-    const dropped = recorded.filter((name) => !mounted.has(name));
-    if (dropped.length > 0) {
-      const key = `${sessionId}\u0000${[...new Set(dropped)].sort().join(",")}`;
-      const emit = warnedDroppedActivations.has(key) ? log.debug : log.warn;
-      warnedDroppedActivations.add(key);
-      emit(
-        `[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${[...new Set(dropped)].join(", ")}`,
-      );
-    }
-    const next = [...new Set([...active.filter((name) => !deferred.includes(name)), ...restored])];
-    if (next.length !== active.length || next.some((name) => !active.includes(name))) {
-      session.setActiveToolsByName(next);
-    }
+    const declared = (current.toolsAdded ?? []).map((tool) => tool.name);
+    const dropped = declared.filter((name) => !mounted.has(name));
+    // Debug, not warn: `session_start` handlers register their tools after this point, and Pi activates the
+    // default-active ones when they do (`_refreshToolRegistry`), so an absence here is routine on every such bind.
+    if (dropped.length)
+      log.debug(`[fastagent] session ${sessionId}: not mounted yet or removed: ${dropped.join(", ")}`);
+    const seen = new Set(getDeclaredTools(history).map((tool) => tool.name));
+    session.setActiveToolsByName([
+      ...declared.filter((name) => mounted.has(name)),
+      ...defaults.filter((name) => !seen.has(name)),
+    ]);
+  } else {
+    session.setActiveToolsByName(defaults);
   }
   return result;
 }
@@ -205,56 +182,25 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
 const reportedExtensionErrors = new Set<string>();
 
 /**
+ * Extension notifications said once per process at their own level, then at debug: every served turn starts the
+ * extensions again, so a notification from `session_start` would otherwise log the same line on every message.
+ */
+const reportedNotifications = new Set<string>();
+
+/**
  * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and carries on with the
  * rest.
  */
-export function reportExtensionErrors(services: AgentSessionServices): void {
+function reportExtensionErrors(services: AgentSessionServices): void {
+  for (const diagnostic of services.diagnostics) {
+    if (diagnostic.type === "error") throw new Error(diagnostic.message);
+  }
   for (const { path, error } of services.resourceLoader.getExtensions().errors) {
     const key = `${path}\u0000${error}`;
     if (reportedExtensionErrors.has(key)) continue;
     reportedExtensionErrors.add(key);
     log.warn(`[fastagent] extension ${path} failed to load: ${error}`);
   }
-}
-
-const PROVIDER_REFUSAL =
-  "extensions cannot register model providers when serving: a provider is process-wide, shared by every " +
-  "conversation, and never unregistered. Declare it in the agent's models.json";
-
-/**
- * Serving refuses an extension that registers a provider while loading. pi would write it into the ONE `ModelRuntime`
- * every conversation resolves against, merge a re-registration into the old entry, and never drop one the code stopped
- * registering. The whole extension is left out, the way a tool file that fails to load is, and the refusal is its
- * load error.
- */
-function refuseLoadTimeProviders(base: LoadExtensionsResult): LoadExtensionsResult {
-  const offenders = new Set([
-    ...base.runtime.pendingProviderRegistrations.map((r) => r.extensionPath),
-    ...base.runtime.pendingNativeProviderRegistrations.map((r) => r.extensionPath),
-  ]);
-  if (offenders.size === 0) return base;
-  base.runtime.pendingProviderRegistrations = [];
-  base.runtime.pendingNativeProviderRegistrations = [];
-  return {
-    ...base,
-    extensions: base.extensions.filter((extension) => !offenders.has(extension.path)),
-    errors: [...base.errors, ...[...offenders].map((path) => ({ path, error: PROVIDER_REFUSAL }))],
-  };
-}
-
-/**
- * ...and a registration made AFTER loading (from an event handler or a command), which pi applies to the shared
- * runtime directly. Must run after the session is created (pi installs its own actions then) and before
- * `bindExtensions` (which fires `session_start`).
- */
-function refuseLateProviders(services: AgentSessionServices): void {
-  const runtime = services.resourceLoader.getExtensions().runtime;
-  const refuse = (): never => {
-    throw new Error(PROVIDER_REFUSAL);
-  };
-  runtime.registerProvider = refuse;
-  runtime.registerNativeProvider = refuse;
-  runtime.unregisterProvider = refuse;
 }
 
 /**
@@ -279,6 +225,17 @@ function servingCommandActions(session: AgentSession): ExtensionCommandContextAc
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
 
+const nativeFactories: Record<(typeof BUILTIN_EXTENSIONS)[number], ExtensionFactory> = {
+  codemode: createCodemodeExtension(),
+  "tool-search": createToolSearchExtension(),
+};
+const nativeExtensions: InlineExtension[] = BUILTIN_EXTENSIONS.map((name) => ({
+  name,
+  factory: nativeFactories[name],
+  replaceable: true,
+  builtin: true,
+}));
+
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
   systemPrompt: () => string | undefined;
@@ -288,11 +245,15 @@ export function definitionResourceLoaderOptions(source: {
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
+    extensionFactories: [...nativeExtensions, compactAdmission],
     // The machine's extensions are its owner's setup, not this agent's.
     noExtensions: true,
-    // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under noExtensions, which
-    // is exactly the split wanted here.
-    ...(source.extensionPaths?.length ? { additionalExtensionPaths: [...source.extensionPaths] } : {}),
+    // Explicit paths survive noExtensions, including Pi's built-ins; so they would also survive the machine's own
+    // `-builtin:<name>`, which is why only the enabled ones are named. Machine extensions stay out.
+    additionalExtensionPaths: [
+      ...source.machine.builtinExtensions.map((name) => `builtin:${name}`),
+      ...(source.extensionPaths ?? []),
+    ],
     // Not pi's: fastagent already loads the SAME files into segment ② (`loadProjectContextFiles` in
     // definition.ts). Leaving both on would put every AGENTS.md in the prompt twice.
     noContextFiles: true,
@@ -398,15 +359,8 @@ export function startCompaction(
   return { admission: Promise.race([admitted, settledFirst]), done };
 }
 
-/**
- * The resources ONE served session runs on: a fresh loader, so fresh extension instances.
- *
- * Assembled here rather than by pi's `createAgentSessionServices`, which ends by refreshing the model runtime it is
- * given — re-reading `models.json` and rebuilding every provider on the ONE runtime all conversations share. That is
- * there to fold in providers extensions registered, which serving refuses; per session it would be a full provider
- * rebuild per turn.
- */
-async function servingServices(options: {
+/** A fresh loader and Pi's native model registration, over a session-local runtime. */
+export async function definitionServices(options: {
   cwd: string;
   modelRuntime: ModelRuntime;
   definition: PiSessionDefinition;
@@ -414,31 +368,31 @@ async function servingServices(options: {
 }): Promise<AgentSessionServices> {
   const { cwd, modelRuntime, definition, extensionPaths } = options;
   const machine = await readMachine(cwd);
-  const agentDir = getAgentDir();
-  // The machine's engine settings, as read at boot and without `packages` — a turn never resolves one.
-  const settingsManager = machine.settingsManager();
-  const resourceLoader = new DefaultResourceLoader({
-    ...definitionResourceLoaderOptions({
-      systemPrompt: () => definition.systemPrompt,
-      skills: () => definition.skills,
-      machine,
-      extensionPaths,
+  initTheme();
+  const services = await withModelRegistration(modelRuntime, () =>
+    createAgentSessionServices({
+      cwd,
+      agentDir: getAgentDir(),
+      modelRuntime,
+      settingsManager: machine.settingsManager(),
+      resourceLoaderOptions: {
+        ...definitionResourceLoaderOptions({
+          systemPrompt: () => definition.systemPrompt,
+          skills: () => definition.skills,
+          machine,
+          extensionPaths,
+        }),
+        extensionsOverride: admissionFirst,
+      },
     }),
-    extensionsOverride: (base) => admissionFirst(refuseLoadTimeProviders(base)),
-    extensionFactories: [compactAdmission],
-    cwd,
-    agentDir,
-    settingsManager,
-  });
-  await resourceLoader.reload();
-  const services = { cwd, agentDir, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
+  );
   reportExtensionErrors(services);
   return services;
 }
 
 /**
  * The `/name` commands a served session dispatches, named the way pi resolves them (a name two extensions share gets
- * a `:N` suffix). Loaded through the same {@link servingServices} a turn binds, so the menu and the dispatch cannot
+ * a `:N` suffix). Loaded through the same {@link definitionServices} a turn binds, so the menu and the dispatch cannot
  * disagree. Loading runs the extensions' factories; no session opens, so `session_start` does not fire, and the
  * instances are never bound (any action they call throws).
  */
@@ -447,8 +401,7 @@ export async function servedExtensionCommands(options: {
   modelRuntime: ModelRuntime;
   extensionPaths: readonly string[];
 }): Promise<ResolvedCommand[]> {
-  if (options.extensionPaths.length === 0) return [];
-  const services = await servingServices({ ...options, definition: { skills: [] } });
+  const services = await definitionServices({ ...options, definition: { skills: [] } });
   const { extensions, runtime } = services.resourceLoader.getExtensions();
   const runner = new ExtensionRunner(
     extensions,
@@ -474,17 +427,15 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   const extensionPaths = options.extensionPaths ?? [];
   const excludedToolNames = options.excludedToolNames ?? [];
   const tools = options.tools ?? [];
-  // `ctx.ui.theme` reads pi's global theme, which only pi's own entry points initialize.
-  if (extensionPaths.length > 0) initTheme();
-  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
   return async (sessionId, inherit) => {
-    const definition = await options.readDefinition();
-    engine ??= options.engine();
-    const { modelRuntime, model } = await engine;
-    // The record first: a control write that races this turn must find the session and be refused busy.
+    // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
-    const services = await servingServices({ cwd, modelRuntime, definition, extensionPaths });
+    const definition = await options.readDefinition();
+    const { modelRuntime, model: configuredModel } = await options.engine();
+    const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
+    const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : configuredModel;
+    if (!model) throw new Error("session factory needs modelSpec or an engine model");
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
     const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
@@ -500,9 +451,28 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       cwd,
       excludedToolNames,
       sessionId,
-      recordActivations: true,
     });
-    refuseLateProviders(services);
+    // Pi's headless UI drops notifications. Keep dialogs cancelled and hasUI false, but surface diagnostics.
+    const runner = session.extensionRunner;
+    if (runner) {
+      const createContext = runner.createContext.bind(runner);
+      runner.createContext = () => {
+        const context = createContext();
+        // Pi clones own descriptors for before_agent_start; inherited fields would disappear there.
+        return Object.defineProperty(context, "ui", {
+          value: {
+            ...context.ui,
+            notify: (message: string, type?: "info" | "warning" | "error") => {
+              const key = `${type ?? "info"}\u0000${message}`;
+              const repeat = reportedNotifications.has(key);
+              reportedNotifications.add(key);
+              const emit = repeat ? log.debug : type === "info" ? log.info : log.warn;
+              emit(`[fastagent] session ${sessionId}: ${message}`);
+            },
+          },
+        });
+      };
+    }
     // `onError` is THE ONLY LISTENER for a fault pi reports nowhere else: `/skill:<name>` is expanded by reading
     // `filePath` at prompt time, and when that read fails pi raises `skill_expansion` on the extension error channel
     // and sends the line to the model unexpanded. The list can outlive the file: it is refreshed per invoke, so a

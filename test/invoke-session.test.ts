@@ -418,7 +418,7 @@ describe("invocation execution scope", () => {
     const lease = inProcessLease();
     const { session, prompted } = promptRecordingSession();
     const disposed = vi.spyOn(session, "dispose");
-    session.steer = vi.fn(async () => {});
+    session.steer = vi.fn(async () => "queued" as const);
     let command: Promise<boolean> | undefined;
     const agent = createPiAgentFromSession({
       lease,

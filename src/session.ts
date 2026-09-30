@@ -324,14 +324,23 @@ export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" 
   runId: string;
 };
 export type MessageFinishedEvent = SessionEvent<"message_finished", Record<never, never>> & { runId: string };
-export type ToolStartedEvent = SessionEvent<"tool_started", { id: string; name: string; args: Json }> & {
+export type ToolStartedEvent = SessionEvent<
+  "tool_started",
+  { id: string; name: string; args: Json; parentToolCallId?: string }
+> & {
   runId: string;
 };
 /** Replace semantics: `partialResult` is the accumulated snapshot so far, not a delta. */
-export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name: string; partialResult: Json }> & {
+export type ToolProgressEvent = SessionEvent<
+  "tool_progress",
+  { id: string; name: string; partialResult: Json; parentToolCallId?: string }
+> & {
   runId: string;
 };
-export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }> & {
+export type ToolFinishedEvent = SessionEvent<
+  "tool_finished",
+  { id: string; isError: boolean; content: Json; parentToolCallId?: string }
+> & {
   runId: string;
 };
 /**

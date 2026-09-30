@@ -38,7 +38,7 @@ export async function enterAgentCommand(
 ): Promise<ResolvedPlacement> {
   const placement = placementOrExit(resolve(dirArg));
   enterAgentEnv(placement.agentDir);
-  await resolveFirstRunModel(placement.agentDir, opts);
+  await resolveFirstRunModel(placement, opts);
   return placement;
 }
 
@@ -83,7 +83,7 @@ export async function reportAssembly(
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
   if (a.deferredToolNames.length > 0) {
-    reportLine("deferred", `${a.deferredToolNames.join(", ")} (activated via search_tools)`);
+    reportLine("deferred", `${a.deferredToolNames.join(", ")} (loaded on demand via tool_search)`);
   }
   reportToolCollisions(a.toolCollisions);
   for (const [label, value] of extras.afterTools ?? []) reportLine(label, value);
@@ -140,7 +140,7 @@ export async function reportAuth(models: AgentModels, modelSpec: string): Promis
  * First-run model resolution for every assembly command (dev/start/invoke/fire/chat/deploy): ONE funnel, no dead ends.
  */
 async function resolveFirstRunModel(
-  agentDir: string,
+  { agentDir, workspace }: ResolvedPlacement,
   options: { model?: string; input?: boolean } = {},
 ): Promise<void> {
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
@@ -148,7 +148,7 @@ async function resolveFirstRunModel(
   if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const environment = agentModels(agentDir);
+  const environment = agentModels(agentDir, {}, { cwd: workspace });
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
   const models = await environment.runtime().catch(failStartup);

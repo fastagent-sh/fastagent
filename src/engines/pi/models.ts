@@ -90,31 +90,53 @@ async function modelLayers(
   return { machinePath, machine, own: (await readProviders(join(agentDir, AGENT_MODELS_FILE))) ?? {} };
 }
 
+/** The models.json pi loads for an agent, and where its content came from (for a load error). */
+export interface ModelsFile {
+  /** A snapshot pi loads; null when the agent has no models.json. */
+  path: string | null;
+  /** The agent's own file, when the snapshot is a copy of it alone. */
+  snapshotOf?: string;
+  merged?: { machine: string; definition: string };
+}
+
 /**
- * The models.json pi loads for an agent: its own file, layered over the machine's. The agent's file wins a provider id
- * outright, as a definition's skill wins a name: an agent that pins an endpoint keeps it.
+ * The models.json pi loads for an agent: its own file, layered over the machine's when `machine` is on. The agent's
+ * file wins a provider id outright, as a definition's skill wins a name: an agent that pins an endpoint keeps it.
  *
- * The merge is a SNAPSHOT named by its content, in fastagent's own home: not in the agent (so `info` writes nothing
- * there), and not in a shared temp dir, which the OS clears while a long-running process still re-reads it (pi
- * reloads `modelsPath` on every refresh). Content addressing is what lets every process share the directory: a
- * snapshot is never rewritten, so no process can change what another's refresh reads. The price is that a running
- * process keeps the snapshot it started with; an edit to either file takes effect on the next start.
+ * Always a SNAPSHOT named by its content, in fastagent's own home: pi reloads `modelsPath` on every refresh, and every
+ * session builds its own runtime, so a live file would let turns run on an edit the control plane never read. Not in
+ * the agent (so `info` writes nothing there), and not in a shared temp dir, which the OS clears while a long-running
+ * process still re-reads it. Content addressing is what lets every process share the directory: a snapshot is never
+ * rewritten, so no process can change what another reads. A running process keeps the content it started with; an
+ * edit to either file takes effect on the next start.
  *
  * ponytail: snapshots are never pruned (one per distinct content, a few KB each) because a running process may still
  * read an old one; delete the directory while no fastagent process runs if it ever matters.
  */
-async function modelsFileFor(
-  agentDir: string,
-): Promise<{ path: string; merged?: { machine: string; definition: string } }> {
+async function modelsFileFor(agentDir: string, machine: boolean): Promise<ModelsFile> {
   const definition = join(agentDir, AGENT_MODELS_FILE);
-  const layers = await modelLayers(agentDir);
-  if (!layers) return { path: definition };
-  const content = JSON.stringify({ providers: { ...layers.machine, ...layers.own } }, null, 2);
+  const layers = machine ? await modelLayers(agentDir) : undefined;
+  if (layers) {
+    const content = JSON.stringify({ providers: { ...layers.machine, ...layers.own } }, null, 2);
+    return { path: snapshotFile(content), merged: { machine: layers.machinePath, definition } };
+  }
+  let own: string;
+  try {
+    own = await readFile(definition, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { path: null };
+    throw new Error(`could not read ${definition}: ${(error as Error).message}`);
+  }
+  // Verbatim, so pi parses it exactly as it would the file itself.
+  return { path: snapshotFile(own), snapshotOf: definition };
+}
+
+function snapshotFile(content: string): string {
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
   const path = join(globalHome(), ".cache", "models", `${hash}.json`);
   // 0600: it may carry literal keys. Several processes may create the same snapshot at once.
   if (!existsSync(path)) writeFileAtomic(path, content, 0o600, true);
-  return { path, merged: { machine: layers.machinePath, definition } };
+  return path;
 }
 
 /**
@@ -181,7 +203,7 @@ async function readCatalog(path: string): Promise<Record<string, ModelsStoreEntr
 }
 
 /**
- * The catalog files layered into one read-only store, later files winning a model id. An entry pi would ignore (no
+ * The catalog files layered into one read-only store, later files winning a (type, model id) pair. An entry pi would ignore (no
  * newer than the catalog bundled with it) is dropped before the merge, so a stale layer cannot ride a newer one's
  * date past pi's rule.
  *
@@ -189,27 +211,37 @@ async function readCatalog(path: string): Promise<Record<string, ModelsStoreEntr
  * on read, which would drop an empty catalog into every agent dir that was never refreshed.
  */
 async function layeredCatalog(paths: readonly string[]): Promise<InMemoryModelsStore> {
+  return catalogStore(await readLayeredCatalog(paths));
+}
+
+/** A fresh store over a catalog read once: pi may write into the store it is given, so runtimes never share one. */
+async function catalogStore(entries: ReadonlyMap<string, ModelsStoreEntry>): Promise<InMemoryModelsStore> {
+  const store = new InMemoryModelsStore();
+  for (const [provider, entry] of entries) await store.write(provider, structuredClone(entry));
+  return store;
+}
+
+async function readLayeredCatalog(paths: readonly string[]): Promise<Map<string, ModelsStoreEntry>> {
   const bundledAt = getBuiltinModelDataGeneratedAt();
   const merged = new Map<string, ModelsStoreEntry>();
   for (const path of paths) {
     for (const [provider, entry] of Object.entries(await readCatalog(path))) {
       if (bundledAt !== undefined && (entry.lastModified === undefined || entry.lastModified <= bundledAt)) continue;
       const held = merged.get(provider);
-      const ids = new Set(entry.models.map((model) => model.id));
+      const key = (model: { type?: string; id: string }) => `${model.type ?? "chat"}\u0000${model.id}`;
+      const ids = new Set(entry.models.map(key));
       merged.set(
         provider,
         held
           ? {
-              models: [...held.models.filter((model) => !ids.has(model.id)), ...entry.models],
+              models: [...held.models.filter((model) => !ids.has(key(model))), ...entry.models],
               lastModified: Math.max(held.lastModified ?? 0, entry.lastModified ?? 0),
             }
           : entry,
       );
     }
   }
-  const store = new InMemoryModelsStore();
-  for (const [provider, entry] of merged) await store.write(provider, entry);
-  return store;
+  return merged;
 }
 
 /**
@@ -218,36 +250,49 @@ async function layeredCatalog(paths: readonly string[]): Promise<InMemoryModelsS
  */
 export async function inGlobalCatalog(provider: string, id: string): Promise<boolean> {
   const entry = await (await layeredCatalog([globalCatalogPath()])).read(provider);
-  return entry?.models.some((model) => model.id === id) ?? false;
+  return entry?.models.some((model) => (model.type ?? "chat") === "chat" && model.id === id) ?? false;
+}
+
+/**
+ * The model files a runtime reads, READ ONCE: `agentModels` keeps one of these per agent, so every session's runtime
+ * and the control plane's catalog see the same content however the files change while serving.
+ */
+export interface ModelFiles {
+  models?: ModelsFile;
+  /** `ModelRuntime.create` options over this read; a fresh catalog store each call. */
+  create(): Promise<{
+    modelsPath: string | null;
+    modelsStore?: InMemoryModelsStore;
+    modelsStorePath?: string;
+    allowModelNetwork: false;
+    catalogBaseUrl?: string;
+  }>;
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */
-export async function modelRuntimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">) {
+export async function modelRuntimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">): Promise<ModelFiles> {
   const { agentDir } = options;
   const machine = options.machineLayer !== false;
-  const models = !agentDir
-    ? undefined
-    : machine
-      ? await modelsFileFor(agentDir)
-      : { path: join(agentDir, AGENT_MODELS_FILE) };
+  const models = agentDir ? await modelsFileFor(agentDir, machine) : undefined;
   const catalogs = !agentDir
     ? []
     : [...(machine ? [globalCatalogPath()] : []), join(agentDir, AGENT_MODEL_CATALOG_FILE)];
+  const catalog = !options.catalogFile && agentDir ? await readLayeredCatalog(catalogs) : undefined;
   return {
-    models,
-    create: {
+    ...(models ? { models } : {}),
+    create: async () => ({
       modelsPath: models?.path ?? null,
       // Always a store of our own whenever modelsPath is set: pi's default is a file at
       // `<dirname(modelsPath)>/models-store.json`. Without a directory, pi keeps an empty one in memory.
       ...(options.catalogFile
         ? { modelsStorePath: options.catalogFile }
-        : agentDir
-          ? { modelsStore: await layeredCatalog(catalogs) }
+        : catalog
+          ? { modelsStore: await catalogStore(catalog) }
           : {}),
       // Never fetched while a runtime is built: serving stays offline and reproducible. A refresh is asked for.
       allowModelNetwork: false,
       ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
-    },
+    }),
   };
 }
 
@@ -365,24 +410,48 @@ export async function environmentAuthSource(
   return (await models.checkAuth(providerId))?.source;
 }
 
+/** Pi registration starts background refreshes; wait for all of them before publishing this fresh runtime. */
+export async function withModelRegistration<T>(runtime: ModelRuntime, register: () => Promise<T>): Promise<T> {
+  const refresh = runtime.refresh;
+  const refreshes: Array<ReturnType<ModelRuntime["refresh"]>> = [];
+  runtime.refresh = (...args) => {
+    const pending = refresh.apply(runtime, args);
+    refreshes.push(pending);
+    return pending;
+  };
+  try {
+    const result = await register();
+    await Promise.all(refreshes);
+    return result;
+  } finally {
+    runtime.refresh = refresh;
+  }
+}
+
 /**
  * A registry over the given credential store. What an agent runs on is built through `agentModels`
  * (agent-models.ts); this is for a registry over some OTHER store: none at all (`models`, a deploy check of what
  * ships), a trial key under test (login), or the catalog file a refresh writes.
  */
-export async function createPiModelRuntime(options: PiModelRuntimeOptions): Promise<ModelRuntime> {
-  const { models, create } = await modelRuntimeFiles(options);
-  const runtime = await ModelRuntime.create({ credentials: options.credentials, ...create });
+export async function createPiModelRuntime(
+  options: PiModelRuntimeOptions & { files?: ModelFiles },
+): Promise<ModelRuntime> {
+  const { models, create } = options.files ?? (await modelRuntimeFiles(options));
+  const runtime = await ModelRuntime.create({ credentials: options.credentials, ...(await create()) });
   // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in
   // getError().
   const error = runtime.getError();
   if (error) {
     const origin = models?.merged
       ? `\n\nThat file merges ${models.merged.machine} with ${models.merged.definition} (the agent's own wins a provider id).`
-      : "";
+      : models?.snapshotOf
+        ? `\n\nThat file is ${models.snapshotOf} as read at startup.`
+        : "";
     throw new Error(`${error}${origin}`);
   }
-  for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
+  await withModelRegistration(runtime, async () => {
+    for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
+  });
   return runtime;
 }
 
@@ -505,6 +574,8 @@ export async function probeAuthSource(models: Models, spec: string): Promise<str
   if (slash < 1) return undefined;
   const model = models.getModel(spec.slice(0, slash), spec.slice(slash + 1));
   if (!model) return undefined;
+  // A virtual selection authenticates the physical model after routing, not its catalog entry.
+  if (model.api === "pi-virtual") return "virtual";
   return (await models.getAuth(model))?.source;
 }
 

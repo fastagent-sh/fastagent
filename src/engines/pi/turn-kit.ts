@@ -157,11 +157,13 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
       return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
     }
     case "tool_started": {
-      const d = se.data as { id: string; name: string; args: Json };
+      const d = se.data as { id: string; name: string; args: Json; parentToolCallId?: string };
+      if (d.parentToolCallId) return null;
       return { type: "tool_started", id: d.id, name: d.name, args: d.args };
     }
     case "tool_finished": {
-      const d = se.data as { id: string; isError: boolean; content: Json };
+      const d = se.data as { id: string; isError: boolean; content: Json; parentToolCallId?: string };
+      if (d.parentToolCallId) return null;
       return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
     }
     case "retry_scheduled": {

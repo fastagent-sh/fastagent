@@ -6,10 +6,12 @@
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
+import { definitionServices } from "../src/engines/pi/agent-session-factory.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -131,6 +133,10 @@ export default function (pi) {
     ctx.ui.theme.fg("accent", "x"); // pi's global theme must be initialized without a TUI
     log.push("start " + id + " hasUI=" + ctx.hasUI);
   });
+  pi.on("before_agent_start", (_e, ctx) => {
+    if (!ctx.cwd || !ctx.sessionManager || !ctx.modelRegistry || !ctx.model) throw new Error("missing headless context");
+    log.push("before " + id + " hasUI=" + ctx.hasUI);
+  });
   pi.on("session_shutdown", () => log.push("shutdown " + id));
   pi.registerTool({
     name: "probe_tool", label: "p", description: "d",
@@ -158,12 +164,15 @@ export default function (pi) {
 
     expect(offered[0]).toContain("probe_tool");
     expect(logOf(key)).toEqual([
-      "factory 1",
-      "start 1 hasUI=false",
-      "shutdown 1",
+      "factory 1", // unbound catalog registration
       "factory 2",
       "start 2 hasUI=false",
+      "before 2 hasUI=false",
       "shutdown 2",
+      "factory 3",
+      "start 3 hasUI=false",
+      "before 3 hasUI=false",
+      "shutdown 3",
     ]);
     expect(warn.mock.calls.flat().join("\n")).not.toMatch(/failed/);
     warn.mockRestore();
@@ -194,13 +203,13 @@ export default function (pi) {
     expect((await collect(agent.invoke({ session: "s" }, { text: "/go slow" }))).text).toContain("from command slow");
   });
 
-  it("builds a session's loader without rebuilding the model runtime every conversation shares", async () => {
+  it("refreshes distinct session-local runtimes for successive bindings", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
     await collect(agent.invoke({ session: "s" }, { text: "first" }));
     const refresh = vi.spyOn(ModelRuntime.prototype, "refresh");
     await collect(agent.invoke({ session: "s" }, { text: "second" }));
     await collect(agent.invoke({ session: "s" }, { text: "third" }));
-    expect(refresh).not.toHaveBeenCalled();
+    expect(new Set(refresh.mock.contexts).size).toBe(2);
     refresh.mockRestore();
   });
 
@@ -221,14 +230,12 @@ export default function (pi) {
     );
   });
 
-  it("refuses a provider registered after loading", async () => {
+  it("accepts a provider registered after loading on the session-local runtime", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await expect(collect(agent.invoke({ session: "s" }, { text: "/provider" }))).rejects.toThrow(
-      /cannot register model providers when serving/,
-    );
+    expect(await collect(agent.invoke({ session: "s" }, { text: "/provider" }))).toEqual({ text: "", data: undefined });
   });
 
-  it("leaves out, and names, an extension that registers a provider while loading", async () => {
+  it("keeps extensions that register providers while loading", async () => {
     const offered: string[][] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const agent = await servedAgent(
@@ -246,8 +253,8 @@ export default function (pi) {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
     expect(offered[0]).toContain("marker_tool");
-    expect(offered[0]).not.toContain("acme_tool");
-    expect(warn.mock.calls.flat().join("\n")).toMatch(/provider\.ts failed to load: extensions cannot register/);
+    expect(offered[0]).toContain("acme_tool");
+    expect(warn.mock.calls.flat().join("\n")).not.toMatch(/provider\.ts failed to load/);
     warn.mockRestore();
   });
 });
@@ -398,6 +405,43 @@ export default async function (pi) {
 });
 
 describe("definition: an extension can define the model chat runs on", () => {
+  it("joins registration refreshes even when the SDK's final refresh finishes first", async () => {
+    const dir = await agentDirWith({
+      "extensions/provider.ts": `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: "test", name: "test", contextWindow: 1000, maxTokens: 100 }] });`,
+    });
+    const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    const nativeRefresh = runtime.refresh.bind(runtime);
+    let release = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const refresh = vi.spyOn(runtime, "refresh").mockImplementation(async (options) => {
+      if (calls++ === 0) await blocked;
+      return nativeRefresh(options);
+    });
+    let ready = false;
+    const loaded = definitionServices({
+      cwd: dir,
+      modelRuntime: runtime,
+      definition: { skills: [] },
+      extensionPaths: [join(dir, "extensions/provider.ts")],
+    }).then((services) => {
+      ready = true;
+      return services;
+    });
+    try {
+      await vi.waitFor(() => expect(calls).toBe(2));
+      await refresh.mock.results[1]?.value;
+      await setImmediate();
+      expect(ready).toBe(false);
+    } finally {
+      release();
+      await loaded;
+      refresh.mockRestore();
+    }
+    expect(runtime.hasConfiguredAuth("acme")).toBe(true);
+  });
   it("resolves a model registered by an extension's registerProvider()", async () => {
     // pi documents registerProvider() as the way an extension adds providers/models, and extensions
     // only execute when the services are built. Resolving the configured model before that failed

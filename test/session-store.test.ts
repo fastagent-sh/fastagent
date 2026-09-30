@@ -200,15 +200,13 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
   });
 
   it("a fork carries the ENGINE's custom entries and drops only the plane's own", async () => {
-    // The distinction a `fastagent` prefix could not make: `fastagent:tool-activation` is written by
-    // the engine and IS thread history (which deferred tools this conversation discovered), so a
-    // child that inherits the assistant messages calling those tools must inherit it too. The fork
-    // stamp and the leaf anchor describe the RECORD, and stay behind.
+    // An extension's fastagent-prefixed state is conversation history, not plane-owned machinery.
+    // The fork stamp and leaf anchor describe the record and stay behind.
     const dir = await mkdtemp(join(tmpdir(), "fa-store-markers-"));
     for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
       const parent = await store.openOrCreate("src");
       parent.appendMessage({ role: "user", content: "use the tool", timestamp: 1 });
-      parent.appendCustomEntry("fastagent:tool-activation", { names: ["search_docs"] });
+      parent.appendCustomEntry("fastagent:extension-state", { topic: "shared context" });
       const at = parent.appendMessage(fauxAssistantMessage("done"));
       await store.applyProperties("src", { leafEntryId: at }); // leaves an anchor behind
 
@@ -216,7 +214,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
       const kinds = ((await store.openIfExists("branch"))?.getEntries() ?? []).map(
         (e) => (e as { customType?: string }).customType,
       );
-      expect(kinds).toContain("fastagent:tool-activation"); // history travels
+      expect(kinds).toContain("fastagent:extension-state"); // history travels
       expect(kinds).not.toContain("fastagent.leaf"); // the parent's anchor does not
       expect(kinds.filter((k) => k === "fastagent.fork")).toHaveLength(1); // its OWN stamp, not the parent's
     }

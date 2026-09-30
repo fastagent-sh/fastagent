@@ -131,17 +131,14 @@ describe("pi behaviour the session store is built on", () => {
     expect(record.getEntries().map((e) => e.type)).toContain("custom");
   });
 
-  it("createBranchedSession writes NO file when the copied path has no assistant message", async () => {
-    // Why both stores copy a fork entry by entry instead of using pi's file-level fork: the pair
-    // (createBranchedSession + forkFrom) fails on the most common fork point there is — "start over
-    // from what I asked" — and the failure surfaces as an unreadable source file.
+  it("createBranchedSession persists a branch containing only a user message", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-pi-branch-"));
     const record = SessionManager.create(dir, dir, { id: "userOnly" });
     const at = record.appendMessage({ role: "user", content: "the question", timestamp: 1 });
 
     const branched = record.createBranchedSession(at);
     expect(branched).toBeTruthy();
-    expect(existsSync(branched as string)).toBe(false); // a path to a file pi has not written
+    expect(existsSync(branched as string)).toBe(true);
   });
 
   it("createBranchedSession MUTATES the manager it is called on", async () => {
@@ -195,14 +192,15 @@ describe("pi behaviour the session store is built on", () => {
     expect(pinned.getBranch().map((e) => e.id)).not.toContain(tip);
   });
 
-  it("a NEW record is buffered in memory until its first assistant message", async () => {
+  it("a NEW record is buffered in memory until its first user message", async () => {
     // Why the store writes the header itself (`publish`) before handing a record out: without it,
     // open-or-create is not idempotent — the second call cannot find the first call's record, and
     // one conversation forks into two files.
     const dir = await mkdtemp(join(tmpdir(), "fa-pi-buffer-"));
     const record = SessionManager.create(dir, dir, { id: "fresh" });
+    expect(existsSync(record.getSessionFile() as string)).toBe(false);
     record.appendMessage({ role: "user", content: "asked", timestamp: 1 });
-    expect(existsSync(record.getSessionFile() as string)).toBe(false); // the question is not on disk
+    expect(existsSync(record.getSessionFile() as string)).toBe(true);
 
     record.appendMessage(fauxAssistantMessage("answered"));
     expect(existsSync(record.getSessionFile() as string)).toBe(true);

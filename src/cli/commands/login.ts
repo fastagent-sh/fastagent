@@ -9,7 +9,7 @@ import { enterAgentEnv } from "../../env.ts";
 import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
 import { agentModels } from "../../engines/pi/agent-models.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
-import { findAgentDir, globalHome, placementDeadEnd } from "../../paths.ts";
+import { findAgentDir, globalHome, placementDeadEnd, resolvePlacement } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
 import { environmentAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
@@ -171,7 +171,7 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   enterAgentEnv(agentDir);
   // The model environment the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will
   // use.
-  const models = agentModels(agentDir);
+  const models = agentModels(agentDir, {}, { cwd: resolvePlacement(agentDir).workspace });
   const { auth } = models;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of

@@ -29,14 +29,12 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
  * activate deferred tools mid-turn without tool.ts importing the engine. pi anchors the addition in the transcript
  * (a system message carrying `toolsAdded`, written after the batch of tool results the activating call belongs to),
  * so providers with native deferred loading keep their
- * prompt-cache prefix; that message describes the run that wrote it, so what carries an activation into LATER turns
- * is fastagent's own `fastagent:tool-activation` entry, replayed by the per-invoke restore
- * (agent-session-factory.ts).
+ * prompt-cache prefix. The same transcript declarations restore the loadout on the next binding.
  */
 export interface ToolActivation {
   /** Names of the currently ACTIVE tools. */
   active(): string[];
-  /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
+  /** Every registered tool (active or not). */
   registered(): Array<{ name: string; description: string }>;
   /**
    * ADDITIVE activation. Returns ONLY the names this call actually added — a name a batch sibling activated first
@@ -47,21 +45,15 @@ export interface ToolActivation {
 }
 
 /** The activation bridge over a live pi session — the ONE implementation, for both consumers. */
-export function sessionToolActivation(session: AgentSession, onActivated?: (added: string[]) => void): ToolActivation {
+export function sessionToolActivation(session: AgentSession): ToolActivation {
   return {
     active: () => session.getActiveToolNames(),
     registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
     activate(names) {
       const current = session.getActiveToolNames();
-      const added = additiveActivation(
-        session.getAllTools().map((t) => t.name),
-        current,
-        names,
-      );
-      if (added.length === 0) return added;
-      session.setActiveToolsByName([...current, ...added]);
-      onActivated?.(added);
-      return added;
+      session.setActiveToolsByName([...current, ...names]);
+      const before = new Set(current);
+      return session.getActiveToolNames().filter((name) => !before.has(name));
     },
   };
 }
@@ -74,13 +66,3 @@ export interface TurnContext {
 }
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();
-
-/**
- * dedupe → keep registered names only (pi's setters THROW on unknown) → exclude already-active → the names to actually
- * add (empty = nothing to set).
- */
-function additiveActivation(registered: string[], current: string[], names: string[]): string[] {
-  const known = new Set(registered);
-  const active = new Set(current);
-  return [...new Set(names)].filter((name) => known.has(name) && !active.has(name));
-}

@@ -36,8 +36,8 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // their only re-read).
     if (rel === AGENT_CONFIG_FILE) return false;
     if (rel === "package.json") return false;
-    // models.json is read ONCE per worker (the model hub is built during assembly), so an edit needs a restart like
-    // any other code input.
+    // models.json is read ONCE per worker (agentModels' snapshot, which every session's runtime is built from), so an
+    // edit needs a restart like any other code input.
     if (rel === AGENT_MODELS_FILE) return false;
     // So is the model catalog: a `models --refresh` during `dev` restarts the worker onto the new models.
     if (rel === AGENT_MODEL_CATALOG_FILE) return false;

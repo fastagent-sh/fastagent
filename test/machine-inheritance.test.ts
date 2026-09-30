@@ -24,10 +24,10 @@ import { makeFaux, sentPrompt } from "./faux.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
-/** What a definition with no `extensions/` serves: nothing to load, so no model runtime is ever asked for. */
+/** A definition with only Pi's built-in extensions. */
 const noExtensions = {
   extensionPaths: [],
-  modelRuntime: () => Promise.reject(new Error("no extensions, so no model runtime is needed")),
+  modelRuntime: () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false }),
 };
 
 /** A machine with skills and prompt templates of its own, as pi keeps them. Returns pi's directory on it. */
