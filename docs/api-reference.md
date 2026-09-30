@@ -362,7 +362,8 @@ Pi's codemode and tool-search extensions load by default, with their own default
 `codemode` and `tool_search` start inactive. Mounting a tool activates the one its exposure needs, the rule Pi's MCP
 extension applies to its own tools: `codemode` for `exposure: "codemode"`, `tool_search` for `exposure: "deferred"`.
 Pi settings (`"defaultTools": ["+codemode"]`) activate either explicitly; `"extensions": ["-builtin:codemode"]`
-turns one off, and a `deferred` or `codemode` tool then has no way in.
+turns one off. A `deferred` or `codemode` tool then has no way in: the assembly warns once per such tool, `info` and
+the startup report list it as `unreachable`, and the base prompt stops pointing the model at `tool_search`.
 
 Pi's MCP extension is not loaded, so `mcp.json` has no effect on an agent. Its connections live as long as a
 session, and a served session lives one turn, so every turn would start every configured server.

@@ -1,13 +1,20 @@
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { fauxAgent } from "./agent.ts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, z } from "../src/index.ts";
 import { loadTools } from "../src/engines/pi/tool.ts";
-import { CODING_TOOL_NAMES, piBasePrompt, resolveAgentTools } from "../src/engines/pi/create.ts";
+import {
+  CODING_TOOL_NAMES,
+  createPiAgentFromDefinition,
+  piBasePrompt,
+  resolveAgentTools,
+} from "../src/engines/pi/create.ts";
+import { log } from "../src/log.ts";
+import { makeFaux } from "./faux.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -241,6 +248,45 @@ describe("loadTools (filesystem discovery)", () => {
     expect(prompt).not.toContain("- inactive:");
     // Only deferred tools are tool_search's to load; codemode lists its own, and an inactive direct tool is authored.
     expect(prompt).toContain("1 additional tool(s)");
+  });
+
+  it("a built-in the machine's settings disable leaves its tools unreachable, and every signal says so", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "fa-tools-no-search-"));
+    await mkdir(join(workspace, ".pi"));
+    await writeFile(join(workspace, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:tool-search"] }));
+    const agentDir = join(workspace, "fastagent");
+    await mkdir(agentDir);
+    const lookup = defineTool({
+      name: "lookup",
+      description: "Look up a business record.",
+      input: z.object({}),
+      exposure: "deferred",
+      execute: () => "ok",
+    });
+    const scripted = { ...lookup, name: "scripted", exposure: "codemode" as const };
+
+    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDir, workspace);
+    expect(indirectTools).toEqual([
+      { name: "lookup", reach: "unreachable" },
+      { name: "scripted", reach: "codemode" },
+    ]);
+    expect(piBasePrompt({ tools: [lookup], builtinExtensions: ["codemode"] })).not.toContain("tool_search");
+
+    const { faux } = makeFaux();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await createPiAgentFromDefinition(agentDir, {
+        providers: [faux.provider],
+        model: "faux/faux-1",
+        cwd: workspace,
+        tools: [lookup, scripted],
+      });
+      const said = warn.mock.calls.flat().join("\n");
+      expect(said).toContain('tool "lookup" (exposure: deferred) cannot be reached');
+      expect(said).not.toContain('tool "scripted"');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("isolates (surfaces, not fatal) a tool file that does not default-export a tool", async () => {

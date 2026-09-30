@@ -23,12 +23,23 @@ type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
 export type MachineSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
 type MachinePrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
 
-/** What this box lends an agent. */
 /** The Pi built-in extensions a definition loads, each unless the machine's settings disable it. */
 // Not `mcp`: its server connections live as long as a session, and a served session lives one turn, so every turn
 // would start every configured server.
 export const BUILTIN_EXTENSIONS = ["codemode", "tool-search"] as const;
 
+/**
+ * The way in for an authored tool the model is not given up front, by its exposure: the built-in extension that
+ * provides it and the tool that extension registers. A `codemode` tool is called from codemode scripts, a `deferred`
+ * one is loaded by tool_search — the rule Pi's MCP extension applies to its own tools (`ensureDiscoveryActive`).
+ * Without that extension the tool has no way in at all.
+ */
+export const DISCOVERY = {
+  codemode: { extension: "codemode", tool: "codemode" },
+  deferred: { extension: "tool-search", tool: "tool_search" },
+} as const satisfies Record<string, { extension: (typeof BUILTIN_EXTENSIONS)[number]; tool: string }>;
+
+/** What this box lends an agent. */
 export interface Machine {
   skills: MachineSkill[];
   prompts: MachinePrompt[];

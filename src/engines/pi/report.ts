@@ -42,6 +42,7 @@ const REACH: Record<ToolReach, string> = {
   codemode: "codemode scripts only",
   hidden: "hidden",
   inactive: "inactive until an authored loader activates it",
+  unreachable: "unreachable: pi's settings disable the built-in extension it needs",
 };
 
 /** The report line for the mounted tools the model is not given up front: each name with its way in. */

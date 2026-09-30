@@ -3,7 +3,7 @@
  * durable record, per invoke.
  */
 import { dirname } from "node:path";
-import { BUILTIN_EXTENSIONS, type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
+import { BUILTIN_EXTENSIONS, DISCOVERY, type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -111,16 +111,11 @@ export interface BindPiSessionOptions {
   sessionId?: string;
 }
 
-/**
- * The discovery tool each non-declared authored exposure needs, the rule Pi's MCP extension applies to its own tools
- * (`ensureDiscoveryActive`): a `codemode` tool is reached by codemode scripts, a `deferred` one is loaded by tool_search. Without it the tool has
- * no way in at all.
- */
+/** The {@link DISCOVERY} tools the mounted tools' exposures need. A disabled extension's name is ignored by Pi. */
 function discoveryToolNames(tools: readonly MountedTool[]): string[] {
   const names = new Set<string>();
   for (const tool of tools) {
-    if (tool.exposure === "codemode") names.add("codemode");
-    if (tool.exposure === "deferred") names.add("tool_search");
+    if (tool.exposure === "codemode" || tool.exposure === "deferred") names.add(DISCOVERY[tool.exposure].tool);
   }
   return [...names];
 }

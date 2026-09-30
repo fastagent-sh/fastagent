@@ -17,6 +17,8 @@ import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
+import { log } from "../../log.ts";
+import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine } from "./machine.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
@@ -78,7 +80,7 @@ function isDefaultActiveTool(tool: MountedTool): boolean {
 }
 
 /** How the model reaches a mounted tool it is not given up front. */
-export type ToolReach = "tool_search" | "codemode" | "hidden" | "inactive";
+export type ToolReach = "tool_search" | "codemode" | "hidden" | "inactive" | "unreachable";
 
 /** A mounted authored tool outside the default-active surface, and its way in. */
 export interface IndirectTool {
@@ -86,8 +88,20 @@ export interface IndirectTool {
   reach: ToolReach;
 }
 
-function indirectReach(tool: MountedTool): ToolReach | undefined {
+/** The built-in extension a `codemode`/`deferred` tool is reached through ({@link DISCOVERY}). */
+function wayIn(tool: MountedTool): string | undefined {
+  return tool.exposure === "codemode" || tool.exposure === "deferred" ? DISCOVERY[tool.exposure].extension : undefined;
+}
+
+/** Whether this machine leaves the tool's way in enabled (a tool that needs none always has one). */
+function hasWayIn(tool: MountedTool, builtinExtensions: readonly string[]): boolean {
+  const extension = wayIn(tool);
+  return extension === undefined || builtinExtensions.includes(extension);
+}
+
+function indirectReach(tool: MountedTool, builtinExtensions: readonly string[]): ToolReach | undefined {
   if (isDefaultActiveTool(tool)) return undefined;
+  if (!hasWayIn(tool, builtinExtensions)) return "unreachable";
   if (tool.exposure === "deferred") return "tool_search";
   if (tool.exposure === "codemode") return "codemode";
   if (tool.exposure === "hidden") return "hidden";
@@ -144,13 +158,14 @@ export async function resolveAgentTools(
   // The discovered tools that were DROPPED (a coding tool or config.tools already owns the name):
   // asking the mounted set instead would read the winner's name as proof the loser is mounted.
   const shadowed = new Set(merged.collisions.map((c) => c.name));
+  const { builtinExtensions } = await readMachine(cwd);
   const defaultNames = new Set<string>(CODING_TOOL_NAMES);
   const toolNames = tools.filter((t) => !defaultNames.has(t.name) && isDefaultActiveTool(t)).map((t) => t.name);
   return {
     tools,
     toolNames,
     indirectTools: tools.flatMap((t) => {
-      const reach = defaultNames.has(t.name) ? undefined : indirectReach(t);
+      const reach = defaultNames.has(t.name) ? undefined : indirectReach(t, builtinExtensions);
       return reach ? [{ name: t.name, reach }] : [];
     }),
     toolCollisions,
@@ -176,14 +191,25 @@ export async function resolveAgentTools(
 // Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
 
 /** The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two deviations. */
-export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string } = {}): string {
+export function piBasePrompt(
+  options: {
+    tools?: MountedTool[];
+    persona?: string;
+    /** The {@link BUILTIN_EXTENSIONS} this machine leaves enabled (`Machine.builtinExtensions`); all by default. */
+    builtinExtensions?: readonly string[];
+  } = {},
+): string {
   const mounted = options.tools ?? [];
+  const builtinExtensions = options.builtinExtensions ?? BUILTIN_EXTENSIONS;
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so naming them here
   // would invite calls to tools that don't exist yet.
   const tools = mounted.filter(isDefaultActiveTool);
   // Only `deferred` tools are tool_search's to load (the session activates it for them); `codemode` ones are listed
   // in codemode's own description, and an inactive direct tool is reached only through an authored activation.
-  const deferredCount = mounted.filter((tool) => tool.exposure === "deferred").length;
+  // A disabled tool-search leaves them no way in, and naming tool_search would invite calls to a tool that is not there.
+  const deferredCount = mounted.filter(
+    (tool) => tool.exposure === "deferred" && hasWayIn(tool, builtinExtensions),
+  ).length;
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line (core.md §2),
@@ -463,6 +489,15 @@ export async function assemblePiFromDefinition(
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
   await models.runtime();
+  const { builtinExtensions } = await readMachine(cwd);
+  const unreachable = tools.filter((tool) => !hasWayIn(tool, builtinExtensions));
+  // Said once per assembly: the model cannot call these at all, while the tools themselves loaded fine.
+  for (const tool of unreachable) {
+    log.warn(
+      `[fastagent] tool "${tool.name}" (exposure: ${tool.exposure}) cannot be reached: pi's settings disable ` +
+        `builtin:${wayIn(tool)}, its only way in`,
+    );
+  }
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
@@ -478,7 +513,7 @@ export async function assemblePiFromDefinition(
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn
           // like AGENTS.md so edits go live.
-          base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
+          base: options.base ?? piBasePrompt({ tools, persona: def.persona, builtinExtensions }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
         }),
