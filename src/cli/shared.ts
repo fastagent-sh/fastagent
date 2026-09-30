@@ -20,10 +20,10 @@ import { readMachine, withMachine } from "../engines/pi/machine.ts";
 import { providerAuthStatuses } from "../engines/pi/models.ts";
 import { type AgentModels, agentModels } from "../engines/pi/agent-models.ts";
 import { formatAuthReport } from "./auth-view.ts";
-import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
+import { CODING_TOOL_NAMES, type IndirectTool } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
-import { reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
+import { describeIndirectTools, reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
 import { type ResolvedPlacement, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
@@ -56,7 +56,7 @@ export interface ReportableAssembly {
   config: { thinkingLevel?: string };
   definition: LoadedDefinition;
   toolNames: string[];
-  deferredToolNames: string[];
+  indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
 }
 
@@ -82,9 +82,7 @@ export async function reportAssembly(
   reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
-  if (a.deferredToolNames.length > 0) {
-    reportLine("deferred", `${a.deferredToolNames.join(", ")} (loaded on demand via tool_search)`);
-  }
+  if (a.indirectTools.length > 0) reportLine("indirect", describeIndirectTools(a.indirectTools));
   reportToolCollisions(a.toolCollisions);
   for (const [label, value] of extras.afterTools ?? []) reportLine(label, value);
   reportFindingsIfChanged(a.definition.dir, a.definition);

@@ -187,8 +187,9 @@ owes.
 Reopening restores Pi's tool declarations from the active transcript using `getCurrentSystemMessage` and
 `setActiveToolsByName`. The SDK supplies an initial loadout even on resume, bypassing `AgentSession`'s own
 constructor restore; the shared binder performs this one public-API replay for serving and chat. There is no
-separate activation journal. Default tools the transcript never declared join the loadout (a tool added to
-`tools/` reaches old channel chats); tools no longer mounted are dropped. Discoveries survive rebind, resume, fork, and compaction on that branch.
+separate activation journal. The loadout is the definition's current defaults plus the transcript's declarations
+that are still mounted. Transcript removals are not honored: fastagent's own activation only adds, so a removal
+records a turn on which the definition did not mount the tool, not the conversation's choice. Discoveries survive rebind, resume, fork, and compaction on that branch.
 
 Every binding also owns a fresh `ModelRuntime`. Credentials are shared through their store, but extension
 provider registrations and virtual router contexts are session-local. An unbound extension-aware catalog supplies
@@ -281,7 +282,7 @@ receive the same workspace cwd and caller session id; their `thinkingLevel` gett
 **Tool exposure and discovery** use Pi's native `direct`, `model-only`, `codemode`, `deferred`, and `hidden`
 exposures. Codemode defaults to mode `on`; `codemode` and `tool_search` are registered inactive until settings
 or a mounted tool with that exposure selects them (`bindPiSession`, the same rule Pi's MCP extension applies). A rebound
-session replays its transcript's declarations and adds only default tools the transcript never declared; a tool
+session runs on the current defaults plus its transcript's still-mounted declarations; a tool
 whose exposure was narrowed stays declared in conversations that already declared it, since the transcript does not
 record why a tool was declared. Built-ins the machine's settings disable (`"extensions": ["-builtin:codemode"]`) are not
 loaded. No fastagent loader or keyword policy is layered over Pi. `ToolContext.tools` remains a small

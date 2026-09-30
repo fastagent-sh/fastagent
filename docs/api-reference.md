@@ -367,8 +367,9 @@ turns one off, and a `deferred` or `codemode` tool then has no way in.
 Pi's MCP extension is not loaded, so `mcp.json` has no effect on an agent. Its connections live as long as a
 session, and a served session lives one turn, so every turn would start every configured server.
 
-An existing conversation keeps the tools its transcript declares, including discoveries and removals, and gains
-default tools it has never seen, so a tool added to `tools/` reaches old channel chats after a restart. Narrowing a
+An existing conversation runs on the definition's current default tools plus whatever its transcript still declares
+and is still mounted (its discoveries), so a tool added to `tools/`, or restored after a release that lacked it,
+reaches old channel chats after a restart. Narrowing a
 tool's exposure (to `deferred`, `codemode`, or `defaultActive: false`) applies to new conversations only: the
 transcript cannot tell a tool declared by default from one discovered, so a conversation that declared it keeps
 its full schema.
@@ -379,8 +380,8 @@ its full schema.
 - Nested calls retain native validation, permission hooks, and cancellation. Session observation includes
   `parentToolCallId`; the channel stream shows the outer call and Pi's bounded nested trace, without duplicating
   each child or publishing `structuredContent`.
-- Pi's transcript restores the loadout across rebind, resume, fork, and compaction. Default tools the conversation
-  has never declared join it; tools no longer mounted are dropped.
+- Pi's transcript restores the loadout across rebind, resume, fork, and compaction. The definition's current default
+  tools always join; tools no longer mounted are dropped.
 - `ToolContext.tools` remains an additive adapter for authored loaders. Pi ignores unknown or unreachable names;
   `activate(names)` returns only names actually added.
 

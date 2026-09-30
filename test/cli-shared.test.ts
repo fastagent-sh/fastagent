@@ -27,7 +27,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
       diagnostics: [],
     },
     toolNames: ["fetch-url"],
-    deferredToolNames: [],
+    indirectTools: [],
     toolCollisions: [],
     toolFailures: [],
   } as unknown as Parameters<typeof reportAssembly>[0];

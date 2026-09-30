@@ -14,6 +14,7 @@ import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, ex
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
+import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
@@ -272,7 +273,17 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   });
   if (modelSpec) await checkGlobalCatalogModel(modelSpec, deployed, report);
   const authPath = resolveAuthPath(agentDir);
-  const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
+  // A model only the definition's extensions declare (a virtual model, or a provider one registers) is authenticated
+  // by that code on the box, per request: a virtual model's credential is whichever physical model it routes to.
+  // Asked of the catalog the box builds, extensions included, so deploy judges the model the box will run.
+  const fromExtension = modelSpec ? await extensionDeclared(agentDir, workspace, modelSpec, deployed) : false;
+  if (fromExtension && modelSpec) {
+    report.note(
+      `${modelSpec} is declared by the definition's extensions, which resolve its credentials on the box — deploy ` +
+        `cannot check them. Set the keys the models it uses need in ${valueFile}`,
+    );
+  }
+  const route = modelSpec && !fromExtension ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
   const boxLogin = route.boxLogin;
   if (boxLogin !== undefined) {
@@ -428,6 +439,24 @@ async function credentialRoute(
   const fromValues = await environmentAuthSource(provider, Object.fromEntries(values), async () => false);
   if (fromValues !== undefined) return isEnvKey(fromValues) ? { envVar: fromValues } : {};
   return { boxLogin: provider };
+}
+
+/** Whether `spec` exists only once the definition's extensions have registered their models. */
+async function extensionDeclared(
+  agentDir: string,
+  workspace: string,
+  spec: string,
+  deployed: ModelRuntime,
+): Promise<boolean> {
+  const provider = providerOf(spec);
+  const id = spec.slice(provider.length + 1);
+  if (deployed.getModel(provider, id)) return false;
+  const catalog = await agentModels(
+    agentDir,
+    { credentialStore: new InMemoryCredentialStore() },
+    { machineLayer: false, cwd: workspace },
+  ).runtime();
+  return catalog.getModel(provider, id) !== undefined;
 }
 
 /** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */

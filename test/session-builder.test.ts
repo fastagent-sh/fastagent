@@ -2,7 +2,7 @@ import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -504,6 +504,27 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
 });
 
 describe("session builder: the credential hint belongs to the runtime, not to each session", () => {
+  it("leaves the user's TUI theme alone when a session is created or switched", async () => {
+    // Pi's `theme` is one global; InteractiveMode applies the user's once, at startup.
+    const current = () =>
+      (globalThis as Record<symbol, { name?: string } | undefined>)[Symbol.for("@earendil-works/pi-coding-agent:theme")]
+        ?.name;
+    const dir = await freshAgentDir("fa-chat-theme-");
+    try {
+      await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+      initTheme("light");
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        await rt.newSession();
+        expect(current()).toBe("light");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dirname(dir), { recursive: true, force: true });
+    }
+  });
+
   it("warns once, not again on every newSession()", async () => {
     // Model resolution moved into createRuntime (extensions must load before a model they register
     // can resolve), which put this warning on a per-session path. Credentials do not change between

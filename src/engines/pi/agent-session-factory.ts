@@ -31,7 +31,7 @@ import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
-import { getCurrentSystemMessage, getDeclaredTools } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { resolveModel } from "./config.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
@@ -154,29 +154,24 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     },
   };
   // The SDK always supplies an initial loadout (settings' defaultTools applied), bypassing AgentSession's native
-  // transcript restore. The conversation keeps what its transcript declares — discoveries and removals alike — and
-  // gains the defaults it never saw, so a tool the author added since joins it, as the base prompt says it does.
+  // transcript restore. The loadout is the definition's defaults as they are NOW, plus whatever the transcript still
+  // declares and is still mounted (a discovery). Removals in the transcript are not honored: fastagent's own activation
+  // only adds, so a removal records a turn on which the definition did not mount the tool, not the conversation's
+  // choice, and honoring it would keep a tool out of a long-lived chat after a release that briefly lacked it.
   // Replayed through Pi's public APIs, for serving and chat alike.
   const defaults = [...session.getActiveToolNames(), ...discoveryToolNames(tools)];
   const current = getCurrentSystemMessage(history);
-  if (current) {
-    const mounted = new Set(session.getAllTools().map((tool) => tool.name));
-    const declared = (current.toolsAdded ?? []).map((tool) => tool.name);
-    const dropped = declared.filter((name) => !mounted.has(name));
-    // Debug, not warn: `session_start` handlers register their tools after this point, and Pi activates the
-    // default-active ones when they do (`_refreshToolRegistry`), so an absence here is routine on every such bind.
-    if (dropped.length)
-      log.debug(`[fastagent] session ${sessionId}: not mounted yet or removed: ${dropped.join(", ")}`);
-    const seen = new Set(getDeclaredTools(history).map((tool) => tool.name));
-    session.setActiveToolsByName([
-      ...declared.filter((name) => mounted.has(name)),
-      ...defaults.filter((name) => !seen.has(name)),
-    ]);
-  } else {
-    session.setActiveToolsByName(defaults);
-  }
+  const mounted = new Set(session.getAllTools().map((tool) => tool.name));
+  const declared = (current?.toolsAdded ?? []).map((tool) => tool.name);
+  const dropped = declared.filter((name) => !mounted.has(name));
+  // Debug, not warn: `session_start` handlers register their tools after this point, and Pi activates the
+  // default-active ones when they do (`_refreshToolRegistry`), so an absence here is routine on every such bind.
+  if (dropped.length) log.debug(`[fastagent] session ${sessionId}: not mounted yet or removed: ${dropped.join(", ")}`);
+  session.setActiveToolsByName([...defaults, ...declared.filter((name) => mounted.has(name))]);
   return result;
 }
+
+let themeReady = false;
 
 /** Each distinct load failure is said once per process: serving loads the extensions again for every session. */
 const reportedExtensionErrors = new Set<string>();
@@ -186,6 +181,9 @@ const reportedExtensionErrors = new Set<string>();
  * extensions again, so a notification from `session_start` would otherwise log the same line on every message.
  */
 const reportedNotifications = new Set<string>();
+// ponytail: cleared wholesale at this size, so a notification with a counter or id in it cannot grow the set for the
+// life of a `start` process; the price is one repeat at warn level after each clear. An LRU if that ever matters.
+const MAX_REPORTED_NOTIFICATIONS = 1000;
 
 /**
  * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and carries on with the
@@ -368,7 +366,6 @@ export async function definitionServices(options: {
 }): Promise<AgentSessionServices> {
   const { cwd, modelRuntime, definition, extensionPaths } = options;
   const machine = await readMachine(cwd);
-  initTheme();
   const services = await withModelRegistration(modelRuntime, () =>
     createAgentSessionServices({
       cwd,
@@ -429,6 +426,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   const tools = options.tools ?? [];
 
   return async (sessionId, inherit) => {
+    // `ctx.ui.theme` reads pi's global theme, which only pi's own entry points initialize. Serving only: chat's theme
+    // is InteractiveMode's, and resetting it on every session switch would drop the user's.
+    if (!themeReady) {
+      initTheme();
+      themeReady = true;
+    }
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
@@ -465,6 +468,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
             notify: (message: string, type?: "info" | "warning" | "error") => {
               const key = `${type ?? "info"}\u0000${message}`;
               const repeat = reportedNotifications.has(key);
+              if (reportedNotifications.size >= MAX_REPORTED_NOTIFICATIONS) reportedNotifications.clear();
               reportedNotifications.add(key);
               const emit = repeat ? log.debug : type === "info" ? log.info : log.warn;
               emit(`[fastagent] session ${sessionId}: ${message}`);

@@ -224,14 +224,15 @@ describe("loadTools (filesystem discovery)", () => {
         defineTool({ ...options, description: options.name, input: z.object({}), execute: () => "ok" }),
       ),
     ];
-    const { tools, toolNames, deferredToolNames } = await resolveAgentTools(
-      { tools: surface },
-      agentDir,
-      process.cwd(),
-    );
+    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDir, process.cwd());
     expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(surface.map((tool) => tool.name)));
     expect(toolNames).toEqual(["direct", "modelOnly"]);
-    expect(deferredToolNames).toEqual(["lookup"]);
+    expect(indirectTools).toEqual([
+      { name: "lookup", reach: "tool_search" },
+      { name: "scriptOnly", reach: "codemode" },
+      { name: "invisible", reach: "hidden" },
+      { name: "inactive", reach: "inactive" },
+    ]);
     const prompt = piBasePrompt({ tools: surface });
     expect(prompt).toContain("- direct:");
     expect(prompt).toContain("- modelOnly:");

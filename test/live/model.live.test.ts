@@ -181,11 +181,14 @@ export default defineTool({
     });
     await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const { agent, toolNames, deferredToolNames } = await createPiAgentFromDir(dir); // refuses if the fixture broke
-    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in deferredToolNames
+    const { agent, toolNames, indirectTools } = await createPiAgentFromDir(dir); // refuses if the fixture broke
+    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in indirectTools
     // and deliberately NOT in toolNames, the author's active-by-default surface. Asserting the wrong
     // slot would pass on a tool that had quietly stopped being deferred — which is the whole premise.
-    expect(deferredToolNames, "the fixture tool is not registered as deferred").toContain("get_vault_code");
+    expect(indirectTools, "the fixture tool is not registered as deferred").toContainEqual({
+      name: "get_vault_code",
+      reach: "tool_search",
+    });
     expect(toolNames, "a deferred tool must not be on the active-by-default surface").not.toContain("get_vault_code");
 
     const events = await drain(

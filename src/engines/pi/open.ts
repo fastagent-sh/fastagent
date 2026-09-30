@@ -8,7 +8,7 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
-import { type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
+import { type IndirectTool, type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
@@ -126,7 +126,7 @@ export interface AgentAssembly {
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/). */
   tools: MountedTool[];
   toolNames: string[];
-  deferredToolNames: string[];
+  indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
   toolSecrets: Map<string, DeclaredSecret[]>;
@@ -145,7 +145,7 @@ export async function resolveAgentAssembly(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
+  const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
     workspace,
@@ -177,7 +177,7 @@ export async function resolveAgentAssembly(
     models: agentModels(agentDir, options, { cwd: workspace }),
     tools,
     toolNames,
-    deferredToolNames,
+    indirectTools,
     toolCollisions,
     toolSecrets,
   };
@@ -291,8 +291,8 @@ export async function createPiAgentFromDir(
   http?: HttpSurface;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
-  /** Tools with native deferred exposure, loaded on demand through tool_search (activated for them). */
-  deferredToolNames: string[];
+  /** Mounted authored tools the model is not given up front, with how each is reached. */
+  indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
 }> {
   const front = await resolveAgentAssembly(dir, options);
@@ -306,7 +306,7 @@ export async function createPiAgentFromDir(
     models,
     tools,
     toolNames,
-    deferredToolNames,
+    indirectTools,
     toolCollisions,
   } = front;
   // Every serve mounts the built-in `wake` tool: the agent's own follow-up work is a default capability, and a serve
@@ -381,7 +381,7 @@ export async function createPiAgentFromDir(
     sessionsDir,
     models,
     toolNames,
-    deferredToolNames,
+    indirectTools,
     toolCollisions,
   };
 }

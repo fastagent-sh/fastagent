@@ -729,39 +729,30 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     expect(offered).toContain("alpha");
   });
 
-  it("a default tool the conversation removed stays removed on the next binding", async () => {
+  it("a tool missing from one release returns to an EXISTING conversation when it is mounted again", async () => {
+    // Pi records the turn without it as a removal; that is the definition's gap, not the conversation's choice.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    const dir = await mkdtemp(join(tmpdir(), "fa-drop-"));
-    const dropper = join(dir, "drop.mjs");
-    await writeFile(
-      dropper,
-      `export default (pi) => pi.registerTool({
-  name: "drop_alpha", label: "drop_alpha", description: "Deactivate alpha.", parameters: { type: "object", properties: {} },
-  execute: async () => { pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "alpha")); return { content: [{ type: "text", text: "dropped" }], details: {} }; },
-});\n`,
-    );
-    const alpha = () =>
-      defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });
-    const first = await agentWith(
-      [fauxAssistantMessage(fauxToolCall("drop_alpha", {}, { id: "d1" })), fauxAssistantMessage("dropped")],
-      { sessions: store, tools: [alpha()], extensionPaths: [dropper] },
-    );
-    await collect(first.invoke({ session: "shrinks-by-choice" }, { text: "drop alpha" }));
-
-    let offered: string[] = [];
-    const next = await agentWith(
-      [
-        (context) => {
-          offered = sentTools(context);
-          return fauxAssistantMessage("second");
-        },
-      ],
-      { sessions: store, tools: [alpha()] },
-    );
-    await collect(next.invoke({ session: "shrinks-by-choice" }, { text: "and now?" }));
-
-    expect(offered).toContain("read");
-    expect(offered).not.toContain("alpha");
+    const tool = (name: string) =>
+      defineTool({ name, description: `The ${name} tool.`, input: z.object({}), execute: async () => "" });
+    const offered: string[][] = [];
+    const turn = async (tools: MountedTool[]) => {
+      const agent = await agentWith(
+        [
+          (context) => {
+            offered.push(sentTools(context));
+            return fauxAssistantMessage("ok");
+          },
+        ],
+        { sessions: store, tools },
+      );
+      await collect(agent.invoke({ session: "rollback" }, { text: "go" }));
+    };
+    await turn([tool("alpha"), tool("beta")]);
+    await turn([tool("alpha")]);
+    await turn([tool("alpha"), tool("beta")]);
+    expect(offered[1]).not.toContain("beta");
+    expect(offered[2]).toContain("beta");
+    expect(offered[2]).toContain("alpha");
   });
 
   it("a recorded activation whose tool is gone is dropped, not replayed into a throw", async () => {

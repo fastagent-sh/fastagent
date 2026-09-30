@@ -77,6 +77,24 @@ function isDefaultActiveTool(tool: MountedTool): boolean {
   );
 }
 
+/** How the model reaches a mounted tool it is not given up front. */
+export type ToolReach = "tool_search" | "codemode" | "hidden" | "inactive";
+
+/** A mounted authored tool outside the default-active surface, and its way in. */
+export interface IndirectTool {
+  name: string;
+  reach: ToolReach;
+}
+
+function indirectReach(tool: MountedTool): ToolReach | undefined {
+  if (isDefaultActiveTool(tool)) return undefined;
+  if (tool.exposure === "deferred") return "tool_search";
+  if (tool.exposure === "codemode") return "codemode";
+  if (tool.exposure === "hidden") return "hidden";
+  // `defaultActive: false`: only an authored loader (`ToolContext.tools.activate`) brings it in.
+  return "inactive";
+}
+
 /**
  * The full directory-agent tool set: all pi coding tools + `config.tools` + discovered `tools/` (deduped, existing
  * win), plus the authored names and collisions to report.
@@ -88,10 +106,8 @@ export async function resolveAgentTools(
 ): Promise<{
   tools: MountedTool[];
   toolNames: string[];
-  /**
-   * Tools with native deferred exposure, loaded on demand through tool_search (activated for them).
-   */
-  deferredToolNames: string[];
+  /** Mounted authored tools the model is not given up front, with how each is reached. */
+  indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
   /** Env vars the MOUNTED tools declared they need, BY TOOL NAME — a discovered tool shadowed by a
@@ -133,7 +149,10 @@ export async function resolveAgentTools(
   return {
     tools,
     toolNames,
-    deferredToolNames: tools.filter((t) => t.exposure === "deferred").map((t) => t.name),
+    indirectTools: tools.flatMap((t) => {
+      const reach = defaultNames.has(t.name) ? undefined : indirectReach(t);
+      return reach ? [{ name: t.name, reach }] : [];
+    }),
     toolCollisions,
     toolFailures: discovered.failures,
     // Mounted only, and config.tools are FastagentTools too, so a programmatic tool declares the

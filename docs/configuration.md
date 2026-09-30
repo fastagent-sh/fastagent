@@ -323,7 +323,9 @@ capabilities, not a security policy; to isolate an agent, sandbox its whole proc
 collision is reported. Pi's codemode and tool-search extensions load by default; their settings control activation,
 and `"extensions": ["-builtin:codemode"]` in Pi's settings turns one off. Pi's MCP extension is not loaded, so
 `mcp.json` has no effect on an agent. Every serve mounts `wake`/`unwake`.
-`fastagent info --json` shows the mounted surface.
+`fastagent info --json` shows the mounted surface: `tools` are the authored tools the model gets up front, and
+`indirectTools` the rest, each with how it is reached (`tool_search`, `codemode`, `hidden`, or `inactive` until an
+authored loader activates it).
 
 Reusable packages export ordinary `FastagentTool[]`:
 
