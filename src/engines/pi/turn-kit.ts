@@ -2,6 +2,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { SessionEvent } from "../../session.ts";
+import { log } from "../../log.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
 //
@@ -123,11 +124,17 @@ export async function toPiPromptOptions(
   }
   const { resizeImage } = await import("@earendil-works/pi-coding-agent");
   const images = await Promise.all(
-    prompt.images.map(async (img): Promise<ImageContent> => {
-      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType).catch(() => null);
-      return resized
-        ? { type: "image", data: resized.data, mimeType: resized.mimeType }
-        : { type: "image", data: img.data, mimeType: img.mimeType };
+    prompt.images.map(async (img, i): Promise<ImageContent> => {
+      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType);
+      if (resized) return { type: "image", data: resized.data, mimeType: resized.mimeType };
+      // `null` covers an image it cannot decode or shrink under the limit AND an image backend that did not load,
+      // and does not say which. pi's own tool-result path keeps the original in that case rather than drop what the
+      // sender attached, and so does this; a provider that refuses it fails the turn with its own message.
+      log.warn(
+        `[fastagent] queued image ${i + 1} (${img.mimeType}) could not be resized; sending it as given — ` +
+          "the provider may refuse it",
+      );
+      return { type: "image", data: img.data, mimeType: img.mimeType };
     }),
   );
   return { images };
