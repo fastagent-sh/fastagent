@@ -15,7 +15,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 // The L0 rendering payload reads message text the way the engine does — ONE reading, joined without a
 // separator because this payload is a transcript, not a preview line.
-import { contentText, type ImageContent } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -35,7 +35,6 @@ import { type ImageRef, type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
-  type EntryImage,
   INVALID_COMMAND_CODE,
   isAddressableSession,
   NO_ACTIVE_RUN_CODE,
@@ -61,6 +60,7 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { entryImages, imageAt } from "./entry-images.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
@@ -119,29 +119,6 @@ function sessionUsage(
 }
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
-
-/** The images an entry PUBLISHES: a user prompt's and a tool result's. `entries()` lists them and `image()` reads
- *  them through this one function, so a ref can only reach what was listed. */
-function publishedImages(message: { role: string; content?: unknown }): ImageContent[] {
-  if (message.role !== "user" && message.role !== "toolResult") return [];
-  const content = message.content;
-  return Array.isArray(content) ? content.filter((b: { type?: unknown }) => b.type === "image") : [];
-}
-
-/** `data.images` of the entry `entryId` holding `message`, absent when it has none. Also what `user_message` carries
- *  (invoke-session.ts), so the event and the entry cannot disagree. */
-export function entryImages(entryId: string, message: { role: string; content?: unknown }): { images?: EntryImage[] } {
-  const images = publishedImages(message).map((b, i) => ({ ref: `${entryId}:${i}`, mimeType: b.mimeType }));
-  return images.length > 0 ? { images } : {};
-}
-
-/** A ref back to its entry and position: the inverse of what `entryImages` mints. */
-function parseImageRef(ref: string): { entryId: string; index: number } | undefined {
-  const at = ref.lastIndexOf(":");
-  const index = ref.slice(at + 1);
-  // Canonical digits only, so one image has one ref (`:00` is not `:0`).
-  return at > 0 && /^(0|[1-9]\d*)$/.test(index) ? { entryId: ref.slice(0, at), index: Number(index) } : undefined;
-}
 
 /**
  * pi `PiSessionEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
@@ -490,13 +467,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     async image(session: string, ref: string): Promise<ImageRef | undefined> {
-      const at = parseImageRef(ref);
-      if (!at) return undefined;
       // ponytail: opens (parses) the whole record per image; an index when long image-heavy sessions make it show.
       const opened = await sessions.openIfExists(session);
-      const entry = opened?.getEntry(at.entryId) as PiSessionEntry | undefined;
-      const image = entry?.type === "message" ? publishedImages(entry.message)[at.index] : undefined;
-      return image ? { data: image.data, mimeType: image.mimeType } : undefined;
+      return opened ? imageAt(opened, ref) : undefined;
     },
 
     events(session: string): SessionEventStream {

@@ -411,6 +411,14 @@ records from other branches, and the client reconstructs the active path via `pa
 `tool` `{ toolCallId, toolName, isError, text, images? }`. Engine-specific kinds may appear beyond the guaranteed
 minimum and MUST be skippable.
 
+The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
+model no longer sees as written. `omitted: true` means the target left the model context; `false` means
+its content was replaced (the replacement is not published). pi writes omissions for its own abandoned
+retry and overflow attempts, and an extension may write either kind of edit, so an omitted entry is not
+necessarily a failed one. The target stays in the transcript. An edit applies only while the
+`context_edit` entry itself lies on the path from `leafEntryId`: after a move or fork to a point
+between the target and the edit, the model sees the target as written.
+
 `images` is present only when the message carried any: `{ ref, mimeType }[]`, in the order sent. The bytes
 stay out, because `entries()` is read on every open and reconnect and one screenshot is megabytes; a client
 reads each one it draws with `image(ref)` on the same session (`GET .../image?ref=`, raw bytes). `ref` is
@@ -420,14 +428,7 @@ wire serves only `image/png`, `image/jpeg`, `image/gif` and `image/webp` under t
 and an `image/svg+xml` or `text/html` "image" would run script on the facade's origin. So over the wire such an
 image reads back as `application/octet-stream`, while the entry keeps the declared type. pi normalizes prompt
 images to the four, so only a tool result it could not normalize gets there. An image the session does not hold
-answers a 404 coded `no_such_image`; an uncoded 404 is a serve that predates the route.
-The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
-model no longer sees as written. `omitted: true` means the target left the model context; `false` means
-its content was replaced (the replacement is not published). pi writes omissions for its own abandoned
-retry and overflow attempts, and an extension may write either kind of edit, so an omitted entry is not
-necessarily a failed one. The target stays in the transcript. An edit applies only while the
-`context_edit` entry itself lies on the path from `leafEntryId`: after a move or fork to a point
-between the target and the edit, the model sees the target as written.
+is a `204` with no body, because in process `image()` returns `undefined` rather than throwing (§13).
 
 Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
 `entries({ since: cursor })` to backfill → `state()` to learn whether work is active. Reading first
@@ -624,6 +625,7 @@ POST   /run                                run one declared routine by name (als
   |---|---|
   | `update` / `fork` / `delete` / actions return a `SessionResult` and never throw | **200 either way**, `ok: false` included |
   | `state` / `entries` / `capabilities` / `commands` return a value | 200 |
+  | `image` returns an `ImageRef` or `undefined` | 200 with the raw bytes, or 204 |
   | `list()` throws a store fault (a coded one) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either; the remote client carries all three on the error it throws |
   | any other read throws — `commands()` on an unreadable definition, `list()` on something that is not a store fault | 500 from the plane's boundary |
   | the request never reached the plane (JSON, body cap, route) | 400 / 413 / 404 / 405 |

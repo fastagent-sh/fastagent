@@ -521,6 +521,9 @@ describe("session control over HTTP", () => {
       expect(res.headers.get("content-type")).toBe("image/png");
       expect(Buffer.from(await res.arrayBuffer()).toString("base64")).toBe(png);
       expect(await remote.sessions.get("s/I").image(`${ref}0`)).toBeUndefined();
+      expect((await fetch(`${served.url}/control/sessions/other/image?ref=${encodeURIComponent(ref)}`)).status).toBe(
+        204,
+      );
       expect(await remote.sessions.get("other").image(ref)).toBeUndefined();
       expect((await fetch(`${served.url}/control/sessions/s%2FI/image`)).status).toBe(400);
     } finally {
@@ -557,7 +560,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("image(): a serve without the route is SKEW; only the plane's coded 404 means no such image", async () => {
+  it("image(): a missing image is a 204 and undefined; a serve without the route rejects instead", async () => {
     const { control } = await fauxControlledAgent([]);
     const withoutImage = Object.fromEntries(
       Object.entries(controlPlaneRoutes(control)).filter(([key]) => !key.endsWith("/image")),
@@ -566,7 +569,7 @@ describe("session control over HTTP", () => {
     const port = await server.listening;
     try {
       const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}` });
-      await expect(remote.sessions.get("s").image("e:0")).rejects.toThrow(/predates the route/);
+      await expect(remote.sessions.get("s").image("e:0")).rejects.toMatchObject({ status: 404 });
     } finally {
       server.close();
     }

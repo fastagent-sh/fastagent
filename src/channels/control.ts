@@ -8,7 +8,6 @@
 import type { ImageRef, Prompt } from "../agent.ts";
 import {
   INVALID_COMMAND_CODE,
-  NO_SUCH_IMAGE_CODE,
   SESSIONS_UNAVAILABLE_CODE,
   type SessionAction,
   type SessionControl,
@@ -327,10 +326,8 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
       const ref = url.searchParams.get("ref");
       if (ref === null) return text("expected ?ref=, an images[].ref from entries()\n", 400);
       const image = await control.sessions.get(session).image(ref);
-      // Coded: an uncoded 404 is how a client recognizes a serve that predates this route.
-      if (!image) {
-        return json({ code: NO_SUCH_IMAGE_CODE, message: "no such image in this session", retryable: false }, 404);
-      }
+      // The local call RETURNS undefined, so this is a 2xx (§13); a 404 stays "this serve predates the route".
+      if (!image) return new Response(null, { status: 204 });
       return new Response(Buffer.from(image.data, "base64"), {
         headers: {
           "content-type": RASTER_IMAGE_TYPES.has(image.mimeType) ? image.mimeType : "application/octet-stream",

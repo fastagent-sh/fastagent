@@ -174,12 +174,6 @@ export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
 
 /**
- * The code on the wire's 404 for an image the session does not hold, so a client can tell it from a serve that
- * predates the route (an uncoded 404). {@link Session.image} itself answers `undefined`.
- */
-export const NO_SUCH_IMAGE_CODE = "no_such_image";
-
-/**
  * Stable `SessionResult.error.code` for a multi-field {@link Session.update} that wrote some of its fields and then
  * failed — the ONE code that reports durable work behind an `ok: false`. The message names what landed, and a
  * `state_changed` event reporting the record as it now is precedes it.

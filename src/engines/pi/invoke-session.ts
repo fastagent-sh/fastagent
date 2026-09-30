@@ -17,7 +17,7 @@ import {
   type Scope,
 } from "../../agent.ts";
 import type { RunSettledEvent, SessionEvent, UserMessageEvent } from "../../session.ts";
-import { entryImages } from "./session-control.ts";
+import { entryImages } from "./entry-images.ts";
 import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
