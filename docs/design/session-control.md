@@ -417,7 +417,10 @@ reads each one it draws with `image(ref)` on the same session (`GET .../image?re
 opaque, and names nothing outside its session: the per-session prefix a facade guards (§14) covers it. The
 wire serves only `image/png`, `image/jpeg`, `image/gif` and `image/webp` under their own type, with
 `nosniff`; anything else is `application/octet-stream`, because the type is whatever the sender declared
-and an `image/svg+xml` or `text/html` "image" would run script on the facade's origin.
+and an `image/svg+xml` or `text/html` "image" would run script on the facade's origin. So over the wire such an
+image reads back as `application/octet-stream`, while the entry keeps the declared type. pi normalizes prompt
+images to the four, so only a tool result it could not normalize gets there. An image the session does not hold
+answers a 404 coded `no_such_image`; an uncoded 404 is a serve that predates the route.
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
 its content was replaced (the replacement is not published). pi writes omissions for its own abandoned

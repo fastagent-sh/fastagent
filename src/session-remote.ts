@@ -5,6 +5,7 @@ import { abortFirstIterator } from "./collect.ts";
 import type { WireEvent } from "./channels/control.ts";
 import {
   isAddressableSession,
+  NO_SUCH_IMAGE_CODE,
   type AgentCommand,
   type Session,
   type SessionCapabilities,
@@ -133,7 +134,7 @@ async function openStreamBody(options: {
 export class ControlRequestError extends Error {
   readonly status: number;
   /**
-   * The plane's own error code, when the reply carried one (`sessions()` is the only read that does today — design
+   * The plane's own error code, when the reply carried one (`sessions()` and `image()` are the reads that do — design
    * §13).
    */
   readonly code?: string;
@@ -374,8 +375,17 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
             const res = await fetchFn(`${base}/control/sessions/${id(session)}/image?ref=${encodeURIComponent(ref)}`, {
               signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
             });
-            if (res.status === 404) return undefined;
-            if (!res.ok) throw await controlError(res);
+            if (!res.ok) {
+              const error = await controlError(res);
+              if (error.code === NO_SUCH_IMAGE_CODE) return undefined;
+              if (res.status === 404) {
+                throw new ControlRequestError(
+                  404,
+                  "this serve does not implement /control/sessions/{id}/image (it predates the route)",
+                );
+              }
+              throw error;
+            }
             return {
               data: toBase64(new Uint8Array(await res.arrayBuffer())),
               mimeType: res.headers.get("content-type") ?? "application/octet-stream",

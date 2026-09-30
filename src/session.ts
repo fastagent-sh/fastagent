@@ -47,6 +47,11 @@ export interface Session {
   /**
    * The bytes behind an {@link EntryImage.ref} this session published; `undefined` when this session holds no such
    * image. Total, like every read but `list()`.
+   *
+   * Over the wire, a `mimeType` other than `image/png`, `image/jpeg`, `image/gif` or `image/webp` reads back as
+   * `application/octet-stream`: the transport will not serve a sender-declared type it cannot trust (the entry still
+   * lists the declared one). pi normalizes prompt images to those four, so in practice only a tool result pi could
+   * not normalize reaches this.
    */
   image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;
@@ -167,6 +172,12 @@ export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 /** What {@link SessionCollection.list} rejects with — the only read that can. `retryable: true`: the condition is
  *  the store's availability, not the request. */
 export const SESSIONS_UNAVAILABLE_CODE = "sessions_unavailable";
+
+/**
+ * The code on the wire's 404 for an image the session does not hold, so a client can tell it from a serve that
+ * predates the route (an uncoded 404). {@link Session.image} itself answers `undefined`.
+ */
+export const NO_SUCH_IMAGE_CODE = "no_such_image";
 
 /**
  * Stable `SessionResult.error.code` for a multi-field {@link Session.update} that wrote some of its fields and then
