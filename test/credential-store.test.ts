@@ -22,7 +22,8 @@ import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 import { createPiAgent } from "../src/engines/pi/create.ts";
 import { createAgentService } from "../src/engines/pi/service.ts";
 import { login, loginOptions } from "../src/engines/pi/login.ts";
-import { createPiModels, probeAuthSource } from "../src/engines/pi/models.ts";
+import { probeAuthSource } from "../src/engines/pi/models.ts";
+import { createPiModels } from "../src/engines/pi/agent-models.ts";
 import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -86,7 +87,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
 
     const opened = await createPiAgentFromDir(host, { credentialStore: store });
-    expect(opened.auth).toBeUndefined(); // no file is in use, so none is reported
+    expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
     expect(store.calls).toContain("list"); // the runtime was built over the store
 
     const anthropic = (specs: string[]) => specs.some((spec) => spec.startsWith("anthropic/"));

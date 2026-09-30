@@ -3,7 +3,6 @@
  * machine) can name; `[search]` filters by substring. `--refresh` first fetches the model catalog into that scope's
  * `models-store.json`.
  */
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { formatModelsCommand } from "../models-view.ts";
@@ -15,7 +14,7 @@ import {
   refreshGlobalModelCatalog,
 } from "../../engines/pi/models.ts";
 import { refreshModelCatalog } from "../../engines/pi/open.ts";
-import { AGENT_MODEL_CATALOG_FILE, GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, findAgentDir, globalHome, placementDeadEnd } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
@@ -32,7 +31,7 @@ export async function runModels(
   if (opts.refresh) {
     // pi fetches a provider's catalog only with a usable credential for it: the scope's own credentials and `.env`
     // keys, as `login` reads them.
-    enterAgentEnv(agentDir ?? join(homedir(), GLOBAL_HOME_DIR));
+    enterAgentEnv(agentDir ?? globalHome());
     if (agentDir) {
       await refreshModelCatalog(agentDir).catch(failStartup);
       console.error(

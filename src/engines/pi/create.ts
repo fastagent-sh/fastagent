@@ -30,7 +30,8 @@ import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secre
 import { withSearchTool } from "./search-tools.ts";
 import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
 import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
-import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime, resolveCredentials } from "./models.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
+import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 
@@ -377,13 +378,12 @@ export interface CreatePiAgentOptions {
 /** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   const { instructions, skills = [] } = options;
-  const { credentials } = resolveCredentials(options);
   return agentOf(
     assemblePi({
       model: options.model,
       thinkingLevel: options.thinkingLevel,
       providers: options.providers,
-      models: () => createPiModelRuntime({ credentials }),
+      models: agentModels(undefined, options).runtime,
       readDefinition: () => ({
         systemPrompt: typeof instructions === "function" ? instructions() : instructions,
         skills,
@@ -430,10 +430,14 @@ export interface CreatePiAgentFromDefinitionOptions {
   observer?: SessionObserver;
 }
 
-/** L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. */
+/**
+ * L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. `models` is the directory's
+ * model environment when the caller already built it (the opener, whose report must describe what runs); otherwise it
+ * is built here from the credential options.
+ */
 export async function assemblePiFromDefinition(
   dir: string,
-  options: Omit<CreatePiAgentFromDefinitionOptions, "observer">,
+  options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & { models?: AgentModels },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
   // and whose ancestors are walked for ② context.
@@ -449,14 +453,14 @@ export async function assemblePiFromDefinition(
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
   const { providers } = options;
-  const { credentials } = resolveCredentials(options, { agentDir: dir, ...(providers ? { providers } : {}) });
+  const models = options.models ?? agentModels(dir, options, providers ? { providers } : {});
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
-  const models = await createPiModelRuntime({ agentDir: dir, credentials, ...(providers ? { providers } : {}) });
+  await models.runtime();
   const assembly = assemblePi({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
-    models: async () => models,
+    models: models.runtime,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills edits (the
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
     // are reserved for code (tools/channels/config, module cache).

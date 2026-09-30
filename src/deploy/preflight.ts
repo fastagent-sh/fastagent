@@ -6,7 +6,8 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
-import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
+import { type FastagentConfig, providerOf } from "../engines/pi/config.ts";
+import { resolveAuthPath } from "../engines/pi/auth.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
@@ -23,7 +24,7 @@ import {
   machineModels,
   globalCatalogPath,
   inGlobalCatalog,
-  interactiveAuth,
+  interactiveLoginKind,
   loginProviders,
 } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
@@ -432,7 +433,7 @@ async function credentialRoute(
 /** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
 function hasLogin(providerId: string): boolean {
   const provider = loginProviders().find((p) => p.id === providerId);
-  return provider !== undefined && (["oauth", "api_key"] as const).some((method) => interactiveAuth(provider, method));
+  return provider !== undefined && interactiveLoginKind(provider) !== "none";
 }
 
 /**
@@ -547,7 +548,7 @@ function resolveDeployModel(
   const source = fromEnv ? valueFile : "fastagent.config";
   // BOTH sources are checked, at the one point that reads them: a `provider`-less spec resolves to nothing on the
   // box, so letting `config.model` through would ship exactly the crash-loop this resolution exists to prevent —
-  // `probeAuthSource` reports "unconfigured" for it here and the failure only appears after deployment.
+  // the auth probe reports "unconfigured" for it here and the failure only appears after deployment.
   const spec = fromEnv || config.model;
   if (spec && !isModelSpec(spec)) return { source, invalid: spec };
   // `envValue` is what the release manifest records (ContainerInput.modelSpec), so it is set only when the value file
