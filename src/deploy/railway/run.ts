@@ -8,7 +8,7 @@ import {
   registerWebhooks,
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import type { CliRunner } from "../runner.ts";
+import { type CliRunner, readOutput } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
 export interface RailwayRunPlan {
@@ -92,7 +92,8 @@ export function parseDomainUrl(stdout: string): string | undefined {
  * The status of the volume `railway volume list --json` shows mounted at `mountPath` ON `service`, or undefined when
  * that service has none there. The list is the whole PROJECT's: another service's volume, or one a deleted service
  * left behind (`serviceName: null` — deleting a service keeps its volume), sits at the same path and is not this
- * one. Read from any object carrying `mountPath` and `serviceName`, so a wrapper key moving does not matter.
+ * one. Read from any object carrying `mountPath` and `serviceName`, so a wrapper key moving does not matter. Output
+ * that is not JSON throws: read as "no volume", it would add a second one.
  */
 export function volumeOn(stdout: string, service: string, mountPath: string): string | undefined {
   const walk = (v: unknown): string | undefined => {
@@ -102,11 +103,7 @@ export function volumeOn(stdout: string, service: string, mountPath: string): st
     if (o.mountPath === mountPath && o.serviceName === service) return typeof o.status === "string" ? o.status : "";
     return walk(Object.values(o));
   };
-  try {
-    return walk(JSON.parse(stdout));
-  } catch {
-    return undefined;
-  }
+  return walk(JSON.parse(stdout));
 }
 
 /**
@@ -205,9 +202,11 @@ export async function deployRailwayRun(
   }
 
   // 3c.
-  const volumeStatus = async () =>
-    volumeOn((await railway(["volume", "list", "--json"], { capture: true })).stdout, plan.name, plan.mountPath);
-  if ((await volumeStatus()) !== undefined) {
+  const volumeStatus = () =>
+    readOutput(railway, "railway", ["volume", "list", "--json"], (out) => volumeOn(out, plan.name, plan.mountPath));
+  const existing = await volumeStatus();
+  if ("gate" in existing) return gate(existing.gate);
+  if (existing.value !== undefined) {
     log(`volume at ${plan.mountPath} exists on ${plan.name} — skipping`);
   } else {
     log(`creating volume at ${plan.mountPath}…`);
@@ -218,7 +217,9 @@ export async function deployRailwayRun(
     // never seed a workspace onto a disk that vanishes on restart).
     let status: string | undefined;
     for (let waited = 0; ; waited += VOLUME_POLL_MS) {
-      status = await volumeStatus();
+      const read = await volumeStatus();
+      if ("gate" in read) return gate(read.gate);
+      status = read.value;
       if (status === "Ready" || waited >= VOLUME_ATTACH_TIMEOUT_MS) break;
       await sleep(VOLUME_POLL_MS);
     }

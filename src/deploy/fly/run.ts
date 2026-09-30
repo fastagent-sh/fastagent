@@ -8,7 +8,7 @@ import {
   registerWebhooks,
 } from "../channel-ingress.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import type { CliRunner } from "../runner.ts";
+import { type CliRunner, readOutput } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
 export interface FlyRunPlan {
@@ -69,31 +69,6 @@ export function listHasName(stdout: string, name: string): boolean {
   return entries.some((o) => (o as { Name?: string }).Name === name);
 }
 
-/**
- * A read-only `fly … list --json`, reduced to the question the next step asks of it — or the gate for a list we cannot
- * act on.
- */
-async function readList<T>(
-  fly: CliRunner,
-  args: string[],
-  read: (stdout: string) => T,
-): Promise<{ value: T } | { gate: string }> {
-  // The command as RUN, not a restatement of it.
-  const cmd = `fly ${args.join(" ")}`;
-  const result = await fly(args, { capture: true });
-  if (result.code !== 0) return { gate: `\`${cmd}\` failed — see the flyctl output above; fix and re-run` };
-  try {
-    return { value: read(result.stdout) };
-  } catch (error) {
-    // The one place a parse failure is allowed to stop being an exception.
-    return {
-      gate:
-        `\`${cmd}\` was unreadable (${error instanceof Error ? error.message : String(error)}) — ` +
-        `run it yourself and check the flyctl version; fix and re-run`,
-    };
-  }
-}
-
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
@@ -113,7 +88,7 @@ export async function deployFlyRun(
   if (missingValues) return gate(missingValues);
 
   // 3.
-  const appExists = await readList(fly, ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));
+  const appExists = await readOutput(fly, "fly", ["apps", "list", "--json"], (out) => listHasName(out, plan.appName));
   if ("gate" in appExists) return gate(appExists.gate);
   if (appExists.value) {
     log(`app ${plan.appName} exists — skipping create`);
@@ -132,7 +107,7 @@ export async function deployFlyRun(
   // blind, and a host with disk but no compute failed the deploy with `insufficient resources … with existing volume`.
 
   // 5.
-  const addresses = await readList(fly, ["ips", "list", "-a", plan.appName, "--json"], ingressAddresses);
+  const addresses = await readOutput(fly, "fly", ["ips", "list", "-a", plan.appName, "--json"], ingressAddresses);
   if ("gate" in addresses) return gate(addresses.gate);
   // Check-then-act PER FAMILY: an app that already holds one must still be given the other, or the gate between the
   // two allocations below heals into a permanent half-state.
