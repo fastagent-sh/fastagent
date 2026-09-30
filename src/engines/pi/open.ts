@@ -5,10 +5,10 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import { type AuthLayers, type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
+import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
-import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
+import { type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
@@ -20,7 +20,8 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
-import { createPiModelRuntime, refreshCatalog, resolveCredentials } from "./models.ts";
+import { createPiModelRuntime, refreshCatalog } from "./models.ts";
+import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -119,10 +120,8 @@ export interface AgentAssembly {
   workspace: string;
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
-  /** The store every credential is read through ({@link resolveCredentials}). */
-  credentials: CredentialStore;
-  /** The credentials files behind it; absent when the caller supplied its own store. */
-  auth?: AuthLayers;
+  /** The credential store and model registry every turn and every report reads ({@link agentModels}). */
+  models: AgentModels;
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
   toolNames: string[];
@@ -166,8 +165,6 @@ export async function resolveAgentAssembly(
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
-  // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
-  const { credentials, auth } = resolveCredentials(options, { agentDir });
   return {
     config,
     configPath,
@@ -175,14 +172,33 @@ export async function resolveAgentAssembly(
     agentDir,
     workspace,
     stateRoot,
-    credentials,
-    ...(auth ? { auth } : {}),
+    // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
+    models: agentModels(agentDir, options),
     tools,
     toolNames,
     deferredToolNames,
     toolCollisions,
     toolSecrets,
   };
+}
+
+/**
+ * L2 over a resolved front half: the ONE mapping from what the directory resolved to what the assembly runs on, for
+ * both session shapes (the served agent and `chat`'s resident one). Two copies of it drifted once (#566, chat ran at
+ * the wrong reasoning effort). `models` is the front's own, so the assembly runs on what the report describes.
+ */
+export function assembleFront(
+  front: AgentAssembly,
+  extra: { tools?: MountedTool[]; sessions?: PiSessionRecordStore } = {},
+): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
+  return assemblePiFromDefinition(front.agentDir, {
+    model: front.modelSpec,
+    thinkingLevel: front.config.thinkingLevel,
+    cwd: front.workspace,
+    tools: extra.tools ?? front.tools,
+    models: front.models,
+    ...(extra.sessions ? { sessions: extra.sessions } : {}),
+  });
 }
 
 /**
@@ -199,10 +215,7 @@ export async function availableModelsFromDir(
   options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<string[]> {
   const { agentDir } = resolvePlacement(dir);
-  const models = await createPiModelRuntime({
-    agentDir,
-    credentials: resolveCredentials(options, { agentDir }).credentials,
-  });
+  const models = await agentModels(agentDir, options).runtime();
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
 }
 
@@ -230,7 +243,7 @@ export async function refreshModelCatalogOver(
   catalogBaseUrl?: string,
 ): Promise<void> {
   const { agentDir } = resolvePlacement(dir);
-  const { credentials } = resolveCredentials(options, { agentDir });
+  const { credentials } = agentModels(agentDir, options);
   await refreshCatalog(
     (catalogFile) =>
       createPiModelRuntime({
@@ -265,11 +278,8 @@ export async function createPiAgentFromDir(
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
-  /**
-   * The credentials files in use — the startup report names whichever layer the credential came from. Absent when the
-   * caller supplied `credentialStore`: then no file is in use.
-   */
-  auth?: AuthLayers;
+  /** The credential store and registry the agent runs on — what the startup report describes. */
+  models: AgentModels;
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present on every serve (a channel's stop command reaches the
    *  live run through it). Its boundary is wired only when {@link publishControl}. */
@@ -284,6 +294,7 @@ export async function createPiAgentFromDir(
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
 }> {
+  const front = await resolveAgentAssembly(dir, options);
   const {
     config,
     configPath,
@@ -291,13 +302,12 @@ export async function createPiAgentFromDir(
     agentDir,
     workspace,
     stateRoot,
-    credentials,
-    auth,
+    models,
     tools,
     toolNames,
     deferredToolNames,
     toolCollisions,
-  } = await resolveAgentAssembly(dir, options);
+  } = front;
   // Every serve mounts the built-in `wake` tool: the agent's own follow-up work is a default capability, and a serve
   // is where the poller that honors it runs. A one-shot `invoke` has no poller, so nothing there would fire it.
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving);
@@ -306,16 +316,8 @@ export async function createPiAgentFromDir(
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
-  const { assembly, definition } = await assemblePiFromDefinition(agentDir, {
-    model: modelSpec,
-    thinkingLevel: config.thinkingLevel,
-    cwd: workspace,
-    tools: mountedTools,
-    // The opener's resolved store, so L2 reads exactly the credentials this report describes.
-    credentialStore: credentials,
-    // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
-    sessions,
-  });
+  // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
+  const { assembly, definition } = await assembleFront(front, { tools: mountedTools, sessions });
   // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
   // the store does).
   const caller = options.observer;
@@ -376,7 +378,7 @@ export async function createPiAgentFromDir(
     modelSpec,
     stateRoot,
     sessionsDir,
-    ...(auth ? { auth } : {}),
+    models,
     toolNames,
     deferredToolNames,
     toolCollisions,

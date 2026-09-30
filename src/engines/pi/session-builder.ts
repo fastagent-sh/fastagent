@@ -16,10 +16,9 @@ import {
 import { bindPiSession, definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { readMachine } from "./machine.ts";
 import { resolveModel } from "./config.ts";
-import { assemblePiFromDefinition } from "./create.ts";
 import { canonicalPath } from "./definition.ts";
 import { reportToolCollisions } from "./report.ts";
-import { resolveAgentAssembly } from "./open.ts";
+import { assembleFront, resolveAgentAssembly } from "./open.ts";
 import { resolvePlacement } from "../../paths.ts";
 
 export interface BuildSessionRuntimeOptions {
@@ -30,7 +29,7 @@ export interface BuildSessionRuntimeOptions {
 }
 
 /**
- * Build pi's interactive runtime over the SAME assembly `dev`/`start` serve ({@link assemblePiFromDefinition}): model
+ * Build pi's interactive runtime over the SAME assembly `dev`/`start` serve ({@link assembleFront}): model
  * registry, prompt, tools, skills, reasoning effort and credentials all come from it, so what differs is only the
  * session's shape (one resident runtime rather than one session per invoke).
  */
@@ -42,13 +41,7 @@ export async function buildAgentSessionRuntime(
   async function resolveAssembly() {
     const front = await resolveAgentAssembly(dir, options);
     reportToolCollisions(front.toolCollisions);
-    const { assembly } = await assemblePiFromDefinition(front.agentDir, {
-      model: front.modelSpec,
-      thinkingLevel: front.config.thinkingLevel,
-      cwd: front.workspace,
-      tools: front.tools,
-      credentialStore: front.credentials,
-    });
+    const { assembly } = await assembleFront(front);
     // Read ONCE per runtime: a rebuild (/new, fork) keeps the startup snapshot, because config and tools stay in the
     // import cache and a half-refreshed agent is worse than a stale one. Restart chat to pick up edits.
     return { modelSpec: front.modelSpec, assembly, definition: await assembly.readDefinition() };

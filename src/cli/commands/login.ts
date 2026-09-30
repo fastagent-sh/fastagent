@@ -4,15 +4,14 @@
  * workspace's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
  */
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { resolveAuthLayers, resolveAuthPath } from "../../engines/pi/config.ts";
-import { GLOBAL_AUTH_PATH } from "../../engines/pi/auth.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
+import { agentModels } from "../../engines/pi/agent-models.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
-import { GLOBAL_HOME_DIR, findAgentDir, placementDeadEnd } from "../../paths.ts";
+import { findAgentDir, globalHome, placementDeadEnd } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
-import { agentAuthStatus, environmentAuthSource } from "../../engines/pi/models.ts";
+import { environmentAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
 import { failStartup, failUsage, placementOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
@@ -41,7 +40,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   if (!agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
   // need no "is this $HOME?" special case to infer it.
-  const loginDir = agentDir ?? join(homedir(), GLOBAL_HOME_DIR);
+  const loginDir = agentDir ?? globalHome();
   // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
   // through that proxy (region-locked providers).
   // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
@@ -170,20 +169,23 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   // proxy they name. AgentCore's command shell hands down none of the runtime's, so a proxy carried there in
   // FASTAGENT_ENV does not reach the login (docs/deploy.md).
   enterAgentEnv(agentDir);
-  // The layers the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will use.
-  const auth = resolveAuthLayers(agentDir);
+  // The model environment the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will
+  // use.
+  const models = agentModels(agentDir);
+  const { auth } = models;
   if (opts.ifMissing && provider) {
-    // The server's own answer (agentAuthStatus), the one its startup report prints. Known ceiling: nothing is asked of
+    // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of
     // the provider beyond a due refresh, so a revoked grant whose access token has not expired yet, or a revoked API
     // key, reads as held and the first turn fails with the provider's error. Asking would spend a real model call on
     // every redeploy, which the readiness checks deliberately never do.
-    const held = await agentAuthStatus({ agentDir, auth, provider });
+    const held = await models.authStatus(provider);
     if (held.source !== undefined) return { ok: true, provider, kept: held.source };
     if (opts.input === false) {
       const what = held.stored
         ? `the stored ${provider} ${held.stored} credential is expired or unusable`
         : `no ${provider} credential`;
-      return { ok: false, reason: "missing", message: `${what} in ${held.path}` };
+      const because = held.error === undefined ? "" : ` (${held.error})`;
+      return { ok: false, reason: "missing", message: `${what}${because} in ${held.path ?? auth.path}` };
     }
   }
   if (opts.input === false) {

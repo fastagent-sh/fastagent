@@ -553,6 +553,9 @@ function refreshModelCatalog(
 ): Promise<void>;
 ```
 
+`probeAuthSource` names what satisfies `spec`'s provider in `models`, or `undefined` when nothing is configured; it
+rejects when resolving fails (a corrupt entry, a refresh the provider refused), with the reason.
+
 `availableModelsFromDir` is what a model picker offers for an agent directory: the specs
 `createPiAgentFromDir(dir, { authPath })` could run now. It covers pi's built-ins, the model catalogs (the agent's
 `models-store.json` over `~/.fastagent/models-store.json`), and the agent's `models.json`, filtered to providers whose credentials are configured, and sorted. The directory needs no model set. It checks

@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { enterAgentCommand, reportAssembly, reportAuth } from "../src/cli/shared.ts";
 import { setLogLevel } from "../src/log.ts";
 import * as models from "../src/engines/pi/models.ts";
+import { agentModels } from "../src/engines/pi/agent-models.ts";
+import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 
 // enterAgentCommand installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
 // Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.
@@ -15,7 +17,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
     agentDir: "/w/agent",
     workspace: "/w",
     modelSpec: "p/m",
-    auth: { path: "/w/agent/.secrets/auth.json" },
+    models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
     config: {},
     definition: {
       dir: "/w/agent",
@@ -120,15 +122,24 @@ describe("reportAuth (which layer the line names)", () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    rmSync(GLOBAL_AUTH_PATH, { force: true });
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
-  /** A primary + fallback auth file pair; `where` (if given) gets the stored credential for provider `p`. */
+  /**
+   * An agent's own credentials file and the global one behind it (this file's own HOME, test/setup.ts); `where` (if
+   * given) gets the stored credential for provider `p`.
+   */
   const layers = (where?: "primary" | "fallback") => {
+    vi.stubEnv("FASTAGENT_AUTH_PATH", undefined);
+    vi.stubEnv("FASTAGENT_SECRETS_DIR", undefined);
     const dir = mkdtempSync(join(tmpdir(), "fastagent-auth-layer-"));
     dirs.push(dir);
-    const primary = join(dir, "project.json");
-    const fallback = join(dir, "global.json");
+    const primary = join(dir, ".secrets", "auth.json");
+    const fallback = GLOBAL_AUTH_PATH;
+    mkdirSync(dirname(primary), { recursive: true });
+    mkdirSync(dirname(fallback), { recursive: true });
     writeFileSync(primary, "{}\n");
     writeFileSync(fallback, "{}\n");
     if (where)
@@ -140,11 +151,11 @@ describe("reportAuth (which layer the line names)", () => {
   };
 
   /** The single `auth:` line, at the default `info` level. */
-  const authLine = async (agentDir: string, primary: string, fallback: string): Promise<string> => {
+  const authLine = async (agentDir: string): Promise<string> => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(agentDir, "p/m", { path: primary, fallback });
+      await reportAuth(agentModels(agentDir), "p/m");
     } finally {
       spy.mockRestore();
     }
@@ -155,14 +166,14 @@ describe("reportAuth (which layer the line names)", () => {
     // Provider "p" is not a real pi provider, so nothing satisfies auth and the line reports what is STORED —
     // which is the read this test is about.
     const held = layers("fallback");
-    expect(await authLine(held.dir, held.primary, held.fallback)).toContain(held.fallback);
+    expect(await authLine(held.dir)).toContain(held.fallback);
 
     const mine = layers("primary");
-    expect(await authLine(mine.dir, mine.primary, mine.fallback)).toContain(mine.primary);
+    expect(await authLine(mine.dir)).toContain(mine.primary);
 
     // Neither layer: the file to edit is the one `fastagent login` writes — the primary.
     const none = layers();
-    const line = await authLine(none.dir, none.primary, none.fallback);
+    const line = await authLine(none.dir);
     expect(line).toContain("(none found)");
     expect(line).toContain(none.primary);
   });
@@ -178,7 +189,7 @@ describe("reportAuth (which layer the line names)", () => {
         },
       }),
     );
-    const line = await authLine(held.dir, held.primary, held.fallback);
+    const line = await authLine(held.dir);
     expect(line).not.toContain(held.fallback);
     expect(line).toContain(held.primary);
   });

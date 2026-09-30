@@ -10,12 +10,11 @@ import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
-import { GLOBAL_AUTH_PATH } from "./auth.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { assertCorsOrigins } from "../../channels/serve.ts";
 import type { HttpSurface } from "../../service.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { AGENT_CONFIG_FILE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
+import { AGENT_CONFIG_FILE } from "../../paths.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -237,57 +236,4 @@ export function resolveModelSpec(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? (env.FASTAGENT_MODEL || config.model);
-}
-
-/**
- * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (the opener then falls
- * back to {@link defaultAuthPath} under the {@link resolveSecretsDir} dir). The CLI has no flag for it: a second
- * spelling of one environment variable buys nothing, and the variable is what a deployed container reads anyway.
- */
-function resolveAuthPathOverride(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
-}
-
-/** The default credentials file under a resolved secrets dir ({@link resolveSecretsDir}). */
-export function defaultAuthPath(secretsDir: string): string {
-  return join(secretsDir, "auth.json");
-}
-
-/** The effective auth file for an agent: override if present, else `<secrets dir>/auth.json`. */
-export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveSecretsDir(dir, env));
-}
-
-/**
- * Which credentials files an agent reads: `path` first, then, per provider, `fallback` — present only when nothing
- * named the path ({@link resolveAuthFallback}). One value because it is one decision: the opener, the model list, the
- * startup report and the first-run picker all read through it.
- */
-export interface AuthLayers {
-  path: string;
-  fallback?: string;
-}
-
-/** The {@link AuthLayers} an agent directory reads: `authPath` option > `FASTAGENT_AUTH_PATH` > its own file. */
-export function resolveAuthLayers(
-  agentDir: string,
-  authPath?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): AuthLayers {
-  const fallback = resolveAuthFallback(authPath, env);
-  return { path: resolveAuthPath(agentDir, authPath, env), ...(fallback !== undefined ? { fallback } : {}) };
-}
-
-/**
- * Where a credential the project does not have is read from instead: the user-global store, because a login is a
- * PERSON on a machine and not a project — one `login -g` then serves every agent here. Undefined when an explicit
- * path was named: "use this file" is an instruction, not a preference, so it gets no second layer.
- *
- * BOTH knobs {@link resolveAuthPath} reads count as that instruction, `FASTAGENT_SECRETS_DIR` included — it is what
- * the Fly/Railway/AgentCore artifacts set, and a deployed container must read its mounted credentials and nothing
- * else (the artifact is the truth).
- */
-export function resolveAuthFallback(flag?: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicit = resolveAuthPathOverride(flag, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
-  return explicit === undefined ? GLOBAL_AUTH_PATH : undefined;
 }

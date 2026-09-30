@@ -718,7 +718,7 @@ box holds the PKCE verifier and exchanges the code, so it is the only holder of 
 can log the builder's machine out. The browser's return to the flow's `localhost` redirect is caught on
 the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
 a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
-credential the box already authenticates with (`--if-missing`, answered by `agentAuthStatus`, the same
+credential the box already authenticates with (`--if-missing`, answered by `AgentModels.authStatus`, the same
 resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
 builder never predicts that answer from its own credentials: `credentialRoute` decides only what the
 deploy ships.
