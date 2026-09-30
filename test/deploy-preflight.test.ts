@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
@@ -250,6 +250,20 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "a directory under the secrets dir it cannot read stops the pre-flight instead of reading as empty",
+    async () => {
+      const agentDir = await workspace({ ".secrets/gcp/key.json": "{}\n" });
+      const nested = join(agentDir, ".secrets", "gcp");
+      await chmod(nested, 0o000);
+      try {
+        await expect(call(agentDir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot read .*gcp/);
+      } finally {
+        await chmod(nested, 0o755);
+      }
+    },
+  );
 
   it("the .env family is interrogated at BOTH levels, like the generated rules — not just the root", async () => {
     // The generated file excludes `**/.env` + `**/.env.*` (minus .env.example). A kept file must be

@@ -3,6 +3,7 @@
  * still keeps it out. A kept workspace-root `.dockerignore` silently replaces the generated one's protections, so the
  * pre-flight asks it the same questions the generated one answers by construction.
  */
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
@@ -28,6 +29,19 @@ function dockerignoreMatcher(text: string): (path: string) => boolean {
     .join("\n");
   const matcher = ignore({ ignorecase: false }).add(anchored);
   return (path) => matcher.ignores(path);
+}
+
+/**
+ * A directory's entries, or none when it does not exist. Any other failure throws: the leak scan would otherwise pass
+ * on a directory it never read, and a credential inside it would ship without a word.
+ */
+async function entriesIfExists(path: string): Promise<Dirent[]> {
+  try {
+    return await readdir(path, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`cannot read ${path} to check what the image would ship: ${(error as Error).message}`);
+  }
 }
 
 /** Workspace-relative paths the build context may hold and the image must not. */
@@ -71,7 +85,7 @@ export async function buildContextPaths(
   const stateShips = stateRel !== undefined && (await exists(join(workspace, stateRel))) ? stateRel : undefined;
   // The `.env` family at the two levels fastagent is RESPONSIBLE for: the agent dir and the workspace root.
   const dotEnvFiles = async (relDir: string): Promise<string[]> => {
-    const names = await readdir(join(workspace, relDir || ".")).catch(() => [] as string[]);
+    const names = (await entriesIfExists(join(workspace, relDir || "."))).map((entry) => entry.name);
     // POSIX separators, like every other context-relative path here (`inContext`).
     return names
       .filter((n) => (n === ".env" || n.startsWith(".env.")) && n !== ".env.example")
@@ -81,7 +95,7 @@ export async function buildContextPaths(
   // Everything ACTUALLY inside the secrets dir, minus the two tracked scaffolds the image ships on purpose (they
   // carry no values; the generated ignore re-includes them by name).
   const secretDirFiles = async (dirRel: string): Promise<string[]> => {
-    const entries = await readdir(join(workspace, dirRel), { withFileTypes: true }).catch(() => []);
+    const entries = await entriesIfExists(join(workspace, dirRel));
     const files: string[] = [];
     for (const entry of entries) {
       if (entry.name === ".gitignore" || entry.name === ".env.example") continue;
