@@ -45,6 +45,8 @@ One agent shape, one marker:
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
 │                           # under it as environment and does not travel
+├── models-store.json       # optional model catalog (`models --refresh`): models newer than the installed
+│                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # .env + auth.json; only the tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state

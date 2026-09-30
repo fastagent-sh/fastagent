@@ -3,9 +3,10 @@
  * drive.
  */
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type AuthLayers, type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
-import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
 import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
@@ -206,10 +207,11 @@ export async function availableModelsFromDir(
 }
 
 /**
- * Refresh this machine's model catalog with the credentials `createPiAgentFromDir(dir, { authPath })` would use, so a
- * model released after the installed pi appears in {@link availableModelsFromDir} and resolves for every agent here.
- * Only providers those credentials authenticate are fetched (pi asks pi.dev for no other). Nothing refreshes it on its
- * own. It does not ship: `deploy` carries the configured model's entry when the deployed pi would not know it.
+ * Refresh the agent's model catalog (`<agent dir>/models-store.json`) with the credentials
+ * `createPiAgentFromDir(dir, { authPath })` would use, so a model released after the installed pi appears in
+ * {@link availableModelsFromDir} and runs. Only providers those credentials authenticate are fetched (pi asks pi.dev
+ * for no other). Nothing refreshes it on its own. The file is part of the definition: commit it, and it ships with a
+ * deploy, so the deployed agent knows the same models without a network call.
  *
  * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set, and
  * when the credentials authenticate no provider at all.
@@ -231,6 +233,7 @@ export async function refreshModelCatalogOver(
   const runtime = await createPiModelRuntime({
     agentDir,
     credentials: resolveCredentials(options, { agentDir }).credentials,
+    catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE),
     ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
   });
   await refreshCatalog(runtime, options.signal ? { signal: options.signal } : {});

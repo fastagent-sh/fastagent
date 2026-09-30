@@ -164,15 +164,24 @@ provider's key can be stored instead of written into the file.
   only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
   which the deployed agent then runs without that entry.
 
-`fastagent models` lists what the machine offers (built-ins, the cached model catalog, `~/.fastagent/models.json`);
+`fastagent models` lists what the agent here can name (outside an agent, or with `-g`, the machine);
 `fastagent info` shows what an agent resolved.
 
-**A model newer than pi's bundled catalog** is known once the machine's catalog cache has it:
-`fastagent models --refresh` (or `pi update --models`) fetches it, and every agent here can then name it. The cache
-itself does not ship, but the configured model does: when only the cache knows it, `deploy` records its catalog entry
-in the release manifest and the deployed agent seeds its own cache from it at start, with no network call. A
-hand-written Dockerfile must set `FASTAGENT_RELEASE_FILE` for that entry to arrive, as for a model named in the
-value file.
+### Models newer than pi: `models-store.json`
+
+pi bundles a model catalog with each release. A model released later is known once a **model catalog** lists it:
+`fastagent models --refresh` fetches the catalog from pi.dev, for the providers the agent's credentials authenticate,
+into `models-store.json` next to its `models.json`. Nothing refreshes it on its own.
+
+- The agent's `models-store.json` is part of the definition: commit it, and it ships with a deploy, so the deployed
+  agent knows the same models without a network call.
+- `fastagent models --refresh -g` writes the machine's, `~/.fastagent/models-store.json`, with the global
+  credentials file and the environment. Every agent here reads it under its own (the agent's wins a model id), and
+  it does not ship: `deploy` refuses a model only it knows (with `--run`; a warning otherwise). Refresh in the agent
+  to record it there.
+- An entry no newer than the installed pi's bundled catalog is ignored, so after a pi upgrade the bundled metadata
+  takes over again.
+- A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.
 
 ## What the machine lends the agent
 

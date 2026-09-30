@@ -82,16 +82,18 @@ Read-only.
 ## `fastagent models`
 
 ```bash
-fastagent models [search] [--refresh]
+fastagent models [search] [--refresh] [-g|--global]
 ```
 
-Lists the model specs (`provider/modelId`) this machine offers, optionally filtered: pi's built-ins, the model
-catalog cached in `~/.pi/agent/models-store.json`, and `~/.fastagent/models.json`. `--refresh` first fetches the
-catalog from pi.dev with the credentials of the agent in the current directory, so models released after the
-installed pi appear; it fails, naming the provider, when the refresh does, and when the agent has no usable credential
-for any provider. The cache is pi's, so `pi update --models`
-refreshes it too. Serving never refreshes it. It does not ship; `deploy` carries the configured model's entry when the
-deployed pi would not know the model.
+Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi's
+built-ins, its `models-store.json` and `models.json` over the machine's (`~/.fastagent/`). Outside an agent, or with
+`-g`, it lists the machine's.
+
+`--refresh` first fetches the model catalog from pi.dev into `models-store.json`, so models released after the
+installed pi appear: the agent's, with its credentials (commit the file; it ships with a deploy), or with `-g` the
+machine's, with the global credentials file and the environment (every agent here reads it; it does not ship). It
+fails, naming the provider, when the refresh does, and when no provider has a usable credential. See
+[configuration](configuration.md#models-newer-than-pi-models-storejson).
 
 ## `fastagent login`
 

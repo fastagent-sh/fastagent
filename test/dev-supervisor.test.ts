@@ -24,6 +24,10 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     // fails that assembly — unwatched, the edit that repairs a dead worker would not be the edit that
     // restarts it, so the author would be stranded with a correct file and a broken serve.
     expect(ignored(join(root, "models.json"))).toBe(false);
+    // The model catalog too: a `models --refresh` during dev restarts the worker onto the new models. Its lock,
+    // which pi holds only while a refresh writes, does not.
+    expect(ignored(join(root, "models-store.json"))).toBe(false);
+    expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
   });
 
   it(".secrets/.env is a code input (credentials are process-bound); the rest of .secrets is not", () => {

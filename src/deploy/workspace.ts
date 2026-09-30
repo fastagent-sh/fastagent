@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { once } from "node:events";
 import type { Readable } from "node:stream";
-import type { ModelsStoreEntry } from "@earendil-works/pi-ai";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
 import { exists } from "../paths.ts";
@@ -27,19 +26,6 @@ export interface DeploymentRelease {
    * opposite of what a credential needs (see docs/design/configuration.md §8).
    */
   model?: string;
-  /**
-   * The catalog entry for that model when the catalog bundled with pi does not know it, and this machine's cached
-   * catalog does (a model released after the installed pi): public model metadata, keyed by provider in pi's own
-   * cache format. The box seeds its cache with it at start, so the release runs the model the definition names
-   * without a network call.
-   */
-  modelCatalog?: Record<string, ModelsStoreEntry>;
-}
-
-/** A pi catalog cache entry, as far as a manifest can be trusted to hold one: a list of models with ids. */
-function isCatalogEntry(value: unknown): value is ModelsStoreEntry {
-  const models = (value as { models?: unknown } | null)?.models;
-  return Array.isArray(models) && models.every((model) => typeof (model as { id?: unknown } | null)?.id === "string");
 }
 
 /** The manifest names a directory the container joins onto the workspace root, so the spelling is
@@ -57,12 +43,7 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
     !r.id ||
     typeof r.agent !== "string" ||
     !isReleaseAgentName(r.agent) ||
-    (r.model !== undefined && !isModelSpec(r.model)) ||
-    (r.modelCatalog !== undefined &&
-      (typeof r.modelCatalog !== "object" ||
-        r.modelCatalog === null ||
-        Array.isArray(r.modelCatalog) ||
-        !Object.values(r.modelCatalog).every(isCatalogEntry)))
+    (r.model !== undefined && !isModelSpec(r.model))
   ) {
     throw new Error("invalid deployment release manifest");
   }

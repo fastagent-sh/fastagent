@@ -21,8 +21,8 @@ import {
   type Provider,
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
-import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { builtinModels, builtinProviders, getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   type CredentialSourceOptions,
   type FastagentAuthOptions,
@@ -32,7 +32,7 @@ import {
   fastagentCredentialStore,
 } from "./auth.ts";
 import { type AuthLayers, resolveAuthLayers } from "./config.ts";
-import { AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
 /** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md). */
@@ -164,78 +164,79 @@ export function isBuiltinProvider(providerId: string): boolean {
 export interface PiModelRuntimeOptions {
   /** The store every credential is read from and refreshed into ({@link resolveCredentials}). */
   credentials: CredentialStore;
-  /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. */
+  /** The agent dir, whose {@link AGENT_MODELS_FILE} and {@link AGENT_MODEL_CATALOG_FILE} the registry reads. */
   agentDir?: string;
   /**
-   * Layer the machine under the agent (default): its models.json, and its cached model catalog
-   * ({@link modelCatalogPath}). Off for the registry a DEPLOYED agent has, which `deploy` must judge by: neither ships,
-   * so that registry is the agent's own file over the catalog bundled with pi.
+   * Layer the machine under the agent (default): its models.json and its model catalog ({@link globalCatalogPath}).
+   * Off for the registry a DEPLOYED agent has, which `deploy` must judge by: neither ships, so that registry is the
+   * agent's own two files over the catalog bundled with pi.
    */
   machineLayer?: boolean;
   /** Extra providers for the ids the built-ins do not cover. */
   providers?: readonly Provider[];
+  /**
+   * Read and write THIS catalog file instead of the layered, read-only snapshot: what a refresh runs on, since the
+   * refresh writes it.
+   */
+  catalogFile?: string;
   /** Where a catalog refresh asks instead of pi.dev: a test seam. */
   catalogBaseUrl?: string;
 }
 
 /**
- * pi's own cache of the model catalog: the models pi.dev lists that are newer than the catalog bundled with pi, kept by
- * `pi` itself (its TUI refreshes it in the background, `pi update --models` on demand) and by
- * `refreshModelCatalog`. Machine environment, like the skills an agent inherits: read, never shipped. pi's file
- * store locks it, so every process on the machine can share it.
+ * The MACHINE's model catalog: the models pi.dev lists that are newer than the catalog bundled with pi, fetched by
+ * `fastagent models --refresh -g`. Every agent here reads it under its own; like `~/.fastagent/models.json`, it
+ * never ships.
  */
-export function modelCatalogPath(): string {
-  return join(getAgentDir(), "models-store.json");
+export function globalCatalogPath(): string {
+  return join(homedir(), GLOBAL_HOME_DIR, AGENT_MODEL_CATALOG_FILE);
 }
 
-/**
- * Add catalog entries to this machine's cache, keeping what it already holds: how a deployed agent receives the model
- * its release names when the catalog bundled with its pi does not know it (the deploy side is `preflightDeploy`). A
- * model id in `entries` replaces the held one; the rest of the provider's entry stays.
- *
- * ponytail: written without pi's file lock. It runs at container start, before anything on the box reads the file;
- * take the lock if a second writer ever shares that moment.
- */
-export async function seedModelCatalog(entries: Readonly<Record<string, ModelsStoreEntry>>): Promise<void> {
-  const path = modelCatalogPath();
-  const held = await readCatalogCache(path);
-  for (const [provider, entry] of Object.entries(entries)) {
-    const current = held[provider];
-    const ids = new Set(entry.models.map((model) => model.id));
-    held[provider] = current
-      ? {
-          ...current,
-          models: [...current.models.filter((model) => !ids.has(model.id)), ...entry.models],
-          lastModified: Math.max(current.lastModified ?? 0, entry.lastModified ?? 0),
-        }
-      : entry;
-  }
-  writeFileAtomic(path, `${JSON.stringify(held, null, 2)}\n`, 0o600, true);
-}
-
-/** The machine's catalog cache as pi writes it (entries by provider), or `{}` when there is none yet. */
-async function readCatalogCache(path: string): Promise<Record<string, ModelsStoreEntry>> {
+/** A catalog file as pi writes it (entries by provider), or `{}` when there is none. */
+async function readCatalog(path: string): Promise<Record<string, ModelsStoreEntry>> {
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(await readFile(path, "utf8")) as Record<string, ModelsStoreEntry>;
   } catch (error) {
-    throw new Error(`the model catalog cache ${path} is not valid JSON (${(error as Error).message}): delete it`);
+    throw new Error(`model catalog ${path} is not valid JSON (${(error as Error).message}): refresh or delete it`);
   }
 }
 
 /**
- * The machine's catalog cache entry for this provider narrowed to one model id, with the entry's own `lastModified`
- * (pi's rule for whether a cached entry outranks a bundled catalog reads it), or undefined when the cache lacks it.
+ * The catalog files layered into one read-only store, later files winning a model id. An entry pi would ignore (no
+ * newer than the catalog bundled with it) is dropped before the merge, so a stale layer cannot ride a newer one's
+ * date past pi's rule.
+ *
+ * Read here rather than handed to pi as a file: pi takes one store, and its file store creates the file (and a lock)
+ * on read, which would drop an empty catalog into every agent dir that was never refreshed.
  */
-export async function cachedCatalogEntry(provider: string, id: string): Promise<ModelsStoreEntry | undefined> {
-  const entry = (await readCatalogCache(modelCatalogPath()))[provider];
-  const model = entry?.models.find((candidate) => candidate.id === id);
-  if (!entry || !model) return undefined;
-  return {
-    models: [model],
-    ...(entry.lastModified !== undefined ? { lastModified: entry.lastModified } : {}),
-    ...(entry.checkedAt !== undefined ? { checkedAt: entry.checkedAt } : {}),
-  };
+async function layeredCatalog(paths: readonly string[]): Promise<InMemoryModelsStore> {
+  const bundledAt = getBuiltinModelDataGeneratedAt();
+  const merged = new Map<string, ModelsStoreEntry>();
+  for (const path of paths) {
+    for (const [provider, entry] of Object.entries(await readCatalog(path))) {
+      if (bundledAt !== undefined && (entry.lastModified === undefined || entry.lastModified <= bundledAt)) continue;
+      const held = merged.get(provider);
+      const ids = new Set(entry.models.map((model) => model.id));
+      merged.set(
+        provider,
+        held
+          ? {
+              models: [...held.models.filter((model) => !ids.has(model.id)), ...entry.models],
+              lastModified: Math.max(held.lastModified ?? 0, entry.lastModified ?? 0),
+            }
+          : entry,
+      );
+    }
+  }
+  const store = new InMemoryModelsStore();
+  for (const [provider, entry] of merged) await store.write(provider, entry);
+  return store;
+}
+
+/** Whether the machine's model catalog lists this model: the one layer a deployed agent does not have. */
+export async function inGlobalCatalog(provider: string, id: string): Promise<boolean> {
+  return (await readCatalog(globalCatalogPath()))[provider]?.models.some((model) => model.id === id) ?? false;
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */
@@ -247,17 +248,20 @@ async function runtimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">)
     : machine
       ? await modelsFileFor(agentDir)
       : { path: join(agentDir, AGENT_MODELS_FILE) };
+  const catalogs = !agentDir
+    ? []
+    : [...(machine ? [globalCatalogPath()] : []), join(agentDir, AGENT_MODEL_CATALOG_FILE)];
   return {
     models,
     create: {
       modelsPath: models?.path ?? null,
-      // MUST be set whenever modelsPath is: pi defaults the store to `<dirname(modelsPath)>/models-store.json`, which
-      // would write a cache INTO the author's agent dir. Without a directory, pi keeps the catalog in memory.
-      ...(agentDir
-        ? machine
-          ? { modelsStorePath: modelCatalogPath() }
-          : { modelsStore: new InMemoryModelsStore() }
-        : {}),
+      // Always a store of our own whenever modelsPath is set: pi's default is a file at
+      // `<dirname(modelsPath)>/models-store.json`. Without a directory, pi keeps an empty one in memory.
+      ...(options.catalogFile
+        ? { modelsStorePath: options.catalogFile }
+        : agentDir
+          ? { modelsStore: await layeredCatalog(catalogs) }
+          : {}),
       // Never fetched while a runtime is built: serving stays offline and reproducible. A refresh is asked for.
       allowModelNetwork: false,
       ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
@@ -267,26 +271,46 @@ async function runtimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">)
 
 /**
  * This machine's registry, without an agent: pi's built-ins, the machine's models.json and its model catalog. What
- * `fastagent models` lists — every spec an agent here can name without a models.json of its own.
+ * `fastagent models` lists outside an agent; {@link catalogFile} is the refresh's (it writes the file).
  */
-export async function machineModelRuntime(): Promise<ModelRuntime> {
+export async function machineModelRuntime(
+  options: { credentials?: CredentialStore; catalogFile?: string; catalogBaseUrl?: string } = {},
+): Promise<ModelRuntime> {
   const runtime = await ModelRuntime.create({
-    credentials: new InMemoryCredentialStore(),
+    credentials: options.credentials ?? new InMemoryCredentialStore(),
     modelsPath: machineModelsPath(),
-    modelsStorePath: modelCatalogPath(),
+    ...(options.catalogFile
+      ? { modelsStorePath: options.catalogFile }
+      : { modelsStore: await layeredCatalog([globalCatalogPath()]) }),
     allowModelNetwork: false,
+    ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
   });
   const error = runtime.getError();
   if (error) throw new Error(error);
   return runtime;
 }
 
+/**
+ * Refresh the machine's catalog ({@link globalCatalogPath}) with the machine's credentials: the global credentials
+ * file and the environment. See {@link refreshCatalog} for what it asks and when it rejects.
+ */
+export async function refreshGlobalModelCatalog(
+  options: { signal?: AbortSignal; catalogBaseUrl?: string } = {},
+): Promise<void> {
+  const runtime = await machineModelRuntime({
+    credentials: fastagentCredentialStore(GLOBAL_AUTH_PATH),
+    catalogFile: globalCatalogPath(),
+    ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
+  });
+  await refreshCatalog(runtime, options.signal ? { signal: options.signal } : {});
+}
+
 /** How long a catalog refresh may take, as `pi update --models` allows. */
 const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch the model catalog of every provider `runtime` can authenticate into the machine's cache
- * ({@link modelCatalogPath}): the refresh `pi update --models` runs. pi asks pi.dev only for a provider with a usable
+ * Fetch the model catalog of every provider `runtime` can authenticate into the catalog file it was built over: the
+ * refresh `pi update --models` runs. pi asks pi.dev only for a provider with a usable
  * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
  * that failed, when any part fails, when it outlasts 15 seconds, when `PI_OFFLINE` is set, and when no provider has a
  * usable credential (the refresh would ask for nothing).

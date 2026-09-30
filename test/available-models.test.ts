@@ -1,14 +1,20 @@
 /**
  * `availableModelsFromDir`: what an embedding client's model picker can offer for an agent directory.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createPiModelRuntime, machineModelRuntime } from "../src/engines/pi/models.ts";
+import {
+  createPiModelRuntime,
+  globalCatalogPath,
+  machineModelRuntime,
+  refreshGlobalModelCatalog,
+} from "../src/engines/pi/models.ts";
 import { availableModelsFromDir, createPiAgentFromDir, refreshModelCatalogOver } from "../src/engines/pi/open.ts";
 
 /** A workspace whose agent sits one level inside, with no model set and two custom endpoints. */
@@ -109,7 +115,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() };
   }
 
-  it("reaches every agent's list and `fastagent models`, and never the registry a deployed agent has", async () => {
+  it("an agent's refresh lands in its own models-store.json: its list, its runs, and its deploy — no other agent's", async () => {
     // pi fetches a provider's catalog only with a usable credential for it.
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
     const a = await workspace("{}");
@@ -123,17 +129,37 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       catalog.close();
     }
 
+    expect(existsSync(join(a.dir, "agent", "models-store.json"))).toBe(true);
     expect(await availableModelsFromDir(a.dir, { authPath: a.authPath })).toContain(`anthropic/${NEW}`);
-    expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).toContain(`anthropic/${NEW}`);
-    const opened = await createPiAgentFromDir(b.dir, { model: `anthropic/${NEW}`, authPath: b.authPath });
+    const opened = await createPiAgentFromDir(a.dir, { model: `anthropic/${NEW}`, authPath: a.authPath });
     expect(opened.modelSpec).toBe(`anthropic/${NEW}`); // listed, so it runs
-    expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
     const deployed = await createPiModelRuntime({
       agentDir: join(a.dir, "agent"),
       credentials: new InMemoryCredentialStore(),
       machineLayer: false,
     });
-    expect(deployed.getModel("anthropic", NEW)).toBeUndefined(); // the cache does not ship
+    expect(deployed.getModel("anthropic", NEW)).toBeDefined(); // the file ships with the definition
+    expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).not.toContain(`anthropic/${NEW}`);
+  });
+
+  it("a machine refresh (-g) reaches every agent here and `fastagent models`, and no deploy", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    const b = await workspace("{}");
+    const catalog = await catalogServer();
+    try {
+      await refreshGlobalModelCatalog({ catalogBaseUrl: catalog.url });
+      expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).toContain(`anthropic/${NEW}`);
+      expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
+      const deployed = await createPiModelRuntime({
+        agentDir: join(b.dir, "agent"),
+        credentials: new InMemoryCredentialStore(),
+        machineLayer: false,
+      });
+      expect(deployed.getModel("anthropic", NEW)).toBeUndefined(); // the machine's catalog does not ship
+    } finally {
+      catalog.close();
+      await rm(globalCatalogPath(), { force: true });
+    }
   });
 
   it("a refresh that fails names the provider and why, instead of leaving the list silently stale", async () => {

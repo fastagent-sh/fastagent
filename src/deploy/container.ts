@@ -94,8 +94,6 @@ export interface ContainerInput {
    * interpolate the operator's shell.
    */
   modelSpec?: string;
-  /** The release manifest's {@link DeploymentRelease.modelCatalog}: the model's catalog entry, when the box needs it. */
-  modelCatalog?: DeploymentRelease["modelCatalog"];
   /**
    * Where deploy's artifacts and the agent's own files sit, relative to the BUILD CONTEXT (which is always the
    * workspace).
@@ -221,7 +219,6 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
     id: input.releaseId,
     agent: input.agentPrefix.replace(/\/$/, ""),
     ...(input.modelSpec !== undefined ? { model: input.modelSpec } : {}),
-    ...(input.modelCatalog !== undefined ? { modelCatalog: input.modelCatalog } : {}),
   };
   parseDeploymentRelease(JSON.stringify(release));
   return [

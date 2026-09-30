@@ -4,10 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { containerArtifacts } from "../src/deploy/container.ts";
-import { RELEASE_FILE, parseDeploymentRelease } from "../src/deploy/workspace.ts";
-import { createPiModelRuntime, createPiModels, modelCatalogPath, seedModelCatalog } from "../src/engines/pi/models.ts";
+import { createPiModels, globalCatalogPath } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -816,54 +813,23 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
   });
 
-  it("a model known only from the machine's cached catalog reaches the box through the release manifest", async () => {
-    // pi's cache, as `pi update --models` or `fastagent models --refresh` leaves it: one anthropic model newer than
-    // the bundled catalog.
+  it("a model known only from the machine's model catalog is refused under --run; the agent's own catalog ships", async () => {
+    // As `fastagent models --refresh` leaves it: one anthropic model newer than the bundled catalog.
     const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
-    await mkdir(dirname(modelCatalogPath()), { recursive: true });
-    const later = Date.now() + 86_400_000;
-    const entry = { models: [{ ...bundled, id: "claude-cached-only" }], checkedAt: Date.now(), lastModified: later };
-    await writeFile(modelCatalogPath(), JSON.stringify({ anthropic: entry }));
-    const dir = await workspace();
+    const entry = { models: [{ ...bundled, id: "claude-newer" }], lastModified: Date.now() + 86_400_000 };
+    await mkdir(dirname(globalCatalogPath()), { recursive: true });
+    await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
     try {
-      const pre = await call(dir, { model: "anthropic/claude-cached-only" }, { run: true });
-      if (!pre.ok) throw new Error(pre.gate);
-      const release = containerArtifacts(pre.container).find((a) => a.path.endsWith(RELEASE_FILE));
-      const manifest = parseDeploymentRelease(release?.content ?? "");
-      expect(manifest.modelCatalog?.anthropic?.models.map((m) => m.id)).toEqual(["claude-cached-only"]);
-      // The cache's own date, so pi on the box can still prefer a bundled catalog that already has the model.
-      expect(manifest.modelCatalog?.anthropic?.lastModified).toBe(later);
+      const running = await call(await workspace(), { model: "anthropic/claude-newer" }, { run: true });
+      expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/does not ship.*models --refresh/) });
 
-      // The box: a fresh machine whose pi knows only its bundled catalog, seeded from the manifest at start.
-      vi.stubEnv("HOME", await mkdtemp(join(tmpdir(), "fa-box-home-")));
-      const box = () => createPiModelRuntime({ agentDir: dir, credentials: new InMemoryCredentialStore() });
-      expect((await box()).getModel("anthropic", "claude-cached-only")).toBeUndefined();
-      await seedModelCatalog(manifest.modelCatalog ?? {});
-      expect((await box()).getModel("anthropic", "claude-cached-only")).toBeDefined();
-      vi.unstubAllEnvs(); // back on the builder
-
-      // A model the bundled catalog has carries nothing.
-      const plain = await call(await workspace(), { model: `anthropic/${bundled?.id}` });
-      expect(plain.ok && plain.container.modelCatalog).toBeUndefined();
-
-      // A machine models.json that overrides the provider (a company gateway) without naming this model: the model
-      // still comes from the cache, so it is still carried.
-      const machine = join(await mkdtemp(join(tmpdir(), "fa-machine-models-")), "models.json");
-      const gateway = { anthropic: { baseUrl: "https://llm-proxy.internal/v1", apiKey: "$CORP_PROXY_KEY" } };
-      await writeFile(machine, JSON.stringify({ providers: gateway }));
-      vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
-      const overridden = await call(await workspace(), { model: "anthropic/claude-cached-only" });
-      if (!overridden.ok) throw new Error(overridden.gate);
-      expect(overridden.container.modelCatalog?.anthropic?.models.map((m) => m.id)).toEqual(["claude-cached-only"]);
-      vi.unstubAllEnvs();
-
-      // A kept hand-written Dockerfile never reads the manifest, so the entry would not arrive.
-      await writeFile(join(dir, "Dockerfile"), "FROM node:22-slim\n");
-      const kept = await call(dir, { model: "anthropic/claude-cached-only" }, { run: true });
-      expect(kept).toMatchObject({ ok: false, gate: expect.stringMatching(/FASTAGENT_RELEASE_FILE.*newer than/) });
+      // The same entry in the agent's own models-store.json travels with the definition: nothing to say.
+      const own = await workspace({ "models-store.json": JSON.stringify({ anthropic: entry }) });
+      const shipped = await call(own, { model: "anthropic/claude-newer" }, { run: true });
+      if (!shipped.ok) throw new Error(shipped.gate);
+      expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
     } finally {
-      vi.unstubAllEnvs();
-      await rm(modelCatalogPath(), { force: true });
+      await rm(globalCatalogPath(), { force: true });
     }
   });
 
