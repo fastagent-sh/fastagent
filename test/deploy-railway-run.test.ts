@@ -307,6 +307,20 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(cmds()).not.toContain("up --ci --service bot");
   });
 
+  it("gate: a volume list that fails or cannot be read stops the run — it never adds a second volume", async () => {
+    for (const answer of [{ code: 1 }, { stdout: "not json" }]) {
+      const { railway, cmds } = fakeRailway((a) => {
+        if (a[0] === "status") return { stdout: "" };
+        if (a[0] === "volume" && a[1] === "list") return answer;
+        return {};
+      });
+      const out = await run(plan(), railway);
+      expect(out.ok, JSON.stringify(answer)).toBe(false);
+      if (!out.ok) expect(out.gate).toContain("`railway volume list --json`");
+      expect(cmds()).not.toContain("volume add --mount-path /data");
+    }
+  });
+
   it("gate (SAFETY): a linked dir WITHOUT --into-linked is refused before any side effect — names the project", async () => {
     // The near-miss: the dir is linked to an unrelated/production project. `--run` only creates on an
     // unlinked dir, so a link is refused; the gate names the project so the operator sees it isn't theirs.
@@ -448,6 +462,7 @@ describe("deploy/railway/run: pure parsers", () => {
     // The list is the PROJECT's: a sibling service's volume and one a deleted service left behind share the path.
     expect(volumeOn(volumes({ serviceName: "worker" }, { serviceName: null }), "bot", "/data")).toBeUndefined();
     expect(volumeOn(volumes({ serviceName: "bot", mountPath: "/other" }), "bot", "/data")).toBeUndefined();
-    expect(volumeOn("", "bot", "/data")).toBeUndefined(); // failed/empty list → treat as absent
+    // Unreadable output is not "no volume": reading it so would add a second one.
+    expect(() => volumeOn("", "bot", "/data")).toThrow();
   });
 });
