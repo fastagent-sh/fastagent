@@ -23,6 +23,33 @@ export type CliRunner = (
 ) => Promise<RunResult>;
 
 /**
+ * A read-only host-CLI query (`… list --json`), reduced to the question the next step asks of it — or the gate for an
+ * answer we cannot act on. A failed command and unreadable output both stop the run: read as "nothing there", either
+ * one would send the next step to create what already exists.
+ */
+export async function readOutput<T>(
+  run: CliRunner,
+  bin: string,
+  args: string[],
+  read: (stdout: string) => T,
+): Promise<{ value: T } | { gate: string }> {
+  // The command as RUN, not a restatement of it.
+  const cmd = `${bin} ${args.join(" ")}`;
+  const result = await run(args, { capture: true });
+  if (result.code !== 0) return { gate: `\`${cmd}\` failed — see the ${bin} output above; fix and re-run` };
+  try {
+    return { value: read(result.stdout) };
+  } catch (error) {
+    // The one place a parse failure is allowed to stop being an exception.
+    return {
+      gate:
+        `\`${cmd}\` was unreadable (${error instanceof Error ? error.message : String(error)}) — ` +
+        `run it yourself and check the ${bin} CLI version; fix and re-run`,
+    };
+  }
+}
+
+/**
  * Production {@link CliRunner}: spawn `bin` in `cwd` (the workspace, so a build/upload context is the agent). stderr
  * is always inherited to the terminal.
  */
