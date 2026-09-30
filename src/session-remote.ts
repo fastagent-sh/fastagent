@@ -370,6 +370,17 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
               }`,
               PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
             ),
+          image: async (ref) => {
+            const res = await fetchFn(`${base}/control/sessions/${id(session)}/image?ref=${encodeURIComponent(ref)}`, {
+              signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
+            });
+            if (!res.ok) throw await controlError(res);
+            if (res.status === 204) return undefined;
+            return {
+              data: toBase64(new Uint8Array(await res.arrayBuffer())),
+              mimeType: res.headers.get("content-type") ?? "application/octet-stream",
+            };
+          },
           events: () => eventsOf(session),
           update: (patch) => write(`/control/sessions/${id(session)}`, "PATCH", patch),
           steer: (prompt) => write(`/control/sessions/${id(session)}/actions`, "POST", { type: "steer", prompt }),
@@ -503,6 +514,14 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
       };
     },
   };
+}
+
+/** Base64 without `Buffer` (this module runs in any Fetch runtime), in chunks: spreading megabytes of bytes into one
+ *  `String.fromCharCode` call overflows the argument limit. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
 }
 
 /** Minimal SSE reader: yields each `data:` payload; ignores comments (heartbeats) and other fields. */

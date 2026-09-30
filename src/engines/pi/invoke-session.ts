@@ -16,7 +16,8 @@ import {
   type Prompt,
   type Scope,
 } from "../../agent.ts";
-import type { RunSettledEvent, SessionEvent } from "../../session.ts";
+import type { RunSettledEvent, SessionEvent, UserMessageEvent } from "../../session.ts";
+import { entryImages } from "./entry-images.ts";
 import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
@@ -137,7 +138,7 @@ function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> 
  */
 function reportUserMessages(
   session: AgentSession,
-  report: (entryId: string, text: string) => void,
+  report: (data: UserMessageEvent["data"]) => void,
 ): Effect.Effect<void, never, EffectScope.Scope> {
   const record = session.sessionManager;
   const append = record.appendMessage;
@@ -145,8 +146,10 @@ function reportUserMessages(
     Effect.sync(() => {
       record.appendMessage = (message) => {
         const entryId = append.call(record, message);
-        // The same text `entries()` publishes for this entry (session-control.ts toSessionEntry).
-        if (message.role === "user") report(entryId, contentText(message.content, ""));
+        // The same text and images `entries()` publishes for this entry (session-control.ts toSessionEntry).
+        if (message.role === "user") {
+          report({ entryId, text: contentText(message.content, ""), ...entryImages(entryId, message) });
+        }
         return entryId;
       };
     }),
@@ -315,8 +318,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         ),
         (unsubscribe) => Effect.sync(unsubscribe),
       );
-      yield* reportUserMessages(session, (entryId, text) =>
-        observe({ type: "user_message", timestamp: Date.now(), runId, data: { entryId, text } }),
+      yield* reportUserMessages(session, (data) =>
+        observe({ type: "user_message", timestamp: Date.now(), runId, data }),
       );
       const extensionTurns = trackExtensionTurns(session);
       // Completing the gate can run waiting controls synchronously; their queue events must be observed.

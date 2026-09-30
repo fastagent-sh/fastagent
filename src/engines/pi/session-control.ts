@@ -31,7 +31,7 @@ import {
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
+import { type ImageRef, type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -60,6 +60,7 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { entryImages, imageAt } from "./entry-images.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
@@ -134,7 +135,9 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
   };
   if (entry.type === "message") {
     const m = entry.message;
-    if (m.role === "user") return { ...base, kind: "user", data: { text: contentText(m.content, "") } };
+    if (m.role === "user") {
+      return { ...base, kind: "user", data: { text: contentText(m.content, ""), ...entryImages(entry.id, m) } };
+    }
     if (m.role === "assistant") {
       // `args` is what `tool_started` carries live (pi emits the call's recorded `arguments` there), so a reopened
       // conversation shows the same call a watcher saw.
@@ -154,6 +157,7 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
           toolName: m.toolName,
           isError: m.isError ?? false,
           text: contentText(m.content, ""),
+          ...entryImages(entry.id, m),
         },
       };
     }
@@ -460,6 +464,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (idx >= 0) entries = all.slice(idx + 1);
       }
       return { entries, ...(leafEntryId ? { leafEntryId } : {}) };
+    },
+
+    async image(session: string, ref: string): Promise<ImageRef | undefined> {
+      // ponytail: opens (parses) the whole record per image; an index when long image-heavy sessions make it show.
+      const opened = await sessions.openIfExists(session);
+      return opened ? imageAt(opened, ref) : undefined;
     },
 
     events(session: string): SessionEventStream {
@@ -1014,6 +1024,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         id: session,
         state: () => reads.state(session),
         entries: (options) => reads.entries(session, options),
+        image: (ref) => reads.image(session, ref),
         events: () => reads.events(session),
         update: (patch) => updateOf(session, patch),
         steer: (prompt) => runAction(session, { type: "steer", prompt }),

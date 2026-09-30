@@ -51,6 +51,12 @@ export interface WireEvent {
   event: SessionEvent;
 }
 
+/**
+ * What `.../image` may answer under the image's own type. `mimeType` is whatever the prompt's sender wrote, and served
+ * as-is a `text/html` or `image/svg+xml` "image" would run script on whatever origin fronts this plane.
+ */
+const RASTER_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
 
@@ -312,6 +318,23 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
     [`GET /control/sessions/${SESSION_SEGMENT}/entries`]: async (_req, url, session) => {
       const since = url.searchParams.get("since") ?? undefined;
       return json(await control.sessions.get(session).entries(since !== undefined ? { since } : undefined));
+    },
+
+    // Raw bytes, not JSON-wrapped base64: a client can hand the response straight to an <img>. The ref names a
+    // durable entry, so the answer never changes. `ref` rides the query because this router has one path variable.
+    [`GET /control/sessions/${SESSION_SEGMENT}/image`]: async (_req, url, session) => {
+      const ref = url.searchParams.get("ref");
+      if (ref === null) return text("expected ?ref=, an images[].ref from entries()\n", 400);
+      const image = await control.sessions.get(session).image(ref);
+      // The local call RETURNS undefined, so this is a 2xx (§13); a 404 stays "this serve predates the route".
+      if (!image) return new Response(null, { status: 204 });
+      return new Response(Buffer.from(image.data, "base64"), {
+        headers: {
+          "content-type": RASTER_IMAGE_TYPES.has(image.mimeType) ? image.mimeType : "application/octet-stream",
+          "x-content-type-options": "nosniff",
+          "cache-control": "private, max-age=31536000, immutable",
+        },
+      });
     },
 
     // The run actions.
