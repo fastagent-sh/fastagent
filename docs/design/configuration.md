@@ -6,7 +6,7 @@ status: partially implemented
 
 # Configuration, deployment environments, and credential ownership
 
-**Status: partially implemented.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. The code truth is `src/`; §12 is the sequencing and carries what has landed.
+**Status: partially implemented.** This is the design conclusion for [#482](https://github.com/fastagent-sh/fastagent/issues/482). It replaces that RFC's file layout and command surface with a smaller one; §11 lists what was dropped and why. The code truth is `src/`; §12 is what the unbuilt env addition would take.
 
 **The day-one tier is built and complete (steps 1–3). The env dimension (§2's day two, step 4) is not, and is deliberately not scheduled** — it is a pure addition with no demand behind it yet, so every `--env` sentence below describes a design that is ready rather than code that exists.
 
@@ -99,14 +99,14 @@ The defaults live in different places for exactly one reason: one can be committ
 Two properties of the credential chain are not free choices, and both were paid for:
 
 - **The fallback is per provider, not per file.** A file-level fallback would make every other provider in the global store vanish the instant `login anthropic` created a project `auth.json`.
-- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthFallback` in `src/engines/pi/config.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
+- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthLayers` in `src/engines/pi/auth.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
 
 `deploy` carries no credentials file at all, project or global (§8).
 
 Two rules follow:
 
 - **Refresh writes back to the layer it read from.** Reading the global store and writing the project one would conjure a second holder of the same grant, which is the failure this whole area exists to avoid.
-- **`--model` never enters a deployment** (a deployment must be reproducible). A remote model choice persists through the selected value file's `FASTAGENT_MODEL`. `modelTravelIssue` (`src/deploy/preflight.ts`) therefore disappears: there is no such thing as a model that "cannot reach the box", only a deployment with no source that resolves one.
+- **`--model` never enters a deployment** (a deployment must be reproducible). A remote model choice persists through the selected value file's `FASTAGENT_MODEL`. There is therefore no such thing as a model that "cannot reach the box", only a deployment with no source that resolves one, which the pre-flight gates under `--run`.
 
 ## 6. CLI surface
 
@@ -159,7 +159,7 @@ A credential that travels as a variable (a provider API key in the value file) i
 - `fastagent login --deployment [host]` runs the ordinary login on the box, through the host's own owner-authenticated shell (`docker compose exec`, `fly ssh console`, `railway ssh`, AgentCore's `InvokeAgentRuntimeCommandShell`). The owner's terminal renders it and opens the browser; the box holds the PKCE verifier, exchanges the code, and writes its own `auth.json`. The box is then the only holder of its grant, so neither side can log the other out, and logging in again replaces it. The mechanism is in [core.md](core.md) §9.
 - `deploy --run` starts that login after readiness and before activation (§7), for the model's provider, keeping a credential the box already holds, so a redeploy leaves it alone. Without a terminal it stops with `not logged in` and the command to run: a CI run never reports success for an agent that cannot answer.
 - A box whose credential is missing or rejected later (revoked, a lost volume) names `fastagent login --deployment` in its startup report.
-- **Two questions, two owners.** The builder decides only what the deploy ships (`credentialRoute` in `src/deploy/preflight.ts`): a key the definition references or the value file holds travels; otherwise the box is asked. It never asks what authenticates the model on the builder's machine — its stored logins and the shell running deploy do not travel, and every earlier attempt to infer the box from them was wrong in a new way. Whether the box authenticates, and with what, is the box's own answer, the same function its startup report uses (`agentAuthStatus`), because only the box knows what it has stored, which platform variables it was given, or what role it runs as.
+- **Two questions, two owners.** The builder decides only what the deploy ships (`credentialRoute` in `src/deploy/preflight.ts`): a key the definition references or the value file holds travels; otherwise the box is asked. It never asks what authenticates the model on the builder's machine — its stored logins and the shell running deploy do not travel, and every earlier attempt to infer the box from them was wrong in a new way. Whether the box authenticates, and with what, is the box's own answer, the same function its startup report uses (`AgentModels.authStatus`), because only the box knows what it has stored, which platform variables it was given, or what role it runs as.
 - **A stored login outranks a key** (pi's rule: a stored credential owns its provider). A key added to the value file after the box logged in is therefore unused; the box's startup report says so and names the switch (log in with the key), rather than deploy deleting a login on the owner's behalf.
 - **AgentCore** resets its storage on every deploy and after 14 idle days, and the login with it, so every deploy of an agent that logs in ends with that login. The old grant goes with the old storage, so the new one is again the only holder. Without a terminal the outcome is known before anything is built (nobody can redo the login), so `--run` gates there instead of replacing a serving runtime with a logged-out one.
 - A day-two environment's credential is `OPENAI_API_KEY` (or equivalent) in `.secrets/<env>/.env`: the ordinary static-variable path, **no special code**. An environment on OAuth anyway logs in its own deployment, with a grant of its own.
@@ -208,40 +208,19 @@ Dropped from the RFC, and from earlier drafts of this document:
 | A `--profile` selector, a current-environment switch, arbitrary credential-path options, a custom encryption/key-distribution framework | Orchestration or scope creep |
 | Reading back deployed state to diff it, moving generated artifacts into `.state/` | Neither is needed for anything above, and each is unrelated to env or credential ownership |
 
-## 12. Implementation sketch and sequencing
+## 12. The env addition (step 4, not scheduled)
+
+Day one is built: the credential layers (§5, §8), the value-file-only delivery (§9), and the model chain are in `src/`, and `test/live/` provisions a real deployment on each host. What remains is the day-two `--env` dimension, a pure addition with no demand behind it yet:
 
 | Work | Where |
 |---|---|
-| `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }` | new `src/deploy/env-values.ts`; the **one** read, shared by the plan side and the run side |
-| `loadEnvValues(file)` returning a Map and **not** writing `process.env` | `src/env.ts`. Loading a definition under a given env's values (channel/schedule discovery) runs in a **subprocess** — a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation |
-| `name` field | `src/engines/pi/config.ts` |
-| global credential fallback, used only for a provider the project authenticates no other way (its `auth.json`, `models.json` key or env variable; [#653](https://github.com/fastagent-sh/fastagent/pull/653)), refresh write-back to the layer read, `login -g` | `src/engines/pi/auth.ts`, `src/engines/pi/models.ts`, `src/engines/pi/login.ts` |
-| "credential present + ready" precondition | `src/deploy/registration-gate.ts` |
-| report the effective model **and its source**; validate that model's provider; gate `--run` when **no** source resolves a model (the replacement for the deleted gate — without it the deletion leaves a silent-degradation window) | `src/deploy/preflight.ts` (delete `modelTravelIssue`) |
-| carry the resolved model to the deployed environment | the release manifest (`DeploymentRelease.model` in `src/deploy/workspace.ts`), projected into `process.env` beside `FASTAGENT_AGENT` by `prepareStartWorkspace`. It is rewritten unconditionally by every deploy, so it cannot go stale, and nothing on the way in can interpolate the operator's shell. **Non-credential configuration only** — the manifest rides inside a readable image and is rebuilt every deploy, both of which are the opposite of what a credential needs (§8) |
-| class D reads the **value file only** (§9), so `assembleSecrets` takes that Map instead of `env: NodeJS.ProcessEnv` | `src/deploy/secrets.ts` + `src/cli/commands/deploy/shared.ts`; every host's runbook then tells CI to write the file rather than export variables. Docker reaches it through Compose's own `env_file`, not per-name interpolation — interpolation resolves from the shell, the one source §9 excludes |
-| a literal `apiKey` in `models.json` WARNS (§3: gate what we cause, warn what the author chose); a `$NAME` reference is an ordinary declared secret and belongs in the runbook's required list; only a literal or a `!command` counts as carried by the definition. Which path the model's credential takes (a definition reference, the value file, an ambient credential, or a login on the box) is decided in ONE place, `credentialRoute` in `src/deploy/preflight.ts`, from what travels and never from what authenticates the builder's machine | `src/engines/pi/models.ts` (`literalKeyProviders`) + `src/deploy/preflight.ts` |
+| `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }`: the **one** read of the selected value file, shared by the plan side and the run side | a new module under `src/deploy/` |
+| Loading a definition under a given env's values (channel/routine discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
+| `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/engines/pi/config.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
-| Per-env artifact names (`fly.<env>.toml`) under `--env` | `src/deploy/container.ts` + each host's `plan.ts` |
-| Unchanged | `.secrets/` 0600 files, `secrets-gate`, `deploy.apt` (`deploy.secrets` was removed: the value file travels whole) |
+| Per-env artifact names (`fly.<env>.toml`) | `src/deploy/container.ts` + each host's `plan.ts` |
 
-| # | Step | Independent value | State |
-|---|---|---|---|
-| 1 | Deployment phase ordering: no entrance opens before credential + readiness | A correctness fix unrelated to env; worth having today | [#518](https://github.com/fastagent-sh/fastagent/pull/518) |
-| 2 | One model chain (`FASTAGENT_MODEL` travels with the value file; delete `modelTravelIssue`) | All of day one; the single-instance path is unchanged | [#520](https://github.com/fastagent-sh/fastagent/pull/520) |
-| 2b | class D reads the value file only — the same rule the model already follows | Removes the last path by which the builder's environment reaches a deployment | [#524](https://github.com/fastagent-sh/fastagent/pull/524) |
-| 2c | literal-`apiKey` **warning** + `$NAME` references treated as declared secrets | Reports the second route by which a credential enters the image, without the framework deciding what is one | [#523](https://github.com/fastagent-sh/fastagent/pull/523) |
-| 3 | Credential global fallback (per provider, last after every project source since #653; refresh written back to the layer read) + `login -g` | One global login serves every project that has nothing else for the provider | [#525](https://github.com/fastagent-sh/fastagent/pull/525), [#526](https://github.com/fastagent-sh/fastagent/pull/526) |
-| 4 | The env addition: `--env` + `.secrets/<env>/.env` + `<name>-<env>` prefix, and `config.name` with it | Pure addition; day-two capability | **not scheduled** — no demand yet |
-
-Each step is usable on its own and is its own PR. 1 and 3 are small, 2 and 4 are medium.
-
-`config.name` moved from step 2 to step 4: its only consumer is the `<name>-<env>` prefix, so on its own it is a config field nothing reads.
-
-Nothing from day one is left open. The host coverage §14 asks for exists: `docker`, `fly-deploy`,
-`railway-deploy`, and `agentcore-deploy` in `test/live/` each provision a real deployment, serve a turn
-through it, and tear it down. What they do NOT cover is the part of §14 that presumes `--env`, which is
-step 4.
+`login --deployment` takes `--env` with it (§11). The part of §14 that presumes `--env` has no live coverage until this lands.
 
 ## 13. Known costs
 

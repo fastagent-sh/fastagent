@@ -2,8 +2,9 @@
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
-import { loadConfig, providerOf, resolveAuthLayers, resolveModel, resolveModelSpec } from "../../engines/pi/config.ts";
-import { agentCredentialStore, createPiModelRuntime, machineModels } from "../../engines/pi/models.ts";
+import { loadConfig, providerOf, resolveModel, resolveModelSpec } from "../../engines/pi/config.ts";
+import { machineModels } from "../../engines/pi/models.ts";
+import { agentModels } from "../../engines/pi/agent-models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
@@ -80,15 +81,16 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDir(agentDir);
   // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
   // a file the agent dir does not contain.
-  const auth = resolveAuthLayers(agentDir);
-  const credentials = agentCredentialStore(auth, { agentDir });
+  const models = agentModels(agentDir);
+  const { auth } = models;
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
   // surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
   const modelError = modelSpec
-    ? await createPiModelRuntime({ agentDir, credentials })
-        .then((models) => {
-          resolveModel(models, modelSpec);
+    ? await models
+        .runtime()
+        .then((runtime) => {
+          resolveModel(runtime, modelSpec);
           return undefined as string | undefined;
         })
         .catch((error: unknown) => (error as Error).message)

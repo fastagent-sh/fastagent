@@ -10,8 +10,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 /** The directory name `init` gives an agent (`<workspace>/fastagent/`) unless `--agent-dir` names another. */
 export const DEFAULT_AGENT_DIRNAME = "fastagent";
 
-/** The user-global machinery home under `$HOME`. */
-export const GLOBAL_HOME_DIR = ".fastagent";
+/** The user-global machinery home, `~/.fastagent`: the machine's credentials, models.json and model catalog. */
+export function globalHome(): string {
+  return join(homedir(), ".fastagent");
+}
 
 /**
  * The secrets segment inside an agent dir (or the global home). Every path fastagent resolves — `.env`,

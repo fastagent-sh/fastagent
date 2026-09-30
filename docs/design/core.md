@@ -718,7 +718,7 @@ box holds the PKCE verifier and exchanges the code, so it is the only holder of 
 can log the builder's machine out. The browser's return to the flow's `localhost` redirect is caught on
 the builder's machine (`catchingRedirect` in `cli/box-login.ts`) and answered as the paste. Success is read only from that line, because a host shell can drop
 a session and still exit 0. `deploy --run` starts the same login once the box is up, keeping a
-credential the box already authenticates with (`--if-missing`, answered by `agentAuthStatus`, the same
+credential the box already authenticates with (`--if-missing`, answered by `AgentModels.authStatus`, the same
 resolution the box's startup report prints); without a terminal it exits 1 naming the command. The
 builder never predicts that answer from its own credentials: `credentialRoute` decides only what the
 deploy ships.
@@ -737,7 +737,7 @@ and EventBridge Scheduler rules delivering each cron slot. Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
-reply so the forwarder re-emits it byte-exact), a routine fire goes through `fireScheduleOnce` with
+reply so the forwarder re-emits it byte-exact), a routine fire goes through `fireRoutineOnce` with
 the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
 SSE. `GET /ping` reports `HealthyBusy` while background turns run (`channels/busy.ts`) so an idle
 reclaim cannot kill a post-ACK turn, and always carries `time_of_last_update`: the field is documented

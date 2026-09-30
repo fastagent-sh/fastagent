@@ -12,19 +12,13 @@ import {
   listModels,
   loadConfig,
   providerOf,
-  type AuthLayers,
-  resolveAuthLayers,
   resolveModelSpec,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
 import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import {
-  agentAuthStatus,
-  agentCredentialStore,
-  createPiModelRuntime,
-  providerAuthStatuses,
-} from "../engines/pi/models.ts";
+import { providerAuthStatuses } from "../engines/pi/models.ts";
+import { type AgentModels, agentModels } from "../engines/pi/agent-models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
@@ -58,7 +52,7 @@ export interface ReportableAssembly {
   agentDir: string;
   workspace: string;
   modelSpec: string;
-  auth?: AuthLayers;
+  models: AgentModels;
   config: { thinkingLevel?: string };
   definition: LoadedDefinition;
   toolNames: string[];
@@ -80,7 +74,7 @@ export async function reportAssembly(
   reportLine("workspace", a.workspace);
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
-  await reportAuth(a.agentDir, a.modelSpec, a.auth);
+  await reportAuth(a.models, a.modelSpec);
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (a.definition.persona) reportLine("persona", "persona.md");
   // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
@@ -126,18 +120,18 @@ export function parseBind(value: string | undefined): string | undefined {
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
-export async function reportAuth(agentDir: string, modelSpec: string, auth: AuthLayers | undefined): Promise<void> {
+export async function reportAuth(models: AgentModels, modelSpec: string): Promise<void> {
   const provider = providerOf(modelSpec);
   // No files: the opener was handed a credential store, which is its caller's to describe.
-  if (auth === undefined) {
+  if (models.auth === undefined) {
     log.info(`[fastagent] auth:   the caller's credential store (${provider})`);
     return;
   }
-  // The runtime's own resolution, and the one a deployed box's `login --if-missing` asks: the line cannot name a file,
-  // or a source, other than the ones the runtime uses.
+  // The agent's own model environment, the one its turns run on and a deployed box's `login --if-missing` asks: the
+  // line cannot name a file, or a source, other than the ones the runtime uses.
   const modelId = modelSpec.slice(provider.length + 1);
-  const status = await agentAuthStatus({ agentDir, auth, provider, modelId }).catch(failStartup);
-  const report = formatAuthReport({ provider, ...status, deployed: isDeployedWorkspace() });
+  const status = await models.authStatus(provider, modelId).catch(failStartup);
+  const report = formatAuthReport({ provider, path: models.auth.path, ...status, deployed: isDeployedWorkspace() });
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }
@@ -154,13 +148,11 @@ async function resolveFirstRunModel(
   if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const auth = resolveAuthLayers(agentDir);
+  const environment = agentModels(agentDir);
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
-  const models = await createPiModelRuntime({ agentDir, credentials: agentCredentialStore(auth, { agentDir }) }).catch(
-    failStartup,
-  );
-  const chosen = await pickWithCredentials(models, auth.path, agentDir);
+  const models = await environment.runtime().catch(failStartup);
+  const chosen = await pickWithCredentials(models, environment.auth.path, agentDir);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(agentDir, configPath, chosen);
