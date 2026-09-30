@@ -15,14 +15,8 @@ import {
   type Provider,
 } from "@earendil-works/pi-ai";
 import { fastagentCredentialStore } from "./auth.ts";
-import {
-  createPiModelRuntime,
-  interactiveAuth,
-  loginProviders,
-  piModelsOver,
-  probeApiKey,
-  resolveCredentials,
-} from "./models.ts";
+import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
+import { agentModels } from "./agent-models.ts";
 
 export type LoginMethod = "oauth" | "api_key";
 
@@ -176,7 +170,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
             ...(providers ? { providers: [...providers] } : {}),
           })
         : piModelsOver(trial, providers);
-  const { credentials: store } = resolveCredentials(request);
+  const store = agentModels(undefined, request).credentials;
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);

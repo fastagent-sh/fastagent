@@ -6,9 +6,7 @@ import { dirname, join } from "node:path";
 import { type Api, InMemoryCredentialStore, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
-  agentAuthStatus,
   createPiModelRuntime,
-  createPiModels,
   literalKeyProviders,
   globalCatalogPath,
   machineModels,
@@ -19,6 +17,7 @@ import {
   refreshCatalog,
 } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
+import { agentModels, createPiModels } from "../src/engines/pi/agent-models.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
@@ -406,7 +405,7 @@ describe("models.json on the serving path (createPiAgentFromDir)", () => {
   });
 });
 
-describe("agentAuthStatus: the one answer to what authenticates a provider for an agent", () => {
+describe("authStatus: the one answer to what authenticates a provider for an agent", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -417,7 +416,7 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
     const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-status-"));
     const path = join(agentDir, "auth.json");
     await writeFile(path, JSON.stringify(stored));
-    return { agentDir, auth: { path }, path };
+    return { models: agentModels(agentDir, { authPath: path }), path };
   }
 
   it("a live stored login, or nothing: what the startup report and a box's --if-missing both read", async () => {
@@ -425,9 +424,9 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
     vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
     const empty = await agentStoring({});
-    expect(await agentAuthStatus({ ...empty, provider: "anthropic" })).toEqual({ path: empty.path });
+    expect(await empty.models.authStatus("anthropic")).toEqual({ path: empty.path });
     const held = await agentStoring({ anthropic: oauth });
-    expect(await agentAuthStatus({ ...held, provider: "anthropic" })).toEqual({
+    expect(await held.models.authStatus("anthropic")).toEqual({
       path: held.path,
       source: "OAuth",
       stored: "oauth",
@@ -438,7 +437,11 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
     const dir = await agentStoring({ "openai-codex": { ...oauth, refresh: "revoked", expires: 1 } });
     const refresh = vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 }));
     vi.stubGlobal("fetch", refresh);
-    expect(await agentAuthStatus({ ...dir, provider: "openai-codex" })).toEqual({ path: dir.path, stored: "oauth" });
+    expect(await dir.models.authStatus("openai-codex")).toEqual({
+      path: dir.path,
+      stored: "oauth",
+      error: expect.stringContaining("401"),
+    });
     expect(refresh).toHaveBeenCalled(); // it asked the provider, rather than trusting the file
   });
 
@@ -447,12 +450,12 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
     // the stored credential own its provider, which is the case a deployment needs spelled out.
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-environment");
     const bare = await agentStoring({});
-    expect(await agentAuthStatus({ ...bare, provider: "anthropic" })).toEqual({
+    expect(await bare.models.authStatus("anthropic")).toEqual({
       path: bare.path,
       source: "ANTHROPIC_API_KEY",
     });
     const held = await agentStoring({ anthropic: oauth });
-    expect(await agentAuthStatus({ ...held, provider: "anthropic" })).toEqual({
+    expect(await held.models.authStatus("anthropic")).toEqual({
       path: held.path,
       source: "OAuth",
       stored: "oauth",

@@ -228,10 +228,12 @@ src/
     ├── machine.ts          # the machine an agent inherits: its skills, prompt templates (installed pi packages
     │                       # included — never installed by us) and engine settings, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
-    ├── auth.ts, login.ts   # credential store/resolution + the `login` flow
-    ├── models.ts           # Models wiring + the agent's OWN models.json and models-store.json (definition-local,
+    ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
+    ├── models.ts           # the registry: the agent's OWN models.json and models-store.json (definition-local,
     │                       # so they travel), layered over the machine's ~/.fastagent/ pair (environment, never
     │                       # shipped); the explicit model-catalog refresh
+    ├── agent-models.ts     # an agent's model environment as ONE value (credential store + registry + auth
+    │                       # status): every reader builds it through `agentModels`, never from the parts
     └── report.ts           # startup report (auth/model/skills/tools surface)
 test/                       # vitest; faux models by default + reusable SPEC conformance
 ├── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)

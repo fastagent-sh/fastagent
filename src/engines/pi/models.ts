@@ -1,16 +1,14 @@
 /**
- * The pi `Models` collection — the single hub that owns BOTH model resolution (provider/modelId lookup) AND auth
- * (per-request credential resolution). fastagent builds one per opener and threads it into the engine alongside the
- * selected `model`; the two must come from the same collection so the model's provider auth is in scope.
+ * Building pi's model registry: the built-ins, an agent's `models.json` and model catalog layered over the machine's,
+ * the catalog refresh, and the reads of those files a report or a deploy check needs. Which credential store an agent
+ * runs it over is agent-models.ts's; registry and auth are one collection, so the model's provider auth is in scope.
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
-  type Credential,
   type Api,
   type CredentialStore,
   InMemoryCredentialStore,
@@ -23,29 +21,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders, getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import {
-  type CredentialSourceOptions,
-  type FastagentAuthOptions,
-  type FastagentCredentialStore,
-  GLOBAL_AUTH_PATH,
-  assertOneCredentialSource,
-  fastagentCredentialStore,
-} from "./auth.ts";
-import { type AuthLayers, resolveAuthLayers } from "./config.ts";
-import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, GLOBAL_HOME_DIR, resolveOverridePath } from "../../paths.ts";
+import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "./auth.ts";
+import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, globalHome, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
-
-/** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md). */
-
-export interface CreatePiModelsOptions extends FastagentAuthOptions, CredentialSourceOptions {
-  /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
-  providers?: Provider[];
-}
-
-/** A `Models` with every built-in pi provider, wired to fastagent's auth. */
-export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  return piModelsOver(resolveCredentials(options).credentials, options.providers);
-}
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
 export function piModelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
@@ -70,7 +48,7 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  * `FASTAGENT_MODELS_PATH` moves it. It never ships: a deployed agent has only its definition's file.
  */
 function machineModelsPath(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_MODELS_PATH) ?? join(homedir(), GLOBAL_HOME_DIR, AGENT_MODELS_FILE);
+  return resolveOverridePath(env.FASTAGENT_MODELS_PATH) ?? join(globalHome(), AGENT_MODELS_FILE);
 }
 
 /** A custom-endpoint file's providers by id, or undefined when there is no file. Strict JSON: see {@link modelLayers}. */
@@ -133,7 +111,7 @@ async function modelsFileFor(
   if (!layers) return { path: definition };
   const content = JSON.stringify({ providers: { ...layers.machine, ...layers.own } }, null, 2);
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
-  const path = join(homedir(), GLOBAL_HOME_DIR, ".cache", "models", `${hash}.json`);
+  const path = join(globalHome(), ".cache", "models", `${hash}.json`);
   // 0600: it may carry literal keys. Several processes may create the same snapshot at once.
   if (!existsSync(path)) writeFileAtomic(path, content, 0o600, true);
   return { path, merged: { machine: layers.machinePath, definition } };
@@ -162,7 +140,7 @@ export function isBuiltinProvider(providerId: string): boolean {
 }
 
 export interface PiModelRuntimeOptions {
-  /** The store every credential is read from and refreshed into ({@link resolveCredentials}). */
+  /** The store every credential is read from and refreshed into. */
   credentials: CredentialStore;
   /** The agent dir, whose {@link AGENT_MODELS_FILE} and {@link AGENT_MODEL_CATALOG_FILE} the registry reads. */
   agentDir?: string;
@@ -189,7 +167,7 @@ export interface PiModelRuntimeOptions {
  * never ships.
  */
 export function globalCatalogPath(): string {
-  return join(homedir(), GLOBAL_HOME_DIR, AGENT_MODEL_CATALOG_FILE);
+  return join(globalHome(), AGENT_MODEL_CATALOG_FILE);
 }
 
 /** A catalog file as pi writes it (entries by provider), or `{}` when there is none. */
@@ -244,7 +222,7 @@ export async function inGlobalCatalog(provider: string, id: string): Promise<boo
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */
-async function runtimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">) {
+export async function modelRuntimeFiles(options: Omit<PiModelRuntimeOptions, "credentials">) {
   const { agentDir } = options;
   const machine = options.machineLayer !== false;
   const models = !agentDir
@@ -361,62 +339,11 @@ export async function refreshCatalog(
 }
 
 /**
- * The ONE reading of a caller's credential source, for every public entry that takes `authPath` or `credentialStore`
- * (createPiModels, L1, L2, the directory opener, availableModelsFromDir, login). A supplied store is used as given;
- * otherwise the files: an agent directory's own layers ({@link resolveAuthLayers}), or, with no directory, the named
- * file or the global one. `auth` is set exactly when files are in use, for a report that names them.
- */
-export function resolveCredentials(
-  source: CredentialSourceOptions & FastagentAuthOptions,
-  context: { agentDir?: string; providers?: readonly Provider[] } = {},
-): { credentials: CredentialStore; auth?: AuthLayers } {
-  assertOneCredentialSource(source);
-  if (source.credentialStore) return { credentials: source.credentialStore };
-  const { agentDir, providers } = context;
-  const auth = agentDir ? resolveAuthLayers(agentDir, source.authPath) : { path: source.authPath ?? GLOBAL_AUTH_PATH };
-  return { credentials: agentCredentialStore(auth, { agentDir, providers, warn: source.warn }), auth };
-}
-
-/**
- * The credential store an agent reads through: its own file, then the user-global one for a provider the PROJECT
- * authenticates no other way (its own auth file, a models.json key, or the environment). "No other way" is answered
- * by pi's own resolution over a runtime that has no global layer, built the first time a provider is looked up there.
- * A deployment never has the global file, so a global login that outranked, say, an `ANTHROPIC_API_KEY` in
- * `.secrets/.env` would run one credential here and a different one deployed.
- */
-export function agentCredentialStore(
-  auth: AuthLayers,
-  options: FastagentAuthOptions & { agentDir?: string; providers?: readonly Provider[] } = {},
-): FastagentCredentialStore {
-  const { warn, providers = [] } = options;
-  const fallback = auth.fallback;
-  if (fallback === undefined) return fastagentCredentialStore(auth.path, { warn });
-  let project: Promise<ModelRuntime> | undefined;
-  const projectRuntime = (): Promise<ModelRuntime> => {
-    project ??= (async () => {
-      const runtime = await ModelRuntime.create({
-        credentials: fastagentCredentialStore(auth.path, { warn }),
-        ...(await runtimeFiles(options)).create,
-        refreshOnCreate: false,
-      });
-      for (const provider of providers) runtime.registerNativeProvider(provider);
-      return runtime;
-    })();
-    return project;
-  };
-  return fastagentCredentialStore(auth.path, {
-    warn,
-    fallbackPath: fallback,
-    projectAuthenticates: async (providerId) => (await (await projectRuntime()).checkAuth(providerId)) !== undefined,
-  });
-}
-
-/**
  * What satisfies a provider from `env` alone (its API-key variable, or an ambient source such as an AWS profile), by
  * pi's own check, or undefined. Passed explicitly rather than read from `process.env`: only the environment a SHELL
  * hands down is shared by every agent on the machine, and a process that has loaded an agent's `.secrets/.env` holds
- * that agent's variables too. What the shell shares outranks the global credentials file ({@link
- * agentCredentialStore}), so a global login for such a provider is not used.
+ * that agent's variables too. What the shell shares outranks the global credentials file (agent-models.ts),
+ * so a global login for such a provider is not used.
  *
  * `fileExists` answers for the files a source points at (an AWS profile, Google ADC): this machine's by default, which
  * is right wherever the answer is about THIS machine. A deployment passes one that finds nothing, because no file of
@@ -439,44 +366,12 @@ export async function environmentAuthSource(
 }
 
 /**
- * What authenticates `provider` for the agent in `agentDir`, resolved exactly as its serving runtime resolves it (the
- * same store and registry `createPiAgentFromDir` builds): the ONE answer both the startup report and a deployed box's
- * `login --if-missing` give, so they cannot disagree about whether the box is logged in.
- *
- * - `source`: what satisfies it now (`OAuth`, `stored credential`, an env variable's name), after a due refresh.
- * - `path`: the file that holds the stored credential, or the one a login would write.
- * - `stored`: the kind of credential the store holds for it, usable or not.
- * - `shadowed`: an env variable that also authenticates it but goes unused, because pi lets a stored credential own
- *   its provider — a key added to a deployment's value file after the box was logged in, typically.
- *
- * `modelId` picks the model to probe with; the provider's first one otherwise (auth is provider-scoped).
+ * A registry over the given credential store. What an agent runs on is built through `agentModels`
+ * (agent-models.ts); this is for a registry over some OTHER store: none at all (`models`, a deploy check of what
+ * ships), a trial key under test (login), or the catalog file a refresh writes.
  */
-export async function agentAuthStatus(options: {
-  agentDir: string;
-  auth: AuthLayers;
-  provider: string;
-  modelId?: string;
-}): Promise<{ source?: string; path: string; stored?: Credential["type"]; shadowed?: string }> {
-  const { agentDir, auth, provider } = options;
-  const credentials = agentCredentialStore(auth, { agentDir });
-  const models = await createPiModelRuntime({ agentDir, credentials });
-  const modelId = options.modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
-  const source = modelId === undefined ? undefined : await probeAuthSource(models, `${provider}/${modelId}`);
-  // `read` never refreshes: this is the kind on file, whatever became of it.
-  const stored = (await credentials.read(provider))?.type;
-  const fromEnvironment = stored === undefined ? undefined : await environmentAuthSource(provider, process.env);
-  const shadowed = source !== undefined && fromEnvironment !== source ? fromEnvironment : undefined;
-  return {
-    path: await credentials.layerOf(provider),
-    ...(source !== undefined ? { source } : {}),
-    ...(stored !== undefined ? { stored } : {}),
-    ...(shadowed !== undefined ? { shadowed } : {}),
-  };
-}
-
-/** The `ModelRuntime`-shaped sibling of {@link createPiModels}. */
 export async function createPiModelRuntime(options: PiModelRuntimeOptions): Promise<ModelRuntime> {
-  const { models, create } = await runtimeFiles(options);
+  const { models, create } = await modelRuntimeFiles(options);
   const runtime = await ModelRuntime.create({ credentials: options.credentials, ...create });
   // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in
   // getError().
@@ -572,7 +467,7 @@ export function interactiveAuth(provider: Provider, method: Exclude<InteractiveL
   return method === "oauth" ? provider.auth.oauth : provider.auth.apiKey?.login ? provider.auth.apiKey : undefined;
 }
 
-/** The providers a sign-in can target: pi's built-ins plus `extra`, composed exactly as {@link createPiModels} does. */
+/** The providers a sign-in can target: pi's built-ins plus `extra`, composed exactly as {@link piModelsOver} does. */
 export function loginProviders(extra?: readonly Provider[]): readonly Provider[] {
   return piModelsOver(new InMemoryCredentialStore(), extra).getProviders();
 }
@@ -600,14 +495,17 @@ export async function providerAuthStatuses(models: Models): Promise<Map<string, 
   return statuses;
 }
 
-/** Which source currently satisfies auth for `spec` — a startup diagnostic. */
+/**
+ * Which source currently satisfies auth for `spec`, or undefined when none does (or the spec is not in `models`).
+ * Rejects when resolving fails — a corrupt entry, a refresh the provider refused — which is a different answer from
+ * "nothing configured" and must reach whoever reports it.
+ */
 export async function probeAuthSource(models: Models, spec: string): Promise<string | undefined> {
   const slash = spec.indexOf("/");
   if (slash < 1) return undefined;
   const model = models.getModel(spec.slice(0, slash), spec.slice(slash + 1));
   if (!model) return undefined;
-  const auth = await models.getAuth(model).catch(() => undefined);
-  return auth?.source;
+  return (await models.getAuth(model))?.source;
 }
 
 /**

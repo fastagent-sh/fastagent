@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { createPiModels, globalCatalogPath } from "../src/engines/pi/models.ts";
+import { globalCatalogPath } from "../src/engines/pi/models.ts";
+import { createPiModels } from "../src/engines/pi/agent-models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */

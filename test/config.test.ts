@@ -4,22 +4,10 @@ import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import {
-  createPiAgentFromDir,
-  createPiModels,
-  type FastagentConfig,
-  listModels,
-  probeAuthSource,
-  resolveModel,
-} from "../src/index.ts";
-import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
-import {
-  defaultAuthPath,
-  loadConfig,
-  resolveAuthFallback,
-  resolveAuthPath,
-  resolveModelSpec,
-} from "../src/engines/pi/config.ts";
+import { createPiAgentFromDir, createPiModels, type FastagentConfig, listModels, resolveModel } from "../src/index.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/engines/pi/auth.ts";
+import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
+import { probeAuthSource } from "../src/engines/pi/models.ts";
 import { resolveSecretsDir, resolveSessionsDir, resolveStateRoot } from "../src/paths.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -121,7 +109,9 @@ describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", ()
     expect(resolveSecretsDir("/app", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
       "/data/.secrets",
     );
-    expect(defaultAuthPath("/data/.secrets")).toBe("/data/.secrets/auth.json");
+    expect(resolveAuthPath("/app", undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
+      "/data/.secrets/auth.json",
+    );
   });
 
   it("the global home carries the same shape, with no special case in the resolvers", async () => {
@@ -158,17 +148,17 @@ describe("config: resolveAuthPath (auth-file precedence)", () => {
     expect(resolveAuthPath("/app", "/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
   });
 
-  it("resolveAuthFallback layers the global store under the DEFAULT path only", () => {
+  it("resolveAuthLayers layers the global store under the DEFAULT path only", () => {
     // "Use this file" is an instruction, so an explicitly named path gets no second layer; the default location is
     // a preference, so it reads the user-global store for providers it does not have.
-    expect(resolveAuthFallback(undefined, {} as NodeJS.ProcessEnv)).toBe(GLOBAL_AUTH_PATH);
-    expect(resolveAuthFallback("flagauth.json", {} as NodeJS.ProcessEnv)).toBeUndefined();
-    expect(resolveAuthFallback(undefined, { FASTAGENT_AUTH_PATH: "env.json" } as NodeJS.ProcessEnv)).toBeUndefined();
+    const fallback = (authPath: string | undefined, env: Record<string, string>) =>
+      resolveAuthLayers("/app", authPath, env as NodeJS.ProcessEnv).fallback;
+    expect(fallback(undefined, {})).toBe(GLOBAL_AUTH_PATH);
+    expect(fallback("flagauth.json", {})).toBeUndefined();
+    expect(fallback(undefined, { FASTAGENT_AUTH_PATH: "env.json" })).toBeUndefined();
     // FASTAGENT_SECRETS_DIR names the file just as explicitly, and is what the Fly/Railway/AgentCore artifacts set:
     // a deployed container reads its mounted credentials, never a second layer under its own $HOME.
-    expect(
-      resolveAuthFallback(undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv),
-    ).toBeUndefined();
+    expect(fallback(undefined, { FASTAGENT_SECRETS_DIR: "/data/.secrets" })).toBeUndefined();
   });
 
   it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {
@@ -404,10 +394,10 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const { host, agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const defaulted = await createPiAgentFromDir(host);
-    expect(defaulted.auth?.path).toBe(join(agent, ".secrets", "auth.json"));
+    expect(defaulted.models.auth?.path).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
     const overridden = await createPiAgentFromDir(host, { authPath: shared });
-    expect(overridden.auth).toEqual({ path: shared }); // named: no second layer
+    expect(overridden.models.auth).toEqual({ path: shared }); // named: no second layer
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

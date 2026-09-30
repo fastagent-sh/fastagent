@@ -48,7 +48,8 @@ export {
 export type { SessionInheritance } from "./engines/pi/session-inheritance.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";
-export { createPiModels, probeAuthSource, type CreatePiModelsOptions } from "./engines/pi/models.ts";
+export { createPiModels, type CreatePiModelsOptions } from "./engines/pi/agent-models.ts";
+export { probeAuthSource } from "./engines/pi/models.ts";
 export {
   login,
   loginOptions,

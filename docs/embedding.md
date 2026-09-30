@@ -211,7 +211,7 @@ Credentials resolve from a **credentials file**, then **env vars** (e.g. `ANTHRO
   the credentials files, refreshes included. Env variables and `models.json` keys still apply, as with `authPath`.
   See [the store's contract](api-reference.md#config-and-models).
 
-To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
+To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined` when nothing is configured. It rejects when resolving fails (a corrupt entry, a refresh the provider refused), with the reason.
 
 There is no `apiKey` option: put keys in the credentials file or the environment. For your own endpoint, see
 `providers` below.

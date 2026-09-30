@@ -1,12 +1,11 @@
 /**
  * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file, consumed by the
- * `Models` collection (models.ts). The write path refuses to overwrite a corrupt file, so a torn read never clobbers
- * the other providers' credentials.
+ * `Models` collection (models.ts), and which of those files an agent reads. The write path refuses to overwrite a
+ * corrupt file, so a torn read never clobbers the other providers' credentials.
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { GLOBAL_HOME_DIR, SECRETS_DIRNAME, SECRET_FILE_MODE, resolveOverridePath } from "../../paths.ts";
+import { globalHome, SECRETS_DIRNAME, SECRET_FILE_MODE, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -16,7 +15,7 @@ import lockfile from "proper-lockfile";
  * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`), under the user-global machinery home
  * `~/.fastagent/`.
  */
-export const GLOBAL_AUTH_PATH = join(homedir(), GLOBAL_HOME_DIR, SECRETS_DIRNAME, "auth.json");
+export const GLOBAL_AUTH_PATH = join(globalHome(), SECRETS_DIRNAME, "auth.json");
 
 export interface FastagentAuthOptions {
   /** Sink for non-fatal auth anomalies (unreadable/corrupt file). */
@@ -290,4 +289,49 @@ export function fastagentCredentialStore(
       });
     },
   };
+}
+
+// ── Which files an agent reads ───────────────────────────────────────────────
+
+/**
+ * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (then
+ * `<secrets dir>/auth.json`). The CLI has no flag for it: a second spelling of one environment variable buys nothing,
+ * and the variable is what a deployed container reads anyway.
+ */
+function resolveAuthPathOverride(flag: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
+  return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
+}
+
+/** The effective auth file for an agent: override if present, else `<secrets dir>/auth.json`. */
+export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveAuthPathOverride(flag, env) ?? join(resolveSecretsDir(dir, env), "auth.json");
+}
+
+/**
+ * Which credentials files an agent reads: `path` first, then, per provider, `fallback`. One value because it is one
+ * decision, read through `agentModels` (agent-models.ts) by everything that reads an agent's credentials.
+ */
+export interface AuthLayers {
+  path: string;
+  fallback?: string;
+}
+
+/**
+ * The {@link AuthLayers} an agent directory reads: `authPath` option > `FASTAGENT_AUTH_PATH` > its own file, and
+ * behind it the user-global store, because a login is a PERSON on a machine and not a project — one `login -g` then
+ * serves every agent here.
+ *
+ * No fallback when a path was named: "use this file" is an instruction, not a preference. BOTH knobs
+ * {@link resolveAuthPath} reads count as that instruction, `FASTAGENT_SECRETS_DIR` included — it is what the
+ * Fly/Railway/AgentCore artifacts set, and a deployed container must read its mounted credentials and nothing else
+ * (the artifact is the truth).
+ */
+export function resolveAuthLayers(
+  agentDir: string,
+  authPath?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AuthLayers {
+  const path = resolveAuthPath(agentDir, authPath, env);
+  const named = resolveAuthPathOverride(authPath, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
+  return named === undefined ? { path, fallback: GLOBAL_AUTH_PATH } : { path };
 }
