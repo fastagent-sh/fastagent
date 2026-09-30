@@ -21,7 +21,12 @@ import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/eng
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
-import { SESSIONS_UNAVAILABLE_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import {
+  SESSIONS_UNAVAILABLE_CODE,
+  UNSUPPORTED_CAPABILITY_CODE,
+  type SessionEntry,
+  type SessionEvent,
+} from "../src/session.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
 /** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
@@ -497,6 +502,39 @@ describe("session control over HTTP", () => {
     } finally {
       served.close();
     }
+  });
+
+  it("image bytes travel raw under their own type, remote reads them as the local ImageRef, a missing ref is undefined", async () => {
+    const served = await serveControl();
+    try {
+      const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      await drain(
+        served.agent.invoke({ session: "s/I" }, { text: "look", images: [{ data: png, mimeType: "image/png" }] }),
+      );
+      const remote = await connectSessionControl({ url: served.url });
+      const { entries } = await remote.sessions.get("s/I").entries();
+      const user = entries.find((e) => e.kind === "user") as SessionEntry;
+      const ref = (user.data as { images: { ref: string }[] }).images[0]?.ref as string;
+
+      expect(await remote.sessions.get("s/I").image(ref)).toEqual({ data: png, mimeType: "image/png" });
+      const res = await fetch(`${served.url}/control/sessions/s%2FI/image?ref=${encodeURIComponent(ref)}`);
+      expect(res.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await res.arrayBuffer()).toString("base64")).toBe(png);
+      expect(await remote.sessions.get("s/I").image(`${ref}0`)).toBeUndefined();
+      expect(await remote.sessions.get("other").image(ref)).toBeUndefined();
+      expect((await fetch(`${served.url}/control/sessions/s%2FI/image`)).status).toBe(400);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("an image whose sender-declared type is not a raster image is served as opaque bytes, never sniffed", async () => {
+    const plane = mountControlPlane(
+      controlPlaneRoutes(handleControl({ image: async () => ({ data: "PHNjcmlwdD4=", mimeType: "text/html" }) })),
+    ).handler;
+    const res = await plane(new Request("http://x/control/sessions/s/image?ref=r"));
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
   it("a serve without the route reads as SKEW, not as an unreadable definition", async () => {

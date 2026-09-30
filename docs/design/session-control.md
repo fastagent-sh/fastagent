@@ -112,6 +112,7 @@ interface Session {
   readonly id: string;
   state(): Promise<SessionState>;
   entries(options?: { since?: string }): Promise<SessionEntries>;
+  image(ref: string): Promise<ImageRef | undefined>;     // the bytes behind an entry's images[].ref
   events(): SessionEventStream;                           // AsyncIterable<SessionEvent> + `ready`
   update(patch: SessionUpdate): Promise<SessionResult>;   // name / model / thinkingLevel / leafEntryId
   steer(prompt: Prompt): Promise<SessionResult>;
@@ -362,7 +363,7 @@ equals the data plane's lease window, so `state()` never says idle while an invo
 `session_busy`.
 
 `pending` lists the prompts queued on the active run, oldest first, as the engine queued them: plain
-text as sent, a slash command already expanded, images not included. A prompt leaves its list when it
+text as sent, a slash command already expanded, without its images (its `user_message` lists them). A prompt leaves its list when it
 enters the conversation as a user message, so a client that shows queued prompts apart from the
 transcript moves one into it at that point. An abort can still end the run before the model answers
 it. Whatever is still listed when the run settles never entered the conversation and is dropped;
@@ -405,10 +406,18 @@ Entries are append-ordered with stable ids, including pre-compaction records and
 where the engine preserves them — `parentId` exists because branches objectively occur. The `since`
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
-`leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text }`; `assistant`
+`leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
 `{ text, toolCalls?: { id, name, args }[] }`, where `args` is the same value `tool_started` carries live;
-`tool` `{ toolCallId, toolName, isError, text }`. Engine-specific kinds may appear beyond the guaranteed
+`tool` `{ toolCallId, toolName, isError, text, images? }`. Engine-specific kinds may appear beyond the guaranteed
 minimum and MUST be skippable.
+
+`images` is present only when the message carried any: `{ ref, mimeType }[]`, in the order sent. The bytes
+stay out, because `entries()` is read on every open and reconnect and one screenshot is megabytes; a client
+reads each one it draws with `image(ref)` on the same session (`GET .../image?ref=`, raw bytes). `ref` is
+opaque, and names nothing outside its session: the per-session prefix a facade guards (§14) covers it. The
+wire serves only `image/png`, `image/jpeg`, `image/gif` and `image/webp` under their own type, with
+`nosniff`; anything else is `application/octet-stream`, because the type is whatever the sender declared
+and an `image/svg+xml` or `text/html` "image" would run script on the facade's origin.
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
 its content was replaced (the replacement is not published). pi writes omissions for its own abandoned
@@ -465,7 +474,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 |---|---|---|
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
-| L0 | `user_message { entryId, text }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
+| L0 | `user_message { entryId, text, images? }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text` and `images`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |
 | L1 | `queue_changed { steering, followUp }` | The active run's whole queue: the queued prompt texts (§7 `pending`). |
@@ -571,6 +580,7 @@ GET    /control/sessions/{id}                  state
 PATCH  /control/sessions/{id}                  {name?, model?, thinkingLevel?, leafEntryId?}
 DELETE /control/sessions/{id}
 GET    /control/sessions/{id}/entries          ?since=
+GET    /control/sessions/{id}/image            ?ref= — raw bytes of one entry image
 GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
@@ -713,7 +723,7 @@ credential:
 | `GET /routines` | The catalogue: which names `POST /run` accepts, with each one's cron if it has one. Never a prompt. |
 | `POST /run` | A turn from a prompt the definition wrote down, for any routine it declares. Both are served when there is at least one AND the data plane is on — `http.run` defaults to `http.invoke`. |
 | `GET /control/sessions` | Every conversation on the deployment |
-| `GET /control/sessions/{id}/entries`, `.../events` | The full contents of any one of them |
+| `GET /control/sessions/{id}/entries`, `.../image`, `.../events` | The full contents of any one of them, images included |
 | `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |

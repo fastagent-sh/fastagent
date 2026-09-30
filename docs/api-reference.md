@@ -738,6 +738,9 @@ const draining = (async () => {
 await resumed.ready;
 const { entries, leafEntryId } = await s1.entries({ since: cursor }); // backfill, beside `draining`
 const state = await s1.state(); // { status, name?, activeRunId?, leafEntryId? }
+// A user or tool entry that carried images lists them, without bytes, as `data.images: { ref, mimeType }[]`;
+// read one when you draw it.
+const image = await s1.image(ref); // { data (base64), mimeType } | undefined
 ```
 
 `invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
@@ -905,6 +908,7 @@ GET    /control/sessions/{id}                  state
 PATCH  /control/sessions/{id}                  {name?, model?, thinkingLevel?, leafEntryId?}
 DELETE /control/sessions/{id}
 GET    /control/sessions/{id}/entries          ?since=
+GET    /control/sessions/{id}/image            ?ref= — raw bytes of an entry's images[].ref
 GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 

@@ -771,6 +771,64 @@ describe("session control: run modulation", () => {
     expect(await reported({ text: "", images: [{ mimeType: "image/png", data: png }] })).toEqual([""]);
   });
 
+  it("images: listed by ref on user and tool entries and on user_message, bytes read by image(ref) in that session only", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const red = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+    const screenshot: AgentTool = {
+      name: "screenshot",
+      label: "Screenshot",
+      description: "Take a screenshot",
+      parameters: Type.Object({}),
+      async execute() {
+        return { content: [{ type: "image", data: red, mimeType: "image/png" }], details: {} };
+      },
+    };
+    const dir = await mkdtemp(join(tmpdir(), "fa-entry-images-"));
+    const { agent, control } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("screenshot", {}, { id: "c1" })),
+        fauxAssistantMessage("done"),
+        fauxAssistantMessage("plain"),
+      ],
+      { tools: [screenshot], boundary: false, sessions: piSessionRecordStore({ dir, cwd: dir }) },
+    );
+    const s = control.sessions.get("img");
+    const watching = watchUntilSettled(control, "img");
+    const sent = [
+      { data: png, mimeType: "image/png" },
+      { data: red, mimeType: "image/png" },
+    ];
+    await drain(agent.invoke({ session: "img" }, { text: "look", images: sent }));
+    const live = (await watching).find((e) => e.type === "user_message");
+
+    const { entries } = await s.entries();
+    const refs = (kind: string) =>
+      ((entries.find((e) => e.kind === kind) as SessionEntry).data as { images: { ref: string }[] }).images.map(
+        (i) => i.ref,
+      );
+    const user = entries.find((e) => e.kind === "user") as SessionEntry;
+    expect(user.data).toEqual({
+      text: "look",
+      images: [
+        { ref: expect.any(String), mimeType: "image/png" },
+        { ref: expect.any(String), mimeType: "image/png" },
+      ],
+    });
+    // The event and the entry are one derivation.
+    expect(live?.data).toEqual({ entryId: user.id, ...(user.data as object) });
+    expect(await Promise.all(refs("user").map((ref) => s.image(ref)))).toEqual(sent);
+    expect(await Promise.all(refs("tool").map((ref) => s.image(ref)))).toEqual([{ data: red, mimeType: "image/png" }]);
+
+    // A message with no images keeps its shape; a ref reaches nothing outside its own session or list.
+    await drain(agent.invoke({ session: "img" }, { text: "no picture" }));
+    const plain = (await s.entries({ since: entries.at(-1)?.id as string })).entries.find((e) => e.kind === "user");
+    expect(plain?.data).toEqual({ text: "no picture" });
+    const assistant = entries.find((e) => e.kind === "assistant") as SessionEntry;
+    expect(await control.sessions.get("other").image(refs("user")[0] as string)).toBeUndefined();
+    for (const ref of [`${user.id}:2`, `${assistant.id}:0`, user.id, "nope"])
+      expect(await s.image(ref)).toBeUndefined();
+  });
+
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
     const { toTerminal } = await import("../src/engines/pi/turn-kit.ts");
     const terminal = toTerminal({

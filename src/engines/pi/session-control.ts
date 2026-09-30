@@ -15,7 +15,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 // The L0 rendering payload reads message text the way the engine does — ONE reading, joined without a
 // separator because this payload is a transcript, not a preview line.
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText, type ImageContent } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -31,10 +31,11 @@ import {
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
+import { type ImageRef, type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
+  type EntryImage,
   INVALID_COMMAND_CODE,
   isAddressableSession,
   NO_ACTIVE_RUN_CODE,
@@ -119,6 +120,29 @@ function sessionUsage(
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
+/** The images an entry PUBLISHES: a user prompt's and a tool result's. `entries()` lists them and `image()` reads
+ *  them through this one function, so a ref can only reach what was listed. */
+function publishedImages(message: { role: string; content?: unknown }): ImageContent[] {
+  if (message.role !== "user" && message.role !== "toolResult") return [];
+  const content = message.content;
+  return Array.isArray(content) ? content.filter((b: { type?: unknown }) => b.type === "image") : [];
+}
+
+/** `data.images` of the entry `entryId` holding `message`, absent when it has none. Also what `user_message` carries
+ *  (invoke-session.ts), so the event and the entry cannot disagree. */
+export function entryImages(entryId: string, message: { role: string; content?: unknown }): { images?: EntryImage[] } {
+  const images = publishedImages(message).map((b, i) => ({ ref: `${entryId}:${i}`, mimeType: b.mimeType }));
+  return images.length > 0 ? { images } : {};
+}
+
+/** A ref back to its entry and position: the inverse of what `entryImages` mints. */
+function parseImageRef(ref: string): { entryId: string; index: number } | undefined {
+  const at = ref.lastIndexOf(":");
+  const index = ref.slice(at + 1);
+  // Canonical digits only, so one image has one ref (`:00` is not `:0`).
+  return at > 0 && /^(0|[1-9]\d*)$/.test(index) ? { entryId: ref.slice(0, at), index: Number(index) } : undefined;
+}
+
 /**
  * pi `PiSessionEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
  * kind vocabulary (user/assistant/tool) with a minimal render payload; every other engine record
@@ -134,7 +158,9 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
   };
   if (entry.type === "message") {
     const m = entry.message;
-    if (m.role === "user") return { ...base, kind: "user", data: { text: contentText(m.content, "") } };
+    if (m.role === "user") {
+      return { ...base, kind: "user", data: { text: contentText(m.content, ""), ...entryImages(entry.id, m) } };
+    }
     if (m.role === "assistant") {
       // `args` is what `tool_started` carries live (pi emits the call's recorded `arguments` there), so a reopened
       // conversation shows the same call a watcher saw.
@@ -154,6 +180,7 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
           toolName: m.toolName,
           isError: m.isError ?? false,
           text: contentText(m.content, ""),
+          ...entryImages(entry.id, m),
         },
       };
     }
@@ -460,6 +487,16 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (idx >= 0) entries = all.slice(idx + 1);
       }
       return { entries, ...(leafEntryId ? { leafEntryId } : {}) };
+    },
+
+    async image(session: string, ref: string): Promise<ImageRef | undefined> {
+      const at = parseImageRef(ref);
+      if (!at) return undefined;
+      // ponytail: opens (parses) the whole record per image; an index when long image-heavy sessions make it show.
+      const opened = await sessions.openIfExists(session);
+      const entry = opened?.getEntry(at.entryId) as PiSessionEntry | undefined;
+      const image = entry?.type === "message" ? publishedImages(entry.message)[at.index] : undefined;
+      return image ? { data: image.data, mimeType: image.mimeType } : undefined;
     },
 
     events(session: string): SessionEventStream {
@@ -1014,6 +1051,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         id: session,
         state: () => reads.state(session),
         entries: (options) => reads.entries(session, options),
+        image: (ref) => reads.image(session, ref),
         events: () => reads.events(session),
         update: (patch) => updateOf(session, patch),
         steer: (prompt) => runAction(session, { type: "steer", prompt }),

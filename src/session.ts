@@ -1,7 +1,7 @@
 /**
  * Session control plane — the engine-neutral serving extension beside Agent Handler (docs/design/session-control.md).
  */
-import type { Json, Prompt } from "./agent.ts";
+import type { ImageRef, Json, Prompt } from "./agent.ts";
 
 // ── Contract ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +44,11 @@ export interface Session {
    * branch structure.
    */
   entries(options?: { since?: string }): Promise<SessionEntries>;
+  /**
+   * The bytes behind an {@link EntryImage.ref} this session published; `undefined` when this session holds no such
+   * image. Total, like every read but `list()`.
+   */
+  image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;
   /** Set durable session properties. */
   update(patch: SessionUpdate): Promise<SessionResult>;
@@ -245,6 +250,13 @@ export interface SessionEntry {
   data: Json;
 }
 
+/**
+ * One image a message carried, as `data.images` lists it on a `user` or `tool` entry and on `user_message` (absent
+ * when there are none). Bytes stay out: `entries()` is read on every open and reconnect, and one screenshot is
+ * megabytes. `ref` is opaque; {@link Session.image} of the same session reads the bytes.
+ */
+export type EntryImage = { ref: string; mimeType: string };
+
 // ── Live events (observation plane) ──────────────────────────────────────────
 
 /**
@@ -295,10 +307,13 @@ export type MessageStartedEvent = SessionEvent<"message_started", Record<never, 
 /**
  * A user message entered the conversation: the run's opening prompt, a steer or follow-up leaving `pending`, or one an
  * extension sent. It reports after the message is recorded, so `entries()` already holds `entryId` with the same
- * `text` (a slash command expanded, images not included), and before the answer to it starts. The one live event a
- * backfill can be deduplicated against exactly.
+ * `text` (a slash command expanded) and `images`, and before the answer to it starts. The one live event a backfill
+ * can be deduplicated against exactly.
  */
-export type UserMessageEvent = SessionEvent<"user_message", { entryId: string; text: string }> & { runId: string };
+export type UserMessageEvent = SessionEvent<
+  "user_message",
+  { entryId: string; text: string; images?: EntryImage[] }
+> & { runId: string };
 export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
   runId: string;
 };
@@ -315,10 +330,10 @@ export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isEr
 };
 /**
  * The prompts queued on the active run, oldest first, as the engine queued them: plain text as sent, a slash command
- * already expanded (a `/skill:…` becomes the skill's text), images not included. A prompt LEAVES its list when it
- * enters the conversation as a user message: from then on it is in the record and in every later model call (an abort
- * can still end the run before the model answers it). Whatever is still listed when the run settles never entered
- * the conversation and is dropped with the run.
+ * already expanded (a `/skill:…` becomes the skill's text), without its images (its `user_message` carries them). A
+ * prompt LEAVES its list when it enters the conversation as a user message: from then on it is in the record and in
+ * every later model call (an abort can still end the run before the model answers it). Whatever is still listed when
+ * the run settles never entered the conversation and is dropped with the run.
  */
 export type PendingPrompts = { steering: string[]; followUp: string[] };
 
