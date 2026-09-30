@@ -560,7 +560,7 @@ describe("session control over HTTP", () => {
     }
   });
 
-  it("image(): a missing image is a 204 and undefined; a serve without the route rejects instead", async () => {
+  it("image() against a serve without the route rejects with 404 instead of reading as undefined", async () => {
     const { control } = await fauxControlledAgent([]);
     const withoutImage = Object.fromEntries(
       Object.entries(controlPlaneRoutes(control)).filter(([key]) => !key.endsWith("/image")),

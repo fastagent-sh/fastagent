@@ -50,8 +50,9 @@ export interface Session {
    *
    * Over the wire, a `mimeType` other than `image/png`, `image/jpeg`, `image/gif` or `image/webp` reads back as
    * `application/octet-stream`: the transport will not serve a sender-declared type it cannot trust (the entry still
-   * lists the declared one). pi normalizes prompt images to those four, so in practice only a tool result pi could
-   * not normalize reaches this.
+   * lists the declared one). pi normalizes an invoke's opening prompt images to those four; a `steer`/`followUp`
+   * image and a tool result keep whatever type the sender declared, so `image/jpg`, a type with parameters, or
+   * `image/svg+xml` sent that way reads back as `application/octet-stream` remotely.
    */
   image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;

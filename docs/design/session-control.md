@@ -426,8 +426,9 @@ opaque, and names nothing outside its session: the per-session prefix a facade g
 wire serves only `image/png`, `image/jpeg`, `image/gif` and `image/webp` under their own type, with
 `nosniff`; anything else is `application/octet-stream`, because the type is whatever the sender declared
 and an `image/svg+xml` or `text/html` "image" would run script on the facade's origin. So over the wire such an
-image reads back as `application/octet-stream`, while the entry keeps the declared type. pi normalizes prompt
-images to the four, so only a tool result it could not normalize gets there. An image the session does not hold
+image reads back as `application/octet-stream`, while the entry keeps the declared type. pi normalizes an
+invoke's opening prompt images to the four; a `steer`/`followUp` image and a tool result keep the declared type,
+so `image/jpg`, a type with parameters, or `image/svg+xml` sent that way gets there. An image the session does not hold
 is a `204` with no body, because in process `image()` returns `undefined` rather than throwing (§13).
 
 Reconnect is four steps, and the ORDER is the contract: subscribe `events()` → `await stream.ready` →
