@@ -196,7 +196,8 @@ export function resolveModel(models: Models, spec: string): AnyModel {
   const model = models.getModel(provider, modelId) as AnyModel | undefined;
   if (!model) {
     throw new Error(
-      `unknown model "${spec}" (provider "${provider}" / id "${modelId}" not in registry); run \`fastagent models\` to list available specs`,
+      `unknown model "${spec}" (provider "${provider}" / id "${modelId}" not in registry); run \`fastagent models\` to list ` +
+        "available specs, or `fastagent models --refresh` in the agent to fetch models newer than the installed pi",
     );
   }
   return model;

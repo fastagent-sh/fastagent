@@ -26,7 +26,8 @@ export async function runModels(
   const cwd = process.cwd();
   const agentDir = opts.global ? undefined : findAgentDir(cwd);
   // "Outside an agent" must mean exactly that, as for `login`: inside an agent's subdirectory, or among several agents
-  // with no default, falling back to the machine would record the models where no deploy carries them.
+  // with no default, falling back to the machine would list without the agent's own catalog and models.json, and a
+  // refresh would record the models where no deploy carries them. Refused either way; `-g` asks for the machine.
   if (!opts.global && !agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
   if (opts.refresh) {
     // pi fetches a provider's catalog only with a usable credential for it: the scope's own credentials and `.env`

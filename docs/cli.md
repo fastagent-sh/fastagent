@@ -87,7 +87,8 @@ fastagent models [search] [--refresh] [-g|--global]
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi's
 built-ins, its `models-store.json` and `models.json` over the machine's (`~/.fastagent/`). Outside an agent, or with
-`-g`, it lists the machine's.
+`-g`, it lists the machine's. Inside an agent's subdirectory, or among several agents with no default, it refuses
+(as `login` does) rather than list the machine's without the agent's own files: `cd` to the agent, or pass `-g`.
 
 `--refresh` first fetches the model catalog from pi.dev into `models-store.json`, so models released after the
 installed pi appear: the agent's, with its credentials (commit the file; it ships with a deploy), or with `-g` the

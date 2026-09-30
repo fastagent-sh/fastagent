@@ -823,6 +823,13 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       const running = await call(await workspace(), { model: "anthropic/claude-newer" }, { run: true });
       expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/does not ship.*models --refresh/) });
 
+      // An entry pi ignores (dated no later than its bundled catalog, as pi writes a 404) supplies nothing here either,
+      // so it is no reason to send anyone to refresh the agent.
+      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: { ...entry, lastModified: 0 } }));
+      const ignored = await call(await workspace(), { model: "anthropic/claude-newer" });
+      expect(ignored.ok && ignored.messages.some((m) => /machine's model catalog/.test(m.text))).toBe(false);
+      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
+
       // The same entry in the agent's own models-store.json travels with the definition: nothing to say.
       const own = await workspace({ "models-store.json": JSON.stringify({ anthropic: entry }) });
       const shipped = await call(own, { model: "anthropic/claude-newer" }, { run: true });

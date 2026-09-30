@@ -234,9 +234,13 @@ async function layeredCatalog(paths: readonly string[]): Promise<InMemoryModelsS
   return store;
 }
 
-/** Whether the machine's model catalog lists this model: the one layer a deployed agent does not have. */
+/**
+ * Whether the machine's model catalog supplies this model, by the same rule every registry reads it with
+ * ({@link layeredCatalog}): an entry pi would ignore supplies nothing. The one layer a deployed agent does not have.
+ */
 export async function inGlobalCatalog(provider: string, id: string): Promise<boolean> {
-  return (await readCatalog(globalCatalogPath()))[provider]?.models.some((model) => model.id === id) ?? false;
+  const entry = await (await layeredCatalog([globalCatalogPath()])).read(provider);
+  return entry?.models.some((model) => model.id === id) ?? false;
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */

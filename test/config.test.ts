@@ -338,6 +338,8 @@ describe("config: resolveModel", () => {
     expect(m.id).toBe("gpt-5.5");
     expect(() => resolveModel(models, "no-slash")).toThrow(/provider\/modelId/);
     expect(() => resolveModel(models, "nope/nothing")).toThrow(/unknown model/);
+    // The next step for a model newer than the installed pi, which the list alone does not show.
+    expect(() => resolveModel(models, "nope/nothing")).toThrow(/fastagent models --refresh/);
   });
 });
 
