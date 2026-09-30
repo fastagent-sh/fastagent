@@ -547,14 +547,27 @@ function availableModelsFromDir(
   dir: string,
   options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void },
 ): Promise<string[]>;
+function refreshModelCatalog(
+  dir: string,
+  options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void; signal?: AbortSignal },
+): Promise<void>;
 ```
 
 `availableModelsFromDir` is what a model picker offers for an agent directory: the specs
-`createPiAgentFromDir(dir, { authPath })` could run now. It covers pi's built-ins plus the agent's `models.json`,
-filtered to providers whose credentials are configured, and sorted. The directory needs no model set. It checks
+`createPiAgentFromDir(dir, { authPath })` could run now. It covers pi's built-ins, the model catalogs (the agent's
+`models-store.json` over `~/.fastagent/models-store.json`), and the agent's `models.json`, filtered to providers whose credentials are configured, and sorted. The directory needs no model set. It checks
 configuration, not validity: no OAuth token is refreshed and no provider is called. An unreadable or corrupt
 credentials file goes to `warn`, and otherwise reads as "nothing configured"; pass a `warn` that throws to surface
 it instead.
+
+`refreshModelCatalog` fetches the model catalog from pi.dev into the agent's `models-store.json`, with the
+credentials `createPiAgentFromDir(dir, { authPath })` would use: pi asks only for the providers they authenticate, and
+may refresh an expired OAuth token to do so. Afterwards a model released after the installed pi is listed by
+`availableModelsFromDir` and runs. The file is part of the definition: commit it, and it ships with a deploy.
+Nothing refreshes it on its own, so serving makes no catalog request. It rejects, naming each provider that failed,
+when the refresh fails,
+takes longer than 15 seconds, or `PI_OFFLINE` is set, and when none of the credentials authenticates a provider (the
+refresh would fetch nothing).
 
 Auth:
 

@@ -1,18 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import { dirname, join } from "node:path";
+import { type Api, InMemoryCredentialStore, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   agentAuthStatus,
   createPiModelRuntime,
+  createPiModels,
   literalKeyProviders,
+  globalCatalogPath,
   machineModels,
   definitionKeyOf,
   probeApiKey,
   probeAuthSource,
   providerAuthStatuses,
+  refreshCatalog,
 } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
@@ -255,18 +259,13 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     expect(runtime.getProvider("anthropic")).toBeDefined();
   });
 
-  it("pi's generated catalog cache lands in the state root, never in the agent dir", async () => {
-    // pi defaults modelsStorePath to `<dirname(modelsPath)>/models-store.json` — i.e. inside the agent
-    // dir, which `deploy` bakes wholesale into the image. The definition dir holds authored files only.
+  it("reading the model catalogs writes nothing: no models-store.json appears where no refresh wrote one", async () => {
+    // pi's own file store creates its file on first read, which would drop an empty catalog into every agent dir.
     const dir = await agentWith(GATEWAY);
-    const stateRoot = join(dir, ".state");
-    await mkdir(stateRoot, { recursive: true });
-    await createPiModelRuntime({
-      agentDir: dir,
-      credentials: fastagentCredentialStore(join(dir, "auth.json")),
-      stateRoot,
-    });
+    await createPiModelRuntime({ agentDir: dir, credentials: fastagentCredentialStore(join(dir, "auth.json")) });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+    expect(existsSync(join(dir, ".state", "models-store.json"))).toBe(false);
+    expect(existsSync(globalCatalogPath())).toBe(false);
   });
 });
 
@@ -459,5 +458,60 @@ describe("agentAuthStatus: the one answer to what authenticates a provider for a
       stored: "oauth",
       shadowed: "ANTHROPIC_API_KEY",
     });
+  });
+});
+
+describe("the model catalogs: the agent's own over the machine's", () => {
+  it("layers by model id, the agent winning, and drops an entry pi would ignore before the merge", async () => {
+    const bundled = createPiModels().getProvider("anthropic")?.getModels()[0] as Model<Api>;
+    const later = Date.now() + 86_400_000;
+    const model = (id: string, name: string): Model<Api> => ({ ...bundled, id, name });
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-catalogs-"));
+    await mkdir(dirname(globalCatalogPath()), { recursive: true });
+    const machine = { models: [model("claude-held", "held"), model("claude-both", "machine's")], lastModified: later };
+    await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: machine }));
+    // The agent's file holds a newer model and an entry no newer than pi's bundled catalog: pi ignores the stale one,
+    // and merging must not let it ride the machine entry's date.
+    const own = { models: [model("claude-both", "agent's"), model("claude-own", "own")], lastModified: later };
+    await writeFile(
+      join(dir, "models-store.json"),
+      JSON.stringify({ anthropic: own, openai: { models: [model("gpt-stale", "stale")], lastModified: 1 } }),
+    );
+    const staleUnderNewer = { anthropic: { models: [model("claude-stale", "stale")], lastModified: 1 } };
+    const staleDir = await mkdtemp(join(tmpdir(), "fastagent-catalogs-stale-"));
+    await writeFile(join(staleDir, "models-store.json"), JSON.stringify(staleUnderNewer));
+    try {
+      const credentials = new InMemoryCredentialStore();
+      const here = await createPiModelRuntime({ agentDir: dir, credentials });
+      expect(here.getModel("anthropic", "claude-held")?.name).toBe("held");
+      expect(here.getModel("anthropic", "claude-own")?.name).toBe("own");
+      expect(here.getModel("anthropic", "claude-both")?.name).toBe("agent's");
+      expect(
+        (await createPiModelRuntime({ agentDir: staleDir, credentials })).getModel("anthropic", "claude-stale"),
+      ).toBeUndefined();
+      // Deployed: the agent's file ships, the machine's does not.
+      const deployed = await createPiModelRuntime({ agentDir: dir, credentials, machineLayer: false });
+      expect(deployed.getModel("anthropic", "claude-own")).toBeDefined();
+      expect(deployed.getModel("anthropic", "claude-held")).toBeUndefined();
+    } finally {
+      await rm(globalCatalogPath(), { force: true });
+    }
+  });
+
+  it("a refresh with no usable credential anywhere is refused instead of reporting a refresh that asked for nothing", async () => {
+    const refresh = vi.fn();
+    const runtime = {
+      getProviders: () => [{ id: "anthropic", refreshModels: async () => {} }, { id: "static" }],
+      checkAuth: async () => undefined,
+      refresh,
+    } as unknown as ModelRuntime;
+    const built: boolean[] = [];
+    const build = async (catalogFile: boolean) => {
+      built.push(catalogFile);
+      return runtime;
+    };
+    await expect(refreshCatalog(build)).rejects.toThrow(/no provider has a usable credential/);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(built).toEqual([false]); // the file-backed runtime, which would create the file, is never built
   });
 });

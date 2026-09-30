@@ -181,13 +181,32 @@ const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
   description:
-    'List every registered "provider/modelId" spec — use one with --model or as `model` in fastagent.config.ts.',
+    'List every "provider/modelId" spec the agent in this directory can name (pi\'s built-ins, the model ' +
+    "catalogs and models.json files, its own over the machine's) — use one with --model or as `model` in " +
+    "fastagent.config.ts. Outside an agent, or with -g, list the machine's.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
+  flags: [
+    {
+      flags: "--refresh",
+      description: "fetch the model catalog first, into the agent's models-store.json (with -g, the machine's)",
+    },
+    { flags: "-g, --global", description: "the machine's catalog, ~/.fastagent/models-store.json" },
+  ],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter; provider-name matches rank first" },
+    { cmd: "fastagent models --refresh", note: "models newer than the installed pi" },
   ],
-  run: async (args) => (await import("./commands/models.ts")).runModels(args[0]),
+  notes:
+    "A refresh asks pi.dev for the providers the scope's credentials authenticate (the agent's, or with -g the " +
+    "global auth.json and environment) and writes the answer to models-store.json. The agent's is part of the " +
+    "definition: commit it, and it ships with a deploy. The machine's (-g) is read by every agent here and does " +
+    "not ship. Nothing refreshes on its own.",
+  run: async (args, f) =>
+    (await import("./commands/models.ts")).runModels(args[0], {
+      refresh: f.refresh === true,
+      global: f.global === true,
+    }),
 };
 
 const start: CommandSpec = {

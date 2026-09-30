@@ -33,6 +33,8 @@ export const AGENT_CONFIG_FILE = "fastagent.config.ts";
 
 /** The optional custom-model-endpoint file inside an agent dir (pi's models.json schema). */
 export const AGENT_MODELS_FILE = "models.json";
+/** The agent's model catalog: pi.dev's models newer than pi's bundled catalog, fetched by `models --refresh`. */
+export const AGENT_MODEL_CATALOG_FILE = "models-store.json";
 
 export interface ResolvedPlacement {
   /**

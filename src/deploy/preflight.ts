@@ -8,7 +8,8 @@ import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
 import { type FastagentConfig, providerOf, resolveAuthPath } from "../engines/pi/config.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
@@ -20,6 +21,8 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
+  globalCatalogPath,
+  inGlobalCatalog,
   interactiveAuth,
   loginProviders,
 } from "../engines/pi/models.ts";
@@ -258,9 +261,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   await checkMachineModels(agentDir, modelSpec, report);
 
-  // The registry the DEPLOYED agent has (its own models.json, not the machine's), built here only so a malformed file
-  // stops the deploy with pi's own reason before anything below reads the file raw. No credential is read for that.
-  await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore(), machineLayer: false });
+  // The registry the DEPLOYED agent has (its own models.json and model catalog, nothing of the machine's), built first
+  // so a malformed file stops the deploy with pi's own reason before anything below reads the file raw. No credential
+  // is read for that.
+  const deployed = await createPiModelRuntime({
+    agentDir,
+    credentials: new InMemoryCredentialStore(),
+    machineLayer: false,
+  });
+  if (modelSpec) await checkGlobalCatalogModel(modelSpec, deployed, report);
   const authPath = resolveAuthPath(agentDir);
   const route = modelSpec ? await credentialRoute(agentDir, modelSpec, values) : {};
   const modelAuth = route.envVar;
@@ -453,6 +462,22 @@ async function checkMachineModels(
       `${AGENT_MODELS_FILE} to deploy it.`;
     report.issue(issue);
   }
+}
+
+/**
+ * The machine's model catalog is this box's environment, like its models.json: a model only it knows (newer than the
+ * catalog bundled with pi) is unknown wherever the agent is deployed. The agent's own catalog ships, so the remedy is
+ * one refresh in the agent.
+ */
+async function checkGlobalCatalogModel(modelSpec: string, deployed: ModelRuntime, report: DeployReport): Promise<void> {
+  const provider = providerOf(modelSpec);
+  const id = modelSpec.slice(provider.length + 1);
+  if (deployed.getModel(provider, id) || !(await inGlobalCatalog(provider, id))) return;
+  report.issue(
+    `model "${modelSpec}" is known only from ${globalCatalogPath()}, the machine's model catalog, which does not ` +
+      "ship — the deployed agent would fail with an unknown model. Run `fastagent models --refresh` in the agent " +
+      `to record it in its own ${AGENT_MODEL_CATALOG_FILE}, which ships.`,
+  );
 }
 
 /**

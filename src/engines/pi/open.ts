@@ -3,9 +3,10 @@
  * drive.
  */
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type AuthLayers, type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
-import { resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { AgentCommand, SessionControl } from "../../session.ts";
 import { agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
@@ -19,7 +20,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
-import { createPiModelRuntime, resolveCredentials } from "./models.ts";
+import { createPiModelRuntime, refreshCatalog, resolveCredentials } from "./models.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -203,6 +204,43 @@ export async function availableModelsFromDir(
     credentials: resolveCredentials(options, { agentDir }).credentials,
   });
   return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
+}
+
+/**
+ * Refresh the agent's model catalog (`<agent dir>/models-store.json`) with the credentials
+ * `createPiAgentFromDir(dir, { authPath })` would use, so a model released after the installed pi appears in
+ * {@link availableModelsFromDir} and runs. Only providers those credentials authenticate are fetched (pi asks pi.dev
+ * for no other). Nothing refreshes it on its own. The file is part of the definition: commit it, and it ships with a
+ * deploy, so the deployed agent knows the same models without a network call.
+ *
+ * Rejects, naming each provider that failed, when the refresh fails, outlasts 15 seconds or `PI_OFFLINE` is set, and
+ * when the credentials authenticate no provider at all.
+ */
+export function refreshModelCatalog(
+  dir: string,
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal } = {},
+): Promise<void> {
+  return refreshModelCatalogOver(dir, options);
+}
+
+/** {@link refreshModelCatalog} against another catalog server. Not public: a test seam. */
+export async function refreshModelCatalogOver(
+  dir: string,
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal },
+  catalogBaseUrl?: string,
+): Promise<void> {
+  const { agentDir } = resolvePlacement(dir);
+  const { credentials } = resolveCredentials(options, { agentDir });
+  await refreshCatalog(
+    (catalogFile) =>
+      createPiModelRuntime({
+        agentDir,
+        credentials,
+        ...(catalogFile ? { catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE) } : {}),
+        ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+      }),
+    options.signal ? { signal: options.signal } : {},
+  );
 }
 
 /**

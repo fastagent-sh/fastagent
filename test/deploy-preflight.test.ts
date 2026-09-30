@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { createPiModels } from "../src/engines/pi/models.ts";
+import { createPiModels, globalCatalogPath } from "../src/engines/pi/models.ts";
 
 /** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
  *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
@@ -811,6 +811,33 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     const shipped = await call(own, { model: "localgw/m" });
     expect(shipped.ok).toBe(true);
     if (shipped.ok) expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
+  });
+
+  it("a model known only from the machine's model catalog is refused under --run; the agent's own catalog ships", async () => {
+    // As `fastagent models --refresh` leaves it: one anthropic model newer than the bundled catalog.
+    const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
+    const entry = { models: [{ ...bundled, id: "claude-newer" }], lastModified: Date.now() + 86_400_000 };
+    await mkdir(dirname(globalCatalogPath()), { recursive: true });
+    await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
+    try {
+      const running = await call(await workspace(), { model: "anthropic/claude-newer" }, { run: true });
+      expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/does not ship.*models --refresh/) });
+
+      // An entry pi ignores (dated no later than its bundled catalog, as pi writes a 404) supplies nothing here either,
+      // so it is no reason to send anyone to refresh the agent.
+      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: { ...entry, lastModified: 0 } }));
+      const ignored = await call(await workspace(), { model: "anthropic/claude-newer" });
+      expect(ignored.ok && ignored.messages.some((m) => /machine's model catalog/.test(m.text))).toBe(false);
+      await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
+
+      // The same entry in the agent's own models-store.json travels with the definition: nothing to say.
+      const own = await workspace({ "models-store.json": JSON.stringify({ anthropic: entry }) });
+      const shipped = await call(own, { model: "anthropic/claude-newer" }, { run: true });
+      if (!shipped.ok) throw new Error(shipped.gate);
+      expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
+    } finally {
+      await rm(globalCatalogPath(), { force: true });
+    }
   });
 
   it("a machine entry that only overrides a built-in provider is warned about, and its key does not count", async () => {

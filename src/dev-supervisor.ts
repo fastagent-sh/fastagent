@@ -5,7 +5,14 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot, isUnderDir } from "./paths.ts";
+import {
+  AGENT_CONFIG_FILE,
+  AGENT_MODEL_CATALOG_FILE,
+  AGENT_MODELS_FILE,
+  type ResolvedPlacement,
+  resolveStateRoot,
+  isUnderDir,
+} from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -16,7 +23,7 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
 /** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. */
 const CODE_INPUT_DIRS = ["tools", "channels", "routines", "extensions"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, models-store.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -32,6 +39,8 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // models.json is read ONCE per worker (the model hub is built during assembly), so an edit needs a restart like
     // any other code input.
     if (rel === AGENT_MODELS_FILE) return false;
+    // So is the model catalog: a `models --refresh` during `dev` restarts the worker onto the new models.
+    if (rel === AGENT_MODEL_CATALOG_FILE) return false;
     const segments = rel.split(sep);
     if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
     // The `.env` restarts too (credentials are process-bound).
