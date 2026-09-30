@@ -831,6 +831,8 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       const release = containerArtifacts(pre.container).find((a) => a.path.endsWith(RELEASE_FILE));
       const manifest = parseDeploymentRelease(release?.content ?? "");
       expect(manifest.modelCatalog?.anthropic?.models.map((m) => m.id)).toEqual(["claude-cached-only"]);
+      // The cache's own date, so pi on the box can still prefer a bundled catalog that already has the model.
+      expect(manifest.modelCatalog?.anthropic?.lastModified).toBe(later);
 
       // The box: a fresh machine whose pi knows only its bundled catalog, seeded from the manifest at start.
       vi.stubEnv("HOME", await mkdtemp(join(tmpdir(), "fa-box-home-")));

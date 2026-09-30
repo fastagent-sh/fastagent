@@ -223,9 +223,19 @@ async function readCatalogCache(path: string): Promise<Record<string, ModelsStor
   }
 }
 
-/** The model the machine's catalog cache holds under this provider and id, as pi fetched it. */
-export async function cachedCatalogModel(provider: string, id: string): Promise<Model<Api> | undefined> {
-  return (await readCatalogCache(modelCatalogPath()))[provider]?.models.find((model) => model.id === id);
+/**
+ * The machine's catalog cache entry for this provider narrowed to one model id, with the entry's own `lastModified`
+ * (pi's rule for whether a cached entry outranks a bundled catalog reads it), or undefined when the cache lacks it.
+ */
+export async function cachedCatalogEntry(provider: string, id: string): Promise<ModelsStoreEntry | undefined> {
+  const entry = (await readCatalogCache(modelCatalogPath()))[provider];
+  const model = entry?.models.find((candidate) => candidate.id === id);
+  if (!entry || !model) return undefined;
+  return {
+    models: [model],
+    ...(entry.lastModified !== undefined ? { lastModified: entry.lastModified } : {}),
+    ...(entry.checkedAt !== undefined ? { checkedAt: entry.checkedAt } : {}),
+  };
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */

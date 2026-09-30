@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { createPiModels } from "../src/engines/pi/models.ts";
 
 // This test pays a project compile plus TWO cold engine starts in child processes: ~3s on an idle
 // machine, but a full `npm test` run puts a fork on every core and has been measured past the old 30s
@@ -86,7 +87,14 @@ it("retries interrupted installs, opens the workspace's runtime and preserves to
 export default defineTool({ name: "context", description: "Read invocation context", input: z.object({}), execute: (_, ctx) => ({ session: ctx.sessionManager?.getSessionId() ?? "missing", cwd: ctx.cwd }) });`,
     );
     const manifest = join(dir, "release.json");
-    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "fastagent" }));
+    // A model the box's bundled pi catalog lacks, carried by the release: start must seed it before anything opens.
+    const [bundled] = createPiModels().getProvider("anthropic")?.getModels() ?? [];
+    const carried = { models: [{ ...bundled, id: "claude-carried" }], lastModified: Date.now() + 86_400_000 };
+    await writeFile(
+      manifest,
+      JSON.stringify({ version: 1, id: "one", agent: "fastagent", modelCatalog: { anthropic: carried } }),
+    );
+    const boxHome = join(dir, "home");
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -118,6 +126,7 @@ fi
       INSTALL_ATTEMPTS: attempts,
       FASTAGENT_RELEASE_FILE: manifest,
       FASTAGENT_STORAGE_DIR: root,
+      HOME: boxHome,
     });
     const workspaceUrl = pathToFileURL(join(packageDir, "dist/deploy/workspace.js")).href;
     const startUrl = pathToFileURL(join(packageDir, "dist/cli/commands/start.js")).href;
@@ -160,6 +169,8 @@ try {
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);
     expect(await readFile(attempts, "utf8")).toBe("failed\nretry\n");
+    const seeded = JSON.parse(await readFile(join(boxHome, ".pi/agent/models-store.json"), "utf8"));
+    expect(seeded.anthropic.models.map((model: { id: string }) => model.id)).toContain("claude-carried");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

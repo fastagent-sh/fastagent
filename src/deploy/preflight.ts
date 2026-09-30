@@ -21,7 +21,7 @@ import {
   literalKeyProviders,
   isBuiltinProvider,
   machineModels,
-  cachedCatalogModel,
+  cachedCatalogEntry,
   interactiveAuth,
   loginProviders,
 } from "../engines/pi/models.ts";
@@ -490,11 +490,10 @@ async function catalogEntryToCarry(
   // cache, and is checkMachineModels' to report.
   const here = await createPiModelRuntime({ agentDir, credentials: new InMemoryCredentialStore() });
   if (!here.getModel(provider, id)) return undefined;
-  const model = await cachedCatalogModel(provider, id);
-  if (!model) return undefined;
-  // pi applies a cached entry only when it is newer than its bundled catalog, which the deploy moment always is.
-  const now = Date.now();
-  return { [provider]: { models: [model], lastModified: now, checkedAt: now } };
+  // The entry keeps the cache's own `lastModified`: pi on the box applies it only while it is newer than the catalog
+  // bundled there, so a box whose pi already ships this model keeps its bundled metadata.
+  const entry = await cachedCatalogEntry(provider, id);
+  return entry ? { [provider]: entry } : undefined;
 }
 
 /**
