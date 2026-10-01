@@ -16,7 +16,7 @@ import {
   type Prompt,
   type Scope,
 } from "../../agent.ts";
-import type { RunSettledEvent, SessionEvent, UserMessageEvent } from "../../session.ts";
+import type { PromptDisposition, RunSettledEvent, SessionEvent, UserMessageEvent } from "../../session.ts";
 import { entryImages } from "./entry-images.ts";
 import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
@@ -212,7 +212,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
      * Every control command obeys one admission rule: wait for this run's binding, then refuse once it has settled.
      * Kept in one place so a fourth command cannot arrive with a fifth spelling of it.
      */
-    const command = (run: (session: AgentSession) => Effect.Effect<void, PortFailure>): Promise<void> =>
+    const command = <A>(run: (session: AgentSession) => Effect.Effect<A, PortFailure>): Promise<A> =>
       Effect.runPromise(
         Effect.gen(function* () {
           const session = yield* ready;
@@ -220,14 +220,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             return yield* Effect.fail(
               new PortFailure(new Error("run already settled; the command cannot take effect")),
             );
-          yield* run(session);
+          return yield* run(session);
         }),
       );
     // Prompt preparation stays OUTSIDE admission. An await between the settled check and the enqueue would let the run
     // end in between, and pi accepts a message for a finished run without complaint (`_steeringMessages.push`) — the
     // command would be dropped and still reported as success. Image resizing is exactly such an await, hundreds of
     // milliseconds of dynamic import and Photon work, and doing it here also keeps it overlapping session acquisition.
-    const enqueue = async (p: Prompt, kind: "steer" | "followUp"): Promise<void> => {
+    const enqueue = async (p: Prompt, kind: "steer" | "followUp"): Promise<PromptDisposition> => {
       const opts = await toPiPromptOptions(p, "queued");
       return command((session) => port(() => session[kind](p.text, opts?.images)));
     };

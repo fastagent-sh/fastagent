@@ -569,7 +569,7 @@ describe("session control: run modulation", () => {
         // Flush prompt preparation so the command is waiting on binding before the factory returns.
         await new Promise<void>((resolve) => setImmediate(resolve));
         binding.resolve();
-        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId });
+        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId, disposition: "queued" });
         expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages(), method).toEqual([
           "queued during binding",
         ]);
@@ -607,7 +607,7 @@ describe("session control: run modulation", () => {
     ])
       expect(await attempt()).toMatchObject({ ok: false, error: { code: INVALID_COMMAND_CODE } });
     const result = await control.sessions.get("s2a").steer({ text: "actually, do it differently" });
-    expect(result).toEqual({ ok: true, runId });
+    expect(result).toEqual({ ok: true, runId, disposition: "queued" });
     // Queue visibility while the steer is pending (the gate still holds the run). Poll: the
     // contract says "queued", not "queue_update delivered synchronously before dispatch resolves".
     for (let i = 0; i < 200 && (await control.sessions.get("s2a").state()).pending.steering.length !== 1; i++) {
@@ -628,6 +628,34 @@ describe("session control: run modulation", () => {
     const after = await control.sessions.get("s2a").state();
     expect(after.status).toBe("idle");
     expect(after.pending).toEqual({ steering: [], followUp: [] });
+  });
+
+  it("a steer or follow-up an extension's input handler consumes answers `handled` and never enters the conversation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-input-handled-"));
+    const intercept = join(dir, "intercept.mjs");
+    await writeFile(
+      intercept,
+      `export default (pi) => pi.on("input", (e) => (e.text.startsWith("!") ? { action: "handled" } : { action: "continue" }));\n`,
+    );
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("steered answer")],
+      { tools: [gate.tool], extensionPaths: [intercept] },
+    );
+    const invoked = drive(agent, "sHandled");
+    const toolRunning = waitForToolStarted(control, "sHandled");
+    const runId = await waitForRunning(control, "sHandled");
+    await toolRunning;
+    const handle = control.sessions.get("sHandled");
+    expect(await handle.steer({ text: "!status" })).toEqual({ ok: true, runId, disposition: "handled" });
+    expect(await handle.followUp({ text: "!later" })).toEqual({ ok: true, runId, disposition: "handled" });
+    expect(await handle.steer({ text: "a real steer" })).toEqual({ ok: true, runId, disposition: "queued" });
+    gate.release();
+    expect((await invoked).at(-1)).toEqual({ type: "completed" });
+    const recorded = JSON.stringify((await handle.entries()).entries);
+    expect(recorded).toContain("a real steer");
+    expect(recorded).not.toContain("!status");
+    expect(recorded).not.toContain("!later");
   });
 
   it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
@@ -679,8 +707,7 @@ describe("session control: run modulation", () => {
         `  if (e.message.role === "user") await new Promise((r) => setTimeout(r, 30));\n});\n`,
     );
     // The disk store is the serving default, and the one where "already readable" can fail: `entries()` re-reads the
-    // file, and pi defers writing a record that has no assistant message yet, which a
-    // fresh session's opening "go" is.
+    // file, so the event must not run ahead of the append that writes it.
     const configs = [
       { label: "plain", extensionPaths: [] },
       { label: "slow write", extensionPaths: [slowWrite] },
@@ -1170,7 +1197,7 @@ describe("session control: run modulation", () => {
         steer: async () => {
           throw new Error("run already settled; the command cannot take effect");
         },
-        followUp: async () => {},
+        followUp: async () => "queued",
         abort: async () => {},
       },
     );

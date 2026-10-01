@@ -266,7 +266,9 @@ export default defineTool({
 The Zod schema is also sent to the provider for **constrained sampling** (`strict: "prefer"`): on a model that
 supports it, arguments are sampled against the schema. A schema that cannot be expressed strictly, or a provider
 without strict mode, falls back silently to an ordinary function tool. Constructs that cannot be strict:
-`z.record(...)`, a union of objects or arrays, `z.tuple(...)`, `z.looseObject(...)`.
+`z.record(...)`, a union of objects or arrays, `z.tuple(...)`, `z.looseObject(...)`. Anthropic's strict mode also
+rejects numeric bounds, so on Anthropic a schema with `.min()`/`.max()` on a number, or any `z.number().int()` (Zod
+emits safe-integer bounds for it), is sent non-strict.
 
 A strict schema has no "absent", so a constrained model sends `null` for an optional field. pi drops those
 `null`s unless your schema accepts `null`, so a `.nullable().optional()` field arrives as `null`. If a tool treats
@@ -316,6 +318,14 @@ interface ToolContext {
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
+  /** Run another mounted tool through Pi's pipeline (see "Calling other tools"). */
+  executeTool?: (
+    name: string,
+    args: unknown,
+    options?: { signal?: AbortSignal; onUpdate?: (partial: AgentToolResult) => void },
+  ) => Promise<{ toolCall: AgentToolCall; result: AgentToolResult; isError: boolean }>;
+  /** Report progress: a snapshot of the work so far, wrapped like a return value. */
+  onUpdate?: (partial: unknown) => void;
   /** The values of this tool's own `secrets`, keyed by the names it declared. */
   secrets: Record<string, string>;
 }
@@ -328,7 +338,11 @@ interface ReadonlySessionManager {
 ```
 
 During serving and `fastagent chat`, `sessionManager` is a read-only view of the current conversation; it is
-undefined in a sessionless call such as `fastagent tool`. `getSessionId()` returns the caller's session id.
+undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`
+returns the caller's session id.
+
+`onUpdate` replaces the previous snapshot each time. It reaches session-control observers as `tool_progress`; the
+`AgentEvent` stream and the chat channels show only the final result.
 
 ### Output budget
 
@@ -385,6 +399,34 @@ its full schema.
   tools always join; tools no longer mounted are dropped.
 - `ToolContext.tools` remains an additive adapter for authored loaders. Pi ignores unknown or unreachable names;
   `activate(names)` returns only names actually added.
+- `namespace: { name, description? }` groups related tools; codemode lists a namespace's tools under one heading
+  with its description.
+- `annotations` carries MCP-style hints: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Pi does
+  not enforce them. A permission extension in `extensions/` reads them from `pi.getAllTools()` to decide which calls
+  to confirm, and treats a tool without them as possibly destructive. Pi's documented example confirms with
+  `ctx.ui.confirm`, which resolves as cancelled when serving, so there it blocks every call it would have asked about.
+
+#### Calling other tools
+
+`ctx.executeTool(name, args)` runs another mounted tool the way codemode scripts do: Pi validates the arguments, runs
+the definition's `tool_call`/`tool_result` hooks, and passes this call's abort signal on. The active `direct` tools and
+every `codemode` or `deferred` tool are callable. It resolves to `{ result, isError }` and does not reject for a tool
+failure: an unknown name, invalid arguments, or a blocked call comes back as `isError: true`.
+
+```ts
+export default defineTool({
+  description: "Forecast the next three days.",
+  input: z.object({ city: z.string() }),
+  async execute({ city }, ctx) {
+    ctx.onUpdate?.(`looking up ${city}`);
+    const days = await Promise.all([1, 2, 3].map((day) => ctx.executeTool?.("weather", { city, day })));
+    return days.map((call) => (call?.isError ? null : call?.result.structuredContent));
+  },
+});
+```
+
+The nested calls are not transcript entries. Session observation reports them with `parentToolCallId`, and Pi keeps a
+bounded record of them on the calling tool's result.
 
 ### Virtual models
 
@@ -779,10 +821,14 @@ const image = await s1.image(ref); // { data (base64), mimeType } | undefined
 outcome (`ok: true` = admitted; the result arrives as `run_settled`):
 
 ```ts
-await s1.steer({ text: "use bun, not npm" });   // joins the run
+await s1.steer({ text: "use bun, not npm" });   // joins the run: { ok: true, runId, disposition: "queued" }
 await s1.followUp({ text: "then summarize" });  // FIFO queue
 await s1.abort();                                // invoke ends failed{code:"aborted"}, run_settled{aborted}
 ```
+
+An accepted `steer`/`followUp` says what became of the prompt. `disposition: "queued"` means it waits in
+`state().pending` until the run takes it in. `"handled"` means an `input` handler in the definition's `extensions/`
+consumed it first: it never enters the conversation, and no `queue_changed` or `user_message` reports it.
 
 With steering or follow-ups, the invoke stream ends when the run settles (all queued continuations done). Actions
 on an idle session reject with `no_active_run`; an action that reached a run that was already settling rejects
