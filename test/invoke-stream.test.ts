@@ -69,6 +69,22 @@ describe("runInvokeStream", () => {
     expect(s.out).toEqual([]);
   });
 
+  it("clips a long status line at a code-point boundary", async () => {
+    const s = sinks();
+    const snakes = "\u{1F40D}".repeat(119);
+    await runInvokeStream(
+      stream(
+        { type: "tool_started", id: "t1", name: "bash", args: {} },
+        { type: "tool_progress", id: "t1", text: `${snakes}ab${"x".repeat(50_000)}` },
+        { type: "tool_progress", id: "t1", text: `${snakes}a` }, // exactly the width: kept whole
+        { type: "completed" },
+      ),
+      s.outFn,
+      s.errFn,
+    );
+    expect(s.err.slice(1)).toEqual([`[tool] bash \u203a ${snakes}a\u2026`, `[tool] bash \u203a ${snakes}a`]);
+  });
+
   it("a successful tool is not reported as a failure", async () => {
     const s = sinks();
     await runInvokeStream(

@@ -272,7 +272,8 @@ Markdown messages.
 `rendering: "classic"` retains one `💭 Thinking…` message and updates it no more than once every three
 seconds. While a tool runs, its line shows the tool's latest status (`tool_progress`: for `bash`, the last line
 of its output so far), clipped to one line and notification-control sanitized like the rest of the preview; the
-native stream does not show it. The settled reply is the answer alone. A native-configured turn also uses this renderer when a custom route sends
+native stream does not show it. The settled reply is the answer alone, but intermediate frames are visible while
+they last and to `message_changed` subscribers ([what that exposes](channels.md#operational-notes)). A native-configured turn also uses this renderer when a custom route sends
 at channel top level, because Slack native streams must reply to a parent user message. This fallback is
 logged. Agent/API failures remain visible in the thread or operator logs.
 

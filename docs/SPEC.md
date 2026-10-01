@@ -80,9 +80,10 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 - `completed.data` is present only when the engine produces structured data.
 - `tool_progress` is advisory and non-terminal; engines MAY emit it between a `tool_started` and the
   `tool_ended` with the same `id`, any number of times. `text` is that call's current status, one line,
-  each replacing the last: what the tool is doing now, not its output (the output arrives with
-  `tool_ended`). It is not truncated; a consumer that shows it clips it to its own width. Terminal
-  consumers ignore it per MUST 4.
+  each replacing the last. An engine MAY derive it from the tool's output so far (a shell's last printed
+  line), so it carries the same trust as `tool_ended.content`: a consumer that shows it to an audience
+  shows tool output. It is never the whole output, which arrives with `tool_ended`. It is not truncated;
+  a consumer that shows it clips it to its own width. Terminal consumers ignore it per MUST 4.
 - `retrying` is advisory and non-terminal; engines MAY emit it when a transient internal failure
   (e.g. a provider error during context summarization) schedules a retry with backoff. It exists so a
   live consumer can explain an otherwise-quiet gap; it is deliberately unclosed — the next event is

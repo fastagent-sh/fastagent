@@ -39,7 +39,8 @@ export type AgentEvent =
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   /**
    * Advisory, non-terminal (engines MAY emit it): the running tool `id`'s current status, one line, replacing the last.
-   * A status, not the tool's output; untruncated, so a consumer that shows it clips it.
+   * It may be a line of the tool's output so far (trust it like `tool_ended.content`), never the whole output;
+   * untruncated, so a consumer that shows it clips it.
    */
   | { type: "tool_progress"; id: string; text: string }
   /**
