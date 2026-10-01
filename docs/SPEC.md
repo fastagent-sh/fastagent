@@ -67,6 +67,7 @@ type AgentEvent =
   | { type: "thinking";     delta: string }                      // Model reasoning (process, not the answer)
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended";   id: string; isError: boolean; content: Json }
+  | { type: "tool_progress"; id: string; text: string }                  // Advisory: a running tool's current status line
   | { type: "retrying";     attempt: number; maxAttempts: number; delayMs: number; reason: string } // Advisory: internal retry backoff
   | { type: "completed";    data?: Json }                        // Terminal: success
   | { type: "failed";       details: string; retryable: boolean; code?: string }; // Terminal: failure (code = §8 subdivision)
@@ -77,6 +78,11 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 - All textual output is emitted as `text` deltas; `completed` is only a terminal success signal and does not repeat the full text.
 - `thinking` deltas carry the model's reasoning when the engine and model expose it (optional — many models emit none). It is process, not output: a consumer MUST NOT fold `thinking` into the final answer (`collect` ignores it). Surface it for live/observability UIs only.
 - `completed.data` is present only when the engine produces structured data.
+- `tool_progress` is advisory and non-terminal; engines MAY emit it between a `tool_started` and the
+  `tool_ended` with the same `id`, any number of times. `text` is that call's current status, one line,
+  each replacing the last: what the tool is doing now, not its output (the output arrives with
+  `tool_ended`). It is not truncated; a consumer that shows it clips it to its own width. Terminal
+  consumers ignore it per MUST 4.
 - `retrying` is advisory and non-terminal; engines MAY emit it when a transient internal failure
   (e.g. a provider error during context summarization) schedules a retry with backoff. It exists so a
   live consumer can explain an otherwise-quiet gap; it is deliberately unclosed — the next event is

@@ -17,6 +17,9 @@ export async function runInvokeStream(
         toolName.set(event.id, event.name);
         err(`[tool] ${event.name}`);
         break;
+      case "tool_progress":
+        err(`[tool] ${toolName.get(event.id) ?? event.id} › ${event.text}`);
+        break;
       case "tool_ended":
         if (event.isError) err(`[tool] ${toolName.get(event.id) ?? event.id} failed`);
         break;

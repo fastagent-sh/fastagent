@@ -1,5 +1,6 @@
 /** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import { stripVTControlCharacters } from "node:util";
+import { type AssistantMessage, type ImageContent, contentText } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
@@ -149,29 +150,80 @@ export interface RunControls {
 /** The DATA-plane observation seam: every rich event of every run, pushed as it happens. */
 export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
 
-/** The SPEC projection of the rich stream. */
-export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
-  switch (se.type) {
-    case "message_delta": {
-      const d = se.data as { channel: "text" | "thinking"; delta: string };
-      return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
+/**
+ * The SPEC projection of ONE run's rich stream. Stateful only for `tool_progress`, the one event that is a status
+ * rather than a fact: an outer call's status line is sent when it changes, and a call that call makes, at any depth,
+ * is its status. Nested calls are otherwise the observation plane's alone.
+ */
+export function agentEventProjection(): (se: SessionEvent) => AgentEvent | null {
+  /** Each nested call's outer call, the one the stream announced with `tool_started`. */
+  const outerOf = new Map<string, string>();
+  /** The status line each outer call last reported. */
+  const shown = new Map<string, string>();
+  const progress = (id: string, text: string | undefined): AgentEvent | null => {
+    if (text === undefined || shown.get(id) === text) return null;
+    shown.set(id, text);
+    return { type: "tool_progress", id, text };
+  };
+  return (se) => {
+    switch (se.type) {
+      case "message_delta": {
+        const d = se.data as { channel: "text" | "thinking"; delta: string };
+        return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
+      }
+      case "tool_started": {
+        const d = se.data as { id: string; name: string; args: Json; parentToolCallId?: string };
+        if (!d.parentToolCallId) return { type: "tool_started", id: d.id, name: d.name, args: d.args };
+        const outer = outerOf.get(d.parentToolCallId) ?? d.parentToolCallId;
+        outerOf.set(d.id, outer);
+        return progress(outer, callLine(d.name, d.args));
+      }
+      case "tool_progress": {
+        const d = se.data as { id: string; partialResult: { content?: unknown }; parentToolCallId?: string };
+        // A nested call's own output is not its caller's status; the nested call starting is (above).
+        if (d.parentToolCallId || !Array.isArray(d.partialResult.content)) return null;
+        return progress(d.id, lastLine(contentText(d.partialResult.content, "\n")));
+      }
+      case "tool_finished": {
+        const d = se.data as { id: string; isError: boolean; content: Json; parentToolCallId?: string };
+        if (d.parentToolCallId) return null;
+        return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
+      }
+      case "retry_scheduled": {
+        // `operation` (compaction | branch_summary) stays session-plane vocabulary.
+        const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
+        return {
+          type: "retrying",
+          attempt: d.attempt,
+          maxAttempts: d.maxAttempts,
+          delayMs: d.delayMs,
+          reason: d.error,
+        };
+      }
+      default:
+        return null;
     }
-    case "tool_started": {
-      const d = se.data as { id: string; name: string; args: Json; parentToolCallId?: string };
-      if (d.parentToolCallId) return null;
-      return { type: "tool_started", id: d.id, name: d.name, args: d.args };
-    }
-    case "tool_finished": {
-      const d = se.data as { id: string; isError: boolean; content: Json; parentToolCallId?: string };
-      if (d.parentToolCallId) return null;
-      return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
-    }
-    case "retry_scheduled": {
-      // `operation` (compaction | branch_summary) stays session-plane vocabulary.
-      const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
-      return { type: "retrying", attempt: d.attempt, maxAttempts: d.maxAttempts, delayMs: d.delayMs, reason: d.error };
-    }
-    default:
-      return null;
+  };
+}
+
+/**
+ * The line a terminal shows last: control sequences removed, and a bare `\r`, a progress bar redrawing in place, ends a
+ * line like `\n` does. Undefined when there is no visible text yet (a shell that has printed nothing).
+ */
+function lastLine(text: string): string | undefined {
+  const lines = stripVTControlCharacters(text).split(/\r\n|\r|\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (line) return line;
   }
+  return undefined;
+}
+
+/** A nested call as its caller's status: the tool and its first plain argument, on one line (`weather London`). */
+function callLine(name: string, args: Json): string {
+  const first =
+    args !== null && typeof args === "object" && !Array.isArray(args)
+      ? Object.values(args).find((value) => typeof value === "string" || typeof value === "number")
+      : undefined;
+  return first === undefined ? name : `${name} ${String(first).replace(/\s+/g, " ").trim()}`.trim();
 }

@@ -53,6 +53,22 @@ describe("runInvokeStream", () => {
     expect(s.err.join("\n")).toMatch(/lookup failed/); // and its error, named from the matching tool_started
   });
 
+  it("a running tool's progress goes to err, by name, never to out", async () => {
+    const s = sinks();
+    await runInvokeStream(
+      stream(
+        { type: "tool_started", id: "t1", name: "bash", args: { command: "npm test" } },
+        { type: "tool_progress", id: "t1", text: "42 passed" },
+        { type: "tool_ended", id: "t1", isError: false, content: "ok" },
+        { type: "completed" },
+      ),
+      s.outFn,
+      s.errFn,
+    );
+    expect(s.err).toEqual(["[tool] bash", "[tool] bash \u203a 42 passed"]);
+    expect(s.out).toEqual([]);
+  });
+
   it("a successful tool is not reported as a failure", async () => {
     const s = sinks();
     await runInvokeStream(

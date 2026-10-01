@@ -7,6 +7,7 @@ import { log } from "../src/log.ts";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { collect } from "../src/collect.ts";
+import type { AgentEvent } from "../src/agent.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { defineTool } from "../src/engines/pi/tool.ts";
 import { fauxControlledAgent } from "./agent.ts";
@@ -200,7 +201,7 @@ describe("Pi-native tool loadouts", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("an authored tool orchestrates others: executeTool keeps pi's hooks, onUpdate reports progress, annotations and namespace reach pi", async () => {
+  it("an authored tool orchestrates others: executeTool keeps pi's hooks, onUpdate and nested calls report progress, annotations and namespace reach pi", async () => {
     const cwd = await workspace(["+codemode"]);
     // A permission extension the way pi documents one: it decides from the annotations `getAllTools()` reports.
     const policy = join(cwd, "policy.mjs");
@@ -257,7 +258,17 @@ describe("Pi-native tool loadouts", () => {
         observer: (_s, event) => events.push(event),
       },
     );
-    expect((await collect(agent.invoke({ session: "desk" }, { text: "go" }))).text).toBe("done");
+    const projected: AgentEvent[] = [];
+    for await (const event of agent.invoke({ session: "desk" }, { text: "go" })) projected.push(event);
+    expect(projected.at(-1)).toEqual({ type: "completed" });
+    // The invoke stream carries the call's status line: its own report, and each call it makes. pi delivers an update
+    // and a nested call made in the same tick out of order (the update takes the longer listener path), so only what
+    // follows an await is ordered: `archive` starts after `lookup` returned.
+    const statuses = projected.flatMap((event) =>
+      event.type === "tool_progress" ? [`${event.id} ${event.text}`] : [],
+    );
+    expect([...statuses].sort()).toEqual(["f1 archive", "f1 checking London", "f1 lookup London"]);
+    expect(statuses.at(-1)).toBe("f1 archive");
     expect(codemodeDescription).toContain("forecast_desk");
     expect(codemodeDescription).toContain("Tools of the forecast desk");
     const finished = events.find((e) => e.type === "tool_finished" && (e.data as { id: string }).id === "f1");

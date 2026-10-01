@@ -30,7 +30,7 @@ import {
   type SessionObserver,
   errorToTerminal,
   inProcessLease,
-  projectAgentEvent,
+  agentEventProjection,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-kit.ts";
@@ -195,6 +195,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     const abort = new AbortController();
     onCancelReady(() => abort.abort());
     const runId = crypto.randomUUID();
+    const project = agentEventProjection();
     let settled = false;
     let outcome: RunSettledEvent["data"] | undefined;
     let abortsInFlight = 0;
@@ -326,7 +327,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 const rich = toSessionEvent(event, runId);
                 observe(rich);
                 if (!rich) return;
-                const projected = projectAgentEvent(rich);
+                const projected = project(rich);
                 if (!projected) return;
                 if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
                 Queue.offerUnsafe(queue, projected);

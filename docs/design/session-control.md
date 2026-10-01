@@ -329,6 +329,8 @@ ambiguity of "send during a run" is resolved by the client's intent, never guess
 | `thinking { delta }` | `message_delta { channel: "thinking" }` |
 | `tool_started` | `tool_started` |
 | `tool_ended` | `tool_finished` |
+| `tool_progress { id, text }` | an outer call's `tool_progress` (the snapshot's last visible line), or a nested call's `tool_started` (as its outer call's status); sent only when the line changes |
+| `retrying` | `retry_scheduled` |
 | `completed { data? }` | `run_settled { status: "completed" }` |
 | `failed { details, retryable, code? }` | `run_settled { status: "failed" \| "aborted" }` |
 
@@ -336,8 +338,9 @@ An externally aborted run projects as `failed` with `code: "aborted"`, so a chan
 cancellation distinctly from an error. Channels MUST treat it as a settled outcome — durable
 turn-intent cleanup included — so an operator's abort is never replayed as a fresh turn on restart.
 
-Events with no `AgentEvent` counterpart (queue, compaction, retry, tool progress) are simply not
-projected. The implementation translates pi events into `SessionEvent` **once** and derives the invoke
+Events with no `AgentEvent` counterpart (queue, compaction, state, user messages) are simply not
+projected. Nested calls are otherwise the observation plane's alone, and so is a snapshot's full content:
+the projected status is one line. The implementation translates pi events into `SessionEvent` **once** and derives the invoke
 stream from it — one translation plus one projection, never two parallel translations.
 
 ## 7. State and durable recovery
@@ -906,7 +909,7 @@ tools safe for untrusted users; `ExecutionEnv` is still not a complete sandbox b
   independently instantiable and `runPiChat` is one consumer; the TUI-only `~/.pi` auth divergence was
   eliminated in place.
 - **Observation.** pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`);
-  `AgentEvent` is its projection (`projectAgentEvent`). `state`/`entries`/`events` read the store's
+  `AgentEvent` is its projection (`agentEventProjection`, one per run). `state`/`entries`/`events` read the store's
   read-only `openIfExists`. Conformance tests cover projection fidelity, run boundaries, reconnect,
   and single-writer.
 - **Run modulation.** `steer`/`follow_up`/`abort` reach the live run via the `RunControls` registered

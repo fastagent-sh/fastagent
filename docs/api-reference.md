@@ -47,6 +47,7 @@ type AgentEvent =
   | { type: "thinking"; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
+  | { type: "tool_progress"; id: string; text: string } // advisory status line
   | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string } // advisory backoff
   | { type: "completed"; data?: Json }
   | { type: "failed"; details: string; retryable: boolean; code?: string };
@@ -341,8 +342,9 @@ During serving and `fastagent chat`, `sessionManager` is a read-only view of the
 undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`
 returns the caller's session id.
 
-`onUpdate` replaces the previous snapshot each time. It reaches session-control observers as `tool_progress`; the
-`AgentEvent` stream and the chat channels show only the final result.
+`onUpdate` replaces the previous snapshot each time. Its last line is the call's status: the invoke stream carries
+it as `tool_progress`, and the chat channels show it on the running tool's line, so keep a status on one line.
+Session-control observers receive the whole snapshot.
 
 ### Output budget
 
@@ -394,7 +396,8 @@ its full schema.
   schema conformance and model-facing size. Codemode scripts receive full internal data, not truncated display text.
 - Nested calls retain native validation, permission hooks, and cancellation. Session observation includes
   `parentToolCallId`; the channel stream shows the outer call and Pi's bounded nested trace, without duplicating
-  each child or publishing `structuredContent`.
+  each child or publishing `structuredContent`. Each nested call starting is the outer call's `tool_progress`
+  status (`weather London`).
 - Pi's transcript restores the loadout across rebind, resume, fork, and compaction. The definition's current default
   tools always join; tools no longer mounted are dropped.
 - `ToolContext.tools` remains an additive adapter for authored loaders. Pi ignores unknown or unreachable names;

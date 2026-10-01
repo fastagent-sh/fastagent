@@ -33,6 +33,8 @@ export const THINKING_PLACEHOLDER = "💭 Thinking…";
 interface ToolLine {
   label: string;
   status: "running" | "ok" | "error";
+  /** The call's latest `tool_progress` text, shown while it runs. */
+  progress?: string;
 }
 
 /** The channel-neutral view STATE of one in-flight turn. */
@@ -71,6 +73,12 @@ export function applyTurnEvent(view: TurnView, e: AgentEvent, now = Date.now()):
       view.toolById.set(e.id, line);
       return true;
     }
+    case "tool_progress": {
+      const line = view.toolById.get(e.id);
+      if (line?.status !== "running") return closedRetry;
+      line.progress = e.text;
+      return true;
+    }
     case "tool_ended": {
       const line = view.toolById.get(e.id);
       if (line) line.status = e.isError ? "error" : "ok";
@@ -86,9 +94,17 @@ export function applyTurnEvent(view: TurnView, e: AgentEvent, now = Date.now()):
 
 const TOOL_MARK = { running: "…", ok: "✓", error: "✗" } as const;
 
-/** The tool-activity block: one `🔧 label …/✓/✗` line per call, in call order. */
+/**
+ * The tool-activity block: one `🔧 label …/✓/✗` line per call, in call order. A running call shows its latest
+ * progress after the mark (`🔧 Bash npm test … › 42 passed`); a finished one drops it.
+ */
 export function toolLines(view: TurnView): string {
-  return view.tools.map((t) => `🔧 ${t.label} ${TOOL_MARK[t.status]}`).join("\n");
+  return view.tools
+    .map((t) => {
+      const progress = t.status === "running" && t.progress ? ` › ${clip(t.progress, TOOL_PROGRESS_MAX)}` : "";
+      return `🔧 ${t.label} ${TOOL_MARK[t.status]}${progress}`;
+    })
+    .join("\n");
 }
 
 /** The reasoning peek: the most recent tail of the (growing) reasoning, one line, code-point safe. */
@@ -117,6 +133,9 @@ export function composeTurnBody(parts: readonly string[]): string {
 /** Max length (code points) of a tool's arg preview. */
 const TOOL_ARG_MAX = 48;
 
+/** Max length (code points) of a running tool's progress line: one status, not its output. */
+const TOOL_PROGRESS_MAX = 64;
+
 /** Max length (code points) of a humanized tool label. */
 const TOOL_NAME_MAX = 80;
 
@@ -124,9 +143,9 @@ const TOOL_NAME_MAX = 80;
  * One-line, truncated at code-point boundaries: collapse whitespace so a multi-line command/arg stays on one line, and
  * never tear a surrogate pair mid-emoji.
  */
-function clip(s: string): string {
+function clip(s: string, max = TOOL_ARG_MAX): string {
   const one = s.replace(/\s+/g, " ").trim();
-  return truncateCodePointPrefix(one, TOOL_ARG_MAX);
+  return truncateCodePointPrefix(one, max);
 }
 
 /**
