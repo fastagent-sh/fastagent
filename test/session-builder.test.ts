@@ -565,8 +565,9 @@ describe("session builder: chat offers the model the same tool set serving does"
     try {
       const active = rt.session.getActiveToolNames().sort();
       expect(active).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
-      // Exactly one copy of each: `noTools: "builtin"` keeps pi's own read/bash/edit/write out, and
-      // fastagent mounts its own. Two under one name would be the model's problem to disambiguate.
+      // Exactly one copy of each: pi registers its own read/bash/edit/write and fastagent mounts its own under the
+      // same names; pi's registry keeps the custom tool (`_refreshToolRegistry` writes custom tools after built-ins).
+      // Two under one name would be the model's problem to disambiguate.
       expect(rt.session.getAllTools().filter((tool) => tool.name === "bash")).toHaveLength(1);
     } finally {
       await rt.dispose?.();

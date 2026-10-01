@@ -12,6 +12,8 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { definitionServices } from "../src/engines/pi/agent-session-factory.ts";
+import { agentModels } from "../src/engines/pi/agent-models.ts";
+import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -44,6 +46,23 @@ async function agentDirWith(files: Record<string, string>): Promise<string> {
   }
   return dir;
 }
+
+describe("definition: one discovery of extensions/ for the catalog and the sessions", () => {
+  it("sessions load the list the model catalog registered from", async () => {
+    // A caller's ExecutionEnv may list a different directory than Node's filesystem: two discoveries could disagree on
+    // which extension declared a model. The assembly takes the catalog's list instead of listing again.
+    const dir = await agentDirWith({});
+    const elsewhere = join(await agentDirWith({}), "elsewhere.ts");
+    await writeFile(elsewhere, "export default () => {};\n");
+    const { faux } = makeFaux();
+    const models = agentModels(dir, {}, { providers: [faux.provider] });
+    const { assembly } = await assemblePiFromDefinition(dir, {
+      model: "faux/faux-1",
+      models: { ...models, extensionPaths: async () => [elsewhere] },
+    });
+    expect(assembly.extensionPaths).toEqual([elsewhere]);
+  });
+});
 
 describe("definition: extensions/ discovery", () => {
   it("has no extensions when the directory is absent", async () => {

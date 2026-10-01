@@ -54,8 +54,9 @@ async function agentWith(
       engine: async () => {
         const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         runtime.registerNativeProvider(faux.provider);
-        return { modelRuntime: runtime, model: faux.getModel() };
+        return { modelRuntime: runtime };
       },
+      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       readDefinition: () => ({ skills: [] }),
       cwd,
       ...options,

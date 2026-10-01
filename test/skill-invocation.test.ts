@@ -153,7 +153,8 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
     lease: inProcessLease(),
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd: dir }),
-      engine: async () => ({ modelRuntime, model: faux.getModel() }),
+      engine: async () => ({ modelRuntime }),
+      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       // A list that still names the skill, pinned the way a run in flight pins it.
       readDefinition: () => ({
         systemPrompt: "test",

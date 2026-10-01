@@ -15,7 +15,7 @@ import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
-import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
+import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { log } from "../../log.ts";
 import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine } from "./machine.ts";
@@ -485,7 +485,7 @@ export async function assemblePiFromDefinition(
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
   const { providers } = options;
-  const models = options.models ?? agentModels(dir, options, { cwd, ...(providers ? { providers } : {}) });
+  const models = options.models ?? agentModels(dir, options, { cwd, env, ...(providers ? { providers } : {}) });
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
   await models.runtime();
@@ -522,7 +522,8 @@ export async function assemblePiFromDefinition(
     },
     tools,
     sessions: options.sessions,
-    extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
+    // The catalog's own discovery: the models it registered and the extensions sessions load are one list.
+    extensionPaths: [...(await models.extensionPaths())],
     cwd,
     env,
     lease: options.lease,

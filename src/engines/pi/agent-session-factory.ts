@@ -46,9 +46,9 @@ export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. */
   sessions: PiSessionRecordStore;
   /** A fresh model runtime per binding: extension routers and provider registrations belong to this session. */
-  engine: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
+  engine: () => Promise<{ modelRuntime: ModelRuntime }>;
   /** Resolved after extensions register their models. */
-  modelSpec?: string;
+  modelSpec: string;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
   /** Read once per binding; prompt and skills come from the same definition read. */
@@ -430,10 +430,9 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
-    const { modelRuntime, model: configuredModel } = await options.engine();
+    const { modelRuntime } = await options.engine();
     const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
-    const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : configuredModel;
-    if (!model) throw new Error("session factory needs modelSpec or an engine model");
+    const model = resolveModel(modelRuntime, options.modelSpec);
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
     const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {

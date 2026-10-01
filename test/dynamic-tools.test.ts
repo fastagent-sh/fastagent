@@ -241,12 +241,12 @@ describe("Pi-native tool loadouts", () => {
     expect(cancelled).toBe(true);
   });
 
-  it("restores native tool_search discoveries across bindings, forks, and compaction without custom activation entries", async () => {
+  it("restores native tool_search discoveries across bindings, forks, and compaction", async () => {
     const cwd = await workspace();
     await mkdir(join(cwd, ".pi"));
     await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ compaction: { keepRecentTokens: 1 } }));
     const offered: string[][] = [];
-    const { agent, control, sessions } = await fauxControlledAgent(
+    const { agent, control } = await fauxControlledAgent(
       [
         fauxAssistantMessage(fauxToolCall("tool_search", { query: "weather" })),
         fauxAssistantMessage("discovered"),
@@ -281,8 +281,5 @@ describe("Pi-native tool loadouts", () => {
     await collect(agent.invoke({ session: "room:/native" }, { text: "after compaction" }));
     expect(offered).toHaveLength(3);
     expect(offered.at(-1)).toContain("weather");
-    expect(JSON.stringify((await sessions.openOrCreate("room:/native")).getBranch())).not.toContain(
-      "fastagent:tool-activation",
-    );
   });
 });

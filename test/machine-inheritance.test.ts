@@ -287,7 +287,8 @@ it("pi's engine settings are inherited, the project file deep-merged over the ma
 
   const session = await piAgentSessionFactory({
     sessions: piInMemorySessionRecordStore({ cwd: dir }),
-    engine: async () => ({ modelRuntime, model: faux.getModel() }),
+    engine: async () => ({ modelRuntime }),
+    modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     cwd: dir,
   })("s");

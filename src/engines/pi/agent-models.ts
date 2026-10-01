@@ -5,6 +5,7 @@
  * login, the model list — so none of them can read other credential layers or another registry than the runtime
  * does. Each used to compose these parts itself, and two of those copies drifted from the rule (#636, #660).
  */
+import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { definitionServices } from "./agent-session-factory.ts";
@@ -63,11 +64,18 @@ export interface AgentModels {
    * otherwise (auth is provider-scoped).
    */
   authStatus(provider: string, modelId?: string): Promise<AuthStatus>;
+  /**
+   * The definition's extension entry points, discovered once: what this catalog registers models from and what every
+   * session of the assembly built over it loads. Empty without a directory.
+   */
+  extensionPaths(): Promise<readonly string[]>;
 }
 
 export interface AgentModelsOptions {
   /** Workspace for extension model registration; defaults to agentDir for standalone definitions. */
   cwd?: string;
+  /** Where `extensions/` is listed from; Node's filesystem by default. */
+  env?: ExecutionEnv;
   /** Extra providers registered on top of the built-ins (a same id replaces one). */
   providers?: readonly Provider[];
   /**
@@ -123,16 +131,21 @@ export function agentModels(
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
+  const cwd = options.cwd ?? agentDir;
+  let discovered: Promise<readonly string[]> | undefined;
+  const extensionPaths = (): Promise<readonly string[]> =>
+    (discovered ??= agentDir
+      ? loadExtensionPaths(agentDir, { ...(cwd ? { cwd } : {}), ...(options.env ? { env: options.env } : {}) })
+      : Promise.resolve([]));
   let registry: Promise<ModelRuntime> | undefined;
   const runtime = (): Promise<ModelRuntime> => {
     registry ??= createRuntime().then(async (models) => {
       if (agentDir) {
-        const cwd = options.cwd ?? agentDir;
         await definitionServices({
-          cwd,
+          cwd: cwd ?? agentDir,
           modelRuntime: models,
           definition: { skills: [] },
-          extensionPaths: await loadExtensionPaths(agentDir, { cwd }),
+          extensionPaths: await extensionPaths(),
         });
       }
       return models;
@@ -144,6 +157,7 @@ export function agentModels(
     credentials,
     runtime,
     createRuntime,
+    extensionPaths,
     async authStatus(provider, modelId) {
       const models = await runtime();
       const id = modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
