@@ -1,7 +1,7 @@
 /** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
-import type { SessionEvent } from "../../session.ts";
+import type { PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
@@ -141,8 +141,8 @@ export async function toPiPromptOptions(
 }
 /** Live modulation handles for one active run — what the control plane's `dispatch` routes to. */
 export interface RunControls {
-  steer(prompt: Prompt): Promise<void>;
-  followUp(prompt: Prompt): Promise<void>;
+  steer(prompt: Prompt): Promise<PromptDisposition>;
+  followUp(prompt: Prompt): Promise<PromptDisposition>;
   abort(): Promise<void>;
 }
 

@@ -254,6 +254,27 @@ export default function (pi) {
     expect(await collect(agent.invoke({ session: "s" }, { text: "/provider" }))).toEqual({ text: "", data: undefined });
   });
 
+  it("says once per process what pi warned about while loading: an extension tool replacing a built-in", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const agent = await servedAgent({
+        "extensions/search.ts": `export default (pi) => pi.registerTool({ name: "tool_search", label: "s", description: "mine", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: undefined }) });`,
+      });
+      await collect(agent.invoke({ session: "a" }, { text: "hi" }));
+      await collect(agent.invoke({ session: "b" }, { text: "hi" }));
+      const said = warn.mock.calls
+        .flat()
+        .filter((line) =>
+          /search\.ts registers tool `tool_search`, so built-in extension `tool-search` was not loaded/.test(
+            String(line),
+          ),
+        );
+      expect(said).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("keeps extensions that register providers while loading", async () => {
     const offered: string[][] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});

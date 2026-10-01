@@ -658,8 +658,9 @@ describe("session control over HTTP", () => {
       {
         steer: async (prompt: { text: string }) => {
           received.push(prompt);
+          return "handled";
         },
-        followUp: async () => {},
+        followUp: async () => "queued",
         abort: async () => {},
       },
     );
@@ -676,7 +677,8 @@ describe("session control over HTTP", () => {
         type: "steer",
         prompt: { text: "look", images: [{ data: "aGk=", mimeType: "image/png", junk: "stripped" }], extra: 1 },
       });
-      expect(result.ok).toBe(true);
+      // The disposition the run's controls answered rides back over the wire.
+      expect(result).toEqual({ ok: true, runId: "r1", disposition: "handled" });
       // Construction, not assertion: exactly the contract fields — image content intact, junk gone.
       expect(received).toEqual([{ text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] }]);
       const badImage = await post({ type: "steer", prompt: { text: "look", images: [42] } });

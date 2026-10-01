@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { log } from "../src/log.ts";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { collect } from "../src/collect.ts";
 import type { SessionEvent } from "../src/session.ts";
@@ -198,6 +198,87 @@ describe("Pi-native tool loadouts", () => {
     expect(events.filter((event) => event.type === "tool_ended").map((event) => event.isError)).toEqual([true, true]);
     expect(JSON.stringify(events)).toContain("denied by policy");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("an authored tool orchestrates others: executeTool keeps pi's hooks, onUpdate reports progress, annotations and namespace reach pi", async () => {
+    const cwd = await workspace(["+codemode"]);
+    // A permission extension the way pi documents one: it decides from the annotations `getAllTools()` reports.
+    const policy = join(cwd, "policy.mjs");
+    await writeFile(
+      policy,
+      `export default pi => pi.on("tool_call", event => pi.getAllTools().find(t => t.name === event.toolName)?.annotations?.readOnlyHint === false ? { block: true, reason: "writes need approval" } : undefined);`,
+    );
+    const desk = { name: "forecast_desk", description: "Tools of the forecast desk" };
+    const lookup = defineTool({
+      name: "lookup",
+      description: "Look up a temperature",
+      exposure: "codemode",
+      namespace: desk,
+      annotations: { readOnlyHint: true },
+      input: z.object({ city: z.string() }),
+      output: z.object({ temperature: z.number() }),
+      execute: () => ({ temperature: 42 }),
+    });
+    const save = vi.fn(() => "saved");
+    const archive = defineTool({
+      name: "archive",
+      description: "Archive a forecast",
+      exposure: "codemode",
+      namespace: desk,
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      input: z.object({}),
+      execute: save,
+    });
+    const forecast = defineTool({
+      name: "forecast",
+      description: "Forecast and archive",
+      input: z.object({}),
+      async execute(_input, ctx) {
+        ctx.onUpdate?.("checking London");
+        const looked = await ctx.executeTool?.("lookup", { city: "London" });
+        const archived = await ctx.executeTool?.("archive", {});
+        return { looked: looked?.result.structuredContent, archiveRefused: archived?.isError };
+      },
+    });
+    let codemodeDescription: string | undefined;
+    const events: SessionEvent[] = [];
+    const { agent } = await fauxControlledAgent(
+      [
+        (context) => {
+          codemodeDescription = getCurrentTools(context.messages).find((t) => t.name === "codemode")?.description;
+          return fauxAssistantMessage(fauxToolCall("forecast", {}, { id: "f1" }));
+        },
+        fauxAssistantMessage("done"),
+      ],
+      {
+        cwd,
+        tools: [lookup, archive, forecast],
+        extensionPaths: [policy],
+        observer: (_s, event) => events.push(event),
+      },
+    );
+    expect((await collect(agent.invoke({ session: "desk" }, { text: "go" }))).text).toBe("done");
+    expect(codemodeDescription).toContain("forecast_desk");
+    expect(codemodeDescription).toContain("Tools of the forecast desk");
+    const finished = events.find((e) => e.type === "tool_finished" && (e.data as { id: string }).id === "f1");
+    expect(JSON.stringify(finished?.data)).toContain('\\"temperature\\":42');
+    expect(JSON.stringify(finished?.data)).toContain('\\"archiveRefused\\":true');
+    expect(save).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_started",
+        data: expect.objectContaining({ name: "lookup", parentToolCallId: "f1" }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_progress",
+        data: expect.objectContaining({
+          id: "f1",
+          partialResult: expect.objectContaining({ content: [{ type: "text", text: "checking London" }] }),
+        }),
+      }),
+    );
   });
 
   it("aborts a nested codemode tool when the caller cancels", async () => {

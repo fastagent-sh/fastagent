@@ -290,7 +290,10 @@ adapter for authored loaders: Pi filters the requested names and records the res
 
 `defineTool({ output: z.object(...) })` gives scripts validated `structuredContent`; tools without an output
 schema retain text results. Full Pi results pass through unchanged. Nested calls use Pi's `ctx.executeTool`, so
-validation, permission hooks, cancellation, and errors share the native tool pipeline. The observation plane
+validation, permission hooks, cancellation, and errors share the native tool pipeline. Authored tools get the same
+function as `ToolContext.executeTool`, taken from the per-call context because Pi binds it to the calling tool call
+(the parent of what it runs), and `ToolContext.onUpdate` over Pi's update callback. `annotations` and `namespace`
+pass through to Pi unchanged. The observation plane
 retains `parentToolCallId` on nested events. The Agent Handler/channel projection emits only outer calls, whose
 Pi display details include bounded nested traces; machine-readable `structuredContent` stays internal.
 

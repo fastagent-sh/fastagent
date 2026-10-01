@@ -569,7 +569,7 @@ describe("session control: run modulation", () => {
         // Flush prompt preparation so the command is waiting on binding before the factory returns.
         await new Promise<void>((resolve) => setImmediate(resolve));
         binding.resolve();
-        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId });
+        expect(await command, method).toEqual({ ok: true, runId: before.activeRunId, disposition: "queued" });
         expect(method === "steer" ? session.getSteeringMessages() : session.getFollowUpMessages(), method).toEqual([
           "queued during binding",
         ]);
@@ -607,7 +607,7 @@ describe("session control: run modulation", () => {
     ])
       expect(await attempt()).toMatchObject({ ok: false, error: { code: INVALID_COMMAND_CODE } });
     const result = await control.sessions.get("s2a").steer({ text: "actually, do it differently" });
-    expect(result).toEqual({ ok: true, runId });
+    expect(result).toEqual({ ok: true, runId, disposition: "queued" });
     // Queue visibility while the steer is pending (the gate still holds the run). Poll: the
     // contract says "queued", not "queue_update delivered synchronously before dispatch resolves".
     for (let i = 0; i < 200 && (await control.sessions.get("s2a").state()).pending.steering.length !== 1; i++) {
@@ -628,6 +628,80 @@ describe("session control: run modulation", () => {
     const after = await control.sessions.get("s2a").state();
     expect(after.status).toBe("idle");
     expect(after.pending).toEqual({ steering: [], followUp: [] });
+  });
+
+  it("a steer or follow-up an extension's input handler consumes answers `handled` and never enters the conversation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-input-handled-"));
+    const intercept = join(dir, "intercept.mjs");
+    await writeFile(
+      intercept,
+      `export default (pi) => pi.on("input", (e) => (e.text.startsWith("!") ? { action: "handled" } : { action: "continue" }));\n`,
+    );
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("steered answer")],
+      { tools: [gate.tool], extensionPaths: [intercept] },
+    );
+    const invoked = drive(agent, "sHandled");
+    const toolRunning = waitForToolStarted(control, "sHandled");
+    const runId = await waitForRunning(control, "sHandled");
+    await toolRunning;
+    const handle = control.sessions.get("sHandled");
+    expect(await handle.steer({ text: "!status" })).toEqual({ ok: true, runId, disposition: "handled" });
+    expect(await handle.followUp({ text: "!later" })).toEqual({ ok: true, runId, disposition: "handled" });
+    expect(await handle.steer({ text: "a real steer" })).toEqual({ ok: true, runId, disposition: "queued" });
+    gate.release();
+    expect((await invoked).at(-1)).toEqual({ type: "completed" });
+    const recorded = JSON.stringify((await handle.entries()).entries);
+    expect(recorded).toContain("a real steer");
+    expect(recorded).not.toContain("!status");
+    expect(recorded).not.toContain("!later");
+  });
+
+  it("a prompt an input handler holds until the run settled is refused, not reported `queued`", async () => {
+    // pi awaits the definition's `input` handlers before it queues, so the run can settle in between. pi still answers
+    // `queued` for a run that will never take the prompt in.
+    const key = `__fa_input_hold_${Date.now()}__`;
+    const dir = await mkdtemp(join(tmpdir(), "fa-input-hold-"));
+    const hold = join(dir, "hold.mjs");
+    await writeFile(
+      hold,
+      `export default (pi) => pi.on("input", async (e) => {\n` +
+        `  const g = globalThis[${JSON.stringify(key)}];\n` +
+        `  if (e.text === "late") { g.entered(); await g.held; }\n` +
+        `  return { action: "continue" };\n});\n`,
+    );
+    const entered = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    (globalThis as Record<string, unknown>)[key] = { entered: entered.resolve, held: held.promise };
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("done")],
+      { tools: [gate.tool], extensionPaths: [hold] },
+    );
+    const iterator = agent.invoke({ session: "sHold" }, { text: "go" })[Symbol.asyncIterator]();
+    const nextTerminal = async () => {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) throw new Error("the stream ended without a terminal");
+        if (next.value.type === "completed" || next.value.type === "failed") return next.value;
+      }
+    };
+    const terminal = nextTerminal(); // the first pull starts the run
+    const toolRunning = waitForToolStarted(control, "sHold");
+    await waitForRunning(control, "sHold");
+    await toolRunning;
+    const steered = control.sessions.get("sHold").steer({ text: "late" });
+    await entered.promise;
+    gate.release();
+    // Settlement precedes the terminal on the stream; the consumer has not finished, so the session is still bound.
+    expect(await terminal).toEqual({ type: "completed" });
+    held.resolve();
+    expect(await steered).toMatchObject({ ok: false, error: { code: RUN_COMMAND_FAILED_CODE, retryable: false } });
+    // Refused on the run plane, so not pending on the observation plane either, before the run is let go.
+    expect((await control.sessions.get("sHold").state()).pending).toEqual({ steering: [], followUp: [] });
+    while (!(await iterator.next()).done);
+    expect(JSON.stringify((await control.sessions.get("sHold").entries()).entries)).not.toContain('"late"');
   });
 
   it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
@@ -679,8 +753,7 @@ describe("session control: run modulation", () => {
         `  if (e.message.role === "user") await new Promise((r) => setTimeout(r, 30));\n});\n`,
     );
     // The disk store is the serving default, and the one where "already readable" can fail: `entries()` re-reads the
-    // file, and pi defers writing a record that has no assistant message yet, which a
-    // fresh session's opening "go" is.
+    // file, so the event must not run ahead of the append that writes it.
     const configs = [
       { label: "plain", extensionPaths: [] },
       { label: "slow write", extensionPaths: [slowWrite] },
@@ -1170,7 +1243,7 @@ describe("session control: run modulation", () => {
         steer: async () => {
           throw new Error("run already settled; the command cannot take effect");
         },
-        followUp: async () => {},
+        followUp: async () => "queued",
         abort: async () => {},
       },
     );

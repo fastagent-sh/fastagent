@@ -260,9 +260,14 @@ that cannot be READ at all is a deployment fault, and this read MAY reject.
 
 ```ts
 type SessionResult =
-  | { ok: true; runId?: string }             // admitted (steer/follow_up: joined this run) or applied (boundary mutations)
+  | { ok: true; runId?: string; disposition?: "queued" | "handled" } // admitted (steer/follow_up: joined this run) or applied (boundary mutations)
   | { ok: false; error: { code: string; message: string; retryable: boolean } };
 ```
+
+An admitted `steer`/`follow_up` carries its `disposition`, and nothing else does. `queued`: the prompt waits in
+`pending` until the run takes it in. `handled`: the engine consumed it before the queue (in pi, an extension's
+`input` handler), so it never enters the conversation and no `queue_changed` or `user_message` reports it. Without
+the field a client could only infer `handled` from an event that never arrives.
 
 `ok: true` means the command was admitted or applied, never that the run ultimately succeeded: run
 outcomes are reported by `run_settled` and by the invoke stream's terminal event. `ok: false` means the

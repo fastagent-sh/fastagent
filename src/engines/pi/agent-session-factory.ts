@@ -168,8 +168,8 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
 
 let themeReady = false;
 
-/** Each distinct load failure is said once per process: serving loads the extensions again for every session. */
-const reportedExtensionErrors = new Set<string>();
+/** Each distinct load diagnostic is said once per process: serving loads the extensions again for every session. */
+const reportedExtensionDiagnostics = new Set<string>();
 
 /**
  * Extension notifications said once per process at their own level, then at debug: every served turn starts the
@@ -181,18 +181,23 @@ const reportedNotifications = new Set<string>();
 const MAX_REPORTED_NOTIFICATIONS = 1000;
 
 /**
- * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and carries on with the
- * rest.
+ * Announce extensions pi failed to load, and what it warned about while loading the rest: among them a definition
+ * extension that registers `codemode` or `tool_search`, which keeps pi's built-in of that name from loading. pi
+ * collects both into `LoadExtensionsResult` and carries on; only its own TUI shows them.
  */
-function reportExtensionErrors(services: AgentSessionServices): void {
+function reportExtensionDiagnostics(services: AgentSessionServices): void {
   for (const diagnostic of services.diagnostics) {
     if (diagnostic.type === "error") throw new Error(diagnostic.message);
   }
-  for (const { path, error } of services.resourceLoader.getExtensions().errors) {
-    const key = `${path}\u0000${error}`;
-    if (reportedExtensionErrors.has(key)) continue;
-    reportedExtensionErrors.add(key);
-    log.warn(`[fastagent] extension ${path} failed to load: ${error}`);
+  const { errors, warnings = [] } = services.resourceLoader.getExtensions();
+  const said = [
+    ...errors.map(({ path, error }) => `extension ${path} failed to load: ${error}`),
+    ...warnings.map(({ path, warning }) => `extension ${path}: ${warning}`),
+  ];
+  for (const line of said) {
+    if (reportedExtensionDiagnostics.has(line)) continue;
+    reportedExtensionDiagnostics.add(line);
+    log.warn(`[fastagent] ${line}`);
   }
 }
 
@@ -378,7 +383,7 @@ export async function definitionServices(options: {
       },
     }),
   );
-  reportExtensionErrors(services);
+  reportExtensionDiagnostics(services);
   return services;
 }
 

@@ -1,8 +1,14 @@
 /** Tool authoring: `defineTool` (the authoring surface) and `loadTools` (filesystem discovery). */
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext, ToolDefinition, ToolExposure } from "@earendil-works/pi-coding-agent";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import type {
+  ExtensionToolContext,
+  ToolAnnotations,
+  ToolDefinition,
+  ToolExposure,
+  ToolNamespace,
+} from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
@@ -19,6 +25,20 @@ export interface ToolContext {
    * Tool activation for the current turn; Pi records changes in the transcript.
    */
   tools?: ToolActivation;
+  /**
+   * Run another mounted tool through pi's own pipeline: argument validation, the definition's `tool_call` and
+   * `tool_result` hooks, cancellation (this call's signal by default). It reaches the active `direct` tools and every
+   * `codemode` or `deferred` one. A tool failure comes back as `isError: true`, never as a rejection. The nested call
+   * is observed with `parentToolCallId` and does not enter the transcript. Undefined without a session
+   * (`fastagent tool`).
+   */
+  executeTool?: ExtensionToolContext["executeTool"];
+  /**
+   * Report progress while this call runs: a snapshot of everything so far (each call replaces the last), wrapped the
+   * way a return value is. Observers of the session control plane receive it as `tool_progress`. Undefined when the
+   * caller takes no progress (`fastagent tool`).
+   */
+  onUpdate?: (partial: unknown) => void;
   /** THE values of {@link DefineToolOptions.secrets}, keyed by the names this tool declared — read
    *  from the process environment per call, so a value rotated THERE takes effect without a restart
    *  (one rotated in `.secrets/.env` does not: that file is loaded once at startup). This is how a
@@ -35,6 +55,14 @@ export interface DefineToolOptions<I extends z.ZodType, S extends readonly strin
   exposure?: ToolExposure;
   /** Direct tools start active unless false; settings may still select them. */
   defaultActive?: boolean;
+  /**
+   * MCP-style hints about what the tool does (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
+   * Pi does not enforce them; a permission extension reads them from `pi.getAllTools()` to decide which calls to
+   * confirm, and treats a tool without them as possibly destructive.
+   */
+  annotations?: ToolAnnotations;
+  /** Groups the tool with related ones (`{ name, description? }`): codemode lists a namespace under one heading. */
+  namespace?: ToolNamespace;
   /** Structured output schema for programmatic callers such as codemode. */
   output?: z.ZodType;
   /** pi's per-tool execution mode: "sequential" makes pi run any batch containing this tool serially. */
@@ -55,9 +83,9 @@ export interface DefineToolOptions<I extends z.ZodType, S extends readonly strin
 
 /** AgentTool with Pi's optional per-call context; absent for sessionless CLI execution. */
 export type MountedTool = Omit<AgentTool, "execute"> &
-  Pick<ToolDefinition, "exposure" | "defaultActive"> & {
+  Pick<ToolDefinition, "exposure" | "defaultActive" | "annotations" | "namespace"> & {
     execute(
-      ...args: [...Parameters<AgentTool["execute"]>, context?: ExtensionContext]
+      ...args: [...Parameters<AgentTool["execute"]>, context?: ExtensionToolContext]
     ): ReturnType<AgentTool["execute"]>;
   };
 
@@ -69,8 +97,9 @@ export type FastagentTool = MountedTool & {
 
 /**
  * Ask the provider to constrain sampling to the tool's schema, the posture pi's own built-ins take. `"prefer"`
- * rather than `"require"`: a schema pi cannot express strictly, or a provider without strict mode, silently falls
- * back to an ordinary function tool instead of failing the turn.
+ * rather than `"require"`: a schema pi cannot express strictly, one using a keyword the provider's strict mode rejects
+ * (Anthropic: numeric bounds, which every `z.number().int()` carries), or a provider without strict mode silently
+ * falls back to an ordinary function tool instead of failing the turn.
  *
  * Nothing here has to undo pi's strict rewrite. To express "optional" strictly, pi marks every property required and
  * unions the optional ones with `null`, so a constrained model emits `null` where it would have omitted the key — and
@@ -107,10 +136,18 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
     constrainedSampling: CONSTRAINED_SAMPLING,
     ...(options.exposure ? { exposure: options.exposure } : {}),
     ...(options.defaultActive !== undefined ? { defaultActive: options.defaultActive } : {}),
+    ...(options.annotations ? { annotations: options.annotations } : {}),
+    ...(options.namespace ? { namespace: options.namespace } : {}),
     ...(options.output ? { outputSchema: z.toJSONSchema(options.output) } : {}),
     ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     ...(options.secrets?.length ? { secrets: options.secrets } : {}),
-    async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
+    async execute(
+      _toolCallId: string,
+      rawParams: unknown,
+      signal?: AbortSignal,
+      onUpdate?: AgentToolUpdateCallback,
+      context?: ExtensionToolContext,
+    ): Promise<AgentToolResult<unknown>> {
       const parsed = options.input.safeParse(rawParams);
       if (!parsed.success) {
         // Validation failure is reported TO THE MODEL (it can correct and retry), not thrown.
@@ -128,6 +165,9 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
           signal,
           sessionManager: store?.sessionManager,
           tools: store?.tools,
+          // Per CALL, not per turn: pi binds `executeTool` to this call's id, the parent of what it runs.
+          executeTool: context?.executeTool,
+          onUpdate: onUpdate && ((partial) => onUpdate(wrapResult(partial))),
           secrets: secretValues(options.secrets),
         }),
         options.output,

@@ -610,7 +610,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
 
   /** steer / follow_up / abort — the run actions. They reach the LIVE run through the controls
    *  registered with `run_started`; nothing durable is written. */
-  const runAction = (session: string, action: SessionAction): Promise<SessionResult> =>
+  const runAction = (session: string, action: Exclude<SessionAction, { type: "compact" }>): Promise<SessionResult> =>
     Effect.runPromise(
       Effect.gen(function* (): Effect.fn.Return<SessionResult, PortFailure> {
         // pi dequeues a queued prompt by matching its text when it enters the conversation, and skips an empty one
@@ -654,14 +654,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           };
         }
         const controls = run.controls;
-        yield* port(() =>
-          action.type === "steer"
-            ? controls.steer(action.prompt)
-            : action.type === "follow_up"
-              ? controls.followUp(action.prompt)
-              : controls.abort(),
+        if (action.type === "abort") {
+          yield* port(() => controls.abort());
+          return { ok: true, runId: run.runId };
+        }
+        const disposition = yield* port(() =>
+          action.type === "steer" ? controls.steer(action.prompt) : controls.followUp(action.prompt),
         );
-        return { ok: true, runId: run.runId };
+        return { ok: true, runId: run.runId, disposition };
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.succeed({

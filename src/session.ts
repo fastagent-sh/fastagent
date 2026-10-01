@@ -60,10 +60,14 @@ export interface Session {
   update(patch: SessionUpdate): Promise<SessionResult>;
   /**
    * Join the active run: delivered after the current turn's tool calls, before the next model call. `prompt.text`
-   * must not be empty (`invalid_command`): a queued prompt is reported by its text ({@link PendingPrompts}).
+   * must not be empty (`invalid_command`): a queued prompt is reported by its text ({@link PendingPrompts}). An
+   * accepted result carries its {@link PromptDisposition}.
    */
   steer(prompt: Prompt): Promise<SessionResult>;
-  /** Queue for the active run, FIFO, delivered when it is otherwise idle. Same non-empty `text` rule as `steer`. */
+  /**
+   * Queue for the active run, FIFO, delivered when it is otherwise idle. Same non-empty `text` rule and
+   * {@link PromptDisposition} as `steer`.
+   */
   followUp(prompt: Prompt): Promise<SessionResult>;
   /** Stop the active run — its queues, its retry delay, its cancellable tool work. */
   abort(): Promise<SessionResult>;
@@ -192,8 +196,16 @@ export const PARTIAL_UPDATE_CODE = "partial_update";
  * `ok: false` re-applies what a partial update already wrote.
  */
 export type SessionResult =
-  | { ok: true; runId?: string }
+  | { ok: true; runId?: string; disposition?: PromptDisposition }
   | { ok: false; error: { code: string; message: string; retryable: boolean } };
+
+/**
+ * What became of an accepted `steer`/`followUp` prompt — present on exactly those results. `queued`: it waits in
+ * {@link PendingPrompts} until the run takes it in. `handled`: the engine consumed it before the queue (in pi, a
+ * definition extension's `input` handler), so it never enters the conversation, and no `queue_changed` or
+ * `user_message` reports it.
+ */
+export type PromptDisposition = "queued" | "handled";
 
 // ── State and durable entries (observation plane) ────────────────────────────
 
