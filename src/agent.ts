@@ -38,6 +38,12 @@ export type AgentEvent =
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   /**
+   * Advisory, non-terminal (engines MAY emit it): the running tool `id`'s current status, one line, replacing the last.
+   * It may be a line of the tool's output so far (trust it like `tool_ended.content`), never the whole output;
+   * untruncated, so a consumer that shows it clips it.
+   */
+  | { type: "tool_progress"; id: string; text: string }
+  /**
    * Advisory, non-terminal (engines MAY emit it): a transient internal failure scheduled a retry with backoff — the
    * turn is still alive.
    */

@@ -295,7 +295,8 @@ function as `ToolContext.executeTool`, taken from the per-call context because P
 (the parent of what it runs), and `ToolContext.onUpdate` over Pi's update callback. `annotations` and `namespace`
 pass through to Pi unchanged. The observation plane
 retains `parentToolCallId` on nested events. The Agent Handler/channel projection emits only outer calls, whose
-Pi display details include bounded nested traces; machine-readable `structuredContent` stays internal.
+Pi display details include bounded nested traces, and reports each nested call starting as its outer call's
+`tool_progress` status; machine-readable `structuredContent` stays internal.
 
 **`ExecutionEnv` governs definition loading, not the tools.** All seven coding tools come from
 pi-coding-agent and reach `node:fs` directly. Routing them through `env` was tried and given up: the

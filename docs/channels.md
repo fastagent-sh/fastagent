@@ -246,6 +246,12 @@ Read [Channel development](channel-development.md) for adapter design, packaging
 - Work started after a webhook ACK is lost if the process exits, unless the channel persists it (Telegram, Slack and Feishu/Lark do).
 - Public endpoints should verify signatures/secrets and cap request bodies before parsing untrusted payloads.
 - User-facing error messages should avoid leaking provider or infrastructure details; log full diagnostics for operators.
+- Live previews show tool activity to everyone in the conversation: each call's argument summary and, while it runs,
+  its latest status line (`tool_progress`). For `bash` that status is the last line it has printed, so a command that
+  prints a secret (`printenv`, `cat .secrets/.env`) shows that line in the preview until the next one replaces it.
+  The settled answer drops it, but the platform keeps what was sent: a message's edit events (Slack
+  `message_changed`), other bots, and notification previews can read an intermediate frame. Telegram, Feishu/Lark and
+  Slack `rendering: "classic"` show it; Slack's native stream does not.
 
 ## Where next
 

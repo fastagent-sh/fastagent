@@ -17,6 +17,9 @@ export async function runInvokeStream(
         toolName.set(event.id, event.name);
         err(`[tool] ${event.name}`);
         break;
+      case "tool_progress":
+        err(`[tool] ${toolName.get(event.id) ?? event.id} › ${clipStatus(event.text)}`);
+        break;
       case "tool_ended":
         if (event.isError) err(`[tool] ${toolName.get(event.id) ?? event.id} failed`);
         break;
@@ -35,4 +38,17 @@ export async function runInvokeStream(
     }
   }
   return exitCode;
+}
+
+/** How much of a status line a terminal gets, in code points. */
+const STATUS_MAX = 120;
+
+/**
+ * A `tool_progress` line clipped to {@link STATUS_MAX} code points. The event is untruncated by contract, and a shell
+ * printing one long line (`curl -s` of a JSON body) re-sends that growing line every 100 ms.
+ */
+function clipStatus(text: string): string {
+  // Only the first STATUS_MAX + 1 code points decide the result, and they fit in twice as many UTF-16 units.
+  const head = [...text.slice(0, (STATUS_MAX + 1) * 2)];
+  return head.length > STATUS_MAX ? `${head.slice(0, STATUS_MAX).join("")}…` : head.join("");
 }

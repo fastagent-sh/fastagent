@@ -62,6 +62,21 @@ describe("turn-view reducer", () => {
     expect(view.thinking).toBe("hm ");
   });
 
+  it("a running call shows its latest progress, clipped to one line; a finished one drops it", () => {
+    const { view, changes } = apply([
+      { type: "tool_started", id: "t1", name: "bash", args: { command: "npm test" } },
+      { type: "tool_progress", id: "t1", text: "12 passed" },
+      { type: "tool_progress", id: "t1", text: `42 passed ${"x".repeat(100)}` },
+      { type: "tool_progress", id: "unknown", text: "not a call the view shows" },
+    ]);
+    expect(changes).toEqual([true, true, true, false]);
+    expect(toolLines(view)).toBe(`\u{1F527} Bash npm test \u2026 \u203a 42 passed ${"x".repeat(53)}\u2026`);
+    applyTurnEvent(view, { type: "tool_ended", id: "t1", isError: false, content: null });
+    expect(toolLines(view)).toBe("\u{1F527} Bash npm test \u2713");
+    // Progress that arrives after the call ended is stale, and not a view change.
+    expect(applyTurnEvent(view, { type: "tool_progress", id: "t1", text: "late" })).toBe(false);
+  });
+
   it("opens the retry notice and closes it on ANY subsequent event, including terminals", () => {
     const retrying = { type: "retrying", attempt: 1, maxAttempts: 4, delayMs: 1000, reason: "503" } as const;
     const { view, changes } = apply([retrying, { type: "completed" }]);

@@ -5,7 +5,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import { attachedFilesManifest } from "../src/channels/kit/invoke-turn-kit.ts";
-import { classifyRetryable, errorToTerminal, toPiPromptOptions, toTerminal } from "../src/engines/pi/turn-kit.ts";
+import {
+  agentEventProjection,
+  classifyRetryable,
+  errorToTerminal,
+  toPiPromptOptions,
+  toTerminal,
+} from "../src/engines/pi/turn-kit.ts";
+import type { Json } from "../src/agent.ts";
 
 describe("classifyRetryable (structured signal first, prose as the ceiling)", () => {
   it("a status decides, whatever the prose says", () => {
@@ -112,5 +119,69 @@ describe("toPiPromptOptions: a queued image pi cannot resize is sent as given, a
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("tool_progress: an outer call's status line, sent when it changes", () => {
+  const at = { timestamp: 0, runId: "r" };
+  const started = (id: string, name: string, args: Json, parentToolCallId?: string) => ({
+    ...at,
+    type: "tool_started",
+    data: { id, name, args, ...(parentToolCallId ? { parentToolCallId } : {}) },
+  });
+  const progress = (id: string, text: string, parentToolCallId?: string) => ({
+    ...at,
+    type: "tool_progress",
+    data: {
+      id,
+      name: "t",
+      partialResult: { content: text ? [{ type: "text", text }] : [] },
+      ...(parentToolCallId ? { parentToolCallId } : {}),
+    },
+  });
+
+  it("is the last visible line, untruncated: a bare \\r ends a line, terminal control sequences are not text", () => {
+    const project = agentEventProjection();
+    project(started("t1", "bash", { command: "npm test" }));
+    const long = "x".repeat(500);
+    const sent = [
+      progress("t1", ""), // a shell that printed nothing yet
+      progress("t1", "line one\nline two\n\n"),
+      progress("t1", "line one\nline two\n\n"), // unchanged: not sent again
+      progress("t1", "downloading 10%\rdownloading 60%"),
+      progress("t1", "\u001b[32mPASS\u001b[0m 42 passed\r\n"),
+      progress("t1", `head\n${long}`),
+    ].map(project);
+    expect(sent).toEqual([
+      null,
+      { type: "tool_progress", id: "t1", text: "line two" },
+      null,
+      { type: "tool_progress", id: "t1", text: "downloading 60%" },
+      { type: "tool_progress", id: "t1", text: "PASS 42 passed" },
+      { type: "tool_progress", id: "t1", text: long },
+    ]);
+  });
+
+  it("reports a nested call starting as its outer call's status, at any depth; a nested call's own output is not", () => {
+    const project = agentEventProjection();
+    expect(project(started("outer", "codemode", { code: "..." }))).toMatchObject({ type: "tool_started" });
+    expect(project(started("outer/1", "weather", { city: "London\nUK", days: 3 }, "outer"))).toEqual({
+      type: "tool_progress",
+      id: "outer",
+      text: "weather London UK",
+    });
+    expect(project(started("outer/1/1", "fetch", {}, "outer/1"))).toEqual({
+      type: "tool_progress",
+      id: "outer",
+      text: "fetch",
+    });
+    expect(project(progress("outer/1/1", "downloaded 3 MB", "outer/1"))).toBeNull();
+    // An unchanged line is not sent again, whoever set it; the outer call's own new line replaces it.
+    expect(project(progress("outer", "fetch"))).toBeNull();
+    expect(project(progress("outer", "summarizing"))).toEqual({
+      type: "tool_progress",
+      id: "outer",
+      text: "summarizing",
+    });
   });
 });

@@ -185,7 +185,8 @@ function streamClassicSlackReply(
     const view = (): string =>
       composeTurnBody([
         THINKING_PLACEHOLDER,
-        toolLines(turn),
+        // Tool names, arguments and progress lines are untrusted text, like the answer.
+        sanitizeSlackMarkdown(toolLines(turn)),
         turn.retrying ? RETRY_NOTICE : "",
         sanitizeSlackMarkdown(revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS, now())),
       ]);
