@@ -196,6 +196,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     onCancelReady(() => abort.abort());
     const runId = crypto.randomUUID();
     const project = agentEventProjection();
+    /**
+     * Each call's `tool_progress` still waiting in the queue. A newer status replaces its text instead of queuing
+     * behind it, so the queue holds at most one per running call, and a consumer that falls behind (a slow `/invoke`
+     * client) gets the latest status, not every snapshot in between: pi's bash reports every 100 ms, and a single
+     * growing line is up to 50 KB each time. The replaced event keeps its place, which moves a status earlier, never
+     * past its own call's `tool_ended`: pi takes no progress from a call once it has returned.
+     */
+    const unreadProgress = new Map<string, Extract<AgentEvent, { type: "tool_progress" }>>();
     let settled = false;
     let outcome: RunSettledEvent["data"] | undefined;
     let abortsInFlight = 0;
@@ -330,6 +338,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 const projected = project(rich);
                 if (!projected) return;
                 if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
+                if (projected.type === "tool_progress") {
+                  const unread = unreadProgress.get(projected.id);
+                  if (unread) {
+                    unread.text = projected.text;
+                    return;
+                  }
+                  unreadProgress.set(projected.id, projected);
+                }
                 Queue.offerUnsafe(queue, projected);
               } catch (error) {
                 eventFailure = new PortFailure(error);
@@ -444,6 +460,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 ? { status: "aborted", error: { message: event.details, retryable: false } }
                 : { status: "failed", error: { code: event.code, message: event.details, retryable: event.retryable } };
           } else if (event.type === "completed") outcome = { status: "completed" };
+          // Handed over: the consumer owns it now, and the next status queues afresh.
+          if (event.type === "tool_progress") unreadProgress.delete(event.id);
           yield event;
         }
       }

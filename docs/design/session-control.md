@@ -329,7 +329,7 @@ ambiguity of "send during a run" is resolved by the client's intent, never guess
 | `thinking { delta }` | `message_delta { channel: "thinking" }` |
 | `tool_started` | `tool_started` |
 | `tool_ended` | `tool_finished` |
-| `tool_progress { id, text }` | an outer call's `tool_progress` (the snapshot's last visible line), or a nested call's `tool_started` (as its outer call's status); sent only when the line changes |
+| `tool_progress { id, text }` | an outer call's `tool_progress` (the snapshot's last visible line), or a nested call's `tool_started` (as its outer call's status); sent only when the line changes, and a newer one replaces one the consumer has not read (the invoke stream holds at most one per running call) |
 | `retrying` | `retry_scheduled` |
 | `completed { data? }` | `run_settled { status: "completed" }` |
 | `failed { details, retryable, code? }` | `run_settled { status: "failed" \| "aborted" }` |

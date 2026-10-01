@@ -261,14 +261,17 @@ describe("Pi-native tool loadouts", () => {
     const projected: AgentEvent[] = [];
     for await (const event of agent.invoke({ session: "desk" }, { text: "go" })) projected.push(event);
     expect(projected.at(-1)).toEqual({ type: "completed" });
-    // The invoke stream carries the call's status line: its own report, and each call it makes. pi delivers an update
-    // and a nested call made in the same tick out of order (the update takes the longer listener path), so only what
-    // follows an await is ordered: `archive` starts after `lookup` returned.
+    // The invoke stream carries the call's status line: its own report, and each call it makes. A status the consumer
+    // has not read yet may be replaced by a newer one, and pi delivers an update and a nested call made in the same tick
+    // out of order (the update takes the longer listener path), so only the last is certain: `archive` starts after
+    // `lookup` returned. The report itself reaching the observation plane is asserted below.
     const statuses = projected.flatMap((event) =>
       event.type === "tool_progress" ? [`${event.id} ${event.text}`] : [],
     );
-    expect([...statuses].sort()).toEqual(["f1 archive", "f1 checking London", "f1 lookup London"]);
     expect(statuses.at(-1)).toBe("f1 archive");
+    expect(
+      statuses.filter((status) => !["f1 checking London", "f1 lookup London", "f1 archive"].includes(status)),
+    ).toEqual([]);
     expect(codemodeDescription).toContain("forecast_desk");
     expect(codemodeDescription).toContain("Tools of the forecast desk");
     const finished = events.find((e) => e.type === "tool_finished" && (e.data as { id: string }).id === "f1");

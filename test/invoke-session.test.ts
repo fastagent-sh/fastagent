@@ -200,6 +200,70 @@ describe("AgentSession L0: cancelling before the model call", () => {
 });
 
 describe("AgentSession L0: the observation plane", () => {
+  it("a consumer that falls behind gets each call's latest status once, not every snapshot in between", async () => {
+    let emit!: (event: AgentSessionEvent) => void;
+    const reported = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const caughtUp = Promise.withResolvers<void>();
+    const update = (toolCallId: string, text: string) =>
+      emit({
+        type: "tool_execution_update",
+        toolCallId,
+        toolName: "bash",
+        args: {},
+        partialResult: { content: [{ type: "text", text }], details: undefined },
+      } as AgentSessionEvent);
+    const session = {
+      ...promptRecordingSession().session,
+      subscribe: (listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      },
+      prompt: async () => {
+        emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} } as AgentSessionEvent);
+        emit({ type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: {} } as AgentSessionEvent);
+        await resume.promise;
+        // pi's bash on one growing line: a snapshot every 100 ms, each one different.
+        for (let i = 1; i <= 100; i++) update("t1", `${"x".repeat(i)}`);
+        update("t2", "t2 status");
+        emit({
+          type: "tool_execution_end",
+          toolCallId: "t1",
+          toolName: "bash",
+          result: { content: [], details: undefined },
+          isError: false,
+        } as AgentSessionEvent);
+        update("t2", "t2 later");
+        reported.resolve();
+        await caughtUp.promise;
+        update("t2", "t2 final");
+        emit({ type: "message_end", message: fauxAssistantMessage("done") });
+      },
+    } as unknown as AgentSession;
+    const iterator = createPiAgentFromSession({ sessionFactory: async () => session })
+      .invoke({ session: "behind" }, { text: "hi" })
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: "tool_started", id: "t1" });
+    // The consumer holds off while the tools report.
+    resume.resolve();
+    await reported.promise;
+    const behind: AgentEvent[] = [];
+    for (let i = 0; i < 4; i++) behind.push((await iterator.next()).value as AgentEvent);
+    // A replaced status keeps its place: t2's moves ahead of t1's end, never past its own.
+    expect(behind).toEqual([
+      { type: "tool_started", id: "t2", name: "bash", args: {} },
+      { type: "tool_progress", id: "t1", text: "x".repeat(100) },
+      { type: "tool_progress", id: "t2", text: "t2 later" },
+      { type: "tool_ended", id: "t1", isError: false, content: { content: [] } },
+    ]);
+    // Once read, a status is the consumer's: the next one is a new event, and the one it holds does not change.
+    caughtUp.resolve();
+    const rest: AgentEvent[] = [];
+    for (let next = await iterator.next(); !next.done; next = await iterator.next()) rest.push(next.value);
+    expect(rest).toEqual([{ type: "tool_progress", id: "t2", text: "t2 final" }, { type: "completed" }]);
+    expect(behind[2]).toEqual({ type: "tool_progress", id: "t2", text: "t2 later" });
+  });
+
   it("projects each retry event with its operation and run identity", async () => {
     for (const [type, operation] of [
       ["auto_retry_start", "assistant"],

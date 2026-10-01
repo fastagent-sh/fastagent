@@ -80,7 +80,8 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 - `completed.data` is present only when the engine produces structured data.
 - `tool_progress` is advisory and non-terminal; engines MAY emit it between a `tool_started` and the
   `tool_ended` with the same `id`, any number of times. `text` is that call's current status, one line,
-  each replacing the last. An engine MAY derive it from the tool's output so far (a shell's last printed
+  each replacing the last; an engine MAY therefore drop one its consumer has not read yet, so a consumer
+  that falls behind gets the latest. An engine MAY derive it from the tool's output so far (a shell's last printed
   line), so it carries the same trust as `tool_ended.content`: a consumer that shows it to an audience
   shows tool output. It is never the whole output, which arrives with `tool_ended`. It is not truncated;
   a consumer that shows it clips it to its own width. Terminal consumers ignore it per MUST 4.
