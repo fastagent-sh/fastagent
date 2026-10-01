@@ -658,6 +658,50 @@ describe("session control: run modulation", () => {
     expect(recorded).not.toContain("!later");
   });
 
+  it("a prompt an input handler holds until the run settled is refused, not reported `queued`", async () => {
+    // pi awaits the definition's `input` handlers before it queues, so the run can settle in between. pi still answers
+    // `queued` for a run that will never take the prompt in.
+    const key = `__fa_input_hold_${Date.now()}__`;
+    const dir = await mkdtemp(join(tmpdir(), "fa-input-hold-"));
+    const hold = join(dir, "hold.mjs");
+    await writeFile(
+      hold,
+      `export default (pi) => pi.on("input", async (e) => {\n` +
+        `  const g = globalThis[${JSON.stringify(key)}];\n` +
+        `  if (e.text === "late") { g.entered(); await g.held; }\n` +
+        `  return { action: "continue" };\n});\n`,
+    );
+    const entered = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    (globalThis as Record<string, unknown>)[key] = { entered: entered.resolve, held: held.promise };
+    const gate = makeGate();
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })), fauxAssistantMessage("done")],
+      { tools: [gate.tool], extensionPaths: [hold] },
+    );
+    const iterator = agent.invoke({ session: "sHold" }, { text: "go" })[Symbol.asyncIterator]();
+    const nextTerminal = async () => {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) throw new Error("the stream ended without a terminal");
+        if (next.value.type === "completed" || next.value.type === "failed") return next.value;
+      }
+    };
+    const terminal = nextTerminal(); // the first pull starts the run
+    const toolRunning = waitForToolStarted(control, "sHold");
+    await waitForRunning(control, "sHold");
+    await toolRunning;
+    const steered = control.sessions.get("sHold").steer({ text: "late" });
+    await entered.promise;
+    gate.release();
+    // Settlement precedes the terminal on the stream; the consumer has not finished, so the session is still bound.
+    expect(await terminal).toEqual({ type: "completed" });
+    held.resolve();
+    expect(await steered).toMatchObject({ ok: false, error: { code: RUN_COMMAND_FAILED_CODE, retryable: false } });
+    while (!(await iterator.next()).done);
+    expect(JSON.stringify((await control.sessions.get("sHold").entries()).entries)).not.toContain('"late"');
+  });
+
   it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
     const { agent, control, gate } = await makeGated([
       fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),

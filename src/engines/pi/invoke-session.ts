@@ -212,24 +212,30 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
      * Every control command obeys one admission rule: wait for this run's binding, then refuse once it has settled.
      * Kept in one place so a fourth command cannot arrive with a fifth spelling of it.
      */
+    const alreadySettled = () => new PortFailure(new Error("run already settled; the command cannot take effect"));
     const command = <A>(run: (session: AgentSession) => Effect.Effect<A, PortFailure>): Promise<A> =>
       Effect.runPromise(
         Effect.gen(function* () {
           const session = yield* ready;
-          if (settled)
-            return yield* Effect.fail(
-              new PortFailure(new Error("run already settled; the command cannot take effect")),
-            );
+          if (settled) return yield* Effect.fail(alreadySettled());
           return yield* run(session);
         }),
       );
-    // Prompt preparation stays OUTSIDE admission. An await between the settled check and the enqueue would let the run
-    // end in between, and pi accepts a message for a finished run without complaint (`_steeringMessages.push`) — the
-    // command would be dropped and still reported as success. Image resizing is exactly such an await, hundreds of
-    // milliseconds of dynamic import and Photon work, and doing it here also keeps it overlapping session acquisition.
+    // Prompt preparation stays OUTSIDE admission: pi accepts a message for a finished run without complaint
+    // (`_steeringMessages.push`), so a run that ends between the settled check and the enqueue drops the command while
+    // it reports success. Image resizing would be such a gap, hundreds of milliseconds of dynamic import and Photon
+    // work, and doing it here also keeps it overlapping session acquisition. pi has a gap of its own: it awaits the
+    // definition's `input` handlers before it queues, so a `queued` answer is checked against settlement once more.
+    // A `handled` one stands either way: the handler took the prompt whatever became of the run.
     const enqueue = async (p: Prompt, kind: "steer" | "followUp"): Promise<PromptDisposition> => {
       const opts = await toPiPromptOptions(p, "queued");
-      return command((session) => port(() => session[kind](p.text, opts?.images)));
+      return command((session) =>
+        Effect.gen(function* () {
+          const disposition = yield* port(() => session[kind](p.text, opts?.images));
+          if (disposition === "queued" && settled) return yield* Effect.fail(alreadySettled());
+          return disposition;
+        }),
+      );
     };
     const controls: RunControls = {
       steer: (p) => enqueue(p, "steer"),
