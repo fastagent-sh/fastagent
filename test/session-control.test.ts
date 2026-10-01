@@ -698,6 +698,8 @@ describe("session control: run modulation", () => {
     expect(await terminal).toEqual({ type: "completed" });
     held.resolve();
     expect(await steered).toMatchObject({ ok: false, error: { code: RUN_COMMAND_FAILED_CODE, retryable: false } });
+    // Refused on the run plane, so not pending on the observation plane either, before the run is let go.
+    expect((await control.sessions.get("sHold").state()).pending).toEqual({ steering: [], followUp: [] });
     while (!(await iterator.next()).done);
     expect(JSON.stringify((await control.sessions.get("sHold").entries()).entries)).not.toContain('"late"');
   });

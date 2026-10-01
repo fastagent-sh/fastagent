@@ -232,7 +232,12 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       return command((session) =>
         Effect.gen(function* () {
           const disposition = yield* port(() => session[kind](p.text, opts?.images));
-          if (disposition === "queued" && settled) return yield* Effect.fail(alreadySettled());
+          if (disposition === "queued" && settled) {
+            // pi has queued it, and announced it (`queue_update`), on a run that takes nothing in any more. Emptying
+            // the queue tells the observation plane so, which would otherwise report the refused prompt pending.
+            session.clearQueue();
+            return yield* Effect.fail(alreadySettled());
+          }
           return disposition;
         }),
       );
