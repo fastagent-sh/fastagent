@@ -6,9 +6,9 @@ import { loadConfig, providerOf, resolveModel, resolveModelSpec } from "../../en
 import { machineModels } from "../../engines/pi/models.ts";
 import { agentModels } from "../../engines/pi/agent-models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
-import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
+import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import { reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import { describeIndirectTools, reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
@@ -38,7 +38,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
       names: r.toolNames,
-      deferred: r.deferredToolNames,
+      indirect: r.indirectTools,
       collisions: r.toolCollisions,
       failures: r.toolFailures,
       secrets: allSecrets(r.toolSecrets),
@@ -46,7 +46,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     }))
     .catch((e: unknown) => ({
       names: [] as string[],
-      deferred: [] as string[],
+      indirect: [] as IndirectTool[],
       collisions: [],
       failures: [],
       secrets: [] as DeclaredSecret[],
@@ -81,7 +81,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDir(agentDir);
   // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
   // a file the agent dir does not contain.
-  const models = agentModels(agentDir);
+  const models = agentModels(agentDir, {}, { cwd: workspace });
   const { auth } = models;
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
@@ -121,7 +121,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           persona: definition.persona !== undefined,
           skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: tools.names,
-          deferredTools: tools.deferred,
+          indirectTools: tools.indirect,
           toolError: tools.error ?? null,
           channels,
           routines,
@@ -160,7 +160,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("persona", definition.persona ? "persona.md" : "(none)");
   line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
-  if (tools.deferred.length > 0) line("deferred", `${tools.deferred.join(", ")} (activated via search_tools)`);
+  if (tools.indirect.length > 0) line("indirect", describeIndirectTools(tools.indirect));
   line("channels", channels.join(", ") || "(none)");
   line(
     "routines",

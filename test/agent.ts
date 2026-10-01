@@ -45,8 +45,9 @@ export function fauxAgent(
       engine: async () => {
         const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         modelRuntime.registerNativeProvider(faux.provider);
-        return { modelRuntime, model: faux.getModel() };
+        return { modelRuntime };
       },
+      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       ...(options.tools ? { tools: options.tools } : {}),
       readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
       cwd,
@@ -99,7 +100,12 @@ export async function fauxControlledAgent(
   const lease = options.lease ?? inProcessLease();
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    engine: async () => ({ modelRuntime, model }),
+    engine: async () => {
+      const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+      runtime.registerNativeProvider(modelRuntime.getProvider(faux.provider.id) ?? faux.provider);
+      return { modelRuntime: runtime };
+    },
+    modelSpec: `${model.provider}/${model.id}`,
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
     ...(options.extensionPaths ? { extensionPaths: options.extensionPaths } : {}),
@@ -120,6 +126,15 @@ export async function fauxControlledAgent(
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.tap ? { tap: options.tap } : {}),
   });
-  const agent = createPiAgentFromSession({ lease, observer, sessionFactory });
+  const agent = createPiAgentFromSession({
+    lease,
+    sessionFactory,
+    observer: options.observer
+      ? (session, event, run) => {
+          observer(session, event, run);
+          options.observer!(session, event, run);
+        }
+      : observer,
+  });
   return { agent, control, observer, sessions, faux, lease, models: modelRuntime };
 }

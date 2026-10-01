@@ -2,8 +2,9 @@
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolDefinition, ToolExposure } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration, secretValues } from "../../declared-secrets.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
@@ -15,8 +16,7 @@ export interface ToolContext {
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   /**
-   * Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred} tools with it —
-   * the built-in `search_tools` is one consumer).
+   * Tool activation for the current turn; Pi records changes in the transcript.
    */
   tools?: ToolActivation;
   /** THE values of {@link DefineToolOptions.secrets}, keyed by the names this tool declared — read
@@ -31,11 +31,12 @@ export interface DefineToolOptions<I extends z.ZodType, S extends readonly strin
   name?: string;
   description: string;
   input: I;
-  /**
-   * Registered but NOT initially active: the tool's schema stays out of every request (and the model's sight) until a
-   * loader.
-   */
-  deferred?: boolean;
+  /** Pi's native visibility: direct (default), model-only, codemode, deferred, or hidden. */
+  exposure?: ToolExposure;
+  /** Direct tools start active unless false; settings may still select them. */
+  defaultActive?: boolean;
+  /** Structured output schema for programmatic callers such as codemode. */
+  output?: z.ZodType;
   /** pi's per-tool execution mode: "sequential" makes pi run any batch containing this tool serially. */
   executionMode?: "sequential" | "parallel";
   /**
@@ -53,34 +54,18 @@ export interface DefineToolOptions<I extends z.ZodType, S extends readonly strin
 }
 
 /** AgentTool with Pi's optional per-call context; absent for sessionless CLI execution. */
-export type MountedTool = Omit<AgentTool, "execute"> & {
-  execute(...args: [...Parameters<AgentTool["execute"]>, context?: ExtensionContext]): ReturnType<AgentTool["execute"]>;
-};
+export type MountedTool = Omit<AgentTool, "execute"> &
+  Pick<ToolDefinition, "exposure" | "defaultActive"> & {
+    execute(
+      ...args: [...Parameters<AgentTool["execute"]>, context?: ExtensionContext]
+    ): ReturnType<AgentTool["execute"]>;
+  };
 
-/** An AgentTool with fastagent's deferral marker. */
-export type FastagentTool = AgentTool & {
-  deferred?: boolean;
+/** A Pi tool with fastagent's declared secrets. */
+export type FastagentTool = MountedTool & {
   /** {@link DefineToolOptions.secrets} — read back by `readSecretDeclaration`; pi ignores it. */
   secrets?: readonly string[];
 };
-
-/**
- * Read the {@link DefineToolOptions.deferred} marker off a mounted tool (extra property on the AgentTool object — pi
- * ignores it).
- */
-export function isDeferredTool(tool: MountedTool): boolean {
-  return (tool as FastagentTool).deferred === true;
-}
-
-/**
- * The same tool without the deferred marker — for a loader that must stay active (a deferred loader could never be
- * activated and would strand every deferred tool).
- */
-export function stripDeferredMarker(tool: MountedTool): MountedTool {
-  if (!isDeferredTool(tool)) return tool;
-  const { deferred: _drop, ...active } = tool as MountedTool & { deferred?: boolean };
-  return active;
-}
 
 /**
  * Ask the provider to constrain sampling to the tool's schema, the posture pi's own built-ins take. `"prefer"`
@@ -97,12 +82,13 @@ export function stripDeferredMarker(tool: MountedTool): MountedTool {
 const CONSTRAINED_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
 
 /** Wrap a plain return value into pi's tool-result shape; pass a full result through unchanged. */
-function wrapResult(value: unknown): AgentToolResult<unknown> {
+function wrapResult(value: unknown, output?: z.ZodType): AgentToolResult<unknown> {
   if (value && typeof value === "object" && Array.isArray((value as { content?: unknown }).content)) {
     return value as AgentToolResult<unknown>;
   }
+  const structuredContent = output ? (output.parse(value) as JsonValue) : undefined;
   const text = typeof value === "string" ? value : JSON.stringify(value ?? null);
-  return { content: [{ type: "text", text }], details: value };
+  return { content: [{ type: "text", text }], details: value, ...(output ? { structuredContent } : {}) };
 }
 
 // `S` defaults to the EMPTY tuple, not `readonly string[]`: a tool that declares nothing then gets
@@ -119,7 +105,9 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
     description: options.description,
     parameters,
     constrainedSampling: CONSTRAINED_SAMPLING,
-    ...(options.deferred ? { deferred: true } : {}),
+    ...(options.exposure ? { exposure: options.exposure } : {}),
+    ...(options.defaultActive !== undefined ? { defaultActive: options.defaultActive } : {}),
+    ...(options.output ? { outputSchema: z.toJSONSchema(options.output) } : {}),
     ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     ...(options.secrets?.length ? { secrets: options.secrets } : {}),
     async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
@@ -127,7 +115,11 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
       if (!parsed.success) {
         // Validation failure is reported TO THE MODEL (it can correct and retry), not thrown.
         const detail = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
-        return { content: [{ type: "text", text: `Invalid arguments: ${detail}` }], details: { error: detail } };
+        return {
+          content: [{ type: "text", text: `Invalid arguments: ${detail}` }],
+          details: { error: detail },
+          isError: true,
+        };
       }
       const store = turnContext.getStore();
       return wrapResult(
@@ -138,6 +130,7 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
           tools: store?.tools,
           secrets: secretValues(options.secrets),
         }),
+        options.output,
       );
     },
   };

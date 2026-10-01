@@ -1,11 +1,13 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type AuthEvent,
   type AuthInteraction,
   type AuthPrompt,
   type Credential,
+  InMemoryCredentialStore,
   type Provider,
   fauxAssistantMessage,
   fauxProvider,
@@ -13,7 +15,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import * as models from "../src/engines/pi/models.ts";
-import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
+import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import {
   type IoOption,
   LoginCancelled,
@@ -87,6 +89,81 @@ function fakeIO(script: { select?: Array<string | undefined>; prompt?: Array<str
 }
 
 describe("loginFlow", () => {
+  it("persists one device ID beside the credentials and gives another installation its own", async () => {
+    const ids: string[] = [];
+    const provider = fakeProvider("device", { oauth: true });
+    provider.auth.oauth!.login = async (_io, options) => {
+      const id = options?.getDeviceId?.();
+      if (!id) throw new Error("device ID required");
+      ids.push(id);
+      return OAUTH_CRED;
+    };
+    const path = await tmpAuth();
+    for (const authPath of [path, path, await tmpAuth()]) {
+      await loginOver(
+        { provider: "device", method: "oauth", authPath, interaction: { prompt: async () => "", notify: () => {} } },
+        { providers: [provider] },
+      );
+    }
+    expect(ids[0]).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i);
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+  it("over a caller's credential store, writes no device ID file and passes none", async () => {
+    let seen: string | undefined = "unset";
+    const provider = fakeProvider("device", { oauth: true });
+    provider.auth.oauth!.login = async (_io, options) => {
+      seen = options?.getDeviceId?.();
+      return OAUTH_CRED;
+    };
+    const credentialStore = new InMemoryCredentialStore();
+    await loginOver(
+      {
+        provider: "device",
+        method: "oauth",
+        credentialStore,
+        interaction: { prompt: async () => "", notify: () => {} },
+      },
+      { providers: [provider] },
+    );
+    expect(seen).toBeUndefined();
+    expect(existsSync(join(dirname(GLOBAL_AUTH_PATH), "settings.json"))).toBe(false);
+    expect(await credentialStore.read("device")).toMatchObject({ type: "oauth" });
+  });
+  it("a broken project .pi/settings.json in the cwd does not block the device ID", async () => {
+    const project = await mkdtemp(join(tmpdir(), "fa-login-cwd-"));
+    await mkdir(join(project, ".pi"));
+    await writeFile(join(project, ".pi", "settings.json"), "{ not json");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(project);
+    try {
+      const provider = fakeProvider("device", { oauth: true });
+      await loginOver(
+        {
+          provider: "device",
+          method: "oauth",
+          authPath: await tmpAuth(),
+          interaction: { prompt: async () => "", notify: () => {} },
+        },
+        { providers: [provider] },
+      );
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+  it("refuses OAuth when the device ID cannot be persisted", async () => {
+    const authPath = await tmpAuth();
+    await mkdir(join(dirname(authPath), "settings.json"));
+    const flow = vi.fn(async () => OAUTH_CRED);
+    const provider = fakeProvider("device", { oauth: true, onOauthLogin: flow });
+    await expect(
+      loginOver(
+        { provider: "device", method: "oauth", authPath, interaction: { prompt: async () => "", notify: () => {} } },
+        { providers: [provider] },
+      ),
+    ).rejects.toThrow("could not persist login device ID");
+    expect(flow).not.toHaveBeenCalled();
+  });
+
   it("a single-method provider auto-runs that method (oauth) and persists {type:oauth}", async () => {
     const path = await tmpAuth();
     const res = await loginFlow(fakeIO().io, {

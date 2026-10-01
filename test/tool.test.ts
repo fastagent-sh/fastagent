@@ -1,13 +1,20 @@
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { fauxAgent } from "./agent.ts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, z } from "../src/index.ts";
 import { loadTools } from "../src/engines/pi/tool.ts";
-import { CODING_TOOL_NAMES, resolveAgentTools } from "../src/engines/pi/create.ts";
+import {
+  CODING_TOOL_NAMES,
+  createPiAgentFromDefinition,
+  piBasePrompt,
+  resolveAgentTools,
+} from "../src/engines/pi/create.ts";
+import { log } from "../src/log.ts";
+import { makeFaux } from "./faux.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -36,8 +43,7 @@ describe("defineTool", () => {
   });
 
   it("passes executionMode through to pi — the author's only way to serialize a batch", async () => {
-    // Nothing inside fastagent sets this any more (the search_tools loader stopped needing it), so without
-    // an assertion the passthrough is a line nobody would notice losing.
+    // Authored tools own their execution mode; the adapter must preserve it.
     expect(
       defineTool({ name: "a", description: "d", input: z.object({}), execute: async () => "" }),
     ).not.toHaveProperty("executionMode");
@@ -201,29 +207,86 @@ describe("loadTools (filesystem discovery)", () => {
     ]);
   });
 
-  it("keeps the deferred search_tools policy independent", async () => {
+  it("keeps native deferred exposure without adding a fastagent loader", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-deferred-"));
     const deferred = defineTool({
       name: "lookup",
       description: "Look up a business record.",
       input: z.object({}),
-      deferred: true,
+      exposure: "deferred",
       execute: () => "ok",
     });
 
-    const { tools, deferredToolNames } = await resolveAgentTools({ tools: [deferred] }, agentDir, process.cwd());
-    expect(tools.map((t) => t.name).sort()).toEqual([
-      "bash",
-      "edit",
-      "find",
-      "grep",
-      "lookup",
-      "ls",
-      "read",
-      "search_tools",
-      "write",
+    const surface = [
+      deferred,
+      ...(
+        [
+          { name: "direct" },
+          { name: "modelOnly", exposure: "model-only" },
+          { name: "scriptOnly", exposure: "codemode" },
+          { name: "invisible", exposure: "hidden" },
+          { name: "inactive", defaultActive: false },
+        ] as const
+      ).map((options) =>
+        defineTool({ ...options, description: options.name, input: z.object({}), execute: () => "ok" }),
+      ),
+    ];
+    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDir, process.cwd());
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(surface.map((tool) => tool.name)));
+    expect(toolNames).toEqual(["direct", "modelOnly"]);
+    expect(indirectTools).toEqual([
+      { name: "lookup", reach: "tool_search" },
+      { name: "scriptOnly", reach: "codemode" },
+      { name: "invisible", reach: "hidden" },
+      { name: "inactive", reach: "inactive" },
     ]);
-    expect(deferredToolNames).toEqual(["lookup"]);
+    const prompt = piBasePrompt({ tools: surface });
+    expect(prompt).toContain("- direct:");
+    expect(prompt).toContain("- modelOnly:");
+    expect(prompt).not.toContain("- scriptOnly:");
+    expect(prompt).not.toContain("- invisible:");
+    expect(prompt).not.toContain("- inactive:");
+    // Only deferred tools are tool_search's to load; codemode lists its own, and an inactive direct tool is authored.
+    expect(prompt).toContain("1 additional tool(s)");
+  });
+
+  it("a built-in the machine's settings disable leaves its tools unreachable, and every signal says so", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "fa-tools-no-search-"));
+    await mkdir(join(workspace, ".pi"));
+    await writeFile(join(workspace, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:tool-search"] }));
+    const agentDir = join(workspace, "fastagent");
+    await mkdir(agentDir);
+    const lookup = defineTool({
+      name: "lookup",
+      description: "Look up a business record.",
+      input: z.object({}),
+      exposure: "deferred",
+      execute: () => "ok",
+    });
+    const scripted = { ...lookup, name: "scripted", exposure: "codemode" as const };
+
+    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDir, workspace);
+    expect(indirectTools).toEqual([
+      { name: "lookup", reach: "unreachable" },
+      { name: "scripted", reach: "codemode" },
+    ]);
+    expect(piBasePrompt({ tools: [lookup], builtinExtensions: ["codemode"] })).not.toContain("tool_search");
+
+    const { faux } = makeFaux();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await createPiAgentFromDefinition(agentDir, {
+        providers: [faux.provider],
+        model: "faux/faux-1",
+        cwd: workspace,
+        tools: [lookup, scripted],
+      });
+      const said = warn.mock.calls.flat().join("\n");
+      expect(said).toContain('tool "lookup" (exposure: deferred) cannot be reached');
+      expect(said).not.toContain('tool "scripted"');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("isolates (surfaces, not fatal) a tool file that does not default-export a tool", async () => {

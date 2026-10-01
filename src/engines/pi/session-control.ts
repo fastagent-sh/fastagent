@@ -404,7 +404,21 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         try {
           const path = activePath(opened);
           if (b) settings = resolveSessionSettings(path, b.models, b.defaults);
-          usage = sessionUsage(path as unknown as PiSessionEntry[], opened, settings?.model.contextWindow);
+          const selected = settings?.model;
+          const latest =
+            selected?.api === "pi-virtual"
+              ? opened
+                  .buildSessionContext()
+                  .messages.filter(
+                    (message) =>
+                      message.role === "assistant" &&
+                      message.stopReason !== "error" &&
+                      message.stopReason !== "aborted",
+                  )
+                  .at(-1)
+              : undefined;
+          const physical = latest?.role === "assistant" ? b?.models.getModel(latest.provider, latest.model) : undefined;
+          usage = sessionUsage(path as unknown as PiSessionEntry[], opened, (physical ?? selected)?.contextWindow);
         } catch (error) {
           log.warn(`[fastagent] session ${session}: state unreadable (entry chain): ${String(error)}`);
         }

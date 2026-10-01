@@ -1,8 +1,8 @@
 import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { dirname, join } from "node:path";
+import { SessionManager, initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
@@ -70,7 +70,25 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("emulates deferral: deferred tools start inactive, search_tools mounts and activates via pi's session", async () => {
+  it("leaves out the Pi built-ins serving leaves out, so settings cannot activate them only in chat", async () => {
+    const dir = await freshAgentDir("fa-chat-excluded-");
+    try {
+      await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+      await mkdir(join(dirname(dir), ".pi"));
+      await writeFile(join(dirname(dir), ".pi/settings.json"), JSON.stringify({ defaultTools: ["+powershell"] }));
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("powershell");
+        expect(rt.session.getActiveToolNames()).not.toContain("powershell");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dirname(dir), { recursive: true, force: true });
+    }
+  });
+
+  it("uses native deferred exposure and settings-selected tool_search in chat", async () => {
     const dir = await freshAgentDir("fa-chat-defer-");
     try {
       await writeFile(
@@ -81,24 +99,26 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
              name: "lookup_weather",
              description: "Look up the weather forecast for a city.",
              parameters: { type: "object", properties: {} },
-             deferred: true,
+             exposure: "deferred",
              execute: async () => ({ content: [{ type: "text", text: "sunny" }], details: {} }),
            }],
          };\n`,
       );
+      await mkdir(join(dirname(dir), ".pi"));
+      await writeFile(join(dirname(dir), ".pi/settings.json"), JSON.stringify({ defaultTools: ["+tool_search"] }));
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const session = rt.session;
-        // Initial active set mirrors serving: deferred tool registered but NOT active; loader active.
+        // Settings select the built-in loader; deferred schemas stay out until discovery.
         expect(session.getAllTools().map((t) => t.name)).toContain("lookup_weather");
         const active = session.getActiveToolNames();
-        expect(active).toContain("search_tools");
+        expect(active).toContain("tool_search");
         expect(active).not.toContain("lookup_weather");
 
         // Drive the SAME builtin loader through pi's tool surface: it must activate via the session.
-        const loader = session.getAllTools().find((t) => t.name === "search_tools");
+        const loader = session.getAllTools().find((t) => t.name === "tool_search");
         expect(loader).toBeDefined();
-        const custom = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
+        const custom = rt.session.agent.state.tools.find((t) => t.name === "tool_search") as unknown as {
           execute: (
             id: string,
             params: unknown,
@@ -106,31 +126,14 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
           ) => Promise<{ content: Array<{ text?: string }> }>;
         };
         const result = await custom.execute("c1", { query: "weather forecast" });
-        expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
+        expect(JSON.stringify(result)).toContain("lookup_weather");
         expect(session.getActiveToolNames()).toContain("lookup_weather");
 
-        // A batch's loader calls must not race the active set: one activates, the sibling reports
-        // already-active. `activate` is a synchronous read-modify-write, so this holds for calls pi runs
-        // concurrently too — started together here rather than awaited in turn, so the assertion is about the
-        // active set and not about call order.
-        await rt.newSession();
-        const reSession = rt.session;
-        const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
-          execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
-        };
-        const texts = (
-          await Promise.all([loader2.execute("p1", { query: "weather" }), loader2.execute("p2", { query: "forecast" })])
-        ).map((r) => r.content[0]?.text ?? "");
-        expect(texts.filter((t) => /Activated: lookup_weather/.test(t))).toHaveLength(1);
-        expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
-        expect(reSession.getActiveToolNames()).toContain("lookup_weather");
-
-        // The documented divergence, as a spec: chat activations do not survive /new — pi's chat
-        // session records no activations, so every rebuild re-narrows and discovery starts over.
+        // /new creates a new conversation; resume/fork restoration is covered on the shared binding.
         await rt.newSession();
         const rebuilt = rt.session;
         expect(rebuilt.getActiveToolNames()).not.toContain("lookup_weather");
-        expect(rebuilt.getActiveToolNames()).toContain("search_tools");
+        expect(rebuilt.getActiveToolNames()).toContain("tool_search");
       } finally {
         await rt.dispose();
       }
@@ -501,6 +504,27 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
 });
 
 describe("session builder: the credential hint belongs to the runtime, not to each session", () => {
+  it("leaves the user's TUI theme alone when a session is created or switched", async () => {
+    // Pi's `theme` is one global; InteractiveMode applies the user's once, at startup.
+    const current = () =>
+      (globalThis as Record<symbol, { name?: string } | undefined>)[Symbol.for("@earendil-works/pi-coding-agent:theme")]
+        ?.name;
+    const dir = await freshAgentDir("fa-chat-theme-");
+    try {
+      await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+      initTheme("light");
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        await rt.newSession();
+        expect(current()).toBe("light");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dirname(dir), { recursive: true, force: true });
+    }
+  });
+
   it("warns once, not again on every newSession()", async () => {
     // Model resolution moved into createRuntime (extensions must load before a model they register
     // can resolve), which put this warning on a per-session path. Credentials do not change between
@@ -541,8 +565,9 @@ describe("session builder: chat offers the model the same tool set serving does"
     try {
       const active = rt.session.getActiveToolNames().sort();
       expect(active).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
-      // Exactly one copy of each: `noTools: "builtin"` keeps pi's own read/bash/edit/write out, and
-      // fastagent mounts its own. Two under one name would be the model's problem to disambiguate.
+      // Exactly one copy of each: pi registers its own read/bash/edit/write and fastagent mounts its own under the
+      // same names; pi's registry keeps the custom tool (`_refreshToolRegistry` writes custom tools after built-ins).
+      // Two under one name would be the model's problem to disambiguate.
       expect(rt.session.getAllTools().filter((tool) => tool.name === "bash")).toHaveLength(1);
     } finally {
       await rt.dispose?.();

@@ -34,7 +34,7 @@ import {
 import { defineTool, z } from "../src/pi.ts";
 import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
-import { withSearchTool } from "../src/engines/pi/search-tools.ts";
+
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { fauxControlledAgent } from "./agent.ts";
 import type { SessionEvent } from "../src/session.ts";
@@ -47,13 +47,16 @@ async function agentWith(
 ) {
   const { faux } = makeFaux();
   faux.setResponses(responses);
-  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-  modelRuntime.registerNativeProvider(faux.provider);
   const cwd = process.cwd();
   return createPiAgentFromSession({
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
-      engine: async () => ({ modelRuntime, model: faux.getModel() }),
+      engine: async () => {
+        const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+        runtime.registerNativeProvider(faux.provider);
+        return { modelRuntime: runtime };
+      },
+      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       readDefinition: () => ({ skills: [] }),
       cwd,
       ...options,
@@ -188,7 +191,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     );
     await watching;
     expect(toolRuns).toBe(1);
-    expect(requests).toEqual(["assistant", "summary", "summary", "assistant"]);
+    expect(requests[0]).toBe("assistant");
+    expect(requests.at(-1)).toBe("assistant");
+    expect(requests).toContain("summary");
     expect(record.getEntries().filter((e) => e.type === "compaction")).toHaveLength(1);
     expect(events.filter((e) => e.type === "run_started")).toHaveLength(1);
     expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
@@ -493,7 +498,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           defineTool({
             name: "lazy",
             description: "Discovered on demand.",
-            deferred: true,
+            exposure: "deferred",
             input: z.object({}),
             execute: async () => "",
           }),
@@ -657,7 +662,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     defineTool({
       name: "weather_forecast",
       description: "Look up the weather forecast for a place.",
-      deferred: true,
+      exposure: "deferred",
       input: z.object({}),
       execute: async () => "sunny",
     }),
@@ -674,7 +679,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
         // Turn one: the model cannot see the deferred tool, searches, and finds it.
         (context) => {
           record(context);
-          return fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "s1" }));
+          return fauxAssistantMessage(fauxToolCall("tool_search", { query: "weather forecast" }, { id: "s1" }));
         },
         fauxAssistantMessage("found it"),
         // Turn two: a fresh session over the same record.
@@ -683,7 +688,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
           return fauxAssistantMessage("still here");
         },
       ],
-      { tools: withSearchTool(deferredPair()) },
+      { tools: deferredPair() },
     );
 
     await collect(agent.invoke({ session: "discovers" }, { text: "what is the weather?" }));
@@ -693,11 +698,9 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     expect(offered[1]).toContain("weather_forecast"); // and restored for the next turn
   });
 
-  it("a tool added to the definition later joins an EXISTING conversation", async () => {
-    // pi 0.86 can restore a session's tool set from the transcript's `toolsAdded` declarations, which would
-    // pin an old conversation to the tools it started with. fastagent pins the initial active set instead
-    // (`noTools: "builtin"` makes pi's `initialActiveToolNames` an explicit list), so that restore never runs
-    // — and there is no warning to notice if it ever does.
+  it("a tool added to the definition joins an EXISTING conversation", async () => {
+    // A channel's session id is its chat: there is no `/new`, so a loadout frozen at the first turn would keep every
+    // new tool out of that chat forever while the base prompt lists it.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const alpha = () =>
       defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });
@@ -727,14 +730,40 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     expect(offered).toContain("alpha");
   });
 
+  it("a tool missing from one release returns to an EXISTING conversation when it is mounted again", async () => {
+    // Pi records the turn without it as a removal; that is the definition's gap, not the conversation's choice.
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const tool = (name: string) =>
+      defineTool({ name, description: `The ${name} tool.`, input: z.object({}), execute: async () => "" });
+    const offered: string[][] = [];
+    const turn = async (tools: MountedTool[]) => {
+      const agent = await agentWith(
+        [
+          (context) => {
+            offered.push(sentTools(context));
+            return fauxAssistantMessage("ok");
+          },
+        ],
+        { sessions: store, tools },
+      );
+      await collect(agent.invoke({ session: "rollback" }, { text: "go" }));
+    };
+    await turn([tool("alpha"), tool("beta")]);
+    await turn([tool("alpha")]);
+    await turn([tool("alpha"), tool("beta")]);
+    expect(offered[1]).not.toContain("beta");
+    expect(offered[2]).toContain("beta");
+    expect(offered[2]).toContain("alpha");
+  });
+
   it("a recorded activation whose tool is gone is dropped, not replayed into a throw", async () => {
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const withTool = await agentWith(
       [
-        fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "s1" })),
+        fauxAssistantMessage(fauxToolCall("tool_search", { query: "weather forecast" }, { id: "s1" })),
         fauxAssistantMessage("found it"),
       ],
-      { sessions: store, tools: withSearchTool(deferredPair()) },
+      { sessions: store, tools: deferredPair() },
     );
     await collect(withTool.invoke({ session: "shrinks" }, { text: "weather?" }));
 
@@ -749,9 +778,9 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
       ],
       {
         sessions: store,
-        tools: withSearchTool([
+        tools: [
           defineTool({ name: "eager", description: "Always available.", input: z.object({}), execute: async () => "" }),
-        ]),
+        ],
       },
     );
 

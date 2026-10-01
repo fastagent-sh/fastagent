@@ -1,331 +1,285 @@
-import { describe, expect, it } from "vitest";
-import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { log } from "../src/log.ts";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import type { AgentEvent } from "../src/agent.ts";
-import { piBasePrompt } from "../src/engines/pi/create.ts";
-import { makeSearchToolsTool, withSearchTool } from "../src/engines/pi/search-tools.ts";
-import { defineTool, isDeferredTool } from "../src/engines/pi/tool.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { fauxAgent } from "./agent.ts";
+import { collect } from "../src/collect.ts";
+import type { SessionEvent } from "../src/session.ts";
+import { defineTool } from "../src/engines/pi/tool.ts";
+import { fauxControlledAgent } from "./agent.ts";
 import { sentTools } from "./faux.ts";
 
+const directories: string[] = [];
+afterEach(async () => {
+  for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+async function workspace(defaultTools?: string[]) {
+  const cwd = await mkdtemp(join(tmpdir(), "fa-native-tools-"));
+  directories.push(cwd);
+  if (defaultTools) {
+    await mkdir(join(cwd, ".pi"));
+    await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ defaultTools }));
+  }
+  return cwd;
+}
 const weather = () =>
   defineTool({
-    name: "lookup_weather",
-    description: "Look up the current weather forecast for a city",
+    name: "weather",
+    description: "Weather forecast",
+    exposure: "deferred",
     input: z.object({ city: z.string() }),
-    deferred: true,
-    execute: ({ city }) => `Weather for ${city}: sunny`,
+    output: z.object({ temperature: z.number() }),
+    execute: (_input, ctx) => {
+      expect(ctx.sessionManager?.getSessionId()).toBe("room:/native");
+      return { temperature: 42 };
+    },
   });
 
-const echo = () =>
-  defineTool({
-    name: "echo",
-    description: "Echo a value",
-    input: z.object({ value: z.string() }),
-    execute: ({ value }) => value,
+describe("Pi-native tool loadouts", () => {
+  it("does not load Pi's MCP extension: a workspace mcp.json starts no server", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, ".pi"));
+    const started = join(cwd, "started");
+    await writeFile(
+      join(cwd, ".pi/mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          demo: {
+            command: process.execPath,
+            args: ["-e", `require("fs").writeFileSync(${JSON.stringify(started)}, "")`],
+          },
+        },
+      }),
+    );
+    const { agent } = await fauxControlledAgent([fauxAssistantMessage("done")], { cwd });
+    await collect(agent.invoke({ session: "no-mcp" }, { text: "go" }));
+    // The server would be spawned at session_start, before the model is asked.
+    expect(existsSync(started)).toBe(false);
   });
 
-describe("deferred tools: marker + mounting + prompt", () => {
-  it("defineTool({ deferred }) marks the tool; withSearchTool mounts the loader only when needed", () => {
-    expect(isDeferredTool(weather())).toBe(true);
-    expect(isDeferredTool(echo())).toBe(false);
-
-    // No deferred tool → untouched (today's agents never see search_tools).
-    const plain = [echo()];
-    expect(withSearchTool(plain)).toBe(plain);
-    // Deferred tool → loader appended; idempotent; an author-defined search_tools wins.
-    const mounted = withSearchTool([echo(), weather()]);
-    expect(mounted.map((t) => t.name)).toContain("search_tools");
-    expect(withSearchTool(mounted)).toBe(mounted);
-    const authored = defineTool({
-      name: "search_tools",
-      description: "my own loader",
-      input: z.object({}),
-      execute: () => "mine",
-    });
-    const kept = withSearchTool([weather(), authored]);
-    expect(kept.filter((t) => t.name === "search_tools")).toHaveLength(1);
-    expect(kept.find((t) => t.name === "search_tools")?.description).toBe("my own loader");
-  });
-
-  it("an authored search_tools marked deferred keeps the loader ACTIVE (a deferred loader would strand every deferred tool)", () => {
-    // The loader is the only entry point to the deferred tools — deferring it means nothing could ever
-    // activate anything: silent, permanent capability loss. The marker is ignored (and warned about).
-    const deferredLoader = defineTool({
-      name: "search_tools",
-      description: "my own loader",
-      input: z.object({}),
-      deferred: true,
-      execute: () => "mine",
-    });
-    const mounted = withSearchTool([weather(), deferredLoader]);
-    const loader = mounted.find((t) => t.name === "search_tools");
-    expect(loader?.description).toBe("my own loader"); // still the author's — no builtin swapped in
-    expect(loader && isDeferredTool(loader)).toBe(false); // marker stripped → in the initial active set
-  });
-
-  it("piBasePrompt lists only non-deferred tools + a discovery note, so activation never changes the prompt", () => {
-    const tools = withSearchTool([echo(), weather()]);
-    const prompt = piBasePrompt({ tools });
-    expect(prompt).toContain("- echo:");
-    expect(prompt).toContain("- search_tools:");
-    expect(prompt).not.toContain("lookup_weather"); // its schema is not in the request until activated
-    expect(prompt).toMatch(/1 additional tool\(s\) are registered but inactive/);
-    expect(piBasePrompt({ tools: [echo()] })).not.toMatch(/registered but inactive/);
-  });
-});
-
-/** The messages a record holds — a branch also carries non-message entries (activations, overrides). */
-function recordedMessages(record: { getBranch(): unknown[] }): unknown[] {
-  return record.getBranch().flatMap((entry) => {
-    const message = (entry as { message?: unknown }).message;
-    return message ? [message] : [];
-  });
-}
-
-/** Tools a transcript message declares as added at its position (pi 0.86's tool-change anchor). */
-function toolsAddedNames(message: unknown): string[] | undefined {
-  const added = (message as { toolsAdded?: { name: string }[] } | undefined)?.toolsAdded;
-  return added?.map((tool) => tool.name);
-}
-
-describe("deferred tools: end-to-end through invoke (faux model)", () => {
-  function makeAgent(responses: FauxResponseStep[], sessions = piInMemorySessionRecordStore({ cwd: process.cwd() })) {
-    return fauxAgent(responses, { sessions, tools: withSearchTool([echo(), weather()]) });
-  }
-
-  it("search_tools activates a deferred tool: the model is offered it, and the transcript records the load point", async () => {
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    let offeredSameRun: string[] = [];
-    const { agent } = makeAgent(
+  it("honors Pi's own -builtin:<name> setting for the built-ins it loads", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, ".pi"));
+    await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:codemode"] }));
+    let offered: string[] = [];
+    const { agent } = await fauxControlledAgent(
       [
-        fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "c1" })),
         (context) => {
-          offeredSameRun = sentTools(context);
-          return fauxAssistantMessage("found it");
+          offered = sentTools(context);
+          return fauxAssistantMessage("done");
         },
       ],
-      sessions,
+      { cwd, tools: [{ ...weather(), exposure: "codemode" }] },
     );
-
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s1" }, { text: "what's the weather?" })) events.push(e);
-    expect(events.at(-1)?.type).toBe("completed");
-
-    // The point of activating, and the only assertion in the repo that observes it: the very next request of
-    // the SAME run offers the tool. The other two assertions below read what the loader SAID and what the
-    // journal RECORDED; since 0.86 the request's tool list is derived separately, by pi reconciling
-    // `context.tools` against the transcript's declarations at each turn boundary, and nothing else here
-    // watches the output of that step.
-    expect(offeredSameRun).toContain("lookup_weather");
-
-    // The loader's tool result reports the activation to the model…
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    expect(JSON.stringify(ended.content)).toContain("lookup_weather");
-
-    // …and pi 0.86 anchors the addition in the transcript itself: a system message carrying `toolsAdded`,
-    // written after the batch of tool results the activating call belongs to. That position is the
-    // prompt-cache prefix native deferred-loading providers keep. Located by the declaration, not by an
-    // offset from the result: the message follows the whole BATCH, so an offset only holds for one call.
-    const messages = recordedMessages(await sessions.openOrCreate("s1"));
-    const declaring = messages.filter((m) => toolsAddedNames(m)?.includes("lookup_weather"));
-    expect(declaring).toHaveLength(1);
-    const results = messages.findIndex((m) => (m as { role?: string }).role === "toolResult");
-    expect(messages.indexOf(declaring[0])).toBeGreaterThan(results);
-    // That the activation SURVIVES into the next turn is asserted where it is observable — against
-    // the tools the model is offered (agent-session-factory.test.ts).
+    await collect(agent.invoke({ session: "no-codemode" }, { text: "go" }));
+    expect(offered).not.toContain("codemode");
   });
 
-  it("parallel batch: two search_tools calls — one activates, the other reports already-active", async () => {
-    // pi executes a batch's tool calls in parallel; only the call that actually activated may produce an
-    // addition, and the sibling must report the truth rather than an empty "Activated: ." claim.
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    const { agent } = makeAgent(
+  it("says an extension's repeated notification once, then at debug", async () => {
+    const cwd = await workspace();
+    const notifier = join(cwd, "notify.mjs");
+    await writeFile(
+      notifier,
+      `export default (pi) => pi.on("session_start", (_event, ctx) => ctx.ui.notify("notifier ${cwd} is misconfigured", "warning"));\n`,
+    );
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
+    try {
+      const { agent } = await fauxControlledAgent([fauxAssistantMessage("done"), fauxAssistantMessage("again")], {
+        cwd,
+        extensionPaths: [notifier],
+      });
+      await collect(agent.invoke({ session: "headless" }, { text: "go" }));
+      await collect(agent.invoke({ session: "headless" }, { text: "go again" }));
+      // Every turn starts the extension again; the same notification is a warning once, then debug.
+      const said = (spy: typeof warn) =>
+        spy.mock.calls.flat().filter((line) => String(line).includes(`notifier ${cwd} is misconfigured`));
+      expect(said(warn)).toHaveLength(1);
+      expect(said(debug)).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
+  });
+
+  it("activates only the discovery tool an authored exposure needs, with no settings", async () => {
+    const offeredWith = async (tools: ReturnType<typeof weather>[]) => {
+      let offered: string[] = [];
+      const { agent } = await fauxControlledAgent(
+        [
+          (context) => {
+            offered = sentTools(context);
+            return fauxAssistantMessage("done");
+          },
+        ],
+        { cwd: await workspace(), tools },
+      );
+      await collect(agent.invoke({ session: "room:/native" }, { text: "go" }));
+      return offered;
+    };
+    const direct = await offeredWith([{ ...weather(), exposure: "direct" }]);
+    expect(direct).not.toContain("codemode");
+    expect(direct).not.toContain("tool_search");
+    const deferred = await offeredWith([weather()]);
+    expect(deferred).toContain("tool_search");
+    expect(deferred).not.toContain("codemode");
+    expect(deferred).not.toContain("weather");
+    const scripted = await offeredWith([{ ...weather(), exposure: "codemode" }]);
+    expect(scripted).toContain("codemode");
+    expect(scripted).not.toContain("tool_search");
+  });
+
+  it("inherits +codemode, returns structured output, and retains nested events only on the observation plane", async () => {
+    const events: SessionEvent[] = [];
+    const { agent, sessions } = await fauxControlledAgent(
       [
-        fauxAssistantMessage([
-          fauxToolCall("search_tools", { query: "weather" }, { id: "c1" }),
-          fauxToolCall("search_tools", { query: "forecast" }, { id: "c2" }),
-        ]),
+        fauxAssistantMessage(
+          fauxToolCall(
+            "codemode",
+            {
+              code: "const result = await tools.weather({city: 'London'}); return result.temperature;",
+            },
+            { id: "outer" },
+          ),
+        ),
         fauxAssistantMessage("done"),
       ],
-      sessions,
+      { cwd: await workspace(["+codemode"]), tools: [weather()], observer: (_session, event) => events.push(event) },
     );
-
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s3" }, { text: "weather?" })) events.push(e);
-    expect(events.at(-1)?.type).toBe("completed");
-
-    const messages = recordedMessages(await sessions.openOrCreate("s3"));
-    const results = messages.filter((m) => (m as { role?: string }).role === "toolResult") as Array<{
-      content: Array<{ text?: string }>;
-    }>;
-    expect(results).toHaveLength(2);
-    // The tool is added to the transcript exactly once, not once per sibling call.
-    expect(messages.flatMap((m) => toolsAddedNames(m) ?? []).filter((n) => n === "lookup_weather")).toHaveLength(1);
-    const texts = results.map((r) => r.content[0]?.text ?? "");
-    expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
-    expect(texts.some((t) => /Activated: \./.test(t))).toBe(false);
-  });
-
-  it("no keyword match → reports the inactive catalog instead of activating anything", async () => {
-    let offeredNextTurn: string[] = [];
-    const { agent } = makeAgent([
-      fauxAssistantMessage(fauxToolCall("search_tools", { query: "quantum chess" }, { id: "c1" })),
-      fauxAssistantMessage("ok"),
-      (context) => {
-        offeredNextTurn = sentTools(context);
-        return fauxAssistantMessage("next");
-      },
-    ]);
-
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s2" }, { text: "go" })) events.push(e);
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    expect(JSON.stringify(ended.content)).toMatch(/No tools matched .*lookup_weather/);
-    for await (const _ of agent.invoke({ session: "s2" }, { text: "again" })) {
-    }
-    expect(offeredNextTurn.sort()).toEqual(["echo", "search_tools"]);
-  });
-
-  it("a broad query over the activation cap activates NOTHING and asks for a narrower query", async () => {
-    // Activation is additive, session-persisted, and has no deactivate path — one broad token must
-    // not permanently activate the catalog.
-    const many = Array.from({ length: 6 }, (_, i) =>
-      defineTool({
-        name: `fetch_${i}`,
-        description: `Fetch resource kind ${i}`,
-        input: z.object({}),
-        deferred: true,
-        execute: () => "ok",
+    const projected = [];
+    for await (const event of agent.invoke({ session: "room:/native" }, { text: "go" })) projected.push(event);
+    expect(projected.at(-1)).toMatchObject({ type: "completed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_started",
+        data: expect.objectContaining({ id: "outer/1", name: "weather", parentToolCallId: "outer" }),
       }),
     );
-    let offeredNextTurn: string[] = [];
-    const { agent } = fauxAgent(
-      [
-        fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch" }, { id: "c1" })),
-        fauxAssistantMessage("ok"),
-        (context) => {
-          offeredNextTurn = sentTools(context);
-          return fauxAssistantMessage("next");
-        },
-      ],
-      { tools: withSearchTool(many) },
-    );
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s4" }, { text: "go" })) events.push(e);
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    expect(JSON.stringify(ended.content)).toMatch(/too many to activate at once/);
-    for await (const _ of agent.invoke({ session: "s4" }, { text: "again" })) {
-    }
-    expect(offeredNextTurn).toEqual(["search_tools"]); // nothing activated
-  });
-
-  it("the cap has a guaranteed escape: an exact tool name activates that one tool", async () => {
-    // After an over-cap answer the model narrows to a name from the candidate list — this second step
-    // must succeed, or a shared-prefix tool family (fetch_*) is permanently unreachable.
-    const many = Array.from({ length: 6 }, (_, i) =>
-      defineTool({
-        name: `fetch_${i}`,
-        description: `Fetch resource kind ${i}`,
-        input: z.object({}),
-        deferred: true,
-        execute: () => "ok",
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_finished",
+        data: expect.objectContaining({
+          id: "outer",
+          isError: false,
+          content: expect.objectContaining({
+            content: expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("42") })]),
+          }),
+        }),
       }),
     );
-    let offeredNextTurn: string[] = [];
-    const { agent } = fauxAgent(
-      [
-        fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch_3" }, { id: "c1" })),
-        fauxAssistantMessage("ok"),
-        (context) => {
-          offeredNextTurn = sentTools(context);
-          return fauxAssistantMessage("next");
-        },
-      ],
-      { tools: withSearchTool(many) },
-    );
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s7" }, { text: "go" })) events.push(e);
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    expect(JSON.stringify(ended.content)).toMatch(/Activated: fetch_3/);
-    for await (const _ of agent.invoke({ session: "s7" }, { text: "again" })) {
-    }
-    expect(offeredNextTurn.sort()).toEqual(["fetch_3", "search_tools"]);
+    expect(projected.filter((event) => event.type === "tool_started")).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain('"structuredContent"');
+    expect(JSON.stringify(projected)).not.toContain('"structuredContent"');
+    expect(JSON.stringify((await sessions.openOrCreate("room:/native")).getBranch())).toContain("nestedCalls");
   });
 
-  it("a query matching an ALREADY-ACTIVE tool says so — never 'No tools matched' (capability-missing trap)", async () => {
-    // Long conversations forget what they activated; the loader is the only discovery surface, so it
-    // must answer for the whole catalog, not only the inactive slice.
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    const { agent } = makeAgent(
-      [
-        fauxAssistantMessage(fauxToolCall("search_tools", { query: "echo" }, { id: "c1" })), // echo is ACTIVE
-        fauxAssistantMessage("ok"),
-      ],
-      sessions,
+  it("keeps validation and permission hooks on nested codemode calls", async () => {
+    const cwd = await workspace(["+codemode"]);
+    const policy = join(cwd, "policy.mjs");
+    await writeFile(
+      policy,
+      `export default pi => pi.on("tool_call", event => event.toolName === "weather" && event.input.city === "blocked" ? { block: true, reason: "denied by policy" } : undefined);`,
     );
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s5" }, { text: "go" })) events.push(e);
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    const text = JSON.stringify(ended.content);
-    expect(text).toMatch(/Already active \(call directly\): echo/);
-    expect(text).not.toMatch(/No tools matched/);
+    const execute = vi.fn(weather().execute);
+    const tool = { ...weather(), execute };
+    const { agent } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.weather({})" })),
+        fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.weather({city: 'blocked'})" })),
+        fauxAssistantMessage("done"),
+      ],
+      { cwd, tools: [tool], extensionPaths: [policy] },
+    );
+    const events = [];
+    for await (const event of agent.invoke({ session: "room:/native" }, { text: "go" })) events.push(event);
+    expect(events.filter((event) => event.type === "tool_ended").map((event) => event.isError)).toEqual([true, true]);
+    expect(JSON.stringify(events)).toContain("denied by policy");
+    expect(execute).not.toHaveBeenCalled();
   });
 
-  it("a custom loader's shared/frozen result object passes through untouched", async () => {
-    const frozen = Object.freeze({ content: [{ type: "text", text: "done" }], details: {} });
-    const loader = defineTool({
-      name: "my_loader",
-      description: "activates the weather tool",
-      input: z.object({}),
-      async execute(_input, ctx) {
-        await ctx.tools?.activate(["lookup_weather"]);
-        return frozen; // shared/frozen result — legal per the defineTool contract
-      },
+  it("aborts a nested codemode tool when the caller cancels", async () => {
+    let start = () => {};
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
     });
-    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    const { agent } = fauxAgent(
-      [fauxAssistantMessage(fauxToolCall("my_loader", {}, { id: "c1" })), fauxAssistantMessage("ok")],
-      { sessions, tools: [loader, weather()] },
+    let cancelled = false;
+    const tool = defineTool({
+      name: "wait",
+      description: "Wait for cancellation",
+      exposure: "codemode",
+      input: z.object({}),
+      execute: (_args, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              cancelled = true;
+              reject(new Error("cancelled"));
+            },
+            { once: true },
+          );
+          start();
+        }),
+    });
+    const { agent } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.wait({})" }))],
+      { cwd: await workspace(["+codemode"]), tools: [tool] },
     );
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s6" }, { text: "go" })) events.push(e);
-    expect(events.at(-1)?.type).toBe("completed"); // no throw on the frozen object
-    // `wrapResult` returns a full AgentToolResult BY REFERENCE: nothing on the path may stamp a field onto
-    // the author's object, and what the session records is the author's own content.
-    expect(Object.keys(frozen)).toEqual(["content", "details"]);
-    const messages = recordedMessages(await sessions.openOrCreate("s6"));
-    const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
-      content: Array<{ text?: string }>;
-    };
-    expect(toolResult.content[0]?.text).toBe("done");
+    const iterator = agent.invoke({ session: "cancelled" }, { text: "go" })[Symbol.asyncIterator]();
+    const draining = (async () => {
+      for (;;) {
+        const result = await iterator.next();
+        if (result.done) return;
+      }
+    })();
+    await started;
+    await iterator.return?.();
+    await draining;
+    expect(cancelled).toBe(true);
   });
 
-  it("a noise query (no searchable tokens) activates nothing — vacuous every() must not match the catalog", async () => {
-    let offeredNextTurn: string[] = [];
-    const { agent } = makeAgent([
-      fauxAssistantMessage(fauxToolCall("search_tools", { query: "???" }, { id: "c1" })),
-      fauxAssistantMessage("ok"),
-      (context) => {
-        offeredNextTurn = sentTools(context);
-        return fauxAssistantMessage("next");
-      },
-    ]);
-    const events: AgentEvent[] = [];
-    for await (const e of agent.invoke({ session: "s8" }, { text: "go" })) events.push(e);
-    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
-    expect(JSON.stringify(ended.content)).toMatch(/no searchable keywords/);
-    for await (const _ of agent.invoke({ session: "s8" }, { text: "again" })) {
-    }
-    expect(offeredNextTurn.sort()).toEqual(["echo", "search_tools"]);
-  });
-
-  it("search_tools outside a turn (bare `fastagent tool` run) degrades with a clear message", async () => {
-    const tool = makeSearchToolsTool() as unknown as {
-      execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
-    };
-    const result = await tool.execute("cli", { query: "weather" });
-    expect(result.content[0]?.text).toMatch(/unavailable outside a conversation turn/);
+  it("restores native tool_search discoveries across bindings, forks, and compaction", async () => {
+    const cwd = await workspace();
+    await mkdir(join(cwd, ".pi"));
+    await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ compaction: { keepRecentTokens: 1 } }));
+    const offered: string[][] = [];
+    const { agent, control } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("tool_search", { query: "weather" })),
+        fauxAssistantMessage("discovered"),
+        ...Array.from({ length: 2 }, () => (context: Parameters<typeof sentTools>[0]) => {
+          offered.push(sentTools(context));
+          return fauxAssistantMessage("still available");
+        }),
+        // A one-token window splits the latest turn; Pi summarizes both history and its prefix.
+        fauxAssistantMessage("The conversation discovered the weather tool."),
+        fauxAssistantMessage("The latest turn asks to keep using weather."),
+        (context) => {
+          offered.push(sentTools(context));
+          return fauxAssistantMessage("available after compaction");
+        },
+      ],
+      { cwd, tools: [weather()] },
+    );
+    await collect(agent.invoke({ session: "room:/native" }, { text: "discover" }));
+    const at = (await control.sessions.get("room:/native").state()).leafEntryId!;
+    const fork = await control.sessions.fork({ from: "room:/native", at, into: "fork" });
+    expect(fork.ok).toBe(true);
+    await collect(agent.invoke({ session: "room:/native" }, { text: "again" }));
+    if (fork.ok) await collect(agent.invoke({ session: "fork" }, { text: "fork" }));
+    expect(offered).toHaveLength(2);
+    for (const tools of offered) expect(tools).toContain("weather");
+    const finished = (async () => {
+      for await (const event of control.sessions.get("room:/native").events())
+        if (event.type === "compaction_finished") return event;
+    })();
+    expect(await control.sessions.get("room:/native").compact()).toEqual({ ok: true });
+    expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
+    await collect(agent.invoke({ session: "room:/native" }, { text: "after compaction" }));
+    expect(offered).toHaveLength(3);
+    expect(offered.at(-1)).toContain("weather");
   });
 });

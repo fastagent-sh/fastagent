@@ -3,8 +3,16 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type Api, InMemoryCredentialStore, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { setImmediate } from "node:timers/promises";
+import {
+  type Api,
+  InMemoryCredentialStore,
+  type Model,
+  type Models,
+  createProvider,
+  fauxProvider,
+} from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   createPiModelRuntime,
   literalKeyProviders,
@@ -15,6 +23,7 @@ import {
   probeAuthSource,
   providerAuthStatuses,
   refreshCatalog,
+  modelRuntimeFiles,
 } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
 import { agentModels, createPiModels } from "../src/engines/pi/agent-models.ts";
@@ -115,6 +124,43 @@ describe("probeApiKey (the post-login quick-fail check)", () => {
 });
 
 describe("models.json: definition-local custom endpoints (createPiModelRuntime)", () => {
+  it("waits for injected providers' registration refreshes before publishing the runtime", async () => {
+    const nativeRefresh = ModelRuntime.prototype.refresh;
+    let release = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    const refresh = vi.spyOn(ModelRuntime.prototype, "refresh").mockImplementation(async function (
+      this: ModelRuntime,
+      options,
+    ) {
+      if (this.getRegisteredNativeProvider("faux")) {
+        entered = true;
+        await blocked;
+      }
+      return nativeRefresh.call(this, options);
+    });
+    let ready = false;
+    const loaded = createPiModelRuntime({
+      credentials: new InMemoryCredentialStore(),
+      machineLayer: false,
+      providers: [fauxProvider().provider],
+    }).then((runtime) => {
+      ready = true;
+      return runtime;
+    });
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      await setImmediate();
+      expect(ready).toBe(false);
+    } finally {
+      release();
+      await loaded;
+      refresh.mockRestore();
+    }
+    expect((await loaded).hasConfiguredAuth("faux")).toBe(true);
+  });
   /** An agent dir with `models.json` — the file that declares a self-hosted / gateway endpoint. */
   async function agentWith(modelsJson: string | undefined): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), "fastagent-modelsjson-"));
@@ -265,6 +311,38 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
     expect(existsSync(join(dir, ".state", "models-store.json"))).toBe(false);
     expect(existsSync(globalCatalogPath())).toBe(false);
+  });
+
+  it("every runtime an agent builds reads the model files as they were at startup", async () => {
+    // Each session builds its own runtime while the control plane keeps the startup catalog: a runtime re-reading the
+    // files would let turns run on an edit the control plane validates and reports against the old content.
+    const dir = await agentWith(GATEWAY);
+    const models = agentModels(dir, { authPath: join(dir, "auth.json") });
+    const startup = await models.runtime();
+    await writeFile(join(dir, "models.json"), GATEWAY.replace("vllm.internal", "edited.internal"));
+    await writeFile(
+      join(dir, "models-store.json"),
+      JSON.stringify({
+        anthropic: {
+          lastModified: Date.now() + 86_400_000,
+          models: [{ ...startup.getProvider("anthropic")!.getModels()[0], id: "catalog-added" }],
+        },
+      }),
+    );
+    const session = await models.createRuntime();
+    for (const runtime of [startup, session]) {
+      expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
+      expect(runtime.getModel("anthropic", "catalog-added")).toBeUndefined();
+    }
+    const fresh = await agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime();
+    expect(resolveModel(fresh, "mygw/deepseek-v3").baseUrl).toBe("http://edited.internal:8000/v1");
+    expect(fresh.getModel("anthropic", "catalog-added")).toBeDefined();
+    await writeFile(join(dir, "models.json"), "{ not json");
+    await expect(models.createRuntime()).resolves.toBeDefined();
+    // A fresh agent reads the edit, and names the agent's own file when it cannot load it.
+    await expect(agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime()).rejects.toThrow(
+      join(dir, "models.json"),
+    );
   });
 });
 
@@ -465,6 +543,42 @@ describe("authStatus: the one answer to what authenticates a provider for an age
 });
 
 describe("the model catalogs: the agent's own over the machine's", () => {
+  it("layers chat, image, and classifier entries independently when their IDs match", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-model-types-"));
+    const entry = (models: object[]) => ({ anthropic: { lastModified: Date.now() + 86_400_000, models } });
+    await mkdir(dirname(globalCatalogPath()), { recursive: true });
+    await writeFile(
+      globalCatalogPath(),
+      JSON.stringify(
+        entry([
+          { id: "same", name: "machine chat" },
+          { id: "same", type: "classifier", name: "classifier" },
+        ]),
+      ),
+    );
+    await writeFile(
+      join(dir, "models-store.json"),
+      JSON.stringify(
+        entry([
+          { id: "same", type: "chat", name: "agent chat" },
+          { id: "same", type: "image", name: "image" },
+        ]),
+      ),
+    );
+    try {
+      const files = await modelRuntimeFiles({ agentDir: dir });
+      const { modelsStore } = await files.create();
+      if (!modelsStore) throw new Error("expected a read-only catalog store");
+      expect((await modelsStore.read("anthropic"))!.models.map((model) => model.name).sort()).toEqual([
+        "agent chat",
+        "classifier",
+        "image",
+      ]);
+    } finally {
+      await rm(globalCatalogPath(), { force: true });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it("layers by model id, the agent winning, and drops an entry pi would ignore before the merge", async () => {
     const bundled = createPiModels().getProvider("anthropic")?.getModels()[0] as Model<Api>;
     const later = Date.now() + 86_400_000;

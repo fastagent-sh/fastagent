@@ -664,7 +664,7 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     // is ever ACTIVATED, and that is the guarantee. What the model actually receives is asserted in
     // the systemPrompt test above.
     expect(session.getActiveToolNames()).toEqual(["read"]);
-    // Reactivation is the attack: a later loader — `search_tools` uses exactly this call — must not
+    // Reactivation is the attack: a later native loader uses this same call and must not
     // be able to hand back something the caller left out. `powershell` is in the list because pi
     // registers it whatever we pass (0.84.3), which is precisely why it has to be excluded too.
     session.setActiveToolsByName(["read", "bash", "write", "powershell"]);

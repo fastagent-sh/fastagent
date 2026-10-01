@@ -480,7 +480,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
 | L0 | `user_message { entryId, text, images? }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text` and `images`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
-| L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. |
+| L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. A call made from inside another tool (a codemode script) carries `parentToolCallId`, the outer call's id. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |
 | L1 | `queue_changed { steering, followUp }` | The active run's whole queue: the queued prompt texts (§7 `pending`). |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
@@ -510,8 +510,8 @@ excludes editor replacement, themes, widgets, and all other TUI presentation sur
 ## 10. Definition fidelity
 
 The serving planes must run the same agent that `dev`, `start`, and embedded Agent Handler run:
-FastAgent prompt assembly, the same skills (definition and machine, core §5) and tools, the same deferred-tool activation,
-FastAgent auth (never implicit `~/.pi` state), model policy from config, and host-owned working
+FastAgent prompt assembly, the same skills (definition and machine, core §5) and tools, the same native tool
+loadout restoration, FastAgent model auth (never implicit `~/.pi` credentials), model policy from config, and host-owned working
 directory and session repository — never client-provided paths.
 
 `src/engines/pi/session-builder.ts` proves this assembly seam: it builds a resident pi

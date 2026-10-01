@@ -603,6 +603,22 @@ describe("preflight: a model credential that does not travel", () => {
     }
   });
 
+  it("a model only the definition's extensions declare is not gated: its credentials are that code's, on the box", async () => {
+    const dir = await workspace({
+      "extensions/router.ts": `export default (pi) => pi.registerVirtualModel({
+  provider: "router", id: "auto", name: "Automatic",
+  route: (_request, ctx) => ({ model: ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5"), thinkingLevel: "off" }),
+});\n`,
+    });
+    const pre = await call(dir, { model: "router/auto" }, { run: true });
+    if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
+    expect(pre.boxLogin).toBeUndefined();
+    expect(pre.messages).toContainEqual({
+      level: "note",
+      text: expect.stringMatching(/router\/auto is declared by the definition's extensions/),
+    });
+  });
+
   it("with nothing stored here either: the box still logs in, since this machine's login was never the source", async () => {
     noAnthropicEnv();
     const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });

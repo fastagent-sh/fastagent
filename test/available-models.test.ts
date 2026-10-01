@@ -105,7 +105,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
   async function catalogServer(status = 200): Promise<{ url: string; close: () => void }> {
     const [bundled] = (await machineModelRuntime()).getModels("anthropic");
     const server = createServer((req, res) => {
-      if (req.url !== "/api/models/providers/anthropic") return void res.writeHead(404).end();
+      if (new URL(req.url ?? "/", "http://localhost").pathname !== "/api/models/providers/anthropic")
+        return void res.writeHead(404).end();
       // Newer than the bundled catalog, or pi ignores the entry.
       const lastModified = new Date(Date.now() + 86_400_000).toUTCString();
       res.writeHead(status, { "content-type": "application/json", "last-modified": lastModified });

@@ -236,10 +236,10 @@ interface FastagentConfig {
 ```
 
 Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) mounts the
-complete coding set. Conditional built-ins stay independent: deferred tools may add `search_tools`,
-and every serve adds `wake`/`unwake`. `createPiAgentFromDefinition` uses the complete coding
-set unless `tools` replaces it; `createPiAgent` starts from the passed `tools`. In both APIs, omitted
-coding built-ins cannot be reactivated, while deferred tools may add `search_tools`.
+complete coding set. Pi's codemode and tool-search extensions load by default; settings or a mounted
+`codemode`/`deferred` tool activate `codemode` and `tool_search`. Pi's MCP extension is not loaded. Every serve adds `wake`/`unwake`. `createPiAgentFromDefinition` uses the complete
+coding set unless `tools` replaces it; `createPiAgent` starts from the passed `tools`. Omitted coding built-ins
+cannot be reactivated.
 
 ## Tool authoring
 
@@ -351,25 +351,50 @@ Return what the model needs, not what the API sent:
 Tools are plain ES modules, so they can be imported and tested without fastagent: `node --test
 test/my-tool.test.ts` on Node 22+ needs no framework and no test script.
 
-### Deferred tools
+### Native exposure, discovery, and codemode
 
-For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it: its schema
-stays out of requests until discovered. When any deferred tool is mounted, the built-in **`search_tools`** loader
-is mounted too (your own tool named `search_tools` replaces it). The model searches by keyword, matching tools are
-activated mid-turn, and the activation is recorded in the session for the rest of that conversation.
+`defineTool` accepts Pi's `exposure`: `direct` (default), `model-only`, `codemode`, `deferred`, or `hidden`.
+`defaultActive: false` keeps a direct tool inactive until an authored loader activates it (`ToolContext.tools`).
+Deferred tools are loaded by Pi's `tool_search`; `codemode` tools are called from codemode scripts. Neither schema
+enters the model's request up front.
 
-- **Discovery searches the `description`.** Write descriptions with the search in mind.
-- On models with native deferred loading, activation keeps the provider's prompt-cache prefix; elsewhere it may
-  cost a cache miss. The supported models are pi's (see its Dynamic Tool Loading docs).
-- `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the bridge for a custom loader.
-  `activate` is additive, ignores unknown names, and returns only the names it actually activated; count against
-  that return value. A loader that awaits between `active()` and `activate()` should declare
-  `executionMode: "sequential"`. `ToolActivation` and `FastagentTool` (`AgentTool` + `deferred`) are exported.
-- `createPiAgent` uses `instructions` verbatim, so mention `search_tools` there yourself when passing deferred
-  tools.
-- On reopen, the active set is today's non-deferred tools plus the conversation's recorded activations: a tool
-  added later joins existing conversations, and one made `deferred` drops out of those that never discovered it.
-- `fastagent chat` behaves the same, except that activations do not survive `/new` or `/resume`.
+Pi's codemode and tool-search extensions load by default, with their own defaults: codemode mode is `on`, while
+`codemode` and `tool_search` start inactive. Mounting a tool activates the one its exposure needs, the rule Pi's MCP
+extension applies to its own tools: `codemode` for `exposure: "codemode"`, `tool_search` for `exposure: "deferred"`.
+Pi settings (`"defaultTools": ["+codemode"]`) activate either explicitly; `"extensions": ["-builtin:codemode"]`
+turns one off. A `deferred` or `codemode` tool then has no way in: the assembly warns once per such tool, `info` and
+the startup report list it as `unreachable`, and the base prompt stops pointing the model at `tool_search`.
+
+Pi's MCP extension is not loaded, so `mcp.json` has no effect on an agent. Its connections live as long as a
+session, and a served session lives one turn, so every turn would start every configured server.
+
+An existing conversation runs on the definition's current default tools plus whatever its transcript still declares
+and is still mounted (its discoveries), so a tool added to `tools/`, or restored after a release that lacked it,
+reaches old channel chats after a restart. Narrowing a
+tool's exposure (to `deferred`, `codemode`, or `defaultActive: false`) applies to new conversations only: the
+transcript cannot tell a tool declared by default from one discovered, so a conversation that declared it keeps
+its full schema.
+
+- `output: z.object(...)` declares and validates structured output for scripts. Without it, scripts receive text.
+  A full Pi `{ content, details, structuredContent?, isError? }` result passes through unchanged; its author owns
+  schema conformance and model-facing size. Codemode scripts receive full internal data, not truncated display text.
+- Nested calls retain native validation, permission hooks, and cancellation. Session observation includes
+  `parentToolCallId`; the channel stream shows the outer call and Pi's bounded nested trace, without duplicating
+  each child or publishing `structuredContent`.
+- Pi's transcript restores the loadout across rebind, resume, fork, and compaction. The definition's current default
+  tools always join; tools no longer mounted are dropped.
+- `ToolContext.tools` remains an additive adapter for authored loaders. Pi ignores unknown or unreachable names;
+  `activate(names)` returns only names actually added.
+
+### Virtual models
+
+Extensions can declare `pi.registerVirtualModel(...)` while loading. Registration precedes startup model
+resolution, so the virtual spec works in config, model listings, chat, and session-control model selection. Each
+bound session owns its runtime and router context; router state lives on its durable branch. `state().model` is
+the selection, while assistant entries name the physical model that answered, and usage uses its context limit.
+Authentication of that physical model occurs after routing. Catalog registration also runs extension factories
+without a session; start background work in lifecycle handlers. Models registered only in `session_start` or a
+command are not part of the startup catalog.
 
 ## Channel authoring
 
@@ -628,7 +653,10 @@ at pi's built-in endpoint, before it is written (credentials are per provider, s
 the key is refused). A key the
 provider rejects (HTTP 401) is never stored, and the provider's key flow runs again with the same provider and
 method (a flow that asks more than the key asks it again too). Aborting `interaction.signal` at any point, the
-verification included, rejects with `LoginCancelled` and writes nothing. `fastagent login` runs the same `login`.
+verification included, rejects with `LoginCancelled` and writes no credential. An OAuth flow that needs an
+installation ID (Sign in with ChatGPT) gets one from `getDeviceId`; with `authPath` it defaults to a `settings.json`
+beside that file, created before the flow runs and kept. Over your own `credentialStore` there is no default: pass
+`getDeviceId` with a stable UUID of your own. `fastagent login` runs the same `login`.
 
 For a custom endpoint (`models.json`), store its key with `fastagentCredentialStore(authPath).modify()` instead:
 `login` covers built-in providers at their own endpoints. That includes a built-in provider an agent's `models.json`

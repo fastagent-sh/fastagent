@@ -184,21 +184,19 @@ deployment owns: per-invoke state (SPEC MUST 6, what AgentCore and every scaled 
 swappable at this rung alone — [conformance-levels.md](conformance-levels.md) states what each posture
 owes.
 
-Reopening is faithful to the whole record, not just the messages. `piAgentSessionFactory` resolves the
-active-tool set itself: the union of the initial set (every non-deferred tool *currently* mounted) and
-the session's accumulated activation *deltas* — `fastagent:tool-activation` entries carrying exactly
-the names that call activated. pi has its own answer — since 0.86 an `AgentSession` can restore a tool
-set from the transcript's `toolsAdded` declarations — and it does not participate here. It has two triggers.
-At construction it is guarded: pi restores only for a session built without an explicit initial active set, and
-the SDK entry every bind goes through always passes one. On branch navigation (`AgentSession.navigateTree`)
-it is unconditional — out of reach only because the control plane moves a leaf with `SessionManager.branch()`
-and never through an `AgentSession`. Re-routing that write is the change that would break this.
+Reopening restores Pi's tool declarations from the active transcript using `getCurrentSystemMessage` and
+`setActiveToolsByName`. The SDK supplies an initial loadout even on resume, bypassing `AgentSession`'s own
+constructor restore; the shared binder performs this one public-API replay for serving and chat. There is no
+separate activation journal. The loadout is the definition's current defaults plus the transcript's declarations
+that are still mounted. Transcript removals are not honored: fastagent's own activation only adds, so a removal
+records a turn on which the definition did not mount the tool, not the conversation's choice. Discoveries survive rebind, resume, fork, and compaction on that branch.
 
-Resolving the set ourselves is what keeps a definition change reaching an old conversation: the initial set is
-read from TODAY's mounted tools, not from what the transcript declared. A tool added to the definition
-joins existing sessions (`agent-session-factory.test.ts`), and a tool flipped to
-`deferred` drops out of sessions that never discovered it. Corollary: *narrowing* the active set is not
-representable in this record.
+Every binding also owns a fresh `ModelRuntime`. Credentials are shared through their store, but extension
+provider registrations and virtual router contexts are session-local. An unbound extension-aware catalog supplies
+startup model resolution, model listings, authentication reporting, and control-plane validation. Virtual selections
+remain selected in `model_change`; assistant entries record the physical model that answered. Context usage uses
+that physical model's limits. Extension factories run for catalog registration too, so work requiring a session
+belongs in lifecycle handlers, not the factory.
 
 This per-invoke assembly is the only data plane. A client needing mid-run control, live observation, or
 reconnectable history uses the optional [session control plane](session-control.md) — never a second
@@ -269,8 +267,9 @@ Workspace tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
 `tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
 refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `routines/`. The coding set is fixed for directory agents: isolation belongs around the whole
-agent process, where it also covers authored tools and channel code. Conditional built-ins
-(`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Reusable
+agent process, where it also covers authored tools and channel code. Pi's codemode and tool-search
+extensions load by default (`BUILTIN_EXTENSIONS`, machine.ts); Pi's MCP extension is not loaded, because its server
+connections live as long as a session and a served session lives one turn; self-scheduling `wake` remains serving-only. Reusable
 integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting.
 
 Every `defineTool` execution receives the same runtime context. Serving adapts the session it binds for
@@ -280,22 +279,20 @@ not pi's encoded record name. Sessionless direct execution provides cwd but no m
 receive the same workspace cwd and caller session id; their `thinkingLevel` getter reads the bound
 `AgentSession`.
 
-**Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
-schemas stay out of the request until the built-in `search_tools` loader (auto-mounted whenever a
-deferred tool exists; an authored `search_tools` wins) activates them by keyword mid-turn. Activation
-runs through a per-turn bridge on the turn context (`ToolActivation`: additive `setActiveTools`,
-unknown names filtered). pi records the addition in the transcript at that position — a system message
-carrying `toolsAdded`, written after the batch of tool results the activating call belongs to — the
-load point that lets providers with
-native deferred loading add definitions without invalidating the cached prompt prefix. `activate` is a
-synchronous read-modify-write over the session's active set and returns only the names it actually added — that
-return value, not the attempt, is what the built-in loader reports and counts its cap against, which is why two
-parallel calls matching the same tool yield one "Activated" and one "already active". The atomicity stops at
-`activate`: a loader that awaits between `active()` and `activate()` interleaves with its batch siblings and owes
-itself `executionMode: "sequential"`. The base prompt lists only non-deferred tools plus a discovery
-note, computed from the static mounted set, so activation never rewrites the prompt. The shared session
-builder (`session-builder.ts`, which `chat` consumes) emulates the same behavior over pi's
-AgentSession through `sessionToolActivation`, so the author debugs exactly what serves.
+**Tool exposure and discovery** use Pi's native `direct`, `model-only`, `codemode`, `deferred`, and `hidden`
+exposures. Codemode defaults to mode `on`; `codemode` and `tool_search` are registered inactive until settings
+or a mounted tool with that exposure selects them (`bindPiSession`, the same rule Pi's MCP extension applies). A rebound
+session runs on the current defaults plus its transcript's still-mounted declarations; a tool
+whose exposure was narrowed stays declared in conversations that already declared it, since the transcript does not
+record why a tool was declared. Built-ins the machine's settings disable (`"extensions": ["-builtin:codemode"]`) are not
+loaded. No fastagent loader or keyword policy is layered over Pi. `ToolContext.tools` remains a small
+adapter for authored loaders: Pi filters the requested names and records the resulting declarations.
+
+`defineTool({ output: z.object(...) })` gives scripts validated `structuredContent`; tools without an output
+schema retain text results. Full Pi results pass through unchanged. Nested calls use Pi's `ctx.executeTool`, so
+validation, permission hooks, cancellation, and errors share the native tool pipeline. The observation plane
+retains `parentToolCallId` on nested events. The Agent Handler/channel projection emits only outer calls, whose
+Pi display details include bounded nested traces; machine-readable `structuredContent` stays internal.
 
 **`ExecutionEnv` governs definition loading, not the tools.** All seven coding tools come from
 pi-coding-agent and reach `node:fs` directly. Routing them through `env` was tried and given up: the

@@ -23,10 +23,31 @@ type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
 export type MachineSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
 type MachinePrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
 
+/** The Pi built-in extensions a definition loads, each unless the machine's settings disable it. */
+// Not `mcp`: its server connections live as long as a session, and a served session lives one turn, so every turn
+// would start every configured server.
+export const BUILTIN_EXTENSIONS = ["codemode", "tool-search"] as const;
+
+/**
+ * The way in for an authored tool the model is not given up front, by its exposure: the built-in extension that
+ * provides it and the tool that extension registers. A `codemode` tool is called from codemode scripts, a `deferred`
+ * one is loaded by tool_search — the rule Pi's MCP extension applies to its own tools (`ensureDiscoveryActive`).
+ * Without that extension the tool has no way in at all.
+ */
+export const DISCOVERY = {
+  codemode: { extension: "codemode", tool: "codemode" },
+  deferred: { extension: "tool-search", tool: "tool_search" },
+} as const satisfies Record<string, { extension: (typeof BUILTIN_EXTENSIONS)[number]; tool: string }>;
+
 /** What this box lends an agent. */
 export interface Machine {
   skills: MachineSkill[];
   prompts: MachinePrompt[];
+  /**
+   * The {@link BUILTIN_EXTENSIONS} left enabled, by Pi's own rule: `"extensions": ["-builtin:codemode"]` in the user
+   * settings disables one, and the workspace's `.pi/settings.json` overrides that either way.
+   */
+  builtinExtensions: string[];
   /** pi's engine settings (retry, compaction, cache warming, …) as read at boot — a fresh manager per caller. */
   settingsManager(): SettingsManager;
 }
@@ -60,7 +81,12 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
   // (`npm install`, `git clone`), throwing out of `reload()` when that fails — measured. So fastagent resolves them
   // here, telling pi to skip what is absent, and hands the loader a packageless copy of the settings so its own
   // resolve has nothing to do.
-  const manager = new DefaultPackageManager({ cwd: workspace, agentDir, settingsManager: files });
+  const manager = new DefaultPackageManager({
+    cwd: workspace,
+    agentDir,
+    settingsManager: files,
+    builtinExtensions: [...BUILTIN_EXTENSIONS],
+  });
   const packages = await manager.resolve(async () => "skip");
   // A package skipped is said, once: its skills would otherwise just not be there. Asked of the configured list, not
   // of `onMissing` — pi never calls that under `PI_OFFLINE`, so the warning would vanish exactly when offline.
@@ -97,7 +123,10 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
       );
     }
   }
-  return { skills, prompts, settingsManager: () => scopedSettings(settings) };
+  const builtinExtensions = packages.extensions
+    .filter((resource) => resource.enabled && resource.metadata.source === "builtin")
+    .map((resource) => resource.path.slice("builtin:".length));
+  return { skills, prompts, builtinExtensions, settingsManager: () => scopedSettings(settings) };
 }
 
 /** A package's enabled resources; the loader discovers the top-level ones itself. */

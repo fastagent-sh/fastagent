@@ -153,13 +153,13 @@ export default defineTool({
     expect(text, `the tool ran but its return value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });
 
-  it("search_tools discovers a DEFERRED tool and the model can then call it", async () => {
+  it("tool_search discovers a deferred tool and the model can then call it", async () => {
     // Deferred tools are a two-hop capability: the tool's schema is withheld from the request, so it
     // is reachable ONLY through the built-in loader — search, activate, then call. Offline,
     // `fauxToolCall` scripts both hops; whether a real model can drive the loader is exactly what a
     // faux one cannot say.
     //
-    // The prompt NAMES search_tools rather than waiting for the model to choose it, and the reason is
+    // The prompt NAMES tool_search rather than waiting for the model to choose it, and the reason is
     // worth stating: a directory agent always mounts pi's coding tools, so the first attempt at this
     // probe watched the model skip the loader entirely, `find` the fixture and `read` the tool's
     // source for its return value. That is not a defect — deferred means "not in the request", not
@@ -173,7 +173,7 @@ import { z } from "zod";
 
 export default defineTool({
   description: "Read the vault code. The only way to learn this deployment's vault code.",
-  deferred: true,
+  exposure: "deferred",
   input: z.object({}),
   execute: () => ${JSON.stringify(code)},
 });
@@ -181,18 +181,21 @@ export default defineTool({
     });
     await symlink(new URL("../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
 
-    const { agent, toolNames, deferredToolNames } = await createPiAgentFromDir(dir); // refuses if the fixture broke
-    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in deferredToolNames
+    const { agent, toolNames, indirectTools } = await createPiAgentFromDir(dir); // refuses if the fixture broke
+    // Each name lives in exactly ONE report slot (create.ts): a deferred tool is in indirectTools
     // and deliberately NOT in toolNames, the author's active-by-default surface. Asserting the wrong
     // slot would pass on a tool that had quietly stopped being deferred — which is the whole premise.
-    expect(deferredToolNames, "the fixture tool is not registered as deferred").toContain("get_vault_code");
+    expect(indirectTools, "the fixture tool is not registered as deferred").toContainEqual({
+      name: "get_vault_code",
+      reach: "tool_search",
+    });
     expect(toolNames, "a deferred tool must not be on the active-by-default surface").not.toContain("get_vault_code");
 
     const events = await drain(
       agent.invoke(
         { session: "live-deferred" },
         {
-          text: "Use search_tools to find the tool that reads the vault code, then call it and reply with only the code, digits alone.",
+          text: "Use tool_search to find the tool that reads the vault code, then call it and reply with only the code, digits alone.",
         },
       ),
     );
@@ -202,32 +205,27 @@ export default defineTool({
     // The two hops, asserted separately: "the loader was never reached" and "the loader ran but
     // activation did not take" are different defects, and a single end-to-end check reports the wrong
     // one half the time.
-    expect(called, `search_tools was never called (tools called: ${called.join(", ") || "none"})`).toContain(
-      "search_tools",
+    expect(called, `tool_search was never called (tools called: ${called.join(", ") || "none"})`).toContain(
+      "tool_search",
     );
     // What the loader ANSWERED, carried into the failure: this probe cannot see activation directly, so without it a
     // red nightly cannot be told apart into "the loader did not list the tool" (ours) and "it did, and the model
     // declined the second hop" (the model's). The second has already happened on a green build, and re-running to
     // find out which one it was means paying for another real turn on a provider that has since moved on.
     //
-    // EVERY search, not the first: the loader's own wording invites a second one (`No tools matched "…"`, or
-    // `Narrow the query` past MAX_ACTIVATIONS_PER_SEARCH), so a miss-then-hit run is ordinary here — printing only the
-    // first would show `No tools matched` and frame a model's choice as our loader failing. An array also keeps
-    // "no tool_ended observed" (`[]`) distinct from a loader that answered nothing.
+    // Capture every search answer, so a miss followed by a hit is diagnosable.
     const searchIds = new Set(
-      events.flatMap((e) => (e.type === "tool_started" && e.name === "search_tools" ? [e.id] : [])),
+      events.flatMap((e) => (e.type === "tool_started" && e.name === "tool_search" ? [e.id] : [])),
     );
     //
-    // Truncated PER ANSWER, not once over the array: a miss lists the active tools with their descriptions, which is
-    // long enough to eat the hit that followed it — the same degradation, reached by formatting. The cap clears 350,
-    // the length of a real activation answer, whose `Activated: ...` line is what the assertion below reads.
+    // Bound each answer separately; one large miss must not hide a later hit.
     const answered = events.flatMap((e) =>
       e.type === "tool_ended" && searchIds.has(e.id) ? [JSON.stringify(e.content).slice(0, 600)] : [],
     );
     expect(
       called,
-      `search_tools ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
-        `search_tools returned: ${answered.join(" | ") || "[]"} — the answer was: ${text.slice(0, 200)}`,
+      `tool_search ran but get_vault_code was never called (tools called: ${called.join(", ")}). ` +
+        `tool_search returned: ${answered.join(" | ") || "[]"} — the answer was: ${text.slice(0, 200)}`,
     ).toContain("get_vault_code");
     expect(text, `the deferred tool ran but its value never reached the answer: ${text.slice(0, 200)}`).toContain(code);
   });

@@ -14,6 +14,8 @@ import {
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
+import { dirname } from "node:path";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fastagentCredentialStore } from "./auth.ts";
 import { createPiModelRuntime, interactiveAuth, loginProviders, piModelsOver, probeApiKey } from "./models.ts";
 import { agentModels } from "./agent-models.ts";
@@ -77,6 +79,12 @@ export async function loginOptionsOver(
 }
 
 export type LoginRequest = {
+  /**
+   * Stable installation identity (Sign in with ChatGPT requires one). With `authPath` it defaults to Pi settings
+   * beside that file (`settings.json`, written before the flow runs); over a caller's `credentialStore` there is no
+   * file to keep it beside, so a flow that needs one fails unless this supplies it.
+   */
+  getDeviceId?: () => string;
   provider: string;
   method: LoginMethod;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
@@ -120,7 +128,7 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
  * A provider an agent's models.json points elsewhere is not this call's: store that key with `fastagentCredentialStore`.
  *
  * Aborting `interaction.signal` at any point, the verification included, rejects with {@link LoginCancelled} and
- * writes nothing. Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
+ * writes no credential (an OAuth device ID, the installation's identity, is kept once created). Every prompt carries a signal that aborts on it, on the prompt's own signal (a callback server
  * beating a `manual_code` prompt), and when the flow settles with a prompt still pending.
  */
 export function login(request: LoginRequest): Promise<LoginResult> {
@@ -156,6 +164,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
   if (!auth?.login) throw new Error(`provider "${provider.id}" has no interactive ${method} login`);
+  const flow = auth.login.bind(auth);
   // The key under test lives here, not in the file, until it passes.
   const trial = new InMemoryCredentialStore();
   // Only a key needs the registry, and building an agent's fails on a broken models.json: an OAuth sign-in must not.
@@ -174,9 +183,22 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
+  let getDeviceId = request.getDeviceId;
+  if (method === "oauth" && !getDeviceId && request.authPath !== undefined) {
+    // Only the settings file beside the credentials: no project's `.pi/settings.json` has a say in this write.
+    const settings = SettingsManager.create(dirname(request.authPath), dirname(request.authPath), {
+      projectTrusted: false,
+    });
+    const deviceId = settings.getOrCreateDeviceId();
+    await settings.flush();
+    const errors = settings.drainErrors();
+    if (errors.length)
+      throw new Error(`could not persist login device ID: ${errors.map(({ error }) => error.message).join("; ")}`);
+    getDeviceId = () => deviceId;
+  }
 
   for (;;) {
-    const credential = await runFlow(auth.login.bind(auth), interaction, signal);
+    const credential = await runFlow((io) => flow(io, { getDeviceId }), interaction, signal);
     let verified: LoginResult["verified"] = "n/a";
     if (models) {
       await trial.modify(provider.id, async () => credential);
@@ -228,7 +250,7 @@ export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   anthropic: "claude-opus-4-8",
   openai: "gpt-5.5",
   "azure-openai-responses": "gpt-5.4",
-  "openai-codex": "gpt-5.5",
+  "openai-codex": "gpt-6.1-sol",
   radius: "balanced",
   nvidia: "nvidia/nemotron-3-super-120b-a12b",
   deepseek: "deepseek-v4-pro",
@@ -248,11 +270,11 @@ export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   moonshotai: "kimi-k2.6",
   "moonshotai-cn": "kimi-k2.6",
   huggingface: "moonshotai/Kimi-K2.6",
-  fireworks: "accounts/fireworks/models/kimi-k2p6",
-  together: "moonshotai/Kimi-K2.6",
+  fireworks: "accounts/fireworks/models/kimi-k3",
+  together: "moonshotai/Kimi-K3",
   baseten: "zai-org/GLM-5.2",
   opencode: "kimi-k2.6",
-  "opencode-go": "kimi-k2.6",
+  "opencode-go": "kimi-k3",
   "kimi-coding": "kimi-for-coding",
   meta: "muse-spark-1.3",
   "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",

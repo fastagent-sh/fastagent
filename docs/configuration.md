@@ -277,7 +277,7 @@ Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse
 
 - `<agent dir>/.state/` — mutable machine state: sessions, channel state (`channels/<kind>/`), schedule state.
   Single-process; point it at a volume in a container.
-- `<agent dir>/.secrets/` — the agent's `.env` and `auth.json`. The scaffolded `.secrets/.gitignore` keeps them
+- `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
 
@@ -320,8 +320,12 @@ Every directory agent mounts pi's coding tools: `read`, `grep`, `find`, `ls`, `b
 capabilities, not a security policy; to isolate an agent, sandbox its whole process.
 
 `config.tools` and `tools/` are appended after the coding tools. On a name collision the earlier tool wins and the
-collision is reported. `search_tools` mounts when a deferred tool exists, and every serve mounts `wake`/`unwake`.
-`fastagent info --json` shows the mounted surface.
+collision is reported. Pi's codemode and tool-search extensions load by default; their settings control activation,
+and `"extensions": ["-builtin:codemode"]` in Pi's settings turns one off. Pi's MCP extension is not loaded, so
+`mcp.json` has no effect on an agent. Every serve mounts `wake`/`unwake`.
+`fastagent info --json` shows the mounted surface: `tools` are the authored tools the model gets up front, and
+`indirectTools` the rest, each with how it is reached (`tool_search`, `codemode`, `hidden`, `inactive` until an
+authored loader activates it, or `unreachable` when pi's settings disable the built-in extension it needs).
 
 Reusable packages export ordinary `FastagentTool[]`:
 
@@ -354,13 +358,16 @@ An extension that fails to load is warned about once and left out; the rest of t
 | `/name` commands it registers | run when a prompt is `/name [args]` | run |
 | `ctx.hasUI` | `false` | `true` |
 | `select` / `confirm` / `input` / `custom` | resolve as cancelled (`undefined`, `false`) | shown to you |
-| `notify`, status, widgets, shortcuts, renderers | no effect | shown |
+| `notify` | logged | shown |
+| status, widgets, shortcuts, renderers | no effect | shown |
 | `ctx.newSession` / `fork` / `navigateTree` / `switchSession` / `reload` | throw | run |
 | `ctx.shutdown()` | logs a warning; the process keeps serving | exits |
-| `pi.registerProvider()` | refused: declare providers in `models.json` | runs |
+| `pi.registerProvider()` / `registerVirtualModel()` | session-local | session-local |
 
 When serving, every session gets its own extension instances: the factory runs and `session_start` fires when a
-turn (or a control-plane write) opens the session, and `session_shutdown` fires when it ends. State kept in
+turn (or a control-plane write) opens the session, and `session_shutdown` fires when it ends. An unbound factory
+also runs when the model catalog is built, before resolving the configured model; virtual models declared there
+can be startup selections. State kept in
 memory does not survive to the next turn; rebuild it from the session in `session_start`. Stop timers and close
 handles in `session_shutdown`: a stale `pi` or `ctx` throws when used after it, and an exception nobody catches
 ends the process.

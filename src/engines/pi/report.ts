@@ -6,6 +6,7 @@ import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
 import type { SkillCollision } from "./definition.ts";
 import type { ToolCollision } from "./tool.ts";
+import type { IndirectTool, ToolReach } from "./create.ts";
 
 type Findings = { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] };
 
@@ -34,6 +35,19 @@ export function reportDefinitionWarnings(collisions: SkillCollision[], diagnosti
   for (const d of diagnostics) {
     log.warn(`[fastagent] ${d.code}: ${d.message} (${d.path})`);
   }
+}
+
+const REACH: Record<ToolReach, string> = {
+  tool_search: "loaded via tool_search",
+  codemode: "codemode scripts only",
+  hidden: "hidden",
+  inactive: "inactive until an authored loader activates it",
+  unreachable: "unreachable: pi's settings disable the built-in extension it needs",
+};
+
+/** The report line for the mounted tools the model is not given up front: each name with its way in. */
+export function describeIndirectTools(tools: readonly IndirectTool[]): string {
+  return tools.map((tool) => `${tool.name} (${REACH[tool.reach]})`).join(", ");
 }
 
 export function reportToolCollisions(collisions: ToolCollision[]): void {
