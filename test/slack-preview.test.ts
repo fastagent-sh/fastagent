@@ -203,6 +203,36 @@ describe("Slack reply rendering", () => {
     expect(frames.map((call) => call[3])).toEqual(frames.map(() => ({ retries: 0 })));
   });
 
+  it("neutralizes notification syntax in the tool lines: a tool's argument and its progress are untrusted text", async () => {
+    vi.useFakeTimers();
+    const api = fakeApi();
+    const pending = run(
+      slackReply(
+        stream(
+          (async function* (): AsyncIterable<AgentEvent> {
+            yield { type: "tool_started", id: "t", name: "bash", args: { command: "echo <!here>" } };
+            yield { type: "tool_progress", id: "t", text: "<!channel> deploy done" };
+            // Past the mutation interval, so the pump writes a frame while the tool still runs.
+            await vi.advanceTimersByTimeAsync(3_500);
+            yield { type: "tool_ended", id: "t", isError: false, content: "ok" };
+            yield { type: "text", delta: "done" };
+            yield { type: "completed" };
+          })(),
+        ),
+        api,
+        { channelId: "C1", threadTs: "1.0" },
+        () => "failed",
+        { rendering: "classic", disclaimer: false },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    const written = JSON.stringify([vi.mocked(api.postMarkdown).mock.calls, vi.mocked(api.updateMarkdown).mock.calls]);
+    expect(written).toContain("&lt;!channel> deploy done");
+    expect(written).toContain("echo &lt;!here>");
+    expect(written).not.toMatch(/<!(channel|here)>/);
+  });
+
   it("enforces Slack's three-second chat.update interval across a completed pump", async () => {
     vi.useFakeTimers();
     const api = fakeApi();

@@ -342,8 +342,9 @@ During serving and `fastagent chat`, `sessionManager` is a read-only view of the
 undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`
 returns the caller's session id.
 
-`onUpdate` replaces the previous snapshot each time. Its last line is the call's status: the invoke stream carries
-it as `tool_progress`, and the chat channels show it on the running tool's line, so keep a status on one line.
+`onUpdate` replaces the previous snapshot each time. Its last line is the call's status, so keep a status on one
+line: the invoke stream carries it as `tool_progress`, and the Telegram, Feishu, and Slack `classic` previews show it
+on the running tool's line. Slack's default `native` stream does not, because its tool traces are append-only.
 Session-control observers receive the whole snapshot.
 
 ### Output budget
