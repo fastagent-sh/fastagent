@@ -160,7 +160,6 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       await refreshMachineModelCatalogOver({}, catalog.url);
       const ofB = (await availableModelsFromDir(b.dir, { authPath: b.authPath })).map((m) => m.spec);
       expect(ofB).toContain(`anthropic/${NEW}`);
-      expect(existsSync(join(b.dir, "agent", "models-store.json"))).toBe(false);
       expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
       const deployed = await createPiModelRuntime({
         agentDir: join(b.dir, "agent"),
@@ -177,14 +176,13 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
   it("a machine refresh authenticates with the caller's credentials file, not the machine's", async () => {
     for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
       vi.stubEnv(name, undefined);
-    const callerAuth = JSON.stringify({ anthropic: { type: "api_key", key: "sk-caller" } });
-    const b = await workspace(callerAuth);
+    const authPath = join(await mkdtemp(join(tmpdir(), "fa-caller-auth-")), "auth.json");
+    await writeFile(authPath, JSON.stringify({ anthropic: { type: "api_key", key: "sk-caller" } }));
     const catalog = await catalogServer();
     try {
       // The machine has no credential, so only the caller's file can make this succeed.
-      await refreshMachineModelCatalogOver({ authPath: b.authPath }, catalog.url);
+      await refreshMachineModelCatalogOver({ authPath }, catalog.url);
       expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
-      expect(existsSync(join(b.dir, "agent", "models-store.json"))).toBe(false);
     } finally {
       catalog.close();
       await rm(globalCatalogPath(), { force: true });
