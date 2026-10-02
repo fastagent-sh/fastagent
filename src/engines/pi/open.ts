@@ -7,7 +7,8 @@ import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
-import type { AgentCommand, SessionControl } from "../../session.ts";
+import type { AgentCommand, ModelDescriptor, SessionControl } from "../../session.ts";
+import { describeModels } from "./session-settings.ts";
 import { type IndirectTool, type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
@@ -203,10 +204,11 @@ export function assembleFront(
 }
 
 /**
- * The model specs `createPiAgentFromDir(dir, { authPath })` could run now: the agent's registry (pi's built-ins plus
- * its `models.json`) filtered to the providers whose credentials are configured, sorted. The directory needs no model
- * set, and the same placement and credential layers as the opener apply, so a listed spec authenticates there.
- * Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
+ * The models `createPiAgentFromDir(dir, { authPath })` could run now, as a picker shows them (spec, name, the thinking
+ * levels a session on it accepts, context window), sorted by spec: the agent's registry (pi's built-ins, its
+ * `models.json`, and what its `extensions/` declare) filtered to the providers whose credentials are configured. The
+ * directory needs no model set, and the same placement and credential layers as the opener apply, so a listed spec
+ * authenticates there. Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
  *
  * `warn` reaches the credential store. An unreadable or corrupt credentials file otherwise reads as "nothing
  * configured", so a client that must not show that as an empty list passes a sink that throws.
@@ -214,10 +216,10 @@ export function assembleFront(
 export async function availableModelsFromDir(
   dir: string,
   options: FastagentAuthOptions & CredentialSourceOptions = {},
-): Promise<string[]> {
+): Promise<ModelDescriptor[]> {
   const { agentDir, workspace } = resolvePlacement(dir);
   const models = await agentModels(agentDir, options, { cwd: workspace }).runtime();
-  return (await models.getAvailable()).map((model) => `${model.provider}/${model.id}`).sort();
+  return describeModels(await models.getAvailable());
 }
 
 /**

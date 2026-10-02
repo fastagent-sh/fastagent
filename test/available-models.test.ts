@@ -32,7 +32,7 @@ async function workspace(auth: string): Promise<{ dir: string; authPath: string 
           baseUrl: "http://127.0.0.1:11434/v1",
           api: "openai-completions",
           apiKey: "ollama",
-          models: [{ id: "llama" }],
+          models: [{ id: "llama", name: "Llama (local)", contextWindow: 32000, reasoning: true }],
         },
         // Its key comes from an environment variable that is not set.
         gated: {
@@ -63,9 +63,16 @@ describe("availableModelsFromDir", () => {
     const { dir, authPath } = await workspace(JSON.stringify(expiredOAuth));
     const fetch = vi.spyOn(globalThis, "fetch");
 
-    const specs = await availableModelsFromDir(dir, { authPath });
+    const models = await availableModelsFromDir(dir, { authPath });
+    const specs = models.map((model) => model.spec);
 
-    expect(specs).toContain("local/llama");
+    // Described as the agent's own models.json declares it.
+    expect(models.find((model) => model.spec === "local/llama")).toEqual({
+      spec: "local/llama",
+      name: "Llama (local)",
+      thinkingLevels: expect.arrayContaining(["off", "high"]),
+      contextWindow: 32000,
+    });
     expect(specs).not.toContain("gated/x");
     expect(specs.some((spec) => spec.startsWith("anthropic/"))).toBe(true); // an expired login is still configured
     expect(fetch).not.toHaveBeenCalled(); // no token refresh, no provider call
@@ -76,7 +83,7 @@ describe("availableModelsFromDir", () => {
     for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
       vi.stubEnv(name, undefined);
     const { dir, authPath } = await workspace("{}");
-    const specs = await availableModelsFromDir(dir, { authPath });
+    const specs = (await availableModelsFromDir(dir, { authPath })).map((model) => model.spec);
     expect(specs.some((s) => s.startsWith("anthropic/"))).toBe(false); // no stored login, no env key: not listed
     const [spec] = specs.filter((s) => s.startsWith("local/"));
     expect(spec).toBe("local/llama");
@@ -121,7 +128,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
     const a = await workspace("{}");
     const b = await workspace("{}");
-    expect(await availableModelsFromDir(a.dir, { authPath: a.authPath })).not.toContain(`anthropic/${NEW}`);
+    const specs = async () => (await availableModelsFromDir(a.dir, { authPath: a.authPath })).map((m) => m.spec);
+    expect(await specs()).not.toContain(`anthropic/${NEW}`);
 
     const catalog = await catalogServer();
     try {
@@ -131,7 +139,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     }
 
     expect(existsSync(join(a.dir, "agent", "models-store.json"))).toBe(true);
-    expect(await availableModelsFromDir(a.dir, { authPath: a.authPath })).toContain(`anthropic/${NEW}`);
+    expect(await specs()).toContain(`anthropic/${NEW}`);
     const opened = await createPiAgentFromDir(a.dir, { model: `anthropic/${NEW}`, authPath: a.authPath });
     expect(opened.modelSpec).toBe(`anthropic/${NEW}`); // listed, so it runs
     const deployed = await createPiModelRuntime({
@@ -140,7 +148,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       machineLayer: false,
     });
     expect(deployed.getModel("anthropic", NEW)).toBeDefined(); // the file ships with the definition
-    expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).not.toContain(`anthropic/${NEW}`);
+    const ofB = (await availableModelsFromDir(b.dir, { authPath: b.authPath })).map((m) => m.spec);
+    expect(ofB).not.toContain(`anthropic/${NEW}`);
   });
 
   it("a machine refresh (-g) reaches every agent here and `fastagent models`, and no deploy", async () => {
@@ -149,7 +158,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     const catalog = await catalogServer();
     try {
       await refreshGlobalModelCatalog({ catalogBaseUrl: catalog.url });
-      expect(await availableModelsFromDir(b.dir, { authPath: b.authPath })).toContain(`anthropic/${NEW}`);
+      const ofB = (await availableModelsFromDir(b.dir, { authPath: b.authPath })).map((m) => m.spec);
+      expect(ofB).toContain(`anthropic/${NEW}`);
       expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
       const deployed = await createPiModelRuntime({
         agentDir: join(b.dir, "agent"),

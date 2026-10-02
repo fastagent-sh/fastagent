@@ -90,7 +90,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
     expect(store.calls).toContain("list"); // the runtime was built over the store
 
-    const anthropic = (specs: string[]) => specs.some((spec) => spec.startsWith("anthropic/"));
+    const anthropic = (models: { spec: string }[]) => models.some((model) => model.spec.startsWith("anthropic/"));
     expect(anthropic(await availableModelsFromDir(host, { credentialStore: store }))).toBe(true);
     expect(anthropic(await availableModelsFromDir(host))).toBe(false); // the files hold nothing
     noCredentialFiles(agent);
