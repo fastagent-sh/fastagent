@@ -1292,6 +1292,26 @@ describe("session control: run modulation", () => {
     expect((await control.sessions.get("sOther").state()).status).toBe("idle");
   });
 
+  // pi's abort stops only an agent run in flight; one sent before the first request (while prompt() prepares) must
+  // still stop it (#691). The response answers only an aborted signal, so a missed abort never settles.
+  it.each([
+    ["synchronously", async () => {}],
+    ["after a microtask", () => Promise.resolve()],
+    ["after setImmediate", () => new Promise<void>((r) => setImmediate(r))],
+  ])("an abort sent %s after invoke stops the first request", async (_when, wait) => {
+    const untilAborted: FauxResponseStep = (_context, options) =>
+      new Promise((resolve) => {
+        const aborted = () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
+        if (options?.signal?.aborted) return aborted();
+        options?.signal?.addEventListener("abort", aborted, { once: true });
+      });
+    const { agent, control } = await fauxControlledAgent([untilAborted]);
+    const invoked = drive(agent, "sEarly");
+    await wait();
+    expect(await control.sessions.get("sEarly").abort()).toMatchObject({ ok: true });
+    expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+  });
+
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {
     const { agent, control, gate } = await makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
     const seen: SessionEvent[] = [];
