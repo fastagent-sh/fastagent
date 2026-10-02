@@ -58,7 +58,7 @@ import {
   type SessionUpdateField,
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
-import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
+import { forkProvenance, isConversationMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
@@ -249,9 +249,9 @@ class Subscriber {
 
 /** What the plane's writes (`update` / `compact` / `fork` / `delete`) need — the SAME instances the
  *  agent assembly uses: the lease (a write must not race a run), the model registry (validation +
- *  allowedModels), and the session factory (compaction is a model call). The one write that creates a
- *  session is `update()` on a session that has never run, through the store's `openOrCreate` like an
- *  invoke; every other write needs a record that exists. */
+ *  allowedModels), and the session factory (compaction is a model call). Two writes create a record:
+ *  fork's `into`, and `update()` on an id that has none (through the store's `openOrCreate`, like an
+ *  invoke). Every other write needs a record that exists. */
 export interface PiBoundaryWiring {
   lease: Lease;
   models: Models;
@@ -400,7 +400,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
       let usage: SessionState["usage"];
       if (!opened) {
-        // A session that has never run is an empty conversation at the defaults: its first turn runs on these.
+        // An id with no record is an empty conversation at the defaults: its first turn would run on these.
         if (b) settings = resolveSessionSettings([], b.models, b.defaults);
       } else {
         try {
@@ -581,6 +581,24 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     error: { code: NO_SUCH_SESSION_CODE, message: `session "${session}" does not exist`, retryable: false },
   });
 
+  /**
+   * The refusal for an id no client could then open: the empty string, `.` and `..` are not URL path segments
+   * (isAddressableSession), so minting one would put a row in list() that nothing can address — listed, unopenable by
+   * the client that just listed it. Both writes that create a record (fork's `into`, and an update to an id with no
+   * record) refuse it.
+   */
+  const unaddressable = (session: string): Extract<SessionResult, { ok: false }> =>
+    invalid(`${JSON.stringify(session)} cannot be a session id — the control plane could not address it`);
+
+  const nothingToCompact = (): Extract<SessionResult, { ok: false }> => ({
+    ok: false,
+    error: {
+      code: NOTHING_TO_COMPACT_CODE,
+      message: "nothing to compact — the session has no compactable history yet; retry after more turns",
+      retryable: false,
+    },
+  });
+
   const invalid = (message: string): Extract<SessionResult, { ok: false }> => ({
     ok: false,
     error: { code: INVALID_COMMAND_CODE, message, retryable: false },
@@ -717,10 +735,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // A name is the client's own label; the only thing that cannot be one is nothing.
         if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
 
-        // A session that has never run takes properties too: its first turn is the "next turn" they apply to, so the
-        // write creates its record (below, under the lease). (Read-only handle — the WRITE one is opened under the
-        // lease, and this one is discarded.)
+        // An id with no record takes properties too: its first turn is the "next turn" they apply to, so the write
+        // creates its record (below, under the lease). (Read-only handle — the WRITE one is opened under the lease,
+        // and this one is discarded.)
         const existing = yield* port(() => sessions.openIfExists(session));
+        if (!existing && !isAddressableSession(session)) return unaddressable(session);
 
         if (patch.leafEntryId !== undefined) {
           // A target that cannot BE a leaf is a permanent payload error, not a session error — the same
@@ -859,6 +878,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (!b) return unsupported("compact()");
         const existing = yield* port(() => sessions.openIfExists(session));
         if (!existing) return noSuchSession(session);
+        // A record with no conversation in it (the list's `messageCount: 0`, e.g. one `update()` created before a first
+        // turn) has nothing to compact on any branch. Said before binding, because binding is a write: pi records the
+        // model and thinking level on a session that has no messages, so asking pi would add two entries and then
+        // refuse. Whether a record WITH messages has a cut point stays pi's decision (below).
+        if (!existing.getEntries().some(isConversationMessage)) return nothingToCompact();
         yield* acquireSessionLease(b.lease, session);
         const bound = yield* acquireSession(b.sessionFactory, session);
         yield* Effect.acquireRelease(
@@ -893,16 +917,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           () => compaction.admission,
           () => bound.abortCompaction(),
         );
-        if (admission === "nothing_to_compact") {
-          return {
-            ok: false,
-            error: {
-              code: NOTHING_TO_COMPACT_CODE,
-              message: "nothing to compact — the session has no compactable history yet; retry after more turns",
-              retryable: false,
-            },
-          } as const;
-        }
+        if (admission === "nothing_to_compact") return nothingToCompact();
         // Any other error pi raises before admission. A served session has no known trigger: it always binds a
         // model, and pi swallows a credential failure here and meets it at the model call (compaction_finished).
         // NOT retryable all the same: it is pi's decision on this session, not a transport or lease fault that
@@ -959,12 +974,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         const provenance = `${from}@${at}`;
         const b = boundary;
         if (!b) return unsupported("fork()");
-        // An id no client could then open: the empty string, `.` and `..` are not URL path segments
-        // (isAddressableSession), so minting one would put a row in list() that nothing can address —
-        // listed, unopenable by the client that just listed it.
-        if (!isAddressableSession(into)) {
-          return invalid(`${JSON.stringify(into)} cannot be a session id — the control plane could not address it`);
-        }
+        if (!isAddressableSession(into)) return unaddressable(into);
         const source = yield* port(() => sessions.openIfExists(from));
         if (!source) return noSuchSession(from);
         // The entry predicate is the one `entries()` publishes by, so "everything published is forkable"

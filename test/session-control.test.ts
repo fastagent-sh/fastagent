@@ -1367,7 +1367,7 @@ describe("session control: boundary mutations", () => {
     ]);
   });
 
-  it("a session that has never run reports its first turn's settings, takes properties, and its first turn runs on them", async () => {
+  it("an id with no record reports its first turn's settings, takes properties, and its first turn runs on them", async () => {
     const ran: { reasoning?: string; model: string }[] = [];
     const answer: FauxResponseStep = (_context, options, _state, model) => {
       ran.push({ ...(options?.reasoning ? { reasoning: options.reasoning } : {}), model: model.id });
@@ -1397,7 +1397,7 @@ describe("session control: boundary mutations", () => {
     expect(ran).toEqual([{ reasoning: "low", model: "thinker" }, { model: "plain" }]);
   });
 
-  it("a patch refused for a session that has never run leaves no record behind", async () => {
+  it("a patch refused for an id with no record leaves no record behind", async () => {
     const { control, sessions } = await makeBoundary([]); // faux-thinker: no "max"
     const ghost = control.sessions.get("sGhost");
     for (const patch of [
@@ -1413,6 +1413,27 @@ describe("session control: boundary mutations", () => {
       });
     }
     expect(await sessions.openIfExists("sGhost")).toBeUndefined();
+    // An id no client could then open is not minted either, as fork refuses it for `into`.
+    for (const id of ["", ".", ".."]) {
+      expect(await control.sessions.get(id).update({ name: "x" }), JSON.stringify(id)).toMatchObject({
+        ok: false,
+        error: { code: INVALID_COMMAND_CODE },
+      });
+      expect(await sessions.openIfExists(id)).toBeUndefined();
+    }
+  });
+
+  it("a record update() created before a first turn is an existing session: compact writes nothing, delete removes it", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const draft = control.sessions.get("sDraft");
+    expect(await draft.update({ thinkingLevel: "low" })).toEqual({ ok: true });
+    const written = (await sessions.openIfExists("sDraft"))?.getEntries().length;
+    // Binding would record the model and level on a session with no messages: refused before it, nothing is written.
+    expect(await draft.compact()).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+    expect((await sessions.openIfExists("sDraft"))?.getEntries().length).toBe(written);
+    expect((await draft.state()).thinkingLevel).toBe("low"); // the record's own setting, not the defaults
+    expect(await draft.delete()).toEqual({ ok: true });
+    expect(await sessions.openIfExists("sDraft")).toBeUndefined();
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
@@ -2870,7 +2891,12 @@ describe("session control: boundary mutations", () => {
     // PRE-acceptance failure (binding the session) still rejects with boundary_command_failed —
     // and releases the lease.
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
+    // A conversation, or a refusal before binding wins: no_such_session for no record, nothing_to_compact for no message.
+    (await sessions.openOrCreate("sPre")).appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "hi" }],
+      timestamp: Date.now(),
+    });
     const lease = inProcessLease();
     const broke = makeFaux();
     const boundary: PiBoundaryWiring = {
@@ -2977,7 +3003,7 @@ describe("session control: boundary mutations", () => {
     }
   });
 
-  it("writes that need a session's history refuse one that has never run with no_such_session, and create nothing", async () => {
+  it("writes that need a record refuse an id with none with no_such_session, and create nothing", async () => {
     const { control, sessions } = await makeBoundary([]);
     const ghost = control.sessions.get("ghost");
     const refused = { ok: false, error: { code: NO_SUCH_SESSION_CODE } };

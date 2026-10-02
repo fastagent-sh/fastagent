@@ -57,9 +57,9 @@ export interface Session {
   image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;
   /**
-   * Set durable session properties, applied by the session's next turn. A session that has never run takes them too:
-   * the write creates its record, and its first turn runs on them (a `leafEntryId` is refused there, since it has no
-   * entries yet).
+   * Set durable session properties, applied by the session's next turn. An id with no record (nothing has written it
+   * yet) takes them too: the write creates its record, and the session's first turn runs on them. Refused there:
+   * `leafEntryId` (no entries to point at) and an id no client could address ({@link isAddressableSession}).
    */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /**
@@ -173,8 +173,9 @@ export const NO_ACTIVE_RUN_CODE = "no_active_run";
 export const INVALID_COMMAND_CODE = "invalid_command";
 
 /**
- * Stable `SessionResult.error.code` for a write that needs a session's history (fork, compact, delete) against a
- * session that has none. `update()` is not one: it creates the record of a session that has never run.
+ * Stable `SessionResult.error.code` for a write that needs a record (fork's source, compact, delete) against an id
+ * that has none, because nothing has written it yet. `update()` creates the record instead, and answers this code only
+ * when a concurrent `delete()` removes the record between its read and its write.
  */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
@@ -247,8 +248,8 @@ export interface SessionState {
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
   /**
-   * What this session will RUN with, not what was recorded. A session that has never run reports what its first turn
-   * will run on.
+   * What this session will RUN with, not what was recorded. An id with no record reports what its first turn would run
+   * on: the defaults, the level clamped to the model.
    */
   model?: string;
   thinkingLevel?: string;

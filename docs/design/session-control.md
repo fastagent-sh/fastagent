@@ -156,9 +156,11 @@ There is no `prompt` action: starting work is the data plane's definition. A ses
 Caller's, so an id nothing has written yet is an empty conversation at the defaults: `state()` reports
 what its first turn will run on, and `update()` sets its properties, which creates its record. That is
 the "next turn" a property applies to, so a client sets a new conversation's model or thinking level
-before its first message. Every other write needs history (`compact`, `fork`'s source, `delete`) and
-refuses such an id with `no_such_session`. A record `update()` created is an existing session to a
-later `invoke`, so `scope.parentSession` is not inherited into it. Whether an Agent Handler Caller
+before its first message. It refuses an id no client could address, as `fork` does for `into`. Every
+other write needs a record (`compact`, `fork`'s source, `delete`) and refuses an id with none with
+`no_such_session`. A record `update()` created is an existing session that has not run: `delete`
+removes it, `compact` answers `nothing_to_compact` before binding (binding would write to it), and a
+later `invoke` does not inherit `scope.parentSession` into it. Whether an Agent Handler Caller
 should set these through `invoke` is a separate question about what `Scope` means.
 
 ```ts
@@ -383,8 +385,9 @@ interface SessionState {
 }
 ```
 
-`model` and `thinkingLevel` are what the session will RUN with. A session that has never run reports
-what its first turn will run on: the defaults, the level clamped to the model.
+`model` and `thinkingLevel` are what the session will RUN with. An id with no record reports what its
+first turn would run on: the defaults, the level clamped to the model. Once `update()` has written
+its record, it reports that record's settings like any other session.
 
 `compacting` refers to manual compaction at a session boundary; automatic overflow compaction happens
 inside a run's activity window and reports as `running` — the observation plane's "running" window
