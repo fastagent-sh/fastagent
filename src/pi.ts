@@ -24,6 +24,7 @@ export {
   availableModelsFromDir,
   createPiAgentFromDir,
   type CreatePiAgentFromDirOptions,
+  refreshMachineModelCatalog,
   refreshModelCatalog,
 } from "./engines/pi/open.ts";
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";

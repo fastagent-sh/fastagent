@@ -21,7 +21,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders, getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "./auth.ts";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, globalHome, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 
@@ -315,25 +314,6 @@ export async function machineModelRuntime(
   const error = runtime.getError();
   if (error) throw new Error(error);
   return runtime;
-}
-
-/**
- * Refresh the machine's catalog ({@link globalCatalogPath}) with the machine's credentials: the global credentials
- * file and the environment. See {@link refreshCatalog} for what it asks and when it rejects.
- */
-export async function refreshGlobalModelCatalog(
-  options: { signal?: AbortSignal; catalogBaseUrl?: string } = {},
-): Promise<void> {
-  const credentials = fastagentCredentialStore(GLOBAL_AUTH_PATH);
-  await refreshCatalog(
-    (catalogFile) =>
-      machineModelRuntime({
-        credentials,
-        ...(catalogFile ? { catalogFile: globalCatalogPath() } : {}),
-        ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
-      }),
-    options.signal ? { signal: options.signal } : {},
-  );
 }
 
 /** How long a catalog refresh may take, as `pi update --models` allows. */

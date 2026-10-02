@@ -622,6 +622,9 @@ function refreshModelCatalog(
   dir: string,
   options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void; signal?: AbortSignal },
 ): Promise<void>;
+function refreshMachineModelCatalog(
+  options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void; signal?: AbortSignal },
+): Promise<void>;
 ```
 
 `probeAuthSource` names what satisfies `spec`'s provider in `models`, or `undefined` when nothing is configured; it
@@ -645,6 +648,12 @@ Nothing refreshes it on its own, so serving makes no catalog request. It rejects
 when the refresh fails,
 takes longer than 15 seconds, or `PI_OFFLINE` is set, and when none of the credentials authenticates a provider (the
 refresh would fetch nothing).
+
+`refreshMachineModelCatalog` is the same refresh into the machine's `~/.fastagent/models-store.json`, which every
+agent on the machine reads under its own: one call serves a client that hosts several agents, and no file is written
+into any agent. It authenticates with `credentialStore` or `authPath` when given, and the global credentials file
+otherwise; environment keys apply either way. It rejects for the same reasons. The machine's catalog does not ship
+with a deploy, so a deployed agent knows only the models its own `models-store.json` lists.
 
 Auth:
 
