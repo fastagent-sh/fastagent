@@ -7,13 +7,8 @@ import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { formatModelsCommand } from "../models-view.ts";
 import { listModels } from "../../engines/pi/config.ts";
-import {
-  createPiModelRuntime,
-  globalCatalogPath,
-  machineModelRuntime,
-  refreshGlobalModelCatalog,
-} from "../../engines/pi/models.ts";
-import { refreshModelCatalog } from "../../engines/pi/open.ts";
+import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../../engines/pi/models.ts";
+import { refreshMachineModelCatalog, refreshModelCatalog } from "../../engines/pi/open.ts";
 import { AGENT_MODEL_CATALOG_FILE, findAgentDir, globalHome, placementDeadEnd } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
@@ -38,7 +33,7 @@ export async function runModels(
         `[fastagent] refreshed ${join(agentDir, AGENT_MODEL_CATALOG_FILE)} — commit it: it ships with a deploy`,
       );
     } else {
-      await refreshGlobalModelCatalog().catch(failStartup);
+      await refreshMachineModelCatalog().catch(failStartup);
       console.error(`[fastagent] refreshed ${globalCatalogPath()} — every agent on this machine reads it`);
     }
   }

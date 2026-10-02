@@ -21,7 +21,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
-import { createPiModelRuntime, refreshCatalog } from "./models.ts";
+import { createPiModelRuntime, globalCatalogPath, machineModelRuntime, refreshCatalog } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
@@ -253,6 +253,35 @@ export async function refreshModelCatalogOver(
         agentDir,
         credentials,
         ...(catalogFile ? { catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE) } : {}),
+        ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+      }),
+    options.signal ? { signal: options.signal } : {},
+  );
+}
+
+/**
+ * Refresh the MACHINE's model catalog (`~/.fastagent/models-store.json`), which every agent here reads under its own,
+ * so one refresh serves them all and no file is written into any agent. Credentials resolve as for
+ * {@link refreshModelCatalog} without a directory: `credentialStore`, else `authPath`, else the global credentials file;
+ * the environment applies either way. Rejects for the same reasons. The file never ships with a deploy.
+ */
+export function refreshMachineModelCatalog(
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal } = {},
+): Promise<void> {
+  return refreshMachineModelCatalogOver(options);
+}
+
+/** {@link refreshMachineModelCatalog} against another catalog server. Not public: a test seam. */
+export async function refreshMachineModelCatalogOver(
+  options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal },
+  catalogBaseUrl?: string,
+): Promise<void> {
+  const { credentials } = agentModels(undefined, options);
+  await refreshCatalog(
+    (catalogFile) =>
+      machineModelRuntime({
+        credentials,
+        ...(catalogFile ? { catalogFile: globalCatalogPath() } : {}),
         ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
       }),
     options.signal ? { signal: options.signal } : {},

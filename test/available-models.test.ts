@@ -9,13 +9,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../src/engines/pi/models.ts";
 import {
-  createPiModelRuntime,
-  globalCatalogPath,
-  machineModelRuntime,
-  refreshGlobalModelCatalog,
-} from "../src/engines/pi/models.ts";
-import { availableModelsFromDir, createPiAgentFromDir, refreshModelCatalogOver } from "../src/engines/pi/open.ts";
+  availableModelsFromDir,
+  createPiAgentFromDir,
+  refreshMachineModelCatalogOver,
+  refreshModelCatalogOver,
+} from "../src/engines/pi/open.ts";
 
 /** A workspace whose agent sits one level inside, with no model set and two custom endpoints. */
 async function workspace(auth: string): Promise<{ dir: string; authPath: string }> {
@@ -157,7 +157,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     const b = await workspace("{}");
     const catalog = await catalogServer();
     try {
-      await refreshGlobalModelCatalog({ catalogBaseUrl: catalog.url });
+      await refreshMachineModelCatalogOver({}, catalog.url);
       const ofB = (await availableModelsFromDir(b.dir, { authPath: b.authPath })).map((m) => m.spec);
       expect(ofB).toContain(`anthropic/${NEW}`);
       expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
@@ -167,6 +167,22 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
         machineLayer: false,
       });
       expect(deployed.getModel("anthropic", NEW)).toBeUndefined(); // the machine's catalog does not ship
+    } finally {
+      catalog.close();
+      await rm(globalCatalogPath(), { force: true });
+    }
+  });
+
+  it("a machine refresh authenticates with the caller's credentials file, not the machine's", async () => {
+    for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
+      vi.stubEnv(name, undefined);
+    const authPath = join(await mkdtemp(join(tmpdir(), "fa-caller-auth-")), "auth.json");
+    await writeFile(authPath, JSON.stringify({ anthropic: { type: "api_key", key: "sk-caller" } }));
+    const catalog = await catalogServer();
+    try {
+      // The machine has no credential, so only the caller's file can make this succeed.
+      await refreshMachineModelCatalogOver({ authPath }, catalog.url);
+      expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
     } finally {
       catalog.close();
       await rm(globalCatalogPath(), { force: true });
