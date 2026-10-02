@@ -3,8 +3,10 @@
  * new one, never one cut short, and a file that is really corrupt still says so.
  */
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -33,7 +35,10 @@ for (let n = 0; ; n++) {
 
 describe("the model catalog file", () => {
   it("a read racing a refresh's writes in another process sees a whole catalog every time", async () => {
-    const path = globalCatalogPath();
+    // A file of its own: the writer is killed mid-loop, possibly holding the lock, and a lock left behind stalls the
+    // next writer of that file until it goes stale (30 s).
+    const dir = await mkdtemp(join(tmpdir(), "fa-catalog-race-"));
+    const path = join(dir, "models-store.json");
     const writer = spawn(process.execPath, ["--input-type=module", "-e", WRITER], {
       env: { ...process.env, MODELS_MODULE, CATALOG: path },
       stdio: ["ignore", "pipe", "pipe"],
@@ -69,7 +74,10 @@ describe("the model catalog file", () => {
       expect(seen.a).toBeGreaterThan(0);
       expect(seen.b).toBeGreaterThan(0);
     } finally {
+      const exited = once(writer, "exit");
       writer.kill();
+      await exited;
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
