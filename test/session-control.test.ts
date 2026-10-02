@@ -26,7 +26,8 @@ import {
   piInMemorySessionRecordStore,
   piSessionRecordStore,
 } from "../src/engines/pi/session-store.ts";
-import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import { activePath, describeModels, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import type { AnyModel } from "../src/engines/pi/models.ts";
 import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
@@ -358,8 +359,12 @@ describe("session control: observation plane", () => {
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // The control is live over this workspace's (jsonl) store: read-only observation works
       // without a single model call, and an unknown session stays uncreated.
+      // A session that has never run reports what its first turn would run on.
       expect(await control.sessions.get("ghost").state()).toEqual({
         status: "idle",
+        model: "openai-codex/gpt-5.5",
+        thinkingLevel: expect.any(String),
+        availableThinkingLevels: expect.any(Array),
         pending: { steering: [], followUp: [] },
       });
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
@@ -1342,14 +1347,72 @@ async function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = 
 }
 
 describe("session control: boundary mutations", () => {
-  it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
+  it("capabilities describe every model a session may be set to, with the levels state() then reports for it", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
     expect(caps.compaction).toBe(true);
-    expect(caps.allowedModels ?? []).toContain(spec); // deployment fact
-    expect(caps.updatable).toContain("thinkingLevel"); // per-session set rides state()
+    expect(caps.updatable).toContain("thinkingLevel");
+    const specs = (caps.allowedModels ?? []).map((model) => model.spec);
+    expect(specs).toEqual([...specs].sort());
+    const described = caps.allowedModels?.find((model) => model.spec === spec);
+    expect(described?.thinkingLevels).toContain("high");
     await sessions.openOrCreate("sCaps");
-    expect((await control.sessions.get("sCaps").state()).availableThinkingLevels).toContain("high");
+    // What a picker offers before the session runs on the model is what the session then accepts.
+    expect((await control.sessions.get("sCaps").state()).availableThinkingLevels).toEqual(described?.thinkingLevels);
+    // A model that declares no name or context window (an extension's virtual model: pi reads the window as 0) leaves
+    // the fields out rather than inventing them.
+    const bare = { provider: "router", id: "bare", api: "pi-virtual", reasoning: false, contextWindow: 0 };
+    expect(describeModels([bare as unknown as AnyModel])).toStrictEqual([
+      { spec: "router/bare", thinkingLevels: ["off"] },
+    ]);
+  });
+
+  it("a session that has never run reports its first turn's settings, takes properties, and its first turn runs on them", async () => {
+    const ran: { reasoning?: string; model: string }[] = [];
+    const answer: FauxResponseStep = (_context, options, _state, model) => {
+      ran.push({ ...(options?.reasoning ? { reasoning: options.reasoning } : {}), model: model.id });
+      return fauxAssistantMessage("done");
+    };
+    const { agent, control, sessions, faux } = await fauxControlledAgent([answer, answer], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      thinkingLevel: "max", // the agent's default, above what the model supports
+    });
+    const plain = `${faux.getModel("plain")?.provider}/plain`;
+    const fresh = control.sessions.get("sFresh");
+    // Before anything is written: the defaults, the level clamped to the model, and nothing created by reading.
+    const before = await fresh.state();
+    expect(before.model).toBe(`${faux.getModel()?.provider}/thinker`);
+    expect(before).not.toHaveProperty("leafEntryId");
+    expect(before.thinkingLevel).not.toBe("max");
+    expect(before.thinkingLevel).toBe(before.availableThinkingLevels?.at(-1));
+    expect(await sessions.openIfExists("sFresh")).toBeUndefined();
+
+    expect(await fresh.update({ thinkingLevel: "low", name: "draft" })).toEqual({ ok: true });
+    expect(await control.sessions.list()).toContainEqual(
+      expect.objectContaining({ session: "sFresh", name: "draft", messageCount: 0 }),
+    );
+    expect(await control.sessions.get("sOther").update({ model: plain })).toEqual({ ok: true });
+    await collect(agent.invoke({ session: "sFresh" }, { text: "go" }));
+    await collect(agent.invoke({ session: "sOther" }, { text: "go" }));
+    expect(ran).toEqual([{ reasoning: "low", model: "thinker" }, { model: "plain" }]);
+  });
+
+  it("a patch refused for a session that has never run leaves no record behind", async () => {
+    const { control, sessions } = await makeBoundary([]); // faux-thinker: no "max"
+    const ghost = control.sessions.get("sGhost");
+    for (const patch of [
+      { leafEntryId: "e1" }, // nothing to point at yet
+      { thinkingLevel: "max" },
+      { thinkingLevel: "loud" },
+      { model: "faux/missing" },
+      { name: " " },
+    ]) {
+      expect(await ghost.update(patch), JSON.stringify(patch)).toMatchObject({
+        ok: false,
+        error: { code: INVALID_COMMAND_CODE },
+      });
+    }
+    expect(await sessions.openIfExists("sGhost")).toBeUndefined();
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
@@ -1825,7 +1888,7 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sNavNoop").state()).leafEntryId).toBe(leaf);
   });
 
-  it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
+  it("navigate rejects an entry that is not in the session", async () => {
     const { agent, control } = await makeBoundary([fauxAssistantMessage("ok")]);
     expect(control.capabilities().updatable.includes("leafEntryId")).toBe(true);
     await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
@@ -1834,9 +1897,6 @@ describe("session control: boundary mutations", () => {
     expect(unknownEntry.ok).toBe(false);
     if (!unknownEntry.ok) expect(unknownEntry.error.code).toBe(INVALID_COMMAND_CODE);
     expect((await control.sessions.get("sNavBad").state()).leafEntryId).toBe(leafBefore); // rejected before acceptance
-    const unknownSession = await control.sessions.get("sGhost").update({ leafEntryId: "x" });
-    expect(unknownSession.ok).toBe(false);
-    if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
 
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
@@ -2917,15 +2977,15 @@ describe("session control: boundary mutations", () => {
     }
   });
 
-  it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
-    const { control, sessions, spec } = await makeBoundary([]);
-    const result = await control.sessions.get("ghost").update({ model: spec });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
-    expect(await sessions.openIfExists("ghost")).toBeUndefined(); // no ghost record landed
-    const compact = await control.sessions.get("ghost").compact();
-    expect(compact.ok).toBe(false);
-    if (!compact.ok) expect(compact.error.code).toBe(NO_SUCH_SESSION_CODE);
+  it("writes that need a session's history refuse one that has never run with no_such_session, and create nothing", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const ghost = control.sessions.get("ghost");
+    const refused = { ok: false, error: { code: NO_SUCH_SESSION_CODE } };
+    expect(await ghost.compact()).toMatchObject(refused);
+    expect(await ghost.delete()).toMatchObject(refused);
+    expect(await control.sessions.fork({ from: "ghost", at: "e1", into: "copy" })).toMatchObject(refused);
+    expect(await sessions.openIfExists("ghost")).toBeUndefined();
+    expect(await sessions.openIfExists("copy")).toBeUndefined();
   });
 
   it("without boundary wiring the commands stay gated off and rejected", async () => {

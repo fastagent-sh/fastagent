@@ -58,7 +58,6 @@ import {
   type SessionUpdateField,
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
-import { listModels } from "./config.ts";
 import { forkProvenance, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
 import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
@@ -66,7 +65,7 @@ import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { startCompaction } from "./agent-session-factory.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
-import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
+import { THINKING_LEVELS, activePath, describeModels, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
@@ -250,9 +249,9 @@ class Subscriber {
 
 /** What the plane's writes (`update` / `compact` / `fork` / `delete`) need — the SAME instances the
  *  agent assembly uses: the lease (a write must not race a run), the model registry (validation +
- *  allowedModels), and the session factory (compaction is a model call). Writes go through the
- *  record the hub's reader opened — after an existence check, so the control plane never creates
- *  a session (that is the data plane's monopoly). */
+ *  allowedModels), and the session factory (compaction is a model call). The one write that creates a
+ *  session is `update()` on a session that has never run, through the store's `openOrCreate` like an
+ *  invoke; every other write needs a record that exists. */
 export interface PiBoundaryWiring {
   lease: Lease;
   models: Models;
@@ -377,10 +376,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // The CONTRACT's list, not a copy of it: a field added to SessionUpdate is advertised
         // without anyone remembering to, and one removed cannot linger here.
         updatable: b ? [...UPDATE_FIELDS] : [],
-        // The registry is a deployment fact (any session may be pointed at any of it). Thinking
-        // LEVELS are a property of the model a session is running, so they ride
-        // `state().availableThinkingLevels` — a list here could only answer for one model.
-        ...(b ? { allowedModels: listModels(b.models) } : {}),
+        // The registry is a deployment fact (any session may be pointed at any of it). Each model carries the levels
+        // a session on it accepts, so a picker can offer them before the session runs on that model;
+        // `state().availableThinkingLevels` answers for the model the session is on.
+        ...(b ? { allowedModels: describeModels(b.models.getModels()) } : {}),
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: true, // state().usage, and state_changed{usage} after each run and compaction
       };
@@ -400,7 +399,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const b = boundary;
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
       let usage: SessionState["usage"];
-      if (opened) {
+      if (!opened) {
+        // A session that has never run is an empty conversation at the defaults: its first turn runs on these.
+        if (b) settings = resolveSessionSettings([], b.models, b.defaults);
+      } else {
         try {
           const path = activePath(opened);
           if (b) settings = resolveSessionSettings(path, b.models, b.defaults);
@@ -704,7 +706,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           const slash = patch.model.indexOf("/");
           model = slash > 0 ? b.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
           if (!model) {
-            return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted specs`);
+            return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted models`);
           }
         }
         if (patch.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
@@ -715,18 +717,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // A name is the client's own label; the only thing that cannot be one is nothing.
         if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
 
-        // Sessions are created by invoke or copied by fork, never minted by an update: an unknown id is
-        // rejected, not turned into a ghost record. (Read-only handle — the WRITE one is opened under
-        // the lease below, and this one is discarded.)
+        // A session that has never run takes properties too: its first turn is the "next turn" they apply to, so the
+        // write creates its record (below, under the lease). (Read-only handle — the WRITE one is opened under the
+        // lease, and this one is discarded.)
         const existing = yield* port(() => sessions.openIfExists(session));
-        if (!existing) return noSuchSession(session);
 
         if (patch.leafEntryId !== undefined) {
           // A target that cannot BE a leaf is a permanent payload error, not a session error — the same
           // disposition as an unknown model spec. Same predicate `entries()` publishes by, so
           // "everything published is a position" holds by construction rather than by two literals
           // agreeing.
-          const entry = existing.getEntry(patch.leafEntryId) as PiSessionEntry | undefined;
+          const entry = existing?.getEntry(patch.leafEntryId) as PiSessionEntry | undefined;
           if (!entry || !isNavigable(entry)) {
             return invalid(
               entry
@@ -744,7 +745,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // Against the path this patch LANDS on: a leaf move is written first, and the branch it
             // moves to can carry a model override of its own — validating on the path being left would
             // reject a level the destination supports, and accept one it does not.
-            resolved = resolveSessionSettings(activePath(existing, patch.leafEntryId), b.models, b.defaults);
+            const path = existing ? activePath(existing, patch.leafEntryId) : [];
+            resolved = resolveSessionSettings(path, b.models, b.defaults);
           } catch (error) {
             return failed(error);
           }
@@ -765,6 +767,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             yield* acquireSessionLease(b.lease, session);
             // portJoin, not port: the lease is held for the duration of this write, so an interrupted
             // fiber must not release it while the store is still writing (effect-port.ts, rule 1).
+            // A never-run session's record is created through the data plane's own path, under the same lease an
+            // invoke creating it takes; one that invoke created meanwhile is simply opened.
+            if (!existing) yield* portJoin(() => sessions.openOrCreate(session));
             return yield* portJoin(() =>
               sessions.applyProperties(session, {
                 ...(patch.name !== undefined ? { name: patch.name } : {}),
@@ -775,7 +780,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             );
           }),
         );
-        if (!applied) return noSuchSession(session); // vanished in the window: same condition, same code
+        if (!applied) return noSuchSession(session); // deleted in the window between the read and the lease
 
         if (applied.landed.length > 0) {
           // ONE event for the patch, built from what the RECORD holds. The settings pair rides along

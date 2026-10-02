@@ -56,7 +56,11 @@ export interface Session {
    */
   image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;
-  /** Set durable session properties. */
+  /**
+   * Set durable session properties, applied by the session's next turn. A session that has never run takes them too:
+   * the write creates its record, and its first turn runs on them (a `leafEntryId` is refused there, since it has no
+   * entries yet).
+   */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /**
    * Join the active run: delivered after the current turn's tool calls, before the next model call. `prompt.text`
@@ -128,10 +132,22 @@ export interface SessionCapabilities {
   delete: boolean;
   /** Which {@link SessionUpdate} fields this deployment accepts. */
   updatable: SessionUpdateField[];
-  /** The specs `update({ model })` accepts — present iff `model` is updatable. */
-  allowedModels?: string[];
+  /** The models `update({ model })` accepts, by `spec` — present iff `model` is updatable. */
+  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
+}
+
+/**
+ * A model as a picker shows it, before any session runs on it. `thinkingLevels` is what `update({ thinkingLevel })`
+ * accepts for a session on this model; `name` and `contextWindow` are absent when the model does not declare them.
+ */
+export interface ModelDescriptor {
+  /** What `update({ model })` takes. */
+  spec: string;
+  name?: string;
+  thinkingLevels: string[];
+  contextWindow?: number;
 }
 
 /** One name a client can offer the user. */
@@ -156,7 +172,10 @@ export const NO_ACTIVE_RUN_CODE = "no_active_run";
 /** Stable `SessionResult.error.code` for a PAYLOAD that is invalid for this runtime. */
 export const INVALID_COMMAND_CODE = "invalid_command";
 
-/** Stable `SessionResult.error.code` for a write against a session that does not exist. */
+/**
+ * Stable `SessionResult.error.code` for a write that needs a session's history (fork, compact, delete) against a
+ * session that has none. `update()` is not one: it creates the record of a session that has never run.
+ */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
 /** Stable `SessionResult.error.code` for a write rejected BEFORE acceptance with nothing durable landed. */
@@ -227,7 +246,10 @@ export interface SessionState {
   /** `compacting` refers to MANUAL compaction (`compact`) at a session boundary. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
-  /** What this session will RUN with, not what was recorded. */
+  /**
+   * What this session will RUN with, not what was recorded. A session that has never run reports what its first turn
+   * will run on.
+   */
   model?: string;
   thinkingLevel?: string;
   /** What `update({ thinkingLevel })` accepts for THIS session — re-read after a model change. */

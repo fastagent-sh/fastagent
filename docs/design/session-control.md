@@ -152,8 +152,14 @@ user→sessions mapping this call would return. That is also why there is no pre
 
 ### 5.1 Actions and properties
 
-There is no `prompt` action: starting work is the data plane's definition. Nothing here creates a
-session from nothing — `fork` copies one that exists.
+There is no `prompt` action: starting work is the data plane's definition. A session id is the
+Caller's, so an id nothing has written yet is an empty conversation at the defaults: `state()` reports
+what its first turn will run on, and `update()` sets its properties, which creates its record. That is
+the "next turn" a property applies to, so a client sets a new conversation's model or thinking level
+before its first message. Every other write needs history (`compact`, `fork`'s source, `delete`) and
+refuses such an id with `no_such_session`. A record `update()` created is an existing session to a
+later `invoke`, so `scope.parentSession` is not inherited into it. Whether an Agent Handler Caller
+should set these through `invoke` is a separate question about what `Scope` means.
 
 ```ts
 type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string };
@@ -288,17 +294,29 @@ interface SessionCapabilities {
   fork: boolean;
   delete: boolean;
   updatable: ("name" | "model" | "thinkingLevel" | "leafEntryId")[];
-  allowedModels?: string[];
+  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
 }
 ```
 
 Clients MUST gate controls on capabilities; calling past a gate fails before acceptance with a stable
-`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session:
-`allowedModels` may live here because the model registry is a deployment fact, while thinking LEVELS
-are a property of the model a session is currently running and therefore live on
-`state().availableThinkingLevels`. A static list could only answer for one model.
+`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session.
+`allowedModels` lives here because the model registry is a deployment fact. Each entry describes a
+model the way a picker shows it, before any session runs on it:
+
+```ts
+interface ModelDescriptor {
+  spec: string;             // what update({ model }) takes
+  name?: string;
+  thinkingLevels: string[]; // what update({ thinkingLevel }) accepts for a session on this model
+  contextWindow?: number;
+}
+```
+
+`state().availableThinkingLevels` answers the same question for the model the session is on, from the
+same function, so a picker offers what the session then accepts. A model that declares no name or
+context window (an extension's virtual model may not) leaves the field out.
 
 `updatable` is a LIST rather than a flag per field, so a client reads the same names it writes
 (`caps.updatable.includes("model")` gates the model picker that `update({ model })` will use).
@@ -364,6 +382,9 @@ interface SessionState {
   leafEntryId?: string;
 }
 ```
+
+`model` and `thinkingLevel` are what the session will RUN with. A session that has never run reports
+what its first turn will run on: the defaults, the level clamped to the model.
 
 `compacting` refers to manual compaction at a session boundary; automatic overflow compaction happens
 inside a run's activity window and reports as `running` — the observation plane's "running" window
