@@ -15,6 +15,7 @@ import {
   InMemoryModelsStore,
   type Model,
   type Models,
+  type ModelsStore,
   type ModelsStoreEntry,
   type Provider,
   defaultProviderAuthContext,
@@ -23,6 +24,7 @@ import { builtinModels, builtinProviders, getBuiltinModelDataGeneratedAt } from 
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, globalHome, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
+import { withLockedFile } from "./locked-file.ts";
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
 export function piModelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
@@ -191,14 +193,62 @@ export function globalCatalogPath(): string {
   return join(globalHome(), AGENT_MODEL_CATALOG_FILE);
 }
 
-/** A catalog file as pi writes it (entries by provider), or `{}` when there is none. */
-async function readCatalog(path: string): Promise<Record<string, ModelsStoreEntry>> {
+type Catalog = Record<string, ModelsStoreEntry>;
+
+/** A catalog file as pi writes it (entries by provider), or `{}` when there is none. Read without a lock: its one
+ *  writer ({@link catalogFileStore}) replaces the file whole, so a read sees the old catalog or the new one. */
+async function readCatalog(path: string): Promise<Catalog> {
   if (!existsSync(path)) return {};
+  return parseCatalog(await readFile(path, "utf8"), path);
+}
+
+/**
+ * The one reading of a catalog file's content, for reads and writes alike. Empty is an empty catalog, as pi reads it:
+ * the writer creates the file exclusively an instant before its first content, and pi's own store, which wrote these
+ * files before, left one behind whenever a refresh it began wrote no entry. That is safe only because nothing writes
+ * these files in place any more: a rewrite in place is read mostly as empty while it runs. Anything else that does not
+ * parse is a corrupt file, and a WRITE refuses it too: serializing over it would drop every other provider's entries.
+ */
+function parseCatalog(content: string, path: string): Catalog {
+  if (content === "") return {};
   try {
-    return JSON.parse(await readFile(path, "utf8")) as Record<string, ModelsStoreEntry>;
+    return JSON.parse(content) as Catalog;
   } catch (error) {
     throw new Error(`model catalog ${path} is not valid JSON (${(error as Error).message}): refresh or delete it`);
   }
+}
+
+/**
+ * The catalog file a refresh writes, as pi's store. It replaces pi's own file store, which rewrites the file in place
+ * under its lock: a reader that takes no lock (every catalog read here, and anything else reading the file) could open
+ * it cut short mid-write and blame a healthy file. Same lock as pi's, so concurrent refreshes still queue; reading
+ * creates nothing, so a refresh that is refused writes no file.
+ */
+export function catalogFileStore(path: string): ModelsStore {
+  const change = (update: (catalog: Catalog) => void) =>
+    withLockedFile(path, async (current) => {
+      const catalog = parseCatalog(current ?? "", path);
+      update(catalog);
+      return { result: undefined, next: JSON.stringify(catalog, null, 2) };
+    });
+  return {
+    async read(providerId, options) {
+      options?.signal?.throwIfAborted();
+      return (await readCatalog(path))[providerId];
+    },
+    async write(providerId, entry, options) {
+      options?.signal?.throwIfAborted();
+      await change((catalog) => {
+        catalog[providerId] = structuredClone(entry);
+      });
+    },
+    async delete(providerId, options) {
+      options?.signal?.throwIfAborted();
+      await change((catalog) => {
+        delete catalog[providerId];
+      });
+    },
+  };
 }
 
 /**
@@ -261,8 +311,7 @@ export interface ModelFiles {
   /** `ModelRuntime.create` options over this read; a fresh catalog store each call. */
   create(): Promise<{
     modelsPath: string | null;
-    modelsStore?: InMemoryModelsStore;
-    modelsStorePath?: string;
+    modelsStore?: ModelsStore;
     allowModelNetwork: false;
     catalogBaseUrl?: string;
   }>;
@@ -284,7 +333,7 @@ export async function modelRuntimeFiles(options: Omit<PiModelRuntimeOptions, "cr
       // Always a store of our own whenever modelsPath is set: pi's default is a file at
       // `<dirname(modelsPath)>/models-store.json`. Without a directory, pi keeps an empty one in memory.
       ...(options.catalogFile
-        ? { modelsStorePath: options.catalogFile }
+        ? { modelsStore: catalogFileStore(options.catalogFile) }
         : catalog
           ? { modelsStore: await catalogStore(catalog) }
           : {}),
@@ -305,9 +354,9 @@ export async function machineModelRuntime(
   const runtime = await ModelRuntime.create({
     credentials: options.credentials ?? new InMemoryCredentialStore(),
     modelsPath: machineModelsPath(),
-    ...(options.catalogFile
-      ? { modelsStorePath: options.catalogFile }
-      : { modelsStore: await layeredCatalog([globalCatalogPath()]) }),
+    modelsStore: options.catalogFile
+      ? catalogFileStore(options.catalogFile)
+      : await layeredCatalog([globalCatalogPath()]),
     allowModelNetwork: false,
     ...(options.catalogBaseUrl ? { catalogBaseUrl: options.catalogBaseUrl } : {}),
   });
@@ -320,26 +369,25 @@ export async function machineModelRuntime(
 const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch the model catalog of every provider the runtime can authenticate into its catalog file: the refresh
- * `pi update --models` runs. `runtime(true)` is built over that file, `runtime(false)` over the read-only layers; the
- * file-backed one is built only once the refresh is known to run, because pi's file store creates the file on read and
- * a refused refresh must leave nothing behind. pi asks pi.dev only for a provider with a usable
+ * Fetch the model catalog of every provider the runtime can authenticate into its catalog file ({@link
+ * catalogFileStore}): the refresh `pi update --models` runs. A refusal writes nothing: the store creates the file only
+ * when pi writes an entry. pi asks pi.dev only for a provider with a usable
  * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
  * that failed, when any part fails, when it outlasts 15 seconds, when `PI_OFFLINE` is set, and when no provider has a
  * usable credential (the refresh would ask for nothing).
  */
 export async function refreshCatalog(
-  runtime: (catalogFile: boolean) => Promise<ModelRuntime>,
+  building: Promise<ModelRuntime>,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   // pi skips its own background refresh under PI_OFFLINE, but an explicit `allowNetwork: true` overrides that.
   if (process.env.PI_OFFLINE !== undefined) throw new Error("PI_OFFLINE is set, so the model catalog is not refreshed");
   // pi skips a provider it cannot authenticate without recording anything, so with no usable credential at all the
   // refresh would "succeed" having asked for nothing.
-  const probe = await runtime(false);
-  const refreshable = probe.getProviders().filter((provider) => provider.refreshModels !== undefined);
+  const runtime = await building;
+  const refreshable = runtime.getProviders().filter((provider) => provider.refreshModels !== undefined);
   const usable = await Promise.all(
-    refreshable.map(async (provider) => (await probe.checkAuth(provider.id)) !== undefined),
+    refreshable.map(async (provider) => (await runtime.checkAuth(provider.id)) !== undefined),
   );
   if (!usable.includes(true)) {
     throw new Error(
@@ -349,7 +397,7 @@ export async function refreshCatalog(
   }
   const timeout = AbortSignal.timeout(CATALOG_REFRESH_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  const result = await (await runtime(true)).refresh({ allowNetwork: true, force: true, signal });
+  const result = await runtime.refresh({ allowNetwork: true, force: true, signal });
   if (result.aborted) {
     throw new Error(
       options.signal?.aborted
