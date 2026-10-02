@@ -615,6 +615,19 @@ describe("the model catalogs: the agent's own over the machine's", () => {
     }
   });
 
+  it("PI_OFFLINE refuses before the runtime is built, so a runtime that cannot be built fails nowhere unheard", async () => {
+    vi.stubEnv("PI_OFFLINE", "1");
+    const build = vi.fn(async (): Promise<ModelRuntime> => {
+      throw new Error("Failed to parse models.json");
+    });
+    try {
+      await expect(refreshCatalog(join(tmpdir(), "fa-offline-catalog.json"), build)).rejects.toThrow(/PI_OFFLINE/);
+      expect(build).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a refresh with no usable credential anywhere is refused instead of reporting a refresh that asked for nothing", async () => {
     const refresh = vi.fn();
     const runtime = {
@@ -622,7 +635,9 @@ describe("the model catalogs: the agent's own over the machine's", () => {
       checkAuth: async () => undefined,
       refresh,
     } as unknown as ModelRuntime;
-    await expect(refreshCatalog(Promise.resolve(runtime))).rejects.toThrow(/no provider has a usable credential/);
+    await expect(refreshCatalog(join(tmpdir(), "fa-no-catalog.json"), async () => runtime)).rejects.toThrow(
+      /no provider has a usable credential/,
+    );
     expect(refresh).not.toHaveBeenCalled();
   });
 });

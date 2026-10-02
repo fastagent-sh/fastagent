@@ -38,6 +38,7 @@ function writeTarget(path: string): string {
 export async function withLockedFile<T>(
   path: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
   mkdirSync(dirname(path), { recursive: true });
   if (!existsSync(path)) {
@@ -77,6 +78,9 @@ export async function withLockedFile<T>(
     const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
     const out = await fn(current);
     throwIfCompromised();
+    // The last moment a caller that gave up can keep its change off disk: waiting for the lock may have outlasted it
+    // (another process held the lock through the caller's timeout or cancel).
+    options.signal?.throwIfAborted();
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {

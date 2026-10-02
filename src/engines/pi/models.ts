@@ -225,12 +225,16 @@ function parseCatalog(content: string, path: string): Catalog {
  * creates nothing, so a refresh that is refused writes no file.
  */
 export function catalogFileStore(path: string): ModelsStore {
-  const change = (update: (catalog: Catalog) => void) =>
-    withLockedFile(path, async (current) => {
-      const catalog = parseCatalog(current ?? "", path);
-      update(catalog);
-      return { result: undefined, next: JSON.stringify(catalog, null, 2) };
-    });
+  const change = (update: (catalog: Catalog) => void, signal: AbortSignal | undefined) =>
+    withLockedFile(
+      path,
+      async (current) => {
+        const catalog = parseCatalog(current ?? "", path);
+        update(catalog);
+        return { result: undefined, next: JSON.stringify(catalog, null, 2) };
+      },
+      signal ? { signal } : {},
+    );
   return {
     async read(providerId, options) {
       options?.signal?.throwIfAborted();
@@ -240,13 +244,13 @@ export function catalogFileStore(path: string): ModelsStore {
       options?.signal?.throwIfAborted();
       await change((catalog) => {
         catalog[providerId] = structuredClone(entry);
-      });
+      }, options?.signal);
     },
     async delete(providerId, options) {
       options?.signal?.throwIfAborted();
       await change((catalog) => {
         delete catalog[providerId];
-      });
+      }, options?.signal);
     },
   };
 }
@@ -369,22 +373,27 @@ export async function machineModelRuntime(
 const CATALOG_REFRESH_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch the model catalog of every provider the runtime can authenticate into its catalog file ({@link
- * catalogFileStore}): the refresh `pi update --models` runs. A refusal writes nothing: the store creates the file only
- * when pi writes an entry. pi asks pi.dev only for a provider with a usable
- * credential, and may refresh an expired OAuth token of the runtime's store to get one. Rejects, naming each provider
- * that failed, when any part fails, when it outlasts 15 seconds, when `PI_OFFLINE` is set, and when no provider has a
- * usable credential (the refresh would ask for nothing).
+ * Fetch the model catalog of every provider the runtime can authenticate into `catalogFile` ({@link
+ * catalogFileStore}): the refresh `pi update --models` runs. `build` makes the runtime over that file, and runs only
+ * once the refresh is known to go ahead. A refusal writes nothing: the store creates the file only when pi writes an
+ * entry. pi asks pi.dev only for a provider with a usable credential, and may refresh an expired OAuth token of the
+ * runtime's store to get one. Rejects, naming each provider that failed, when any part fails, when it outlasts 15
+ * seconds, when `PI_OFFLINE` is set, when the catalog file is corrupt, and when no provider has a usable credential (the
+ * refresh would ask for nothing).
  */
 export async function refreshCatalog(
-  building: Promise<ModelRuntime>,
+  catalogFile: string,
+  build: (catalogFile: string) => Promise<ModelRuntime>,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   // pi skips its own background refresh under PI_OFFLINE, but an explicit `allowNetwork: true` overrides that.
   if (process.env.PI_OFFLINE !== undefined) throw new Error("PI_OFFLINE is set, so the model catalog is not refreshed");
+  // A corrupt file fails here, once, by its own message: past this point every provider's refresh reads the store and
+  // would repeat it, worded as that provider's failure.
+  await readCatalog(catalogFile);
+  const runtime = await build(catalogFile);
   // pi skips a provider it cannot authenticate without recording anything, so with no usable credential at all the
   // refresh would "succeed" having asked for nothing.
-  const runtime = await building;
   const refreshable = runtime.getProviders().filter((provider) => provider.refreshModels !== undefined);
   const usable = await Promise.all(
     refreshable.map(async (provider) => (await runtime.checkAuth(provider.id)) !== undefined),

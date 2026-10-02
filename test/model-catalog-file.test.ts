@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it } from "vitest";
 import { catalogFileStore, globalCatalogPath, inGlobalCatalog } from "../src/engines/pi/models.ts";
 
@@ -77,6 +78,26 @@ describe("the model catalog file", () => {
       const exited = once(writer, "exit");
       writer.kill();
       await exited;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a write cancelled while it waits for the lock leaves the file as it was", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-catalog-cancel-"));
+    const path = join(dir, "models-store.json");
+    const store = catalogFileStore(path);
+    const before = { models: [{ id: "kept" }] };
+    await store.write("anthropic", before);
+    // Another refresh holds the lock (pi's settings), past this one's timeout or cancel.
+    const release = await lockfile.lock(path, { realpath: false });
+    try {
+      const controller = new AbortController();
+      const writing = store.write("anthropic", { models: [{ id: "late" }] }, { signal: controller.signal });
+      controller.abort();
+      await release();
+      await expect(writing).rejects.toThrow(/abort/i);
+      expect(await store.read("anthropic")).toEqual(before);
+    } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });

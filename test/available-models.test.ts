@@ -2,7 +2,7 @@
  * `availableModelsFromDir`: what an embedding client's model picker can offer for an agent directory.
  */
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -213,5 +213,17 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       /no provider has a usable credential/,
     );
     expect(existsSync(file)).toBe(false);
+  });
+
+  it("a corrupt catalog fails the refresh once, by its own message, before any provider is asked", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test"); // a usable credential: the refresh would go ahead
+    const { dir, authPath } = await workspace("{}");
+    const file = join(dir, "agent", "models-store.json");
+    await writeFile(file, '{ "anthropic": ');
+    const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(
+      new RegExp(`^model catalog ${escaped} is not valid JSON \\([^)]*\\): refresh or delete it$`),
+    );
+    expect(await readFile(file, "utf8")).toBe('{ "anthropic": ');
   });
 });

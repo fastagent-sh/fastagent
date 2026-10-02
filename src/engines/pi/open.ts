@@ -248,12 +248,14 @@ export async function refreshModelCatalogOver(
   const { agentDir } = resolvePlacement(dir);
   const { credentials } = agentModels(agentDir, options);
   await refreshCatalog(
-    createPiModelRuntime({
-      agentDir,
-      credentials,
-      catalogFile: join(agentDir, AGENT_MODEL_CATALOG_FILE),
-      ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
-    }),
+    join(agentDir, AGENT_MODEL_CATALOG_FILE),
+    (catalogFile) =>
+      createPiModelRuntime({
+        agentDir,
+        credentials,
+        catalogFile,
+        ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+      }),
     options.signal ? { signal: options.signal } : {},
   );
 }
@@ -277,11 +279,13 @@ export async function refreshMachineModelCatalogOver(
 ): Promise<void> {
   const { credentials } = agentModels(undefined, options);
   await refreshCatalog(
-    machineModelRuntime({
-      credentials,
-      catalogFile: globalCatalogPath(),
-      ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
-    }),
+    globalCatalogPath(),
+    (catalogFile) =>
+      machineModelRuntime({
+        credentials,
+        catalogFile,
+        ...(catalogBaseUrl ? { catalogBaseUrl } : {}),
+      }),
     options.signal ? { signal: options.signal } : {},
   );
 }
