@@ -152,6 +152,44 @@ describe("session control: observation plane", () => {
     expect(invoked.some((e) => e.type === "tool_ended" && e.id === "call-1")).toBe(true);
   });
 
+  it("an answer says how it ended, identically on message_finished and on its entry; a normal one says nothing", async () => {
+    const cases = [
+      {
+        session: "oFailed",
+        answer: fauxAssistantMessage("partial answer", { stopReason: "error", errorMessage: "invalid api key" }),
+        outcome: { status: "failed", error: { message: "invalid api key" } },
+        settled: "failed",
+      },
+      {
+        session: "oAborted",
+        answer: fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "Request aborted" }),
+        outcome: { status: "aborted", error: { message: "Request aborted" } },
+        settled: "aborted",
+      },
+      {
+        // Cut off at the output limit: the answer's property, so the run still completes.
+        session: "oTruncated",
+        answer: fauxAssistantMessage("cut off", { stopReason: "length" }),
+        outcome: { status: "truncated" },
+        settled: "completed",
+      },
+      { session: "oNormal", answer: fauxAssistantMessage("done"), outcome: undefined, settled: "completed" },
+    ];
+    for (const c of cases) {
+      const { agent, control } = await makeObserved([c.answer]);
+      const watched = watchUntilSettled(control, c.session);
+      await drain(agent.invoke({ session: c.session }, { text: "go" }));
+      const rich = await watched;
+      const finished = rich.find((e) => e.type === "message_finished");
+      const entry = (await control.sessions.get(c.session).entries()).entries.find((e) => e.kind === "assistant");
+
+      expect(rich.at(-1)?.data, c.session).toMatchObject({ status: c.settled });
+      expect(finished?.data, c.session).toEqual(c.outcome ? { outcome: c.outcome } : {});
+      if (c.outcome) expect(entry?.data, c.session).toMatchObject({ outcome: c.outcome });
+      else expect(entry?.data, c.session).not.toHaveProperty("outcome");
+    }
+  });
+
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {
     const { agent, control } = await makeObserved([fauxAssistantMessage("a long answer")]);
     const watched = watchUntilSettled(control, "sC");

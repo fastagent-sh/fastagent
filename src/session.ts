@@ -358,7 +358,14 @@ export type UserMessageEvent = SessionEvent<
 export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
   runId: string;
 };
-export type MessageFinishedEvent = SessionEvent<"message_finished", Record<never, never>> & { runId: string };
+/**
+ * How an answer ended, when it did not end normally: absent on an answer that did. One value, carried live by its
+ * `message_finished` and durably by its `assistant` entry, so a reopened conversation reads what a watcher saw.
+ * `truncated` is an answer cut off at the output limit — a property of the answer, not of its run, which may still
+ * complete. A `failed` answer whose entry a `context_edit { omitted }` targets is an attempt the engine retried.
+ */
+export type AnswerOutcome = { status: "failed" | "aborted" | "truncated"; error?: { message: string } };
+export type MessageFinishedEvent = SessionEvent<"message_finished", { outcome?: AnswerOutcome }> & { runId: string };
 export type ToolStartedEvent = SessionEvent<
   "tool_started",
   { id: string; name: string; args: Json; parentToolCallId?: string }

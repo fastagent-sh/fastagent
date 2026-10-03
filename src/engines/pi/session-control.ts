@@ -60,7 +60,7 @@ import {
 } from "../../session.ts";
 import { forkProvenance, isConversationMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
-import type { RunControls, SessionObserver, Lease } from "./turn-kit.ts";
+import { type RunControls, type SessionObserver, type Lease, answerOutcome } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { startCompaction } from "./agent-session-factory.ts";
@@ -145,6 +145,8 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
         .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args: b.arguments ?? {} }));
       const data: Json = { text: contentText(m.content, "") };
       if (toolCalls.length > 0) (data as { toolCalls?: Json }).toolCalls = toolCalls;
+      const outcome = answerOutcome(m);
+      if (outcome) (data as { outcome?: Json }).outcome = outcome;
       return { ...base, kind: "assistant", data };
     }
     if (m.role === "toolResult") {
