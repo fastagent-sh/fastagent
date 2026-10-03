@@ -211,7 +211,14 @@ describe("session control: observation plane", () => {
       fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-t" }), { stopReason: "length" }),
       fauxAssistantMessage("done"),
     ]);
+    const truncatedWatch = watchUntilSettled(truncated.control, "tTruncated");
     await drain(truncated.agent.invoke({ session: "tTruncated" }, { text: "go" }));
+    // Reported as failed live too, although the tool never executed.
+    const live = (await truncatedWatch).filter((e) => e.type === "tool_started" || e.type === "tool_finished");
+    expect(live.map((e) => [e.type, e.data])).toMatchObject([
+      ["tool_started", { id: "call-t" }],
+      ["tool_finished", { id: "call-t", isError: true }],
+    ]);
     const truncatedEntries = (await truncated.control.sessions.get("tTruncated").entries()).entries;
     expect(truncatedEntries.find((e) => e.kind === "tool")?.data).toMatchObject({
       toolCallId: "call-t",

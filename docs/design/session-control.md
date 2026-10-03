@@ -449,10 +449,12 @@ client applies one rule to the live event and to the entry it reads back, and a 
 channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
 output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
 a later complete answer. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
-`tool` entry follow them. A `truncated` answer's calls are not run either, but each gets a `tool` entry with
-`isError: true`, because their arguments may be cut off. An attempt the engine abandoned and retried is a `failed` answer whose entry a
-`context_edit { omitted: true }` targets. A run whose process died mid-answer recorded nothing, so it reads as a
-user entry with no answer after it.
+`tool` entry follow them. A `truncated` answer's calls do not run either, because their arguments may be cut off,
+but each is reported as failed: live as `tool_started` followed by `tool_finished { isError: true }`, durably as a
+`tool` entry with `isError: true`. An answer a `context_edit { omitted: true }` targets, `failed` or `truncated`,
+is an attempt the engine abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
+always: the retry can be stopped during its backoff, or the compaction it waits on can fail. A run whose process
+died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
 
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
