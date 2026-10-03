@@ -234,6 +234,8 @@ src/
     ├── models.ts           # the registry: the agent's OWN models.json and models-store.json (definition-local,
     │                       # so they travel), layered over the machine's ~/.fastagent/ pair (environment, never
     │                       # shipped); the explicit model-catalog refresh
+    ├── openai-account-models.ts # a ChatGPT sign-in lists its ACCOUNT's models: catalog read at login/refresh,
+    │                       # kept on the credential, applied by wrapping pi's `openai` provider in every registry
     ├── agent-models.ts     # an agent's model environment as ONE value (credential store + registry + auth
     │                       # status): every reader builds it through `agentModels`, never from the parts
     └── report.ts           # startup report (auth/model/skills/tools surface)
