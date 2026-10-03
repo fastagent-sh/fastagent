@@ -98,7 +98,7 @@ Attributes:
 | `ref` | github | Branch, tag or commit. Defaults to the default branch | yes |
 | `local` | github | A path to use on a machine where it is a checkout of that repository; otherwise the repository is cloned | yes |
 | `readonly` | all | The agent reads it and does not write it, for example a company handbook | later |
-| `path` | github | Only a subdirectory of the repository (monorepos) | later |
+| `path` | github | A subdirectory of the repository (monorepos). On the primary context it is the working directory | yes |
 
 ### Rules
 
@@ -257,6 +257,6 @@ These belong to other layers, the way a program does not do its own package mana
 | `AGENTS.md` is read from the agent directory, and from the working directory up to the filesystem root | `AGENTS.md` is read from the working directory up to the primary context's root, plus each other context's root |
 | A project's skills are found by walking up from the working directory | A context's skills are read from each context |
 | A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a deployment receives; a harness committed in a `github` context runs from its clone |
-| `.secrets/` and `.state/` live inside the agent directory | They are the instance's runtime state, not part of the definition |
+| `.secrets/` and `.state/` are part of the agent directory | They stay where they are, as the local instance's state ([CLI](agent-cli.md) §2): never part of the definition, never in a copied Agent |
 | A code-module change needs a restart under `start` | The instance restarts itself once idle |
 | A skill the agent writes lasts until the next deployment replaces it | The agent may change itself; in a `github` context the change travels with the repository |
