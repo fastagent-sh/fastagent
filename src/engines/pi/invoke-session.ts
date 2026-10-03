@@ -31,6 +31,7 @@ import {
   errorToTerminal,
   inProcessLease,
   agentEventProjection,
+  answerOutcome,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-kit.ts";
@@ -73,9 +74,11 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
       }
       return null;
     }
-    case "message_end":
+    case "message_end": {
       if (event.message.role !== "assistant") return null;
-      return { type: "message_finished", timestamp: at, runId, data: {} };
+      const outcome = answerOutcome(event.message);
+      return { type: "message_finished", timestamp: at, runId, data: outcome ? { outcome } : {} };
+    }
     case "tool_execution_start":
       return {
         type: "tool_started",

@@ -439,9 +439,22 @@ where the engine preserves them — `parentId` exists because branches objective
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
-`{ text, toolCalls?: { id, name, args }[] }`, where `args` is the same value `tool_started` carries live;
+`{ text, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
 `tool` `{ toolCallId, toolName, isError, text, images? }`. Engine-specific kinds may appear beyond the guaranteed
 minimum and MUST be skippable.
+
+`outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
+did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a
+client applies one rule to the live event and to the entry it reads back, and a failure a client never watched (a
+channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
+output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
+a later complete answer. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
+`tool` entry follow them. A `truncated` answer's calls do not run either, because their arguments may be cut off,
+but each is reported as failed: live as `tool_started` followed by `tool_finished { isError: true }`, durably as a
+`tool` entry with `isError: true`. An answer a `context_edit { omitted: true }` targets, `failed` or `truncated`,
+is an attempt the engine abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
+always: the retry can be stopped during its backoff, or the compaction it waits on can fail. A run whose process
+died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
 
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
@@ -510,7 +523,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | Level | Events | Purpose |
 |---|---|---|
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
-| L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
+| L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished { outcome? }` | Streaming text. Thinking MUST NOT be folded into the answer. |
 | L0 | `user_message { entryId, text, images? }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text` and `images`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. A call made from inside another tool (a codemode script) carries `parentToolCallId`, the outer call's id. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |

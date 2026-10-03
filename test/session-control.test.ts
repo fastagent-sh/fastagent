@@ -152,6 +152,81 @@ describe("session control: observation plane", () => {
     expect(invoked.some((e) => e.type === "tool_ended" && e.id === "call-1")).toBe(true);
   });
 
+  it("an answer says how it ended, identically on message_finished and on its entry; a normal one says nothing", async () => {
+    const cases = [
+      {
+        session: "oFailed",
+        answer: fauxAssistantMessage("partial answer", { stopReason: "error", errorMessage: "invalid api key" }),
+        outcome: { status: "failed", error: { message: "invalid api key" } },
+        settled: "failed",
+      },
+      {
+        session: "oAborted",
+        answer: fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "Request aborted" }),
+        outcome: { status: "aborted", error: { message: "Request aborted" } },
+        settled: "aborted",
+      },
+      {
+        // Cut off at the output limit: the answer's property, so the run still completes.
+        session: "oTruncated",
+        answer: fauxAssistantMessage("cut off", { stopReason: "length" }),
+        outcome: { status: "truncated" },
+        settled: "completed",
+      },
+      { session: "oNormal", answer: fauxAssistantMessage("done"), outcome: undefined, settled: "completed" },
+    ];
+    for (const c of cases) {
+      const { agent, control } = await makeObserved([c.answer]);
+      const watched = watchUntilSettled(control, c.session);
+      await drain(agent.invoke({ session: c.session }, { text: "go" }));
+      const rich = await watched;
+      const finished = rich.find((e) => e.type === "message_finished");
+      const entry = (await control.sessions.get(c.session).entries()).entries.find((e) => e.kind === "assistant");
+
+      expect(rich.at(-1)?.data, c.session).toMatchObject({ status: c.settled });
+      expect(finished?.data, c.session).toEqual(c.outcome ? { outcome: c.outcome } : {});
+      if (c.outcome) expect(entry?.data, c.session).toMatchObject({ outcome: c.outcome });
+      else expect(entry?.data, c.session).not.toHaveProperty("outcome");
+    }
+  });
+
+  it("a failed answer's tool calls never ran; a truncated answer's calls are recorded as failed and the run goes on", async () => {
+    const failed = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-f" }), {
+        stopReason: "error",
+        errorMessage: "invalid api key",
+      }),
+    ]);
+    const failedWatch = watchUntilSettled(failed.control, "tFailed");
+    await drain(failed.agent.invoke({ session: "tFailed" }, { text: "go" }));
+    expect((await failedWatch).some((e) => e.type === "tool_started")).toBe(false);
+    const failedEntries = (await failed.control.sessions.get("tFailed").entries()).entries;
+    expect(failedEntries.find((e) => e.kind === "assistant")?.data).toMatchObject({
+      toolCalls: [{ id: "call-f" }],
+      outcome: { status: "failed" },
+    });
+    expect(failedEntries.some((e) => e.kind === "tool")).toBe(false);
+
+    const truncated = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-t" }), { stopReason: "length" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const truncatedWatch = watchUntilSettled(truncated.control, "tTruncated");
+    await drain(truncated.agent.invoke({ session: "tTruncated" }, { text: "go" }));
+    // Reported as failed live too, although the tool never executed.
+    const live = (await truncatedWatch).filter((e) => e.type === "tool_started" || e.type === "tool_finished");
+    expect(live.map((e) => [e.type, e.data])).toMatchObject([
+      ["tool_started", { id: "call-t" }],
+      ["tool_finished", { id: "call-t", isError: true }],
+    ]);
+    const truncatedEntries = (await truncated.control.sessions.get("tTruncated").entries()).entries;
+    expect(truncatedEntries.find((e) => e.kind === "tool")?.data).toMatchObject({
+      toolCallId: "call-t",
+      isError: true,
+    });
+    expect(truncatedEntries.filter((e) => e.kind === "assistant").at(-1)?.data).toEqual({ text: "done" });
+  });
+
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {
     const { agent, control } = await makeObserved([fauxAssistantMessage("a long answer")]);
     const watched = watchUntilSettled(control, "sC");
