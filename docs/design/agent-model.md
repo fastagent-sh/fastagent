@@ -11,6 +11,9 @@ status: proposed
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover versioning
 or distribution (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 
+The test every rule here answers to: an agent an author shaped with a coding agent in their own repository runs
+as a service without being rewritten, and behaves there the way it did on their machine.
+
 ## 1. The model
 
 ```text
@@ -25,14 +28,14 @@ Instance = workspace + runtime state      one running Agent
 | Harness | The program | `persona.md`, `skills/`, `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `models.json` |
 | Context | The data, declared | A directory the agent works on, with a type that says how it reaches each instance (§3) |
 | **Instance** | One running Agent | Its workspace and its runtime state |
-| Workspace | The instance's own directory | The agent's working directory; every context appears inside it by name (§4) |
+| Workspace | The instance's own directory | Holds its contexts; the working directory is the primary context (§4) |
 | Runtime state | What the instance accumulates | Conversations, credentials, channel state, schedule state (§5) |
 
 Relations:
 
 - One Agent can run as several instances (on a laptop, on a host). Each has its own workspace and runtime state.
 - One context can be the data of several Agents (an engineer's and a PM's agent on one repository).
-- An instance runs exactly one Agent.
+- An instance runs exactly one Agent, and exactly one copy of its harness (§3).
 
 ## 2. Harness and context: program and data
 
@@ -48,10 +51,14 @@ them (§6) and not how widely a change is seen.
 to the project, not to the agent, the way a repository's `.eslintrc` changes how eslint behaves and is still the
 repository's file. The agent's identity belongs in `persona.md`.
 
+A harness may be stored inside a context: `app/fastagent/` is committed in the repository `app/`. It is still the
+harness. Where it is stored decides how it reaches an instance (§3), not what it is.
+
 ## 3. Contexts and their types
 
-An agent declares its contexts in `fastagent.config.ts`. `init` scaffolds the declaration for the layout it
-creates, so the common case is written down rather than implied:
+An agent declares its contexts in `fastagent.config.ts`. The first one is the **primary context**: the agent's
+working directory. `init` scaffolds the declaration for the layout it creates, so the common case is written
+down rather than implied:
 
 ```ts
 export default {
@@ -60,7 +67,7 @@ export default {
 };
 ```
 
-An agent that declares no context has none: a chat-only assistant gets an empty workspace. The declaration
+An agent that declares no context has none: a chat-only assistant works in an empty workspace. The declaration
 decides what a deployment carries, so it is visible in the definition instead of being a hidden default.
 
 ### Types
@@ -84,21 +91,26 @@ Attributes:
 | `readonly` | all | The agent reads it and does not write it, for example a company handbook | later |
 | `path` | github | Only a subdirectory of the repository (monorepos) | later |
 
-Rules:
+### Rules
 
 - **When a copy is made follows from whether the context is writable.** A writable copied context is copied once,
   when the instance is created, and belongs to that instance afterwards: copying it again on every deployment
-  would destroy what the deployed agent wrote. A `readonly` copied context is copied again on every deployment:
-  there is nothing local to lose, and it always matches what was released.
+  would destroy what the deployed agent wrote. A redeploy says that it kept the deployed copy, so a local edit
+  that did not arrive is not a surprise. A `readonly` copied context is copied again on every deployment: there
+  is nothing local to lose, and it always matches what was released.
+- **A writable copied context needs storage that survives a restart.** On a host without it, deploying is
+  refused: "copied once, then the instance's own" cannot hold there.
 - **A local context without `copy` refuses to deploy.** The refusal names the two ways out: add `copy`, or move
   the directory to a repository and declare it as `github`. A deployment never starts with a context silently
   missing.
-- **A copied context does not carry the agent's own directory.** When the harness sits inside a context
-  (`app/fastagent/` inside `app/`), the copy leaves the agent directory out. The harness reaches a deployment as
-  the definition, and a second copy inside the context would be one the running agent does not use. A `github`
-  context has the same overlap, since its clone contains the agent directory when that directory is committed.
-  Which of the two a deployment runs is open: running the harness from the clone would give self-changes the
-  repository's history, which is a versioning question (§8).
+- **A `github` context needs access.** Cloning a private repository and pushing to it take a credential: on this
+  machine the user's own git credentials, on a deployment one held in the host's secret store, like any other
+  credential of the instance.
+- **An instance runs one copy of its harness.** When the agent directory is committed in a `github` context, the
+  instance runs the harness in that context's clone: pushing to the repository is how the author releases it,
+  and the agent's changes to itself travel the same way as its changes to the project. When the agent directory
+  sits in a copied local context, the copy leaves it out, and the harness reaches the deployment as the
+  definition.
 - **Paths in a declaration are relative to the agent's directory.** They describe this machine's layout; the
   `github` type is what makes a context independent of where anything sits.
 
@@ -107,27 +119,35 @@ would be another context type. It is not part of this note.
 
 ## 4. Workspace
 
-Every instance gets a new directory of its own: its **workspace**. It is the agent's working directory, and it is
-never copied or shared.
+Every instance has a directory of its own: its **workspace**. It holds the instance's contexts, side by side,
+and it is never copied or shared.
 
 ```text
-workspace/            the agent's cwd: its own files, scratch work, downloads
-├── app/              context acme/app
-└── notes/            context ../notes
+workspace/            the instance's own directory: scratch work, downloads
+├── app/              the primary context: the agent's working directory
+└── notes/            another context
 ```
 
-- **Every context appears inside the workspace under its name.** The same name on every deployment, so a
-  routine's prompt, a skill or `AGENTS.md` can say `app/CHANGELOG.md` and mean the same file everywhere.
-- **The agent's own files stay out of the contexts.** What the agent writes for itself lands in the workspace,
-  not in a repository it shares with others.
-- **The agent is told its contexts.** For each one: its directory, its type, whether it is writable, and whether
+- **The working directory is the primary context.** Commands, relative paths and authored tools start in the
+  project, exactly as they did when the author ran a coding agent in that repository. On this machine it is the
+  real directory (`~/code/app`), not a link to it. With no context declared, the working directory is the
+  workspace itself.
+- **On a deployment, contexts sit side by side under their names.** A path inside the primary context means the
+  same file everywhere. A reference to another context uses the location the agent is told, not a relative path
+  written into a file.
+- **The agent's own files stay out of the contexts.** What the agent writes for itself goes to the workspace,
+  not into a repository it shares with others. Whether those files survive a restart depends on the host's
+  storage.
+- **The agent is told its contexts.** For each one: its location, its type, whether it is writable, and whether
   a change there reaches other deployments. Writing a finding into a context that does not travel is how
-  knowledge gets lost, so the agent needs to know which is which.
-- **Project instructions come from each context.** `AGENTS.md` at a context's root and the skills a context
-  provides are read from every context, not by walking up from the working directory. An agent works in a
-  context with `cd app && …` or with paths under `app/`.
-- **A tool reads a context's location from its context, not from `cwd`.** An authored tool that works on project
-  files is told where each context is.
+  knowledge gets lost, so the agent needs to know which is which. It is also told where its harness and its
+  workspace are.
+- **Project instructions come from the contexts.** `AGENTS.md` is read from the working directory up to the root
+  of the primary context, and never above it, so a machine's home directory does not leak into an agent that
+  runs the same way elsewhere. Another context contributes the `AGENTS.md` at its root. The skills a context
+  provides are read from every context.
+- **A tool is told where each context is.** An authored tool that works on another context reads its location
+  from its context, not by guessing from the working directory.
 
 ## 5. Runtime state
 
@@ -137,7 +157,7 @@ context.
 | Runtime state | Why it is not context |
 |---|---|
 | Conversations (sessions) | They belong to the place a conversation happens and the people in it ([participant model](participant-model.md) §5). As data, a direct message would be readable by every agent working on the project |
-| Credentials | They belong to the machine or host running the instance, and never travel with a definition |
+| Credentials (model logins, channel tokens, repository access) | They belong to the machine or host running the instance, and never travel with a definition |
 | Channel and schedule state | Bookkeeping of one running process |
 
 The difference shows in four places:
@@ -165,11 +185,15 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `persona.md`, `skills/`, `AGENTS.md`, scripts, project files | On the next turn |
-| `tools/`, `channels/`, `routines/` (code modules) | Between turns: the instance notices its code changed and restarts itself |
+| `tools/`, `channels/`, `routines/` (code modules) | Once the instance is idle: turns already running finish, then it restarts itself |
 
 The second row is a commitment, not today's behavior: `dev` restarts on code edits already, `start` does not.
-In-process reloading of code modules was built and removed (#598, #600); restarting between turns gives the
-same result for the author without it.
+In-process reloading of code modules was built and removed (#598, #600); restarting when idle gives the same
+result for the author without it.
+
+A change is recorded only where its context is: a change in a `github` context, including a harness committed in
+one, becomes part of that repository's history once versioning pushes it (§8). A change in a local context, or
+in a harness that is not in a repository, has no record beyond the files themselves until versioning exists.
 
 Whether an agent may change its own default model is open, pending the definitions in pi 1.0 and pi durable.
 
@@ -179,9 +203,11 @@ Whether an agent may change its own default model is open, pending the definitio
 |---|---|---|
 | Agent | preset | A shared definition is an Agent. Clients express "make my own copy" in their interface, not with a second noun |
 | Instance | deployment, for a running agent | Deployment is how an instance gets onto a host (§8) |
-| Workspace (new meaning) | workspace as "the agent directory's parent" | It is now the instance's own working directory; the placement rule it named is gone |
+| Workspace (new meaning) | workspace as "the agent directory's parent" | It is now the instance's own directory; the placement rule it named is gone |
 
-A client that calls the running thing an agent (duang) maps it to an instance.
+A client that calls the running thing an agent (duang) maps it to an instance. Existing documents that call a
+running agent a deployment ([session control](session-control.md), for one) move to "instance" with the
+implementation.
 
 ## 8. Out of scope
 
@@ -198,10 +224,10 @@ These belong to other layers, the way a program does not do its own package mana
 
 | Today | In this model |
 |---|---|
-| The workspace is the agent directory's parent, by placement | Each instance has its own workspace; what the agent works on is declared as contexts |
-| `AGENTS.md` is read from the agent directory and the workspace's ancestors | `AGENTS.md` is read from the root of each context |
+| The workspace is the agent directory's parent, by placement | The working directory is the first declared context; each instance has its own workspace holding its contexts |
+| `AGENTS.md` is read from the agent directory, and from the working directory up to the filesystem root | `AGENTS.md` is read from the working directory up to the primary context's root, plus each other context's root |
 | A project's skills are found by walking up from the working directory | A context's skills are read from each context |
-| A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a deployment receives |
+| A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a deployment receives; a harness committed in a `github` context runs from its clone |
 | `.secrets/` and `.state/` live inside the agent directory | They are the instance's runtime state, not part of the definition |
-| A code-module change needs a restart under `start` | The instance restarts itself between turns |
-| A skill the agent writes lasts until the next deployment replaces it | The agent may change itself; keeping that change across deployments is versioning (§8) |
+| A code-module change needs a restart under `start` | The instance restarts itself once idle |
+| A skill the agent writes lasts until the next deployment replaces it | The agent may change itself; in a `github` context the change travels with the repository |
