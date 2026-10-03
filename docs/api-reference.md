@@ -852,6 +852,9 @@ with `run_command_failed`. Both are `retryable: false`; check `state()` first. A
 the race: an `abort` may settle `completed`, and a `steer`/`followUp` may settle unconsumed. The settlement is what
 happened.
 
+An `abort` accepted before the run's first model request still stops that request, and any later one the run would
+make. Work that is not a model request, such as an extension command's handler, runs to its end.
+
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills, the
 commands its `extensions/` register, and the machine's skills and prompt templates. `source` is `skill`, `extension`
 or `prompt`. It is a listing only. To run one, send its spelling as prompt text and the server dispatches it: a skill
