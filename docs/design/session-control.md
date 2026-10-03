@@ -152,8 +152,16 @@ user→sessions mapping this call would return. That is also why there is no pre
 
 ### 5.1 Actions and properties
 
-There is no `prompt` action: starting work is the data plane's definition. Nothing here creates a
-session from nothing — `fork` copies one that exists.
+There is no `prompt` action: starting work is the data plane's definition. A session id is the
+Caller's, so an id nothing has written yet is an empty conversation at the defaults: `state()` reports
+what its first turn will run on, and `update()` sets its properties, which creates its record. That is
+the "next turn" a property applies to, so a client sets a new conversation's model or thinking level
+before its first message. It refuses an id no client could address, as `fork` does for `into`. Every
+other write needs a record (`compact`, `fork`'s source, `delete`) and refuses an id with none with
+`no_such_session`. A record `update()` created is an existing session that has not run: `delete`
+removes it, `compact` answers `nothing_to_compact` before binding (binding would write to it), and a
+later `invoke` does not inherit `scope.parentSession` into it. Whether an Agent Handler Caller
+should set these through `invoke` is a separate question about what `Scope` means.
 
 ```ts
 type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string };
@@ -288,17 +296,29 @@ interface SessionCapabilities {
   fork: boolean;
   delete: boolean;
   updatable: ("name" | "model" | "thinkingLevel" | "leafEntryId")[];
-  allowedModels?: string[];
+  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
 }
 ```
 
 Clients MUST gate controls on capabilities; calling past a gate fails before acceptance with a stable
-`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session:
-`allowedModels` may live here because the model registry is a deployment fact, while thinking LEVELS
-are a property of the model a session is currently running and therefore live on
-`state().availableThinkingLevels`. A static list could only answer for one model.
+`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session.
+`allowedModels` lives here because the model registry is a deployment fact. Each entry describes a
+model the way a picker shows it, before any session runs on it:
+
+```ts
+interface ModelDescriptor {
+  spec: string;             // what update({ model }) takes
+  name?: string;
+  thinkingLevels: string[]; // what update({ thinkingLevel }) accepts for a session on this model
+  contextWindow?: number;
+}
+```
+
+`state().availableThinkingLevels` answers the same question for the model the session is on, from the
+same function, so a picker offers what the session then accepts. A model that declares no name or
+context window (an extension's virtual model may not) leaves the field out.
 
 `updatable` is a LIST rather than a flag per field, so a client reads the same names it writes
 (`caps.updatable.includes("model")` gates the model picker that `update({ model })` will use).
@@ -365,6 +385,10 @@ interface SessionState {
 }
 ```
 
+`model` and `thinkingLevel` are what the session will RUN with. An id with no record reports what its
+first turn would run on: the defaults, the level clamped to the model. Once `update()` has written
+its record, it reports that record's settings like any other session.
+
 `compacting` refers to manual compaction at a session boundary; automatic overflow compaction happens
 inside a run's activity window and reports as `running` — the observation plane's "running" window
 equals the data plane's lease window, so `state()` never says idle while an invoke would be rejected
@@ -415,9 +439,22 @@ where the engine preserves them — `parentId` exists because branches objective
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
-`{ text, toolCalls?: { id, name, args }[] }`, where `args` is the same value `tool_started` carries live;
+`{ text, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
 `tool` `{ toolCallId, toolName, isError, text, images? }`. Engine-specific kinds may appear beyond the guaranteed
 minimum and MUST be skippable.
+
+`outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
+did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a
+client applies one rule to the live event and to the entry it reads back, and a failure a client never watched (a
+channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
+output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
+a later complete answer. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
+`tool` entry follow them. A `truncated` answer's calls do not run either, because their arguments may be cut off,
+but each is reported as failed: live as `tool_started` followed by `tool_finished { isError: true }`, durably as a
+`tool` entry with `isError: true`. An answer a `context_edit { omitted: true }` targets, `failed` or `truncated`,
+is an attempt the engine abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
+always: the retry can be stopped during its backoff, or the compaction it waits on can fail. A run whose process
+died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
 
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
@@ -486,7 +523,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | Level | Events | Purpose |
 |---|---|---|
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
-| L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. Thinking MUST NOT be folded into the answer. |
+| L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished { outcome? }` | Streaming text. Thinking MUST NOT be folded into the answer. |
 | L0 | `user_message { entryId, text, images? }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text` and `images`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. A call made from inside another tool (a codemode script) carries `parentToolCallId`, the outer call's id. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |

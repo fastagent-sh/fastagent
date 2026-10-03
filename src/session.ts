@@ -56,7 +56,11 @@ export interface Session {
    */
   image(ref: string): Promise<ImageRef | undefined>;
   events(): SessionEventStream;
-  /** Set durable session properties. */
+  /**
+   * Set durable session properties, applied by the session's next turn. An id with no record (nothing has written it
+   * yet) takes them too: the write creates its record, and the session's first turn runs on them. Refused there:
+   * `leafEntryId` (no entries to point at) and an id no client could address ({@link isAddressableSession}).
+   */
   update(patch: SessionUpdate): Promise<SessionResult>;
   /**
    * Join the active run: delivered after the current turn's tool calls, before the next model call. `prompt.text`
@@ -128,10 +132,22 @@ export interface SessionCapabilities {
   delete: boolean;
   /** Which {@link SessionUpdate} fields this deployment accepts. */
   updatable: SessionUpdateField[];
-  /** The specs `update({ model })` accepts — present iff `model` is updatable. */
-  allowedModels?: string[];
+  /** The models `update({ model })` accepts, by `spec` — present iff `model` is updatable. */
+  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
+}
+
+/**
+ * A model as a picker shows it, before any session runs on it. `thinkingLevels` is what `update({ thinkingLevel })`
+ * accepts for a session on this model; `name` and `contextWindow` are absent when the model does not declare them.
+ */
+export interface ModelDescriptor {
+  /** What `update({ model })` takes. */
+  spec: string;
+  name?: string;
+  thinkingLevels: string[];
+  contextWindow?: number;
 }
 
 /** One name a client can offer the user. */
@@ -156,7 +172,11 @@ export const NO_ACTIVE_RUN_CODE = "no_active_run";
 /** Stable `SessionResult.error.code` for a PAYLOAD that is invalid for this runtime. */
 export const INVALID_COMMAND_CODE = "invalid_command";
 
-/** Stable `SessionResult.error.code` for a write against a session that does not exist. */
+/**
+ * Stable `SessionResult.error.code` for a write that needs a record (fork's source, compact, delete) against an id
+ * that has none, because nothing has written it yet. `update()` creates the record instead, and answers this code only
+ * when a concurrent `delete()` removes the record between its read and its write.
+ */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
 /** Stable `SessionResult.error.code` for a write rejected BEFORE acceptance with nothing durable landed. */
@@ -227,7 +247,10 @@ export interface SessionState {
   /** `compacting` refers to MANUAL compaction (`compact`) at a session boundary. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
-  /** What this session will RUN with, not what was recorded. */
+  /**
+   * What this session will RUN with, not what was recorded. An id with no record reports what its first turn would run
+   * on: the defaults, the level clamped to the model.
+   */
   model?: string;
   thinkingLevel?: string;
   /** What `update({ thinkingLevel })` accepts for THIS session — re-read after a model change. */
@@ -335,7 +358,15 @@ export type UserMessageEvent = SessionEvent<
 export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
   runId: string;
 };
-export type MessageFinishedEvent = SessionEvent<"message_finished", Record<never, never>> & { runId: string };
+/**
+ * How an answer ended, when it did not end normally: absent on an answer that did. One value, carried live by its
+ * `message_finished` and durably by its `assistant` entry, so a reopened conversation reads what a watcher saw.
+ * `truncated` is an answer cut off at the output limit — a property of the answer, not of its run, which may still
+ * complete. An answer whose entry a `context_edit { omitted }` targets (`failed` or `truncated`) is an attempt the
+ * engine abandoned; a retry usually, but not always, follows it.
+ */
+export type AnswerOutcome = { status: "failed" | "aborted" | "truncated"; error?: { message: string } };
+export type MessageFinishedEvent = SessionEvent<"message_finished", { outcome?: AnswerOutcome }> & { runId: string };
 export type ToolStartedEvent = SessionEvent<
   "tool_started",
   { id: string; name: string; args: Json; parentToolCallId?: string }

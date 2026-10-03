@@ -8,7 +8,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type AgentSession, type AgentSessionEvent, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { log } from "../src/log.ts";
@@ -26,7 +26,8 @@ import {
   piInMemorySessionRecordStore,
   piSessionRecordStore,
 } from "../src/engines/pi/session-store.ts";
-import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import { activePath, describeModels, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import type { AnyModel } from "../src/engines/pi/models.ts";
 import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiModelRuntime } from "../src/engines/pi/models.ts";
 import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
@@ -149,6 +150,81 @@ describe("session control: observation plane", () => {
     expect(toolFinished.isError).toBe(false);
     expect(invoked.some((e) => e.type === "tool_started" && e.name === "echo")).toBe(true);
     expect(invoked.some((e) => e.type === "tool_ended" && e.id === "call-1")).toBe(true);
+  });
+
+  it("an answer says how it ended, identically on message_finished and on its entry; a normal one says nothing", async () => {
+    const cases = [
+      {
+        session: "oFailed",
+        answer: fauxAssistantMessage("partial answer", { stopReason: "error", errorMessage: "invalid api key" }),
+        outcome: { status: "failed", error: { message: "invalid api key" } },
+        settled: "failed",
+      },
+      {
+        session: "oAborted",
+        answer: fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "Request aborted" }),
+        outcome: { status: "aborted", error: { message: "Request aborted" } },
+        settled: "aborted",
+      },
+      {
+        // Cut off at the output limit: the answer's property, so the run still completes.
+        session: "oTruncated",
+        answer: fauxAssistantMessage("cut off", { stopReason: "length" }),
+        outcome: { status: "truncated" },
+        settled: "completed",
+      },
+      { session: "oNormal", answer: fauxAssistantMessage("done"), outcome: undefined, settled: "completed" },
+    ];
+    for (const c of cases) {
+      const { agent, control } = await makeObserved([c.answer]);
+      const watched = watchUntilSettled(control, c.session);
+      await drain(agent.invoke({ session: c.session }, { text: "go" }));
+      const rich = await watched;
+      const finished = rich.find((e) => e.type === "message_finished");
+      const entry = (await control.sessions.get(c.session).entries()).entries.find((e) => e.kind === "assistant");
+
+      expect(rich.at(-1)?.data, c.session).toMatchObject({ status: c.settled });
+      expect(finished?.data, c.session).toEqual(c.outcome ? { outcome: c.outcome } : {});
+      if (c.outcome) expect(entry?.data, c.session).toMatchObject({ outcome: c.outcome });
+      else expect(entry?.data, c.session).not.toHaveProperty("outcome");
+    }
+  });
+
+  it("a failed answer's tool calls never ran; a truncated answer's calls are recorded as failed and the run goes on", async () => {
+    const failed = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-f" }), {
+        stopReason: "error",
+        errorMessage: "invalid api key",
+      }),
+    ]);
+    const failedWatch = watchUntilSettled(failed.control, "tFailed");
+    await drain(failed.agent.invoke({ session: "tFailed" }, { text: "go" }));
+    expect((await failedWatch).some((e) => e.type === "tool_started")).toBe(false);
+    const failedEntries = (await failed.control.sessions.get("tFailed").entries()).entries;
+    expect(failedEntries.find((e) => e.kind === "assistant")?.data).toMatchObject({
+      toolCalls: [{ id: "call-f" }],
+      outcome: { status: "failed" },
+    });
+    expect(failedEntries.some((e) => e.kind === "tool")).toBe(false);
+
+    const truncated = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-t" }), { stopReason: "length" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const truncatedWatch = watchUntilSettled(truncated.control, "tTruncated");
+    await drain(truncated.agent.invoke({ session: "tTruncated" }, { text: "go" }));
+    // Reported as failed live too, although the tool never executed.
+    const live = (await truncatedWatch).filter((e) => e.type === "tool_started" || e.type === "tool_finished");
+    expect(live.map((e) => [e.type, e.data])).toMatchObject([
+      ["tool_started", { id: "call-t" }],
+      ["tool_finished", { id: "call-t", isError: true }],
+    ]);
+    const truncatedEntries = (await truncated.control.sessions.get("tTruncated").entries()).entries;
+    expect(truncatedEntries.find((e) => e.kind === "tool")?.data).toMatchObject({
+      toolCallId: "call-t",
+      isError: true,
+    });
+    expect(truncatedEntries.filter((e) => e.kind === "assistant").at(-1)?.data).toEqual({ text: "done" });
   });
 
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {
@@ -358,8 +434,12 @@ describe("session control: observation plane", () => {
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // The control is live over this workspace's (jsonl) store: read-only observation works
       // without a single model call, and an unknown session stays uncreated.
+      // A session that has never run reports what its first turn would run on.
       expect(await control.sessions.get("ghost").state()).toEqual({
         status: "idle",
+        model: "openai-codex/gpt-5.5",
+        thinkingLevel: expect.any(String),
+        availableThinkingLevels: expect.any(Array),
         pending: { steering: [], followUp: [] },
       });
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
@@ -1287,6 +1367,65 @@ describe("session control: run modulation", () => {
     expect((await control.sessions.get("sOther").state()).status).toBe("idle");
   });
 
+  // pi's abort stops only an agent run in flight; one sent before the first request (while prompt() prepares) must
+  // still stop it (#691). This response answers only an aborted signal, so a missed abort never settles.
+  const untilAborted: FauxResponseStep = (_context, options) =>
+    new Promise((resolve) => {
+      const aborted = () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
+      if (options?.signal?.aborted) return aborted();
+      options?.signal?.addEventListener("abort", aborted, { once: true });
+    });
+
+  it.each([
+    ["synchronously", async () => {}],
+    ["after a microtask", () => Promise.resolve()],
+    ["after setImmediate", () => new Promise<void>((r) => setImmediate(r))],
+  ])("an abort sent %s after invoke stops the first request", async (_when, wait) => {
+    const { agent, control } = await fauxControlledAgent([untilAborted]);
+    const invoked = drive(agent, "sEarly");
+    await wait();
+    expect(await control.sessions.get("sEarly").abort()).toMatchObject({ ok: true });
+    expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+  });
+
+  it("an early abort also stops the automatic compaction prompt() runs before the first agent run", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-early-abort-home-"));
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 400 },
+        retry: { enabled: false },
+      }),
+    );
+    vi.stubEnv("HOME", home);
+    const debug = vi.spyOn(log, "debug");
+    try {
+      const { agent, control, sessions, faux } = await fauxControlledAgent([untilAborted, untilAborted], {
+        faux: { models: [{ id: "small", contextWindow: 2500, maxTokens: 1000 }] },
+      });
+      // History whose last answer filled the context window: prompt() compacts before it starts the agent run.
+      const record = await sessions.openOrCreate("sEarlyCompact");
+      for (let i = 0; i < 4; i++) {
+        record.appendMessage({ role: "user", content: `Earlier question ${i}`, timestamp: i });
+        record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
+      }
+      const model = faux.getModel();
+      const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      const usage = { input: 2450, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 2450, cost: zero };
+      record.appendMessage({ ...fauxAssistantMessage("full"), provider: model.provider, model: model.id, usage });
+
+      const invoked = drive(agent, "sEarlyCompact");
+      expect(await control.sessions.get("sEarlyCompact").abort()).toMatchObject({ ok: true });
+      expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+      // The compaction did start, so the abort above is what stopped it, not a history that needed none.
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/automatic compaction threshold .*: aborted$/));
+    } finally {
+      debug.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {
     const { agent, control, gate } = await makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
     const seen: SessionEvent[] = [];
@@ -1342,14 +1481,93 @@ async function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = 
 }
 
 describe("session control: boundary mutations", () => {
-  it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
+  it("capabilities describe every model a session may be set to, with the levels state() then reports for it", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
     expect(caps.compaction).toBe(true);
-    expect(caps.allowedModels ?? []).toContain(spec); // deployment fact
-    expect(caps.updatable).toContain("thinkingLevel"); // per-session set rides state()
+    expect(caps.updatable).toContain("thinkingLevel");
+    const specs = (caps.allowedModels ?? []).map((model) => model.spec);
+    expect(specs).toEqual([...specs].sort());
+    const described = caps.allowedModels?.find((model) => model.spec === spec);
+    expect(described?.thinkingLevels).toContain("high");
     await sessions.openOrCreate("sCaps");
-    expect((await control.sessions.get("sCaps").state()).availableThinkingLevels).toContain("high");
+    // What a picker offers before the session runs on the model is what the session then accepts.
+    expect((await control.sessions.get("sCaps").state()).availableThinkingLevels).toEqual(described?.thinkingLevels);
+    // A model that declares no name or context window (an extension's virtual model: pi reads the window as 0) leaves
+    // the fields out rather than inventing them.
+    const bare = { provider: "router", id: "bare", api: "pi-virtual", reasoning: false, contextWindow: 0 };
+    expect(describeModels([bare as unknown as AnyModel])).toStrictEqual([
+      { spec: "router/bare", thinkingLevels: ["off"] },
+    ]);
+  });
+
+  it("an id with no record reports its first turn's settings, takes properties, and its first turn runs on them", async () => {
+    const ran: { reasoning?: string; model: string }[] = [];
+    const answer: FauxResponseStep = (_context, options, _state, model) => {
+      ran.push({ ...(options?.reasoning ? { reasoning: options.reasoning } : {}), model: model.id });
+      return fauxAssistantMessage("done");
+    };
+    const { agent, control, sessions, faux } = await fauxControlledAgent([answer, answer], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      thinkingLevel: "max", // the agent's default, above what the model supports
+    });
+    const plain = `${faux.getModel("plain")?.provider}/plain`;
+    const fresh = control.sessions.get("sFresh");
+    // Before anything is written: the defaults, the level clamped to the model, and nothing created by reading.
+    const before = await fresh.state();
+    expect(before.model).toBe(`${faux.getModel()?.provider}/thinker`);
+    expect(before).not.toHaveProperty("leafEntryId");
+    expect(before.thinkingLevel).not.toBe("max");
+    expect(before.thinkingLevel).toBe(before.availableThinkingLevels?.at(-1));
+    expect(await sessions.openIfExists("sFresh")).toBeUndefined();
+
+    expect(await fresh.update({ thinkingLevel: "low", name: "draft" })).toEqual({ ok: true });
+    expect(await control.sessions.list()).toContainEqual(
+      expect.objectContaining({ session: "sFresh", name: "draft", messageCount: 0 }),
+    );
+    expect(await control.sessions.get("sOther").update({ model: plain })).toEqual({ ok: true });
+    await collect(agent.invoke({ session: "sFresh" }, { text: "go" }));
+    await collect(agent.invoke({ session: "sOther" }, { text: "go" }));
+    expect(ran).toEqual([{ reasoning: "low", model: "thinker" }, { model: "plain" }]);
+  });
+
+  it("a patch refused for an id with no record leaves no record behind", async () => {
+    const { control, sessions } = await makeBoundary([]); // faux-thinker: no "max"
+    const ghost = control.sessions.get("sGhost");
+    for (const patch of [
+      { leafEntryId: "e1" }, // nothing to point at yet
+      { thinkingLevel: "max" },
+      { thinkingLevel: "loud" },
+      { model: "faux/missing" },
+      { name: " " },
+    ]) {
+      expect(await ghost.update(patch), JSON.stringify(patch)).toMatchObject({
+        ok: false,
+        error: { code: INVALID_COMMAND_CODE },
+      });
+    }
+    expect(await sessions.openIfExists("sGhost")).toBeUndefined();
+    // An id no client could then open is not minted either, as fork refuses it for `into`.
+    for (const id of ["", ".", ".."]) {
+      expect(await control.sessions.get(id).update({ name: "x" }), JSON.stringify(id)).toMatchObject({
+        ok: false,
+        error: { code: INVALID_COMMAND_CODE },
+      });
+      expect(await sessions.openIfExists(id)).toBeUndefined();
+    }
+  });
+
+  it("a record update() created before a first turn is an existing session: compact writes nothing, delete removes it", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const draft = control.sessions.get("sDraft");
+    expect(await draft.update({ thinkingLevel: "low" })).toEqual({ ok: true });
+    const written = (await sessions.openIfExists("sDraft"))?.getEntries().length;
+    // Binding would record the model and level on a session with no messages: refused before it, nothing is written.
+    expect(await draft.compact()).toMatchObject({ ok: false, error: { code: NOTHING_TO_COMPACT_CODE } });
+    expect((await sessions.openIfExists("sDraft"))?.getEntries().length).toBe(written);
+    expect((await draft.state()).thinkingLevel).toBe("low"); // the record's own setting, not the defaults
+    expect(await draft.delete()).toEqual({ ok: true });
+    expect(await sessions.openIfExists("sDraft")).toBeUndefined();
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
@@ -1825,7 +2043,7 @@ describe("session control: boundary mutations", () => {
     expect((await control.sessions.get("sNavNoop").state()).leafEntryId).toBe(leaf);
   });
 
-  it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
+  it("navigate rejects an entry that is not in the session", async () => {
     const { agent, control } = await makeBoundary([fauxAssistantMessage("ok")]);
     expect(control.capabilities().updatable.includes("leafEntryId")).toBe(true);
     await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
@@ -1834,9 +2052,6 @@ describe("session control: boundary mutations", () => {
     expect(unknownEntry.ok).toBe(false);
     if (!unknownEntry.ok) expect(unknownEntry.error.code).toBe(INVALID_COMMAND_CODE);
     expect((await control.sessions.get("sNavBad").state()).leafEntryId).toBe(leafBefore); // rejected before acceptance
-    const unknownSession = await control.sessions.get("sGhost").update({ leafEntryId: "x" });
-    expect(unknownSession.ok).toBe(false);
-    if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
 
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
@@ -2810,7 +3025,12 @@ describe("session control: boundary mutations", () => {
     // PRE-acceptance failure (binding the session) still rejects with boundary_command_failed —
     // and releases the lease.
     const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
-    await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
+    // A conversation, or a refusal before binding wins: no_such_session for no record, nothing_to_compact for no message.
+    (await sessions.openOrCreate("sPre")).appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "hi" }],
+      timestamp: Date.now(),
+    });
     const lease = inProcessLease();
     const broke = makeFaux();
     const boundary: PiBoundaryWiring = {
@@ -2917,15 +3137,15 @@ describe("session control: boundary mutations", () => {
     }
   });
 
-  it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
-    const { control, sessions, spec } = await makeBoundary([]);
-    const result = await control.sessions.get("ghost").update({ model: spec });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
-    expect(await sessions.openIfExists("ghost")).toBeUndefined(); // no ghost record landed
-    const compact = await control.sessions.get("ghost").compact();
-    expect(compact.ok).toBe(false);
-    if (!compact.ok) expect(compact.error.code).toBe(NO_SUCH_SESSION_CODE);
+  it("writes that need a record refuse an id with none with no_such_session, and create nothing", async () => {
+    const { control, sessions } = await makeBoundary([]);
+    const ghost = control.sessions.get("ghost");
+    const refused = { ok: false, error: { code: NO_SUCH_SESSION_CODE } };
+    expect(await ghost.compact()).toMatchObject(refused);
+    expect(await ghost.delete()).toMatchObject(refused);
+    expect(await control.sessions.fork({ from: "ghost", at: "e1", into: "copy" })).toMatchObject(refused);
+    expect(await sessions.openIfExists("ghost")).toBeUndefined();
+    expect(await sessions.openIfExists("copy")).toBeUndefined();
   });
 
   it("without boundary wiring the commands stay gated off and rejected", async () => {

@@ -178,7 +178,8 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
 - `fastagent models --refresh -g` writes the machine's, `~/.fastagent/models-store.json`, with the global
   credentials file and the environment. Every agent here reads it under its own (the agent's wins a model id), and
   it does not ship: `deploy` refuses a model only it knows (with `--run`; a warning otherwise). Refresh in the agent
-  to record it there.
+  to record it there. An embedding client runs the same refresh with its own credentials through
+  `refreshMachineModelCatalog` ([API reference](api-reference.md)).
 - An entry no newer than the installed pi's bundled catalog is ignored, so after a pi upgrade the bundled metadata
   takes over again.
 - A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.

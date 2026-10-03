@@ -18,8 +18,8 @@ import {
 export interface PiSessionRecordStore {
   openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
   /**
-   * OPEN-EXISTING sibling: an unknown session answers undefined, never creates one — sessions are the data plane's
-   * monopoly.
+   * OPEN-EXISTING sibling: an unknown session answers undefined, never creates one. The reads and every write that
+   * needs history go through it; creating is `openOrCreate`'s.
    */
   openIfExists(sessionId: string): Promise<SessionManager | undefined>;
   /** Write session properties, in the order pi's leaf pointer requires, and report what LANDED. */
