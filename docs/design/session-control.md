@@ -448,7 +448,9 @@ did not end normally, and is absent when it did. The answer's `message_finished`
 client applies one rule to the live event and to the entry it reads back, and a failure a client never watched (a
 channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
 output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
-a later complete answer. An attempt the engine abandoned and retried is a `failed` answer whose entry a
+a later complete answer. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
+`tool` entry follow them. A `truncated` answer's calls are not run either, but each gets a `tool` entry with
+`isError: true`, because their arguments may be cut off. An attempt the engine abandoned and retried is a `failed` answer whose entry a
 `context_edit { omitted: true }` targets. A run whose process died mid-answer recorded nothing, so it reads as a
 user entry with no answer after it.
 

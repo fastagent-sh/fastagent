@@ -190,6 +190,36 @@ describe("session control: observation plane", () => {
     }
   });
 
+  it("a failed answer's tool calls never ran; a truncated answer's calls are recorded as failed and the run goes on", async () => {
+    const failed = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-f" }), {
+        stopReason: "error",
+        errorMessage: "invalid api key",
+      }),
+    ]);
+    const failedWatch = watchUntilSettled(failed.control, "tFailed");
+    await drain(failed.agent.invoke({ session: "tFailed" }, { text: "go" }));
+    expect((await failedWatch).some((e) => e.type === "tool_started")).toBe(false);
+    const failedEntries = (await failed.control.sessions.get("tFailed").entries()).entries;
+    expect(failedEntries.find((e) => e.kind === "assistant")?.data).toMatchObject({
+      toolCalls: [{ id: "call-f" }],
+      outcome: { status: "failed" },
+    });
+    expect(failedEntries.some((e) => e.kind === "tool")).toBe(false);
+
+    const truncated = await makeObserved([
+      fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-t" }), { stopReason: "length" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await drain(truncated.agent.invoke({ session: "tTruncated" }, { text: "go" }));
+    const truncatedEntries = (await truncated.control.sessions.get("tTruncated").entries()).entries;
+    expect(truncatedEntries.find((e) => e.kind === "tool")?.data).toMatchObject({
+      toolCallId: "call-t",
+      isError: true,
+    });
+    expect(truncatedEntries.filter((e) => e.kind === "assistant").at(-1)?.data).toEqual({ text: "done" });
+  });
+
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {
     const { agent, control } = await makeObserved([fauxAssistantMessage("a long answer")]);
     const watched = watchUntilSettled(control, "sC");
