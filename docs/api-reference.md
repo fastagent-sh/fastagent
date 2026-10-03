@@ -617,9 +617,12 @@ function probeAuthSource(models: Models, spec: string): Promise<string | undefin
 function availableModelsFromDir(
   dir: string,
   options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void },
-): Promise<string[]>;
+): Promise<ModelDescriptor[]>; // { spec, name?, thinkingLevels, contextWindow? }
 function refreshModelCatalog(
   dir: string,
+  options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void; signal?: AbortSignal },
+): Promise<void>;
+function refreshMachineModelCatalog(
   options?: { authPath?: string; credentialStore?: CredentialStore; warn?: (message: string) => void; signal?: AbortSignal },
 ): Promise<void>;
 ```
@@ -627,9 +630,12 @@ function refreshModelCatalog(
 `probeAuthSource` names what satisfies `spec`'s provider in `models`, or `undefined` when nothing is configured; it
 rejects when resolving fails (a corrupt entry, a refresh the provider refused), with the reason.
 
-`availableModelsFromDir` is what a model picker offers for an agent directory: the specs
-`createPiAgentFromDir(dir, { authPath })` could run now. It covers pi's built-ins, the model catalogs (the agent's
-`models-store.json` over `~/.fastagent/models-store.json`), and the agent's `models.json`, filtered to providers whose credentials are configured, and sorted. The directory needs no model set. It checks
+`availableModelsFromDir` is what a model picker offers for an agent directory: the models
+`createPiAgentFromDir(dir, { authPath })` could run now, sorted by spec. Each one carries its `spec`, its `name`, the
+`thinkingLevels` a session on it accepts, and its `contextWindow`; `name` and `contextWindow` are absent when the
+model does not declare them. It covers pi's built-ins, the model catalogs (the agent's `models-store.json` over
+`~/.fastagent/models-store.json`), the agent's `models.json`, and the models its `extensions/` declare, filtered to
+providers whose credentials are configured. The directory needs no model set. It checks
 configuration, not validity: no OAuth token is refreshed and no provider is called. An unreadable or corrupt
 credentials file goes to `warn`, and otherwise reads as "nothing configured"; pass a `warn` that throws to surface
 it instead.
@@ -642,6 +648,12 @@ Nothing refreshes it on its own, so serving makes no catalog request. It rejects
 when the refresh fails,
 takes longer than 15 seconds, or `PI_OFFLINE` is set, and when none of the credentials authenticates a provider (the
 refresh would fetch nothing).
+
+`refreshMachineModelCatalog` is the same refresh into the machine's `~/.fastagent/models-store.json`, which every
+agent on the machine reads under its own: one call serves a client that hosts several agents, and no file is written
+into any agent. It authenticates with `credentialStore` or `authPath` when given, and the global credentials file
+otherwise; environment keys apply either way. It rejects for the same reasons. The machine's catalog does not ship
+with a deploy, so a deployed agent knows only the models its own `models-store.json` lists.
 
 Auth:
 
@@ -840,6 +852,9 @@ with `run_command_failed`. Both are `retryable: false`; check `state()` first. A
 the race: an `abort` may settle `completed`, and a `steer`/`followUp` may settle unconsumed. The settlement is what
 happened.
 
+An `abort` accepted before the run's first model request still stops that request, and any later one the run would
+make. Work that is not a model request, such as an extension command's handler, runs to its end.
+
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills, the
 commands its `extensions/` register, and the machine's skills and prompt templates. `source` is `skill`, `extension`
 or `prompt`. It is a listing only. To run one, send its spelling as prompt text and the server dispatches it: a skill
@@ -912,7 +927,7 @@ await s1.delete();                                                       // irre
 
 `fork` copies history into the session `into`. It is idempotent: repeating the same fork answers `ok: true` and
 writes nothing; `into` already holding a different history rejects `invalid_command`. Clone a session by forking
-at its own `leafEntryId`. There is no `create`: `invoke` creates sessions. `delete` ends the session's live
+at its own `leafEntryId`. There is no `create`: `invoke` creates sessions, and `update()` creates the record of an id that has none. `delete` ends the session's live
 `events()` streams.
 
 Overrides persist in the session and apply to every later turn, channels included. A thinking level the current
@@ -920,12 +935,23 @@ model does not support is clamped to the lowest supported level at or above it (
 can raise reasoning cost; the recorded preference returns when the session moves back to a capable model.
 `state()`, `state_changed` and execution all report the same resolved level.
 
-Writes require an existing session (`no_such_session` otherwise): sessions are created by `invoke` or
-copied by `fork`, never minted by an update. Invalid payloads reject `invalid_command` before acceptance.
-`capabilities()` lists `allowedModels` (the
-deployment's registry — a static fact) but not thinking LEVELS: which exist depends on the model a
-session is running, so they ride `state().availableThinkingLevels`, and `update({ thinkingLevel })`
-validates against that same set rather than recording an override the run would ignore. Every write
+An id with no record (nothing has written it yet) takes properties too: `update({ model, thinkingLevel, name })`
+creates its record, and the session's first turn runs on them. That is how a client starts a new conversation at a chosen model or thinking level:
+
+```ts
+const draft = control.sessions.get(conversationId);
+(await draft.state()).thinkingLevel;            // what its first turn would run on now
+await draft.update({ thinkingLevel: "high" });  // then invoke as usual
+```
+
+From then on it is an existing session that has not run yet: listed with `messageCount: 0`, `state()` reports its
+recorded settings, `delete()` removes it, `compact()` answers `nothing_to_compact` and writes nothing, and it can be
+forked. A later `invoke` does not seed it from `scope.parentSession`. Writes that need a record (`compact`, `delete`,
+`fork`'s source) refuse an id with no record with `no_such_session`. Invalid payloads, and an id no client could
+address (`""`, `.`, `..`), reject `invalid_command` before acceptance, and nothing is created. `capabilities()` lists `allowedModels`, the deployment's registry, each entry
+described like `availableModelsFromDir`'s, with the `thinkingLevels` a session on that model accepts.
+`state().availableThinkingLevels` is the same list for the model the session is on, and `update({ thinkingLevel })`
+validates against it rather than recording an override the run would ignore. Every write
 requires the wiring the agent opener provides (`sessionControl: true`); a hub without it reports an
 empty `updatable`, `fork: false`, `delete: false`, and rejects with `unsupported_capability`.
 

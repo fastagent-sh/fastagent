@@ -2,7 +2,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { type AssistantMessage, type ImageContent, contentText } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
-import type { PromptDisposition, SessionEvent } from "../../session.ts";
+import type { AnswerOutcome, PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
@@ -86,19 +86,39 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
   return {};
 }
 /**
- * Terminal mapping, decided by the resolved message's stopReason: pi's `prompt()` RESOLVES a message with stopReason
+ * How an answer ended, read off the stopReason pi records on the message. The ONE reading: `message_finished`,
+ * the `assistant` entry `entries()` publishes, and the invoke terminal all derive from it, so the live outcome and
+ * the recorded one cannot disagree.
+ */
+export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefined {
+  const error = message.errorMessage ? { error: { message: message.errorMessage } } : {};
+  switch (message.stopReason) {
+    case "error":
+      return { status: "failed", ...error };
+    case "aborted":
+      return { status: "aborted", ...error };
+    case "length":
+      return { status: "truncated" };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Terminal mapping, decided by the resolved message's outcome: pi's `prompt()` RESOLVES a message with stopReason
  * "error"/"aborted" rather than throwing, so relying on catch alone would miss that whole failure class and violate
- * SPEC MUST 1.
+ * SPEC MUST 1. A truncated final answer still completes the run.
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
-  if (message.stopReason === "aborted") {
+  const outcome = answerOutcome(message);
+  if (outcome?.status === "aborted") {
     // A deliberate stop (a control-plane or consumer abort), not an error — see {@link ABORTED_CODE} for the consumer
     // contract (design §6).
-    const details = message.errorMessage ?? "run aborted";
+    const details = outcome.error?.message ?? "run aborted";
     return { type: "failed", details, retryable: false, code: ABORTED_CODE };
   }
-  if (message.stopReason === "error") {
-    const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
+  if (outcome?.status === "failed") {
+    const details = outcome.error?.message ?? "model stopped: error";
     return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
   }
   return { type: "completed" };

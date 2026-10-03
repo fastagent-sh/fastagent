@@ -31,6 +31,7 @@ import {
   errorToTerminal,
   inProcessLease,
   agentEventProjection,
+  answerOutcome,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-kit.ts";
@@ -73,9 +74,11 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
       }
       return null;
     }
-    case "message_end":
+    case "message_end": {
       if (event.message.role !== "assistant") return null;
-      return { type: "message_finished", timestamp: at, runId, data: {} };
+      const outcome = answerOutcome(event.message);
+      return { type: "message_finished", timestamp: at, runId, data: outcome ? { outcome } : {} };
+    }
     case "tool_execution_start":
       return {
         type: "tool_started",
@@ -208,6 +211,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     let outcome: RunSettledEvent["data"] | undefined;
     let abortsInFlight = 0;
     let abortSucceeded = false;
+    /**
+     * An abort is owed to every model request this invoke makes, including one not yet started. pi's `abort()` stops
+     * only an agent run or a compaction already in flight: one that lands while `prompt()` prepares (input handlers,
+     * the auth check, `before_agent_start`) finds nothing to stop, and `_runAgentPrompt` then clears pi's own flag.
+     * So the run remembers it and aborts each agent run and automatic compaction as it starts (`agent_start`,
+     * `compaction_start`: both emitted once pi's controller for it exists).
+     */
+    let abortRequested = false;
     const observe = (event: SessionEvent | null, run?: RunControls): void => {
       if (!event || !observer) return;
       try {
@@ -258,6 +269,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         command((session) =>
           Effect.gen(function* () {
             abortsInFlight++;
+            abortRequested = true;
             yield* port(() => session.abort()).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
@@ -300,9 +312,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       let streamedAnswer = false;
       let retriedAfterAnswer: string | undefined;
       let eventFailure: PortFailure | undefined;
-      const stop = () => {
-        void Effect.runPromise(portCleanup("event-fault abort", () => session.abort()));
+      const abortWith = (operation: string) => {
+        void Effect.runPromise(portCleanup(operation, () => session.abort()));
       };
+      const stop = () => abortWith("event-fault abort");
       yield* Effect.acquireRelease(
         Effect.try({
           try: () =>
@@ -310,6 +323,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
               if (retriedAfterAnswer !== undefined || eventFailure) return;
               try {
                 if (event.type === "agent_start") runStarted = true;
+                if ((event.type === "agent_start" || event.type === "compaction_start") && abortRequested)
+                  abortWith("requested abort");
                 // Compaction rewrites session history; the event's assistant message is the turn's fact.
                 if (event.type === "message_end" && event.message.role === "assistant") {
                   finalAssistant = event.message as AssistantMessage;

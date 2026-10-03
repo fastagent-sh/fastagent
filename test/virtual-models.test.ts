@@ -85,8 +85,10 @@ function routerState(record: { getBranch(): unknown[] }) {
 describe("Pi virtual models", () => {
   it("resolves extension models before startup, lists them, and isolates simultaneous routing contexts", async () => {
     const opened = await routedAgent();
-    expect(opened.sessionControl!.capabilities().allowedModels).toContain("router/auto");
-    expect(await availableModelsFromDir(opened.dir)).toContain("router/auto");
+    // Described as the extension declares it, the same in both listings.
+    const auto = { spec: "router/auto", name: "Automatic", thinkingLevels: ["off", "high"], contextWindow: 8000 };
+    expect(opened.sessionControl!.capabilities().allowedModels).toContainEqual(auto);
+    expect(await availableModelsFromDir(opened.dir)).toContainEqual(auto);
     expect(await opened.models.authStatus("router", "auto")).toMatchObject({ source: "virtual" });
     const results = await Promise.all([
       collect(opened.agent.invoke({ session: "A" }, { text: "small" })),
