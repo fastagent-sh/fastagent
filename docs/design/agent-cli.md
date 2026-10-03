@@ -16,7 +16,7 @@ Three rules shape every command:
   that directory sits.
 - **The local instance is implicit.** An author runs an agent; they do not create or name an instance on their
   own machine.
-- **Every context is resolved out loud.** Where each one came from, where it is, and what a deployment will get
+- **Every context is resolved out loud.** Where each one came from, where it is, and what a host will get
   are printed, never inferred silently.
 
 ## 1. Addressing an Agent
@@ -27,6 +27,7 @@ Commands that take an agent take `[agent]`: the path to an agent directory, the 
 | The current directory | Result |
 |---|---|
 | Is an agent | That agent |
+| Is inside an agent directory (`app/fastagent/skills/`) | Refused, naming the agent's root: `cd` there or pass it |
 | Holds exactly one agent directly inside it | That agent, so `cd app && fastagent dev` keeps working |
 | Holds several | Refused, listing them: name one, `fastagent dev pm` |
 | Holds none | Refused: run `fastagent init` |
@@ -35,7 +36,9 @@ Commands that take an agent take `[agent]`: the path to an agent directory, the 
 
 - `FASTAGENT_AGENT`, and the rule that a directory named `fastagent` wins a tie;
 - the `ENV FASTAGENT_AGENT` a generated Dockerfile pins;
-- "an agent directory used as its own project is not supported": declare `contexts: [{ local: "." }]`.
+- "an agent directory used as its own project is not supported": declare `contexts: [{ local: "." }]` on this
+  machine. On a host such an agent needs a `github` context, because a copy of it would leave the agent directory
+  out and be empty ([agent model](agent-model.md) §3).
 
 ## 2. The local instance
 
@@ -46,7 +49,8 @@ app/fastagent/
 ├── persona.md  skills/  tools/  …   the definition
 ├── .secrets/                        the instance's credentials
 └── .state/                          the instance's sessions, channel and schedule state
-    └── workspace/                   the instance's own files: scratch work, downloads
+    └── workspace/                   the instance's own files; also where a github context is cloned
+                                     when no checkout is named
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
@@ -58,9 +62,15 @@ What this asks of others: both directories stay out of version control (they do 
 Agent to give it to someone leaves them out. duang's design already excludes `.secrets`, `.env` and session state
 from a preset.
 
+The cost: in the default layout the agent directory is inside its primary context, so these files sit inside the
+tree the agent works in. They never travel with the context, but an agent with a shell can open them, and so can
+a second agent working on the same project. That is true of any file its account can read, so placing them
+elsewhere on the machine would not change it ([agent model](agent-model.md) §5).
+
 Considered: a registry of instances under `~/.fastagent/instances/<name>/`. The definition directory would hold
 only the definition, but every instance would need a name, `ls` and `rm` commands would be needed, and moving an
-agent directory would separate it from its conversations.
+agent directory would separate it from its conversations. It would not keep the state from an agent's shell
+either.
 
 A hosted instance keeps its state in the host's storage; how is a deployment question.
 
@@ -85,7 +95,7 @@ Example output:
 
 ```text
 created app/fastagent
-context  app  github acme/app, using this checkout here; a deployment clones it
+context  app  github acme/app, using this checkout here; a host clones it
 ```
 
 ## 4. Editing contexts: `fastagent context`
@@ -120,7 +130,7 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into …`, with the reason |
+| A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/workspace/app`, with the reason |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
 
@@ -140,9 +150,14 @@ context  draft  local ~/draft          refused: not available on a host
          → add `copy: true`, or move it to a GitHub repository and declare it as github
 ```
 
-- **A harness committed in a `github` context deploys what was pushed.** When the agent directory has changes
-  that are not committed or not pushed, deploy refuses: the author almost certainly expects them to be included.
-  The refusal names the ways out: push them, or pass `--allow-unpushed` to run the pushed version knowingly.
+- **A harness committed in a `github` context deploys what is at the context's `ref`.** Deploy compares the agent
+  directory with the head of that `ref` on the remote, and refuses when they differ: uncommitted changes, commits
+  not pushed, or work pushed to another branch than the one the host will clone. The author almost certainly
+  expects their version to run. The refusal names the ways out: push to that `ref`, or pass `--allow-unpushed` to
+  run the `ref`'s head knowingly.
+- **A later deploy updates the host's clone only when nothing is lost.** It fast-forwards the clone to the
+  `ref`'s head when the clone holds no changes of the instance's own, and otherwise refuses, saying what the
+  instance changed ([agent model](agent-model.md) §3).
 - **A `github` context's credential is a host secret.** The runbook lists it with the instance's other secrets.
 
 ## 8. `login` and `add <channel>`
@@ -156,8 +171,8 @@ Unchanged as commands. What they store goes to the local instance (`.secrets/`),
 | `[dir]` is a workspace or an agent directory | `[agent]` is an agent directory, or the one directly inside the current directory |
 | `FASTAGENT_AGENT` and a `fastagent`-named tie-break select among several agents | A path selects one; several without a path is refused with the list |
 | The Dockerfile pins `ENV FASTAGENT_AGENT` | Nothing to pin |
-| An agent directory cannot be its own project | `contexts: [{ local: "." }]` |
+| An agent directory cannot be its own project | `contexts: [{ local: "." }]` on this machine; a `github` context on a host |
 | `init` writes no context; the parent directory becomes the workspace | `init` declares the context it was run in, and says so |
 | Contexts do not exist | `fastagent context list/add/remove` |
 | Startup reports the workspace | Startup reports each context's resolution |
-| `deploy` copies the workspace once | `deploy` shows each context's fate, refuses a local context without `copy`, and refuses unpushed harness changes |
+| `deploy` copies the workspace once | `deploy` shows each context's fate, refuses a local context without `copy`, refuses a harness that differs from its `ref`, and updates a clone only by fast-forward |
