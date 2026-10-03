@@ -111,11 +111,33 @@ Attributes:
   and the agent's changes to itself travel the same way as its changes to the project. When the agent directory
   sits in a copied local context, the copy leaves it out, and the harness reaches the deployment as the
   definition.
-- **Paths in a declaration are relative to the agent's directory.** They describe this machine's layout; the
-  `github` type is what makes a context independent of where anything sits.
+- **A path in a declaration is absolute or relative to the agent's directory.** Either way it describes this
+  machine; the `github` type is what makes a context independent of where anything sits.
 
 A service for sharing and synchronizing local directories between agents, the way GitHub does for repositories,
 would be another context type. It is not part of this note.
+
+### Example: an agent with a folder of its own
+
+A client such as duang may give a new agent a directory it creates for it, and let the user attach folders they
+already have. The agent's own directory is a context like any other, declared first so it is the working
+directory:
+
+```ts
+export default {
+  contexts: [
+    { local: "/Users/me/Agents/researcher", copy: true }, // created for the agent: its notes and output
+    { local: "/Users/me/Documents/papers", copy: true, name: "papers" },
+    { github: "acme/handbook" },
+  ],
+};
+```
+
+It is a context, not the workspace, because its content is what the user expects to find on every instance of
+the agent: on a laptop and when a copy runs online. Until a context-sharing service exists, an online instance
+starts from a copy and keeps its own; once one exists, the type changes from a copied local directory to a
+synchronized one, and nothing else in the declaration does. The workspace stays
+what every instance has to itself.
 
 ## 4. Workspace
 
