@@ -5,7 +5,7 @@
  * pi lists a provider's models through `filterModels`, which is synchronous, so the catalog is read when there is a
  * token to read it with (login and every token refresh) and kept on the credential, like the account it belongs to:
  * a new account brings its own list, and nothing per-account lands in the definition's model catalog. pi's `openai`
- * provider does not do this itself (as of pi 1.0.1), so {@link withAccountModels} wraps it. An API key on the same
+ * provider does not do this itself (checked against pi 0.99.2), so {@link withAccountModels} wraps it. An API key on the same
  * provider keeps the built-in list.
  */
 import type { Credential, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
@@ -44,8 +44,8 @@ function accountModels(credential: OAuthCredential): readonly string[] | undefin
 }
 
 /**
- * Why the stored `openai` credential lists no models, when that is because its sign-in carries no catalog: the one wording a
- * listing reports instead of falling back to every built-in model.
+ * Why the stored `openai` credential lists no models, when that is because its sign-in carries no catalog: the one
+ * wording a listing reports instead of falling back to every built-in model.
  */
 export function missingAccountModels(credential: Credential | undefined): string | undefined {
   if (credential?.type !== "oauth" || accountModels(credential)) return undefined;
@@ -106,13 +106,26 @@ export function withAccountModels(provider: Provider): Provider {
   };
 }
 
+/** Providers this module built, so a second registration leaves them as they are instead of wrapping them again. */
+const wrappedProviders = new WeakSet<Provider>();
+
 /**
- * Put {@link withAccountModels} on a runtime's `openai`, over the provider the runtime composed (pi's remote catalog
- * and the agent's models.json included), so neither is lost. pi composes a native provider with models.json once more;
- * that second pass is idempotent today, and openai-account-models.test.ts holds it to that. Call it inside
- * `withModelRegistration`.
+ * Put {@link withAccountModels} on a runtime's `openai`, over the provider the runtime composed (pi's remote catalog,
+ * the agent's models.json, and an extension's `registerProvider("openai", …)` included), so none of them is lost. pi
+ * composes a native provider with models.json once more; that second pass is idempotent today, and
+ * openai-account-models.test.ts holds it to that. Call it inside `withModelRegistration`, and again after extensions
+ * load: pi's `registerProvider` drops a native provider, and a refresh without the wrapper would store a credential
+ * without its catalog. Repeating it is harmless.
+ *
+ * Known ceiling: an extension that registers `openai` later than its load (from an event handler) drops the wrapper
+ * for that runtime.
  */
 export function registerAccountModels(runtime: ModelRuntime): void {
+  const registered = runtime.getRegisteredNativeProvider(OPENAI_PROVIDER);
+  if (registered && wrappedProviders.has(registered)) return;
   const provider = runtime.getProvider(OPENAI_PROVIDER);
-  if (provider) runtime.registerNativeProvider(withAccountModels(provider));
+  if (!provider) return;
+  const wrapped = withAccountModels(provider);
+  wrappedProviders.add(wrapped);
+  runtime.registerNativeProvider(wrapped);
 }

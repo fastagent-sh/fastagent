@@ -84,17 +84,28 @@ describe("what a ChatGPT sign-in lists", () => {
     expect((await openaiSpecs(keyed.dir, keyed.authPath)).length).toBeGreaterThan(2);
   });
 
-  it("a sign-in with no catalog lists nothing for openai and says why, instead of every built-in model", async () => {
+  it("a sign-in with no catalog lists nothing for openai and logs why, without failing a throwing warn", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
     const { dir, authPath } = await workspace({ openai: oauth() });
-    const warned: string[] = [];
-    expect(await openaiSpecs(dir, authPath, (message) => warned.push(message))).toEqual([]);
-    expect(warned).toEqual([expect.stringMatching(/carries no model catalog.*fastagent login/)]);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The documented sink for a broken credentials file: it must not hear this normal, recoverable state.
+    const specs = (
+      await availableModelsFromDir(dir, {
+        authPath,
+        warn: (message) => {
+          throw new Error(`credentials: ${message}`);
+        },
+      })
+    ).map((model) => model.spec);
+    expect(specs.filter((spec) => spec.startsWith("openai/"))).toEqual([]);
+    expect(specs.some((spec) => spec.startsWith("anthropic/"))).toBe(true);
+    expect(logged).toHaveBeenCalledWith(expect.stringMatching(/carries no model catalog.*fastagent login/));
   });
 
   it("a token refresh, through any registry that can make one, reads the catalog again and stores it", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
-    stubOpenAI();
+    const fetch = stubOpenAI();
     // The agent's runtime (turns, the agent catalog refresh), the machine's (`models --refresh -g`), and the bare
     // registry login is built on: a registry that refreshed without the wrapper would drop the catalog.
     const registries: Record<string, (dir: string, authPath: string) => Promise<Models>> = {
@@ -103,11 +114,15 @@ describe("what a ChatGPT sign-in lists", () => {
       bare: async (_dir, authPath) => piModelsOver(fastagentCredentialStore(authPath)),
     };
     for (const [name, open] of Object.entries(registries)) {
+      fetch.mockClear();
       const { dir, authPath } = await workspace({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
       const models = await open(dir, authPath);
       expect((await models.getAuth("openai"))?.auth.apiKey, name).toBe("at-new");
       const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
       expect(stored, name).toMatchObject({ refresh: "rt-new", accountModels: ["gpt-5.5", "gpt-6-astra"] });
+      // Registered more than once (the agent's runtime again after its extensions load), wrapped once.
+      const reads = fetch.mock.calls.filter(([input]) => String(input) === MODELS_URL);
+      expect(reads, name).toHaveLength(1);
     }
   });
 
@@ -121,6 +136,24 @@ describe("what a ChatGPT sign-in lists", () => {
     // The old refresh token is spent: losing the new one would sign the account out.
     const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
     expect(stored).toMatchObject({ refresh: "rt-new", accountModels: ["gpt-5.5"] });
+  });
+
+  it("an extension that re-registers openai keeps the catalog: listed, and carried over a refresh", async () => {
+    vi.stubEnv("OPENAI_API_KEY", undefined);
+    const { dir, authPath } = await workspace({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
+    await mkdir(join(dir, "agent", "extensions"));
+    await writeFile(
+      join(dir, "agent", "extensions", "gateway.ts"),
+      `export default (pi) => { pi.registerProvider("openai", { headers: { "x-gateway": "1" } }); };`,
+    );
+    const fetch = stubOpenAI();
+    const models = await agentModels(join(dir, "agent"), { authPath }).runtime();
+    expect((await models.getAuth("openai"))?.auth.apiKey).toBe("at-new");
+    const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
+    expect(stored).toMatchObject({ refresh: "rt-new", accountModels: ["gpt-5.5", "gpt-6-astra"] });
+    // Wrapped once, however often it was registered: one catalog read per refresh.
+    expect(fetch.mock.calls.filter(([input]) => String(input) === MODELS_URL)).toHaveLength(1);
+    expect((await models.getAvailable("openai")).map((m) => m.id).sort()).toEqual(["gpt-5.5", "gpt-6-astra"]);
   });
 
   it("the agent's models.json overrides on openai still apply over the wrapped provider", async () => {

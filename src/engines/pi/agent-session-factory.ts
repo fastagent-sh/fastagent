@@ -35,6 +35,7 @@ import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { resolveModel } from "./config.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
+import { registerAccountModels } from "./openai-account-models.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
 interface PiSessionDefinition {
@@ -381,6 +382,10 @@ export async function definitionServices(options: {
         }),
         extensionsOverride: admissionFirst,
       },
+    }).then((services) => {
+      // AFTER the extensions: one that re-registers `openai` replaced the account-catalog wrapper.
+      registerAccountModels(modelRuntime);
+      return services;
     }),
   );
   reportExtensionDiagnostics(services);

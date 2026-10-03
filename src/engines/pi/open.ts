@@ -213,9 +213,10 @@ export function assembleFront(
  * authenticates there. Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
  * A Sign in with ChatGPT on `openai` lists the account's own models (openai-account-models.ts), not pi's built-ins.
  *
- * `warn` reaches the credential store, and hears why a ChatGPT sign-in lists no models when it carries no catalog.
- * An unreadable or corrupt credentials file otherwise reads as "nothing configured", so a client that must not show
- * that as an empty list passes a sink that throws.
+ * `warn` reaches the credential store. An unreadable or corrupt credentials file otherwise reads as "nothing
+ * configured", so a client that must not show that as an empty list passes a sink that throws. A ChatGPT sign-in that
+ * carries no catalog is a normal, recoverable state (signed in before the catalog was read), not that: it is logged,
+ * never sent to `warn`, so a throwing sink does not fail the whole listing for it.
  */
 export async function availableModelsFromDir(
   dir: string,
@@ -225,7 +226,7 @@ export async function availableModelsFromDir(
   const environment = agentModels(agentDir, options, { cwd: workspace });
   const available = await (await environment.runtime()).getAvailable();
   const missing = missingAccountModels(await environment.credentials.read(OPENAI_PROVIDER));
-  if (missing) (options.warn ?? log.warn)(missing);
+  if (missing) log.warn(missing);
   return describeModels(available);
 }
 

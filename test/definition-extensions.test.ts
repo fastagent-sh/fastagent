@@ -13,6 +13,8 @@ import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { definitionServices } from "../src/engines/pi/agent-session-factory.ts";
 import { agentModels } from "../src/engines/pi/agent-models.ts";
+import { withModelRegistration } from "../src/engines/pi/models.ts";
+import { registerAccountModels } from "../src/engines/pi/openai-account-models.ts";
 import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
@@ -450,6 +452,9 @@ describe("definition: an extension can define the model chat runs on", () => {
       "extensions/provider.ts": `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: "test", name: "test", contextWindow: 1000, maxTokens: 100 }] });`,
     });
     const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    // As fastagent builds every runtime (createPiModelRuntime): `openai` already wrapped, so loading the definition
+    // registers nothing of ours and the refreshes counted below are the extension's and the SDK's.
+    await withModelRegistration(runtime, async () => registerAccountModels(runtime));
     const nativeRefresh = runtime.refresh.bind(runtime);
     let release = () => {};
     const blocked = new Promise<void>((resolve) => {
