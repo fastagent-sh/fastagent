@@ -8,8 +8,8 @@ status: proposed
 # Agent model
 
 **Status: proposed.** This note fixes the concepts and the vocabulary, seen from the author's side. It says what
-an author declares and what an agent sees, not how it is stored or implemented, and it does not cover versioning
-or distribution (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
+an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
+synchronization, distribution or deployment (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 
 The test every rule here answers to: an agent an author shaped with a coding agent in their own repository runs
 as a service without being rewritten, and behaves there the way it did on their machine.
@@ -36,6 +36,15 @@ Relations:
 - One Agent can run as several instances (on a laptop, on a host). Each has its own workspace and runtime state.
 - One context can be the data of several Agents (an engineer's and a PM's agent on one repository).
 - An instance runs exactly one Agent, and exactly one copy of its harness (§3).
+
+### What this layer guarantees
+
+Every instance of an Agent, given the same version of its definition, runs the same program on contexts
+resolved the same way: the same declarations, the same names, the same working directory, the same `AGENTS.md`
+and skills. A laptop instance and a hosted one behave the same on the same data.
+
+Keeping the data itself the same across instances afterwards is not this layer's job. It belongs to
+collaboration and synchronization (§8): git for a repository, a context service for what is not one.
 
 ## 2. Harness and context: program and data
 
@@ -78,7 +87,7 @@ A context's type says how it reaches an instance that runs somewhere else.
 |---|---|---|---|---|
 | **local** | `{ local: "../notes" }` | That directory, edited in place | Absent: deploying is refused (below) | The directory |
 | **local, copied** | `{ local: "../notes", copy: true }` | That directory, edited in place | A copy | Each deployment keeps its own |
-| **github** | `{ github: "acme/app" }` | A clone, or an existing checkout (`local`, below) | A clone of the same repository | Back to the repository (versioning, §8) |
+| **github** | `{ github: "acme/app" }` | A clone, or an existing checkout (`local`, below) | A clone of the same repository | Back to the repository (synchronization, §8) |
 
 Attributes:
 
@@ -95,11 +104,8 @@ Attributes:
 
 - **When a copy is made follows from whether the context is writable.** A writable copied context is copied once,
   when the instance is created, and belongs to that instance afterwards: copying it again on every deployment
-  would destroy what the deployed agent wrote. A redeploy says that it kept the deployed copy, so a local edit
-  that did not arrive is not a surprise. A `readonly` copied context is copied again on every deployment: there
-  is nothing local to lose, and it always matches what was released.
-- **A writable copied context needs storage that survives a restart.** On a host without it, deploying is
-  refused: "copied once, then the instance's own" cannot hold there.
+  would destroy what the deployed agent wrote. A `readonly` copied context is copied again on every deployment:
+  there is nothing local to lose, and it always matches what was released.
 - **A local context without `copy` refuses to deploy.** The refusal names the two ways out: add `copy`, or move
   the directory to a repository and declare it as `github`. A deployment never starts with a context silently
   missing.
@@ -158,8 +164,7 @@ workspace/            the instance's own directory: scratch work, downloads
   same file everywhere. A reference to another context uses the location the agent is told, not a relative path
   written into a file.
 - **The agent's own files stay out of the contexts.** What the agent writes for itself goes to the workspace,
-  not into a repository it shares with others. Whether those files survive a restart depends on the host's
-  storage.
+  not into a repository it shares with others. Whether those files survive a restart depends on the host (§8).
 - **The agent is told its contexts.** For each one: its location, its type, whether it is writable, and whether
   a change there reaches other deployments. Writing a finding into a context that does not travel is how
   knowledge gets lost, so the agent needs to know which is which. It is also told where its harness and its
@@ -213,9 +218,8 @@ The second row is a commitment, not today's behavior: `dev` restarts on code edi
 In-process reloading of code modules was built and removed (#598, #600); restarting when idle gives the same
 result for the author without it.
 
-A change is recorded only where its context is: a change in a `github` context, including a harness committed in
-one, becomes part of that repository's history once versioning pushes it (§8). A change in a local context, or
-in a harness that is not in a repository, has no record beyond the files themselves until versioning exists.
+Recording a self-change, reviewing it and reverting it are not done here: they belong to the tools that keep the
+context's history (§8), git for a repository and a context service for what is not one.
 
 Whether an agent may change its own default model is open, pending the definitions in pi 1.0 and pi durable.
 
@@ -235,10 +239,13 @@ implementation.
 
 These belong to other layers, the way a program does not do its own package management:
 
-- **Versioning and merging.** Recording an agent's changes, branches, conflicts, reverting a self-change, and how
-  changes in a `github` context get back to the repository.
+- **Collaboration and synchronization.** Recording an agent's changes, branches, conflicts, reverting a
+  self-change, how changes in a `github` context get back to the repository, and reconciling copies that
+  diverged. Done by external tools (git) or a future context service, not by the agent layer.
 - **Distribution.** Sharing and copying an Agent; reusing a harness by copying it into another Agent.
-- **Deployment.** Running an instance on a host.
+- **Deployment.** Running an instance on a host, and planning each host's storage for each context type: what
+  holds a writable copy (it needs storage that survives a restart), where the workspace lives, and what a
+  redeploy reports. Separating the program from its contexts is what lets each host plan this per type.
 - **Context sharing.** A service through which several agents and people share and synchronize a context that is
   not a repository, and sharing conversations as context.
 
