@@ -25,10 +25,13 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, globalHome, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { withLockedFile } from "./locked-file.ts";
+import { OPENAI_PROVIDER, registerAccountModels, withAccountModels } from "./openai-account-models.ts";
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */
 export function piModelsOver(credentials: CredentialStore, providers: readonly Provider[] = []): Models {
   const models = builtinModels({ credentials, authContext: defaultProviderAuthContext() });
+  const openai = models.getProvider(OPENAI_PROVIDER);
+  if (openai) models.setProvider(withAccountModels(openai));
   for (const provider of providers) models.setProvider(provider);
   return models;
 }
@@ -366,6 +369,8 @@ export async function machineModelRuntime(
   });
   const error = runtime.getError();
   if (error) throw new Error(error);
+  // A machine catalog refresh may refresh an OAuth token, which must carry the account's catalog over.
+  await withModelRegistration(runtime, async () => registerAccountModels(runtime));
   return runtime;
 }
 
@@ -487,6 +492,7 @@ export async function createPiModelRuntime(
     throw new Error(`${error}${origin}`);
   }
   await withModelRegistration(runtime, async () => {
+    registerAccountModels(runtime);
     for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
   });
   return runtime;

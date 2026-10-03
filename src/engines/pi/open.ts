@@ -23,6 +23,8 @@ import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
 import { createPiModelRuntime, globalCatalogPath, machineModelRuntime, refreshCatalog } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
+import { OPENAI_PROVIDER, missingAccountModels } from "./openai-account-models.ts";
+import { log } from "../../log.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
@@ -209,17 +211,22 @@ export function assembleFront(
  * `models.json`, and what its `extensions/` declare) filtered to the providers whose credentials are configured. The
  * directory needs no model set, and the same placement and credential layers as the opener apply, so a listed spec
  * authenticates there. Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
+ * A Sign in with ChatGPT on `openai` lists the account's own models (openai-account-models.ts), not pi's built-ins.
  *
- * `warn` reaches the credential store. An unreadable or corrupt credentials file otherwise reads as "nothing
- * configured", so a client that must not show that as an empty list passes a sink that throws.
+ * `warn` reaches the credential store, and hears why a ChatGPT sign-in lists no models when it carries no catalog.
+ * An unreadable or corrupt credentials file otherwise reads as "nothing configured", so a client that must not show
+ * that as an empty list passes a sink that throws.
  */
 export async function availableModelsFromDir(
   dir: string,
   options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<ModelDescriptor[]> {
   const { agentDir, workspace } = resolvePlacement(dir);
-  const models = await agentModels(agentDir, options, { cwd: workspace }).runtime();
-  return describeModels(await models.getAvailable());
+  const environment = agentModels(agentDir, options, { cwd: workspace });
+  const available = await (await environment.runtime()).getAvailable();
+  const missing = missingAccountModels(await environment.credentials.read(OPENAI_PROVIDER));
+  if (missing) (options.warn ?? log.warn)(missing);
+  return describeModels(available);
 }
 
 /**
