@@ -209,10 +209,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     let abortsInFlight = 0;
     let abortSucceeded = false;
     /**
-     * An abort is owed to every agent run this invoke starts, including one not yet started. pi's `abort()` stops only
-     * an agent run already in flight: one that lands before the first request (while `prompt()` runs input handlers,
-     * the auth check and `before_agent_start`) finds nothing to stop, and `_runAgentPrompt` then clears pi's own flag.
-     * So the run remembers it and aborts each agent run as it starts (`agent_start`, when pi's controller exists).
+     * An abort is owed to every model request this invoke makes, including one not yet started. pi's `abort()` stops
+     * only an agent run or a compaction already in flight: one that lands while `prompt()` prepares (input handlers,
+     * the auth check, `before_agent_start`) finds nothing to stop, and `_runAgentPrompt` then clears pi's own flag.
+     * So the run remembers it and aborts each agent run and automatic compaction as it starts (`agent_start`,
+     * `compaction_start`: both emitted once pi's controller for it exists).
      */
     let abortRequested = false;
     const observe = (event: SessionEvent | null, run?: RunControls): void => {
@@ -318,10 +319,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             session.subscribe((event) => {
               if (retriedAfterAnswer !== undefined || eventFailure) return;
               try {
-                if (event.type === "agent_start") {
-                  runStarted = true;
-                  if (abortRequested) abortWith("requested abort");
-                }
+                if (event.type === "agent_start") runStarted = true;
+                if ((event.type === "agent_start" || event.type === "compaction_start") && abortRequested)
+                  abortWith("requested abort");
                 // Compaction rewrites session history; the event's assistant message is the turn's fact.
                 if (event.type === "message_end" && event.message.role === "assistant") {
                   finalAssistant = event.message as AssistantMessage;

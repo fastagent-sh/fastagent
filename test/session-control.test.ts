@@ -8,7 +8,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type AgentSession, type AgentSessionEvent, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { log } from "../src/log.ts";
@@ -1293,23 +1293,62 @@ describe("session control: run modulation", () => {
   });
 
   // pi's abort stops only an agent run in flight; one sent before the first request (while prompt() prepares) must
-  // still stop it (#691). The response answers only an aborted signal, so a missed abort never settles.
+  // still stop it (#691). This response answers only an aborted signal, so a missed abort never settles.
+  const untilAborted: FauxResponseStep = (_context, options) =>
+    new Promise((resolve) => {
+      const aborted = () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
+      if (options?.signal?.aborted) return aborted();
+      options?.signal?.addEventListener("abort", aborted, { once: true });
+    });
+
   it.each([
     ["synchronously", async () => {}],
     ["after a microtask", () => Promise.resolve()],
     ["after setImmediate", () => new Promise<void>((r) => setImmediate(r))],
   ])("an abort sent %s after invoke stops the first request", async (_when, wait) => {
-    const untilAborted: FauxResponseStep = (_context, options) =>
-      new Promise((resolve) => {
-        const aborted = () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
-        if (options?.signal?.aborted) return aborted();
-        options?.signal?.addEventListener("abort", aborted, { once: true });
-      });
     const { agent, control } = await fauxControlledAgent([untilAborted]);
     const invoked = drive(agent, "sEarly");
     await wait();
     expect(await control.sessions.get("sEarly").abort()).toMatchObject({ ok: true });
     expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+  });
+
+  it("an early abort also stops the automatic compaction prompt() runs before the first agent run", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-early-abort-home-"));
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 400 },
+        retry: { enabled: false },
+      }),
+    );
+    vi.stubEnv("HOME", home);
+    const debug = vi.spyOn(log, "debug");
+    try {
+      const { agent, control, sessions, faux } = await fauxControlledAgent([untilAborted, untilAborted], {
+        faux: { models: [{ id: "small", contextWindow: 2500, maxTokens: 1000 }] },
+      });
+      // History whose last answer filled the context window: prompt() compacts before it starts the agent run.
+      const record = await sessions.openOrCreate("sEarlyCompact");
+      for (let i = 0; i < 4; i++) {
+        record.appendMessage({ role: "user", content: `Earlier question ${i}`, timestamp: i });
+        record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
+      }
+      const model = faux.getModel();
+      const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      const usage = { input: 2450, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 2450, cost: zero };
+      record.appendMessage({ ...fauxAssistantMessage("full"), provider: model.provider, model: model.id, usage });
+
+      const invoked = drive(agent, "sEarlyCompact");
+      expect(await control.sessions.get("sEarlyCompact").abort()).toMatchObject({ ok: true });
+      expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+      // The compaction did start, so the abort above is what stopped it, not a history that needed none.
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/automatic compaction threshold .*: aborted$/));
+    } finally {
+      debug.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {
