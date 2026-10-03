@@ -18,7 +18,7 @@ rewritten, and behaves the same wherever it runs.
 
 ```text
 Agent    = model + harness + context      the definition
-Instance = runtime state                  one running Agent
+Instance = runtime state                  one Agent's life in one place
 ```
 
 What an author thinks: **I created an agent. It works on some things, and it knows others.**
@@ -27,9 +27,9 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 |---|---|---|
 | **Agent** | The definition, the way a program is | Its model, harness and contexts, as declared in its directory |
 | Model | What the agent thinks with | The default model and thinking level. Credentials are not part of it |
-| Harness | The program: who the agent is and how it works | `persona.md`, `skills/`, `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts`, `models.json`, `package.json` |
+| Harness | The program: who the agent is and how it works | `persona.md`, `skills/`, `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, and pi's project resources (`.pi/`, §4) |
 | Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
-| **Instance** | One running Agent | Its runtime state: conversations, credentials, channel state, schedule state (§5) |
+| **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
 Relations:
 
@@ -41,10 +41,11 @@ Relations:
 
 Every instance of an Agent, given the same version of its definition, runs the same program on contexts
 resolved the same way: the same declarations, the same names, the same working directory (its own), the same
-`AGENTS.md`, and the same skills from its harness and its contexts. A context an instance only knows is brought
-to its declared version every time the instance is deployed or started; a context it works on starts from its
-declared version and is the instance's own from then on (§3). A laptop instance and a hosted one behave the same
-on the same data.
+`AGENTS.md`, and the same skills from its harness and its contexts. A context an instance fetches itself and only
+knows is brought to its declared version every time the instance is deployed or started; one it works on starts
+from its declared version and is the instance's own from then on (§3). A checkout the user names with `local` is
+the exception: it is read as the user left it, and a difference from the declared version is reported, not
+corrected. A laptop instance and a hosted one behave the same on the same data.
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
 templates, installed pi packages, engine settings, the programs on its `PATH`) comes from that machine wherever
@@ -151,13 +152,19 @@ Attributes:
     instance afterwards: fetching it again would destroy what the instance wrote. A later deployment leaves it as
     it is and says so, including when the declared `ref` has changed since: moving the instance's own work to
     another line, and bringing the repository and the clone up to date with each other, is synchronization (§8).
+  - "Leaves it as it is" holds only where the instance's storage survives a deployment. A host whose storage a
+    deployment resets (AgentCore, [core](core.md) §9) fetches every context again on every deployment, and what the
+    instance wrote and did not push is lost. Its deployment says so before it runs.
 - **A checkout named by `local` is the user's.** FastAgent never switches its branch. When it is not at the
   declared `ref`, startup says so.
 - **What an instance fetches, it keeps in its own storage, under the context's name.** A clone, or a copy on a
   host, lives with the instance's runtime state (§5), not in the definition. Renaming a context makes it a new
   one: the next start or deployment fetches it afresh and says so.
-- **Names are unique within an agent.** Two contexts with the same name are refused when the agent is loaded;
-  adding one whose default name is taken asks for an explicit name.
+- **A name is one path segment, unique within the agent regardless of case.** It becomes a directory name, so it
+  is letters, digits, `-` and `_`, the spelling a release's agent name already has (`isReleaseAgentName`), and two
+  names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either
+  rule is refused when the agent is loaded; adding a context whose default name is taken or misspelled asks for an
+  explicit one.
 - **A local context without `copy` refuses to deploy.** The refusal names the two ways out: add `copy`, or move
   the directory to a repository and declare it as `github`. An instance never starts with a context silently
   missing.
@@ -207,6 +214,11 @@ directory to a synchronized one, and nothing else in the declaration does.
 - **Project instructions come from the contexts.** Each context's `AGENTS.md` at its root is loaded, marked with
   the directory it applies to, and so are the skills each context provides. Nothing in the agent's own directory
   is loaded but its harness.
+- **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
+  change engine settings and the built-in extensions, prompt templates, packages) is read from the agent
+  directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's
+  project scope is read from a context: a context contributes its `AGENTS.md` and its skills only. Today that scope
+  is the workspace, the project around the agent.
 - **What the agent creates lands in its own directory unless it puts it elsewhere.** Whether a file is temporary
   or part of the agent often cannot be decided when it is written: a helper script that proves useful is how a
   skill begins. The author decides what stays, with the tool every repository uses: version control and ignore
@@ -255,10 +267,15 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `persona.md`, `skills/`, `AGENTS.md`, scripts, project files | On the next turn |
-| What is loaded once per process: `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts` (its `contexts` included), `models.json`, `package.json` | Once the instance is idle: turns already running finish, then it restarts itself |
+| What a process loads once: `tools/`, `channels/`, `routines/`, `extensions/`, `.pi/`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When each process serving the instance is idle: its running turns finish, then it restarts |
 
-The second row is a commitment, not today's behavior: `dev` restarts on these edits already, `start` does not. It
-also applies when `fastagent context add` changes a running instance's declaration.
+The second row is a commitment, for `dev` and `start` alike, and neither keeps it today. `start` does not restart
+at all. `dev` restarts at once: its supervisor stops the worker 200 ms after the edit, so a running turn, the one
+that wrote `tools/x.ts` included, is cut off, and a definition that fails to load stops `dev` until the next edit.
+The commitment also covers `fastagent context add` on a running instance.
+
+Every process serving the instance follows the rule on its own: a change made in a turn in one process restarts
+another process once that one is idle, and a failure is reported in whichever process next runs a turn.
 
 This reverses a decision. #600 removed in-process reloading of `tools/` and stated the rule `core.md` §2 and the
 deployed prompt still give: an agent improves itself through skills, scripts run through `bash`, and `wake`;
@@ -267,22 +284,27 @@ and how this model answers them:
 
 - **The reload mechanism.** Reloading modules inside a running process had twelve documented limits (module
   caches per format and runtime, state leaking per reload, a helper loaded twice). A restart has none of them: it
-  is a new process, as `dev` already does.
+  is a new process.
 - **The need was already met.** Skills, scripts and `wake` remain the first path: they take effect on the next
   turn. A code module is a second path, for what a script cannot be: a tool with a typed interface, a channel, an
   extension. Agent harnesses now let an agent write those for itself, and this model follows them.
-- **A routine written by the agent bypassed `wake`'s opt-in and frequency floor.** A routine an agent adds or
-  changes is the agent scheduling itself, so it is held to the same gate: it takes effect only where `selfSchedule`
-  is on, and only within the floor `wake` is held to. A change that does not pass is not applied, and the agent
-  and the log are told why. Under `start` and on a host, a routine change that appears while the instance runs is
-  the agent's; one that arrives with a deployment is the author's. Under `dev` the author is the one editing, and
-  changes apply as they do today.
+- **A routine written by the agent bypassed `wake`'s guards.** `wake` is mounted on every serve now (#612), so
+  the guard left is its floor: a recurring wake fires at most every 10 minutes (`src/schedule/wakeups.ts`). Every
+  routine is held to that floor, whoever wrote it. Telling the author's routines from the agent's would need a
+  record of who wrote each file that survives a restart, and an agent can trigger a restart; one floor for all
+  needs no record. A routine that must fire more often is the author's to drive from outside the agent: an
+  external scheduler calling `POST /run`, the same way a host without a resident clock runs one.
 
-One risk is new: an agent can break the module that reaches it. So an instance restarts only onto a definition
-that loads. When the changed one does not (a tool or channel that throws while loading), the instance keeps running
-what it had and reports the failure, to the log and to the agent on its next turn. A channel that loads and then
-fails while handling messages is not caught that way: the agent can lose that channel until the author repairs it,
-and other channels and `dev` stay available.
+One risk is new: an agent can break the module that reaches it. A process restarts only onto a definition that
+loads; when the changed one does not (a tool or channel that throws while loading), the process keeps running
+what it had and reports the failure to the log and to the agent's next turn. That protects a process that is
+alive. The broken definition is still on disk, so the next fresh start (a machine restart, a crash, a host waking a
+scaled-to-zero instance, the author running `start` again) fails to load it, and the instance serves nothing until
+the definition is repaired. The failure is reported at that start, and the way back is the author's: revert the
+change with version control on this machine, or deploy again on a host, which ships the definition anew. Keeping
+the last definition that loaded, and starting from it with a report, would close this gap; it is not part of
+this model yet. A channel that loads and then fails while handling messages is not caught either: the agent can
+lose that channel until the author repairs it.
 
 A change to a context reaches other instances the way that context synchronizes. A change an agent on a host
 makes to its harness lasts until the next deployment ships the definition again: keeping it is a question of
@@ -332,6 +354,8 @@ These belong to other layers, the way a program does not do its own package mana
 | A project's skills are found by walking up from the working directory | A context's skills are read from each context |
 | A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a host receives; the definition is shipped |
 | `.secrets/` and `.state/` are part of the agent directory | They stay where they are, as the local instance's state ([CLI](agent-cli.md) §2): never part of the definition, never in a copied Agent |
-| A code-module change needs a restart under `start` | The instance restarts itself once idle, onto a definition that loads |
-| `core.md` §2 and the deployed prompt say `tools/`, `routines/` and `channels/` are the author's code, and an agent improves itself through skills, scripts and `wake` | They say an agent may also change its code modules, effective once idle; a routine it writes is held to `wake`'s gate |
+| A code-module change needs a restart under `start`; `dev` restarts at once and cuts off a running turn | Each serving process restarts once idle, onto a definition that loads |
+| `core.md` §2 and the deployed prompt say `tools/`, `routines/` and `channels/` are the author's code, and an agent improves itself through skills, scripts and `wake` | They say an agent may also change its code modules, effective once idle |
+| A routine fires as often as its cron says | Every routine, the author's or the agent's, fires at most every 10 minutes, `wake`'s recurring floor |
+| pi's project scope (`.pi/settings.json`, prompt templates, packages) is the workspace | It is the agent's own directory, part of the definition |
 | A skill the agent writes lasts until the next deployment replaces it | The same for a hosted agent's harness, until distribution can source a harness from its own repository (§8) |

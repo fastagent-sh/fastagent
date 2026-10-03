@@ -39,7 +39,8 @@ there is nothing to search for below the current directory. These go away:
 
 ## 2. The local instance
 
-On a machine, an agent directory has one instance. Its state stays where it is today:
+On a machine, an agent directory has one instance. `dev`, `start` and a one-off `invoke` run in that directory
+are processes serving the same instance. Its state stays where it is today:
 
 ```text
 ~/agents/reviewer/                   the working directory
@@ -115,7 +116,7 @@ fastagent context remove <name> [agent]
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it a context the agent
   knows rather than works on.
 - `add` refuses a context that contains the agent directory or sits inside it, and asks for `--name` when the
-  default name is already taken.
+  default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
 - The command edits only the literal `contexts` array `init` writes. When an author has replaced it with a
   computed value, the command refuses and says why, rather than guessing.
@@ -138,10 +139,11 @@ What is said rather than handled quietly:
 | A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/contexts/app`, with the reason |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
-| Two contexts have the same name | Refused, naming both |
+| Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A context was renamed | `fetching acme/app afresh as app2`, since what was fetched is kept under the old name |
-| A changed definition does not load when the instance restarts itself | The instance keeps running the previous one, and the log and the agent's next turn say why |
+| A changed definition does not load when a process restarts itself | That process keeps running the previous one, and the log and the agent's next turn say why |
+| The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
 | A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
 
 ## 6. `info`
@@ -166,6 +168,12 @@ works on  draft     local ~/draft                 refused: not available on a ho
   of a context the agent works on is the instance's own, so it is kept, and the deploy says so, also when the
   declared `ref` has changed; bringing it up to date is synchronization ([agent model](agent-model.md) §3, §8). A
   context it only knows is fetched again at its declared `ref`.
+- **Kept only where the host's storage survives a deployment.** On AgentCore a deployment resets the storage, so
+  preflight says so for every context the agent works on:
+
+  ```text
+  works on  app       github acme/app@main          cloned on every deployment; changes not pushed are lost
+  ```
 - **A `github` context's credential is a host secret.** The runbook lists it with the instance's other secrets.
 
 ## 8. `login` and `add <channel>`
