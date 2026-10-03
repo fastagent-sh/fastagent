@@ -229,6 +229,8 @@ src/
     │                       # (codemode, tool-search; never mcp) stay enabled, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
     ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
+    ├── locked-file.ts      # the cross-process locked read-modify-write that REPLACES a file (credentials, model
+    │                       # catalogs), pi's lock included, so every reader of those files reads without one
     ├── models.ts           # the registry: the agent's OWN models.json and models-store.json (definition-local,
     │                       # so they travel), layered over the machine's ~/.fastagent/ pair (environment, never
     │                       # shipped); the explicit model-catalog refresh
