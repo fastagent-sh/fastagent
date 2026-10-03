@@ -45,7 +45,8 @@ On a machine, an agent directory has one instance. Its state stays where it is t
 ~/agents/reviewer/                   the working directory
 ├── persona.md  skills/  tools/  …   the definition
 ├── .secrets/                        the instance's credentials
-└── .state/                          the instance's sessions, channel and schedule state, and the clones it made
+└── .state/                          the instance's sessions, channel and schedule state, and the clones it
+                                     made, under each context's name (.state/contexts/<name>)
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
@@ -113,7 +114,8 @@ fastagent context remove <name> [agent]
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it a context the agent
   knows rather than works on.
-- `add` refuses a context that contains the agent directory or sits inside it.
+- `add` refuses a context that contains the agent directory or sits inside it, and asks for `--name` when the
+  default name is already taken.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
 - The command edits only the literal `contexts` array `init` writes. When an author has replaced it with a
   computed value, the command refuses and says why, rather than guessing.
@@ -125,7 +127,7 @@ Startup says what the agent works on and what it knows:
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
 works on  app       ~/code/app (github acme/app, existing checkout)
-knows     handbook  github acme/handbook, cloned into .state/contexts/handbook
+knows     handbook  github acme/handbook@main, fetched into .state/contexts/handbook
 instance  ~/agents/reviewer/.state
 ```
 
@@ -136,6 +138,10 @@ What is said rather than handled quietly:
 | A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/contexts/app`, with the reason |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
+| Two contexts have the same name | Refused, naming both |
+| A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
+| A context was renamed | `fetching acme/app afresh as app2`, since what was fetched is kept under the old name |
+| A changed definition does not load when the instance restarts itself | The instance keeps running the previous one, and the log and the agent's next turn say why |
 | A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
 
 ## 6. `info`
@@ -148,15 +154,18 @@ would be refused without trying one.
 The definition is shipped to the host. Preflight lists what the host gets for each context:
 
 ```text
-works on  app       github acme/app@main          cloned on the host
+works on  app       github acme/app@main          cloned once; the instance's own afterwards
 works on  notes     local ~/notes                 copied once, when the instance is created
-knows     papers    local ~/papers, read-only     copied again on every deployment
+knows     handbook  github acme/handbook@main     fetched again on every deployment
+knows     papers    local ~/papers                copied again on every deployment
 works on  draft     local ~/draft                 refused: not available on a host
           → add `copy: true`, or move it to a GitHub repository and declare it as github
 ```
 
-- **A later deploy leaves existing clones and writable copies as they are,** and says so. They are the instance's
-  own; bringing them up to date is synchronization ([agent model](agent-model.md) §8).
+- **A later deploy leaves what the instance works on as it is, and refreshes what it only knows.** A clone or copy
+  of a context the agent works on is the instance's own, so it is kept, and the deploy says so, also when the
+  declared `ref` has changed; bringing it up to date is synchronization ([agent model](agent-model.md) §3, §8). A
+  context it only knows is fetched again at its declared `ref`.
 - **A `github` context's credential is a host secret.** The runbook lists it with the instance's other secrets.
 
 ## 8. `login` and `add <channel>`
@@ -171,7 +180,7 @@ Unchanged as commands. What they store goes to the local instance (`.secrets/`),
 | `FASTAGENT_AGENT` and a `fastagent`-named tie-break select among several agents | A path selects one |
 | The Dockerfile pins `ENV FASTAGENT_AGENT` | Nothing to pin |
 | `init [dir]` creates `./fastagent/` inside a project, and the project becomes its workspace | `init <dir>` creates the agent in its own directory; `--context` attaches what it works on |
-| An agent lives inside its project | An agent and its contexts never contain one another |
+| An agent lives inside its project | A declared context never contains the agent directory, nor sits inside it |
 | Contexts do not exist | `fastagent context list/add/remove`, with `--readonly` for what the agent only knows |
 | Startup reports the workspace | Startup reports what the agent works on and what it knows |
-| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, refuses a local context without `copy`, and leaves existing clones and copies alone |
+| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, refuses a local context without `copy`, keeps what the instance works on and refreshes what it only knows |
