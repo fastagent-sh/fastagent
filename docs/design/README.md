@@ -31,6 +31,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
+| [agent-model.md](agent-model.md) | **Proposed.** What an agent is, as a program: model + harness + context, the instance that runs it, and the vocabulary later designs build on. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
 | [distribution.md](distribution.md) | Why a workspace has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |
