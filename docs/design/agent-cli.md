@@ -44,7 +44,7 @@ are processes serving the same instance. Its state stays where it is today:
 
 ```text
 ~/agents/reviewer/                   the working directory
-├── persona.md  skills/  tools/  …   the definition
+├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
 └── .state/                          the instance's sessions, channel and schedule state, and the clones it
                                      made, under each context's name (.state/contexts/<name>)
@@ -93,6 +93,12 @@ with `fastagent context add --readonly`.
   refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --context ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
   with the command that creates the agent elsewhere and attaches this directory.
+
+`init` scaffolds `APPEND_SYSTEM.md` for the agent's standing instructions, in place of today's `persona.md`, so a
+new agent keeps pi's default prompt and follows it as pi improves it. An agent that should be someone other than
+pi's coding assistant replaces the default with `SYSTEM.md` instead ([agent model](agent-model.md) §2). An agent
+directory that still has a `persona.md` is refused rather than served with an identity it ignores; the refusal
+names both files and when to use each.
 
 Example output:
 
