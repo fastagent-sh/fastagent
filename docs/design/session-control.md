@@ -440,8 +440,8 @@ cursor is an APPEND-ORDER position, not a descendant filter: in a branched sessi
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
 `{ text, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
-`tool` `{ toolCallId, toolName, isError, text, images? }`. Engine-specific kinds may appear beyond the guaranteed
-minimum and MUST be skippable.
+`tool` `{ toolCallId, toolName, isError, text, images?, terminate? }`. Engine-specific kinds may appear beyond the
+guaranteed minimum and MUST be skippable.
 
 `outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
 did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a
@@ -455,6 +455,16 @@ but each is reported as failed: live as `tool_started` followed by `tool_finishe
 is an attempt the engine abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
 always: the retry can be stopped during its backoff, or the compaction it waits on can fail. A run whose process
 died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
+
+`terminate: true` on a `tool` entry, and on its live `tool_finished`, means the call asked to end its run (pi's
+`terminate`: returned by the tool, or set by a `tool_call` hook that blocks the call; a `tool_result` hook cannot set
+it). When every call answering one assistant entry asks it, the model is not called again for that batch: unless a
+queued steer or follow-up continues the run, it ends there and settles `completed` with no answer after those
+`tool` entries. Live, whether the run ended is `run_settled`'s to say, not the flags'; read back, a run that went on
+shows its next `user` entry after them. The flag is how a client tells a run that ended there from one whose process
+died after its tools ran, which leaves the same entries without it. A batch
+in which only some calls ask goes on as usual, and a call made from inside another tool (`parentToolCallId`) never
+carries the flag, since it is not part of the batch.
 
 The pi reference publishes one with a payload: `context_edit` `{ targetId, omitted }` names an entry the
 model no longer sees as written. `omitted: true` means the target left the model context; `false` means
@@ -525,7 +535,7 @@ The vocabulary, grouped by the client maturity level that needs it:
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished { outcome? }` | Streaming text. Thinking MUST NOT be folded into the answer. |
 | L0 | `user_message { entryId, text, images? }` | A user message entered the conversation: the opening prompt, a steer or follow-up leaving `pending`, or one an extension sent. Reported after it is recorded (`entries()` already holds `entryId` with the same `text` and `images`) and before the answer to it starts, so a client places each prompt from this event instead of inferring it. A command that sends no message produces none. |
-| L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. A call made from inside another tool (a codemode script) carries `parentToolCallId`, the outer call's id. |
+| L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished { terminate? }` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. A call made from inside another tool (a codemode script) carries `parentToolCallId`, the outer call's id. |
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome. Not emittable in-process. |
 | L1 | `queue_changed { steering, followUp }` | The active run's whole queue: the queued prompt texts (§7 `pending`). |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
