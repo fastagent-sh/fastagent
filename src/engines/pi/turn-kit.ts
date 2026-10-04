@@ -1,6 +1,6 @@
 /** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
 import { stripVTControlCharacters } from "node:util";
-import { type AssistantMessage, type ImageContent, contentText } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ImageContent, type ToolResultMessage, contentText } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { AnswerOutcome, PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
@@ -102,6 +102,30 @@ export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefi
     default:
       return undefined;
   }
+}
+
+/**
+ * Whether a finished tool call asked to end its run (pi's `terminate`, set by the tool or a `tool_call` /
+ * `tool_result` hook). pi ends the run after a batch whose EVERY result asks it, without another model call, so the run
+ * completes on `tool` entries with no answer after them: the same shape a process killed after its tools leaves. A
+ * call made from inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count.
+ * The ONE reading: the live `tool_finished` and the flag {@link markEndsRun} records both come from it.
+ */
+export function asksToEndRun(event: { result?: unknown; parentToolCallId?: string }): boolean {
+  return !event.parentToolCallId && (event.result as { terminate?: unknown } | undefined)?.terminate === true;
+}
+
+/**
+ * The tool result message as pi then records it, carrying the request: pi's `createToolResultMessage` drops
+ * `terminate` (as of pi 0.99.2), so without this nothing in the record says the run ended on purpose.
+ */
+export function markEndsRun(message: ToolResultMessage): ToolResultMessage {
+  return { ...message, terminate: true } as ToolResultMessage;
+}
+
+/** Whether a recorded tool result carries {@link markEndsRun}'s flag. */
+export function endsRun(message: ToolResultMessage): boolean {
+  return (message as { terminate?: unknown }).terminate === true;
 }
 
 /**

@@ -36,6 +36,7 @@ import { resolveModel } from "./config.ts";
 import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
 import { registerAccountModels } from "./openai-account-models.ts";
+import { asksToEndRun, markEndsRun } from "./turn-kit.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 
 interface PiSessionDefinition {
@@ -244,7 +245,7 @@ export function definitionResourceLoaderOptions(source: {
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
   return {
-    extensionFactories: [...nativeExtensions, compactAdmission],
+    extensionFactories: [...nativeExtensions, compactAdmission, recordEndsRun],
     // The machine's extensions are its owner's setup, not this agent's.
     noExtensions: true,
     // Explicit paths survive noExtensions, including Pi's built-ins; so they would also survive the machine's own
@@ -276,6 +277,28 @@ export function definitionResourceLoaderOptions(source: {
     promptsOverride: () => ({ prompts: [...source.machine.prompts], diagnostics: [] }),
   };
 }
+
+/**
+ * Records on a tool result that it asked to end its run ({@link asksToEndRun}), so `entries()` can tell a run that
+ * ended on its tool batch from one cut after its tools. Through pi's `message_end` replacement, which runs before pi
+ * appends the message to the record. LAST among the extensions (pi appends inline factories after path ones), so a
+ * definition's own `message_end` replacement cannot drop the flag. One instance per loader, so per session.
+ */
+const recordEndsRun: InlineExtension = {
+  name: "fastagent-record-ends-run",
+  hidden: true,
+  factory: (pi) => {
+    const asked = new Set<string>();
+    pi.on("tool_execution_end", (event) => {
+      if (asksToEndRun(event)) asked.add(event.toolCallId);
+    });
+    pi.on("message_end", (event) => {
+      const message = event.message;
+      if (message.role !== "toolResult" || !asked.delete(message.toolCallId)) return;
+      return { message: markEndsRun(message) };
+    });
+  },
+};
 
 /** Manual compactions waiting for pi's admission, keyed by the session's record (what an extension's `ctx` names). */
 const compactAdmissions = new WeakMap<SessionManager, () => void>();

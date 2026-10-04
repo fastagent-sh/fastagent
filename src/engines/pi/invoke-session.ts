@@ -32,6 +32,7 @@ import {
   inProcessLease,
   agentEventProjection,
   answerOutcome,
+  asksToEndRun,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-kit.ts";
@@ -113,6 +114,7 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
           isError: event.isError,
           content: displayToolResult(event.result),
           ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
+          ...(asksToEndRun(event) ? { terminate: true as const } : {}),
         },
       };
     case "queue_update":

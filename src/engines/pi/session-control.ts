@@ -60,7 +60,7 @@ import {
 } from "../../session.ts";
 import { forkProvenance, isConversationMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
-import { type RunControls, type SessionObserver, type Lease, answerOutcome } from "./turn-kit.ts";
+import { type RunControls, type SessionObserver, type Lease, answerOutcome, endsRun } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { startCompaction } from "./agent-session-factory.ts";
@@ -159,6 +159,8 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
           isError: m.isError ?? false,
           text: contentText(m.content, ""),
           ...entryImages(entry.id, m),
+          // Same flag as the live `tool_finished` (turn-kit.ts asksToEndRun).
+          ...(endsRun(m) ? { terminate: true } : {}),
         },
       };
     }

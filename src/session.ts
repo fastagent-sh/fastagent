@@ -380,9 +380,13 @@ export type ToolProgressEvent = SessionEvent<
 > & {
   runId: string;
 };
+/**
+ * `terminate: true` when the call asked to end its run: once every call answering one assistant message asks it, the
+ * run ends there, with no answer after its `tool` entries (which carry the same flag).
+ */
 export type ToolFinishedEvent = SessionEvent<
   "tool_finished",
-  { id: string; isError: boolean; content: Json; parentToolCallId?: string }
+  { id: string; isError: boolean; content: Json; parentToolCallId?: string; terminate?: true }
 > & {
   runId: string;
 };
