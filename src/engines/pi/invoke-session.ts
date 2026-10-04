@@ -9,6 +9,7 @@ import * as Queue from "effect/Queue";
 import type * as EffectScope from "effect/Scope";
 import {
   ABORTED_CODE,
+  MISSING_MODEL_CODE,
   SESSION_BUSY_CODE,
   type Agent,
   type AgentEvent,
@@ -24,6 +25,7 @@ import { toRetryScheduledEvent } from "./retry-event.ts";
 import type { SessionInheritance } from "./session-inheritance.ts";
 import { PortFailure, port, portAbort, portCleanup, portError } from "../../effect-port.ts";
 import { SessionBusy, acquireSession, acquireSessionLease } from "./session-effects.ts";
+import { MissingModel } from "./session-settings.ts";
 import {
   type Lease,
   type RunControls,
@@ -439,7 +441,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                       retryable: true,
                       code: SESSION_BUSY_CODE,
                     } as const)
-                  : errorToTerminal(error),
+                  : error instanceof MissingModel
+                    ? ({ type: "failed", details: error.message, retryable: false, code: MISSING_MODEL_CODE } as const)
+                    : errorToTerminal(error),
               );
             }),
           );

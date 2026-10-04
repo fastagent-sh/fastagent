@@ -218,7 +218,7 @@ function createPiAgentFromDir(
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
-  modelSpec: string;
+  modelSpec?: string; // the default model; absent when none is set (see below)
   agentDir: string; // where the agent lives
   workspace: string; // the agent's cwd — the agent dir's parent
   stateRoot: string;
@@ -231,6 +231,15 @@ function createPiAgentFromDir(
 ```
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`.
+
+The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
+`createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
+`entries()`, `state()` and `update()` work, and a session that records its model (pi writes it into every session it
+starts, and `update({ model })` sets it) runs on that model. A session with no model of its own fails its invoke with
+`failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }`, before any record is created for it;
+`update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
+registry does not know still fails the open. The CLI's `dev`, `start`, `invoke`, `routine run` and `chat` still
+refuse to start without a default (`missing model`), since every new conversation they took would fail.
 
 ```ts
 interface FastagentConfig {

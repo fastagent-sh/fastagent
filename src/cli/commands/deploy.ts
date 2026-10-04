@@ -6,7 +6,7 @@ import type { DeployHost } from "../../deploy/hosts.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentCommand } from "../shared.ts";
+import { enterAgentDirectory } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
@@ -74,7 +74,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
   // The picker's write-back lands the model in fastagent.config.ts.
-  const placement = await enterAgentCommand(dirArg, opts);
+  const placement = await enterAgentDirectory(dirArg, opts);
   // ONE deploy semantic: bake the WORKSPACE (WYSIWYG).
   const { agentDir, workspace } = placement;
   const { config } = await loadConfig(agentDir).catch(failStartup);

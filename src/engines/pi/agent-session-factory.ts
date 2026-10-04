@@ -48,7 +48,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { resolveModel } from "./config.ts";
-import { activePath, resolveSessionSettings } from "./session-settings.ts";
+import { MissingModel, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
 import { registerAccountModels } from "./openai-account-models.ts";
 import { asksToEndRun, markEndsRun } from "./turn-kit.ts";
@@ -75,8 +75,11 @@ export interface PiAgentSessionFactoryOptions {
   sessions: PiSessionRecordStore;
   /** A fresh model runtime per binding: extension routers and provider registrations belong to this session. */
   engine: () => Promise<{ modelRuntime: ModelRuntime }>;
-  /** Resolved after extensions register their models. */
-  modelSpec: string;
+  /**
+   * The default model, resolved after extensions register their models. Optional: a session that records a model
+   * runs on it, and one that records none is refused with {@link MissingModel} when there is no default either.
+   */
+  modelSpec?: string;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
   /** Read once per binding; prompt and skills come from the same definition read. */
@@ -551,18 +554,25 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       initTheme();
       themeReady = true;
     }
+    // A new record with nothing to inherit records no model. Refused BEFORE it is created, so a turn that cannot run
+    // leaves no empty conversation behind in the listing.
+    if (!options.modelSpec && !inherit && !(await sessions.openIfExists(sessionId))) {
+      throw new MissingModel(sessionId, []);
+    }
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
     const { modelRuntime } = await options.engine();
     const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
-    const model = resolveModel(modelRuntime, options.modelSpec);
+    const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : undefined;
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
-    const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
-      model,
+    const path = activePath(sessionManager);
+    const settings = resolveSessionSettings(path, modelRuntime, {
+      ...(model ? { model } : {}),
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
+    if (!settings) throw new MissingModel(sessionId, path);
     const { session } = await bindPiSession({
       services,
       sessionManager,

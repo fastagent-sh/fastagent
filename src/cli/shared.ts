@@ -11,6 +11,7 @@ import {
   isValidPort,
   listModels,
   loadConfig,
+  missingDefaultModel,
   providerOf,
   resolveModelSpec,
   rewriteConfigModel,
@@ -36,15 +37,43 @@ import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { failStartup, failUsage, placementOrExit } from "./fail.ts";
 
-/** How every command that runs the model enters its agent directory, in the one order that works. */
+/**
+ * How a command enters its agent directory, in the one order that works: placement, the agent's environment, then the
+ * first-run model picker. Returns the default model that then resolves, if any. `deploy` uses this directly: it gates
+ * a missing model itself, by what will ship.
+ */
+export async function enterAgentDirectory(
+  dirArg: string,
+  opts: { model?: string; input?: boolean },
+): Promise<ResolvedPlacement & { modelSpec?: string }> {
+  const placement = placementOrExit(resolve(dirArg));
+  enterAgentEnv(placement.agentDir);
+  const modelSpec = await resolveFirstRunModel(placement, opts);
+  return { ...placement, ...(modelSpec ? { modelSpec } : {}) };
+}
+
+/**
+ * How every command that RUNS the agent on this machine enters it (dev, start, invoke, routine run, chat):
+ * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
+ * every new conversation, so it stops at startup with {@link missingDefaultModel} instead.
+ */
 export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean },
-): Promise<ResolvedPlacement> {
-  const placement = placementOrExit(resolve(dirArg));
-  enterAgentEnv(placement.agentDir);
-  await resolveFirstRunModel(placement, opts);
-  return placement;
+): Promise<ResolvedPlacement & { modelSpec: string }> {
+  return requireDefaultModel(await enterAgentDirectory(dirArg, opts));
+}
+
+/**
+ * The startup half of {@link enterAgentCommand}, for the one command that checks something of its own in between:
+ * `routine run`, whose unknown name or unset secret is the more basic fault and is reported first.
+ */
+export function requireDefaultModel(
+  placement: ResolvedPlacement & { modelSpec?: string },
+): ResolvedPlacement & { modelSpec: string } {
+  const { modelSpec } = placement;
+  if (!modelSpec) failStartup(missingDefaultModel());
+  return { ...placement, modelSpec };
 }
 
 /** The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). */
@@ -145,20 +174,22 @@ export async function reportAuth(models: AgentModels, modelSpec: string): Promis
 async function resolveFirstRunModel(
   { agentDir, workspace }: ResolvedPlacement,
   options: { model?: string; input?: boolean } = {},
-): Promise<void> {
+): Promise<string | undefined> {
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
-  if (resolveModelSpec(options.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
-  if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
-  if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
+  const configured = resolveModelSpec(options.model, config);
+  if (configured) return configured; // already set (flag > FASTAGENT_MODEL > config)
+  if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
+  if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
 
   const environment = agentModels(agentDir, {}, { cwd: workspace });
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
   const models = await environment.runtime().catch(failStartup);
   const chosen = await pickWithCredentials(models, environment.auth.path, agentDir);
-  if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
+  if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(agentDir, configPath, chosen);
+  return chosen;
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */

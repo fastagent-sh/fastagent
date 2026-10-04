@@ -164,16 +164,19 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   const placement = await enterAgentCommand(dirArg, opts);
   const opened = await createPiAgentFromDir(placement.agentDir, {
-    model: opts.model,
+    model: placement.modelSpec,
     serving: true,
   });
   const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
-  await reportAssembly(opened, {
-    afterTools: [
-      ["state", stateRoot],
-      ["sessions", sessionsDir],
-    ],
-  });
+  await reportAssembly(
+    { ...opened, modelSpec: placement.modelSpec },
+    {
+      afterTools: [
+        ["state", stateRoot],
+        ["sessions", sessionsDir],
+      ],
+    },
+  );
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
       "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",

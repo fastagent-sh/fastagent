@@ -261,8 +261,11 @@ export interface PiAssembly {
   modelRuntime: () => Promise<ModelRuntime>;
   /** A fresh runtime for every session, before loading its extensions. */
   createModelRuntime: () => Promise<ModelRuntime>;
-  /** The registry and configured model, resolved on first use (a credential read is async). */
-  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
+  /**
+   * The registry and the default model, resolved on first use (a credential read is async). No model when the
+   * assembly has no default: each session then runs on the model it records (agent-session-factory.ts).
+   */
+  engine: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
   /** The tools every session mounts. */
@@ -277,7 +280,8 @@ export interface PiAssembly {
 
 /** Shared low-level wiring: resolve the model spec against the collection, default the K ports, build the parts. */
 function assemblePi(opts: {
-  model: string;
+  /** The default model spec; see {@link PiAgentSessionFactoryOptions.modelSpec}. */
+  model?: string;
   thinkingLevel?: ThinkingLevel;
   /** The model registry to run on, resolved on first use. */
   models: () => Promise<ModelRuntime>;
@@ -307,9 +311,13 @@ function assemblePi(opts: {
     registry ??= opts.catalog();
     return registry;
   };
-  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
+  let engine: Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }> | undefined;
   const resolveEngine = () => {
-    engine ??= modelRuntime().then((runtime) => ({ modelRuntime: runtime, model: resolveModel(runtime, opts.model) }));
+    const spec = opts.model;
+    engine ??= modelRuntime().then((runtime) => ({
+      modelRuntime: runtime,
+      ...(spec ? { model: resolveModel(runtime, spec) } : {}),
+    }));
     return engine;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
@@ -317,7 +325,7 @@ function assemblePi(opts: {
   const sessionFactory = piAgentSessionFactory({
     sessions,
     engine: async () => ({ modelRuntime: await createModelRuntime() }),
-    modelSpec: opts.model,
+    ...(opts.model ? { modelSpec: opts.model } : {}),
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
     readDefinition: opts.readDefinition,
@@ -404,8 +412,11 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
 
 /** L2 options. */
 export interface CreatePiAgentFromDefinitionOptions {
-  /** Model spec "provider/modelId", resolved against {@link models}. */
-  model: string;
+  /**
+   * The default model spec "provider/modelId", resolved against {@link models}. Optional: without it, a session runs
+   * on the model it records, and one that records none fails its invoke with `missing_model`.
+   */
+  model?: string;
   /** Reasoning effort (pi's scale). */
   thinkingLevel?: ThinkingLevel;
   /**

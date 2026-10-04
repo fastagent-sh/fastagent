@@ -67,6 +67,13 @@ export const SESSION_BUSY_CODE = "session_busy";
 export const ABORTED_CODE = "aborted";
 
 /**
+ * The `failed.code` set when a turn has no model to run on: its session records none of its own, and the agent sets
+ * no default. Not retryable as is: giving the session a model (session control's `update({ model })`) or the agent a
+ * default is what changes the answer.
+ */
+export const MISSING_MODEL_CODE = "missing_model";
+
+/**
  * One turn = one invoke, returning a single async event stream. The stream MUST terminate with exactly one of
  * `completed` / `failed`, or be cancelled by the caller (no terminal event).
  */

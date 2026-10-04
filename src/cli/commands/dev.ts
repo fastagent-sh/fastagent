@@ -47,17 +47,20 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
-async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promise<void> {
+async function serveOnce(placement: ResolvedPlacement & { modelSpec: string }, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
   const a = await createPiAgentFromDir(placement.agentDir, {
-    model: opts.model,
+    model: placement.modelSpec,
     serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
-  await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
+  await reportAssembly(
+    { ...a, modelSpec: placement.modelSpec },
+    { beforeModel: [["config", a.configPath ?? "(none)"]] },
+  );
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
   const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);
