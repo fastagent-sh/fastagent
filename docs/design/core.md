@@ -38,9 +38,10 @@ One agent shape, one marker:
 
 ```txt
 <agent dir>/                # any name — the config below is what makes it an agent
-├── persona.md              # optional identity
+├── SYSTEM.md               # optional: replaces pi's default system prompt
+├── APPEND_SYSTEM.md        # optional: standing instructions added to it
 ├── AGENTS.md               # optional project context
-├── skills/  tools/  channels/  routines/
+├── skills/  prompts/  tools/  channels/  routines/
 ├── fastagent.config.ts     # THE marker
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
@@ -62,7 +63,7 @@ repo/                       # `fastagent dev` here  → agent = repo/agent, work
 ├── AGENTS.md
 ├── src/
 └── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo
-    ├── persona.md  skills/  tools/  channels/  routines/
+    ├── APPEND_SYSTEM.md  skills/  tools/  channels/  routines/
     ├── fastagent.config.ts
     └── .secrets/  .state/
 ```
@@ -79,7 +80,7 @@ on, and every command that re-opens an agent passes its `agentDir`, which resolv
 
 - **The marker is the config, at every position, and it is a declaration rather than configuration.**
   Nothing in an agent directory is logically required to serve a turn, so the marker has to be the one
-  artifact present in every agent and absent from every non-agent. `persona.md`, `skills/`, `tools/`,
+  artifact present in every agent and absent from every non-agent. `SYSTEM.md`, `skills/`, `tools/`,
   `channels/` and `routines/` are each optional and generic enough that scanning for them would read
   half the world's repositories as agents. `export default {}` is a signature — the same job
   `package.json`, `Cargo.toml` and `pyproject.toml` do. A directory holding nothing but a config is a
@@ -123,17 +124,25 @@ agent can each drive the same repository. `FASTAGENT_AGENT` selects between them
 - **`deploy` bakes it.** The container re-resolves placement at `/app`, so the generated Dockerfile
   pins `ENV FASTAGENT_AGENT=<name>`. Otherwise the artifact would depend on the builder's environment.
 
-The pi reference prompt has four segments:
+pi builds the prompt; FastAgent hands it the pieces and adds its own sections:
 
-| Segment | Source |
+| Section | Source |
 |---|---|
-| ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
-| ② project context | `AGENTS.md` files loaded by pi from the agent dir and the workspace ancestor walk |
-| ③ skills listing | pi appends the agent's skills — the definition's and the machine's (§5) — when `read` is active |
-| ④ runtime context | pi appends cwd, without a date line that would invalidate the prefix cache daily |
+| preamble, tools, rules, docs | pi's default, built by pi so it follows pi; `SYSTEM.md` (else `.pi/SYSTEM.md`, else L2's `base`) replaces all four. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
+| addendum | `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`; never the machine's |
+| project context | `AGENTS.md` files loaded from the agent dir and the workspace ancestor walk, handed to pi through `agentsFilesOverride` |
+| skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`) and the machine's (§5) — when `read` is active |
+| cwd | pi appends it, without a date line that would invalidate the prefix cache daily |
+| FastAgent's sections | `deferred_tools` and, on a deployed host, `self_change`, added on `before_agent_start` as named sections, so they hold under a `SYSTEM.md` |
 
-`persona.md` is authored identity; `AGENTS.md` is project context. The definition is re-read for every
-invocation, so persona/context/skill edits take effect on the next turn; code modules are reloaded by
+pi lists a tool only when it has a `promptSnippet`. The coding tools FastAgent mounts are pi's `AgentTool`s, which
+carry none, so FastAgent copies pi's own snippets and guidelines onto them; an authored tool's snippet is the
+first line of its description. pi's default says the agent reads files, runs commands and edits code, so an L2
+`tools` list without the coding tools needs `base` or a `SYSTEM.md`, checked at assembly and every turn.
+
+`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; `AGENTS.md` is project
+context. A `persona.md` is refused, naming both files. The definition is re-read for every invocation, so prompt,
+context and skill edits take effect on the next turn; code modules are reloaded by
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
 process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool,

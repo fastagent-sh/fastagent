@@ -91,7 +91,7 @@ beforeAll(async () => {
   workspace = join(tmpdir(), NAME);
   const agentDir = join(workspace, "fastagent");
   await mkdir(agentDir, { recursive: true });
-  await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   // Every serve mounts the `wake` tool (open.ts), and every stack carries the forwarder, its Function URL and the
   // wake/scheduler IAM — so a plain config is the whole chain.
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);

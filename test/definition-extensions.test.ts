@@ -40,7 +40,7 @@ export default async function (api) {
 
 async function agentDirWith(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-ext-"));
-  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   for (const [rel, content] of Object.entries(files)) {
     const path = join(dir, rel);
     await mkdir(join(path, ".."), { recursive: true });
@@ -330,7 +330,7 @@ describe("definition: chat runs the definition's extensions in full", () => {
     const workspace = await mkdtemp(join(tmpdir(), "fa-chat-ext-"));
     const dir = join(workspace, "fastagent");
     await mkdir(join(dir, "extensions"), { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     await writeFile(join(dir, "extensions", "marker.ts"), markerExtension("chat_extension_marker"));
 
@@ -397,7 +397,7 @@ export default async function (pi) {
     const workspace = await mkdtemp(join(tmpdir(), "fa-chat-live-"));
     const dir = join(workspace, "fastagent");
     await mkdir(join(dir, "extensions"), { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     for (const [rel, content] of Object.entries(files)) await writeFile(join(dir, rel), content);
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
@@ -409,7 +409,7 @@ export default async function (pi) {
     const workspace = await mkdtemp(join(tmpdir(), "fa-chat-live-"));
     const dir = join(workspace, "fastagent");
     await mkdir(join(dir, "extensions"), { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     for (const [rel, content] of Object.entries(files)) await writeFile(join(dir, rel), content);
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
@@ -494,7 +494,7 @@ describe("definition: an extension can define the model chat runs on", () => {
     const workspace = await mkdtemp(join(tmpdir(), "fa-prov-"));
     const dir = join(workspace, "fastagent");
     await mkdir(join(dir, "extensions"), { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "acme-proxy/acme-1" };\n');
     await writeFile(
       join(dir, "extensions", "provider.ts"),
@@ -538,7 +538,7 @@ describe("definition: chat rebuilds extensions when pi replaces the session", ()
     const workspace = await mkdtemp(join(tmpdir(), "fa-newsess-"));
     const dir = join(workspace, "fastagent");
     await mkdir(join(dir, "extensions"), { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     await writeFile(
       join(dir, "extensions", "count.ts"),

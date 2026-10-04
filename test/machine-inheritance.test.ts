@@ -57,7 +57,7 @@ async function skill(dir: string, name: string, description: string): Promise<vo
 /** An agent directory with its own skills. */
 async function definition(skills: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-def-"));
-  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   for (const [name, description] of Object.entries(skills)) await skill(join(dir, "skills", name), name, description);
   return dir;
 }

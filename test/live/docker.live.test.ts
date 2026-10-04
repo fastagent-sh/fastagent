@@ -43,7 +43,7 @@ beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "fa-live-docker-"));
   const agent = join(workspace, "fastagent");
   await mkdir(agent, { recursive: true });
-  await writeFile(join(agent, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(agent, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(
     join(agent, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,

@@ -28,7 +28,7 @@ async function fixture() {
   await mkdir(join(source, ".git"));
   await writeFile(join(source, ".git/HEAD"), "initial history");
   await writeFile(join(source, "project.txt"), "initial code");
-  await writeFile(join(source, "fastagent/persona.md"), "release one");
+  await writeFile(join(source, "fastagent/SYSTEM.md"), "release one");
   await writeFile(join(source, "fastagent/skills/old.md"), "old skill");
   return { dir, source, root };
 }
@@ -113,22 +113,22 @@ describe("deployed workspace lifecycle", () => {
     await writeFile(join(base, "project.txt"), "uncommitted change");
     await writeFile(join(base, "untracked.txt"), "unfinished work");
     await writeFile(join(base, ".git/HEAD"), "new history");
-    await writeFile(join(base, "fastagent/persona.md"), "self improvement");
+    await writeFile(join(base, "fastagent/SYSTEM.md"), "self improvement");
     await symlink("project.txt", join(base, "project-link"));
     for (const dir of [".state", ".secrets"]) await mkdir(join(root, dir));
     await writeFile(join(root, ".state/session.json"), "conversation");
     await writeFile(join(root, ".secrets/auth.json"), "rotated credential");
     await applyDeploymentRelease(source, root, release("one"));
-    expect(await readFile(join(base, "fastagent/persona.md"), "utf8")).toBe("self improvement");
+    expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8")).toBe("self improvement");
     await writeFile(join(source, "project.txt"), "builder change");
-    await writeFile(join(source, "fastagent/persona.md"), "release two");
+    await writeFile(join(source, "fastagent/SYSTEM.md"), "release two");
     await rm(join(source, "fastagent/skills/old.md"));
     await applyDeploymentRelease(source, root, release("two"));
     expect(await readFile(join(base, "project.txt"), "utf8")).toBe("uncommitted change");
     expect(await readFile(join(base, "project-link"), "utf8")).toBe("uncommitted change");
     expect(await readFile(join(base, "untracked.txt"), "utf8")).toBe("unfinished work");
     expect(await readFile(join(base, ".git/HEAD"), "utf8")).toBe("new history");
-    expect(await readFile(join(base, "fastagent/persona.md"), "utf8")).toBe("release two");
+    expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8")).toBe("release two");
     expect(await readdir(join(base, "fastagent/skills"))).toEqual([]);
     expect(await readFile(join(root, ".state/session.json"), "utf8")).toBe("conversation");
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe("rotated credential");
@@ -140,12 +140,12 @@ describe("deployed workspace lifecycle", () => {
       const base = await applyDeploymentRelease(source, root, release("one"));
       const meta = join(root, ".deployment");
       await mkdir(join(meta, "staged"));
-      await writeFile(join(meta, "staged/persona.md"), "complete new definition");
+      await writeFile(join(meta, "staged/SYSTEM.md"), "complete new definition");
       await writeFile(join(meta, "pending.json"), JSON.stringify({ release: release("two"), initial: false }));
       if (point !== "before-switch") await rename(join(base, "fastagent"), join(meta, "previous"));
       if (point === "after-new-move") await rename(join(meta, "staged"), join(base, "fastagent"));
       await applyDeploymentRelease(source, root, release("two"));
-      expect(await readFile(join(base, "fastagent/persona.md"), "utf8"), point).toBe("complete new definition");
+      expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8"), point).toBe("complete new definition");
       expect(await readdir(meta), point).toEqual(["applied.json"]);
     }
   });

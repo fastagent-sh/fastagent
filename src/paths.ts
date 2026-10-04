@@ -40,7 +40,7 @@ export const AGENT_MODEL_CATALOG_FILE = "models-store.json";
 
 export interface ResolvedPlacement {
   /**
-   * The AGENT directory — where the definition (persona.md/skills/tools/channels/routines), the config, and the
+   * The AGENT directory — where the definition (SYSTEM.md/skills/tools/channels/routines), the config, and the
    * machinery dirs (`.secrets/`, `.state/`) live.
    */
   agentDir: string;
@@ -55,7 +55,7 @@ export interface ResolvedPlacement {
  * The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded inside
  * ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
  */
-const LOADED_SURFACE = ["persona.md", "skills", "tools", "channels", "routines"] as const;
+const LOADED_SURFACE = ["SYSTEM.md", "APPEND_SYSTEM.md", "skills", "prompts", "tools", "channels", "routines"] as const;
 
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent

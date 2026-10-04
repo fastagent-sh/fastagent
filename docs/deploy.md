@@ -334,7 +334,7 @@ persistent storage once:
   an unexcluded `.state` or `node_modules` warns. Patterns are root-anchored: use `**/.secrets/**`.
 
 **Git**: when the workspace is a repo, `git` is installed and `.git` ships, so the agent can pull and push;
-credentials go in `.secrets/.env` (e.g. `GH_TOKEN`) and the push policy in `persona.md`. Some host CLIs strip
+credentials go in `.secrets/.env` (e.g. `GH_TOKEN`) and the push policy in `APPEND_SYSTEM.md`. Some host CLIs strip
 `.git` (`railway up` does), so check `git status` on the box after the first deploy. A non-git workspace that needs
 git sets `deploy: { apt: ["git"] }`. Add `.git` to `.dockerignore` for a smaller image.
 

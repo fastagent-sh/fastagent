@@ -21,7 +21,7 @@ import { log } from "../../log.ts";
 type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
 /** pi's own shapes, taken from its loader rather than re-declared. */
 export type MachineSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
-type MachinePrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
+export type MachinePrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
 
 /** The Pi built-in extensions a definition loads, each unless the machine's settings disable it. */
 // Not `mcp`: its server connections live as long as a session, and a served session lives one turn, so every turn
@@ -123,10 +123,20 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
       );
     }
   }
+  // A `/` in a skill's name names the context it comes from (definition.ts), and pi only warns about one. The
+  // machine's own skill spelled that way is left out rather than let collide with a context's.
+  const lent = skills.filter((skill) => {
+    if (!skill.name.includes("/")) return true;
+    log.warn(
+      `[fastagent] machine skill "${skill.name}" (${skill.filePath}) is not loaded: a skill's name may not contain "/", ` +
+        `which names the context a skill comes from`,
+    );
+    return false;
+  });
   const builtinExtensions = packages.extensions
     .filter((resource) => resource.enabled && resource.metadata.source === "builtin")
     .map((resource) => resource.path.slice("builtin:".length));
-  return { skills, prompts, builtinExtensions, settingsManager: () => scopedSettings(settings) };
+  return { skills: lent, prompts, builtinExtensions, settingsManager: () => scopedSettings(settings) };
 }
 
 /** A package's enabled resources; the loader discovers the top-level ones itself. */

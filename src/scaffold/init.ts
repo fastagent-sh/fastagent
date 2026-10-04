@@ -63,8 +63,8 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     content: baseTemplate(`skills/writing-great-skills/${name}`),
   });
   const files: ScaffoldFile[] = [
-    // ① identity.
-    { rel: join(root, "persona.md"), content: baseTemplate("persona.md") },
+    // Standing instructions, added to pi's default prompt (SYSTEM.md would replace it).
+    { rel: join(root, "APPEND_SYSTEM.md"), content: baseTemplate("APPEND_SYSTEM.md") },
     // The example skill: how to author skills well — the core of self-iteration.
     skill("SKILL.md"),
     skill("GLOSSARY.md"),

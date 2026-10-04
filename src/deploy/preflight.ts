@@ -361,7 +361,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(workspace, agentDir, agentPrefix, authPath);
   await checkKeptIgnoreFiles({ workspace, agentDir, agentPrefix, force, paths }, report);
 
-  // Write-back mechanics are fastagent's (the policy is the persona's).
+  // Write-back mechanics are fastagent's (the policy is the agent's prompt's).
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),

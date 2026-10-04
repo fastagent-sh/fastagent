@@ -10,11 +10,18 @@ describe("report", () => {
 
   it("renders skill collisions and diagnostics to stderr", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    reportDefinitionWarnings([{ name: "greet", winnerPath: "/a/SKILL.md", loserPath: "/b/SKILL.md" }], [
-      { type: "warning", code: "invalid_metadata", message: "description is required", path: "/c/SKILL.md" },
-    ] as SkillDiagnostic[]);
+    reportDefinitionWarnings({
+      collisions: [{ name: "greet", winnerPath: "/a/SKILL.md", loserPath: "/b/SKILL.md" }],
+      diagnostics: [
+        { type: "warning", code: "invalid_metadata", message: "description is required", path: "/c/SKILL.md" },
+      ] as SkillDiagnostic[],
+      shadowed: [{ what: "system prompt", winnerPath: "/a/SYSTEM.md", loserPath: "/a/.pi/SYSTEM.md" }],
+      ignored: [{ path: "/a/.pi/extensions", reason: "not loaded: a definition's extensions live in extensions/" }],
+    });
     expect(lines(err)).toMatch(/skill "greet" collision — using \/a\/SKILL.md, ignoring \/b\/SKILL.md/);
     expect(lines(err)).toMatch(/invalid_metadata: description is required \(\/c\/SKILL.md\)/);
+    expect(lines(err)).toMatch(/system prompt is in two places — using \/a\/SYSTEM.md, ignoring \/a\/.pi\/SYSTEM.md/);
+    expect(lines(err)).toMatch(/\/a\/.pi\/extensions is not loaded: a definition's extensions live in extensions\//);
   });
 
   it("the findings memo is per DEFINITION, not per reader: two readers of one dir warn once", () => {
@@ -55,7 +62,7 @@ describe("report", () => {
 
   it("prints nothing when there are no findings", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    reportDefinitionWarnings([], []);
+    reportDefinitionWarnings({ collisions: [], diagnostics: [] });
     reportToolCollisions([]);
     expect(err).not.toHaveBeenCalled();
   });

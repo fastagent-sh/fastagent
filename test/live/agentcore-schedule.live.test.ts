@@ -82,7 +82,7 @@ beforeAll(async () => {
   workspace = join(tmpdir(), NAME);
   const agentDir = join(workspace, "fastagent");
   await mkdir(join(agentDir, "routines"), { recursive: true });
-  await writeFile(join(agentDir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
   // The ONE line that decides this deployment's topology: a schedule puts a forwarder, a Function URL

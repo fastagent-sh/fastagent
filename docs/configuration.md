@@ -6,7 +6,8 @@ status: current
 
 # Configuration
 
-- Agent behavior lives in `persona.md` (identity), `skills/`, `tools/`, and `AGENTS.md` project context.
+- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`), `skills/`, `prompts/`, `tools/`, and
+  `AGENTS.md` project context.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
@@ -184,12 +185,51 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
   takes over again.
 - A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.
 
+## The system prompt
+
+pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
+is), the project context from `AGENTS.md`, the skills, and the working directory. Two files in the agent directory
+change it, both re-read every turn:
+
+| File | Effect |
+|---|---|
+| `SYSTEM.md` | Replaces pi's default: identity, tool list, rules and documentation pointers. Write it when the agent should be someone other than pi's coding assistant. The model still receives every tool's schema |
+| `APPEND_SYSTEM.md` | Added after the prompt, whichever it is. Standing instructions, goals, an approval policy. `init` scaffolds it |
+
+pi's default says the agent is "an expert coding assistant", so an identity ("You are…") written into
+`APPEND_SYSTEM.md` gives the model two; put it in `SYSTEM.md` instead. A `persona.md` is refused: its text belongs
+in one of the two.
+
+FastAgent adds its own sections after these, whichever wrote the prompt: a note about tools that are registered but
+not loaded yet, and on a deployed host how long its storage lasts and how the agent changes itself.
+
+The machine's `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are never read: a system prompt from someone's machine
+would make the agent theirs.
+
+An embedder that replaces the coding tools (`createPiAgentFromDefinition(dir, { tools })` without `read`, `bash`,
+`edit` and `write`) must give the agent a prompt that matches, through `base` or a `SYSTEM.md`: pi's default claims
+those tools, so the assembly is refused without one, and so is any turn after `SYSTEM.md` is deleted.
+
+## Where the definition's files are read
+
+Each resource has a FastAgent spelling at the agent directory's root, and pi's spelling in `.pi/` is read too,
+below it. A name found twice in the definition takes the first and is reported, never silently:
+
+| Resource | Read in this order |
+|---|---|
+| System prompt | `SYSTEM.md`, `.pi/SYSTEM.md`; `APPEND_SYSTEM.md`, `.pi/APPEND_SYSTEM.md` |
+| Skills | `skills/`, `.pi/skills/`, `.agents/skills/`, then the machine's (below) |
+| Prompt templates | `prompts/`, `.pi/prompts/`, then the machine's (below) |
+| Extensions | `extensions/` only; a `.pi/extensions/` is reported as not loaded |
+
+A skill's name may not contain `/`: it is refused in the definition and left out of the machine's.
+
 ## What the machine lends the agent
 
-**Skills** and **prompt templates** load from the definition's `skills/` and from this machine, through pi's
+**Skills** and **prompt templates** also load from this machine, through pi's
 [Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, project
-`.pi/skills/` and `.agents/skills/`). A name in the definition wins a collision; `fastagent add skill <name>`
-vendors one into `skills/`.
+`.pi/skills/` and `.agents/skills/` around the working directory). A name in the definition wins over the machine's
+silently: `fastagent add skill <name>` vendors one into `skills/` for exactly that.
 
 Skills and prompts from installed pi **packages** load too. A listed package that is not installed is skipped with
 a warning; fastagent never installs one. The machine is read once, at startup.
@@ -199,7 +239,7 @@ A deployed image has only what its build put in it. The machine's extensions and
 **Prompt templates on a served agent can be fired by anyone talking to it.** A template is invoked by a bare
 `/<name>` in the prompt text, and on a channel or `POST /invoke` that text comes from other people. A template whose
 name matches a platform command (`prompts/start.md` against Telegram's `/start`) rewrites that message. Keep the
-machine's `prompts/` for `chat`, or put a template that belongs to the agent in its definition.
+machine's `prompts/` for `chat`, or put a template that belongs to the agent in its definition's `prompts/`.
 
 ## Engine settings: `~/.pi/agent/settings.json`
 
@@ -222,7 +262,8 @@ wins) once at startup. The project file is inside the workspace, so it ships wit
 
 ### The prompt lives in the session record
 
-pi records the system prompt as the transcript's first message; an edit to `persona.md` or `AGENTS.md` is appended
+pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or
+`AGENTS.md` is appended
 as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
 others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
 
@@ -400,7 +441,7 @@ FASTAGENT_AGENT=reviewer fastagent dev .
 FASTAGENT_AGENT=releaser fastagent deploy fly .
 ```
 
-Each has its own config, persona, skills, tools, channels, routines, `.state/`, and `.secrets/`. With one agent,
+Each has its own config, prompt, skills, tools, channels, routines, `.state/`, and `.secrets/`. With one agent,
 selection is automatic; with several, the one named `fastagent` answers unless `FASTAGENT_AGENT` (shell or
 `.envrc`) names another.
 

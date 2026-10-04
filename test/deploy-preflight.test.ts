@@ -14,7 +14,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
   const dir = join(host, "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
-  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");

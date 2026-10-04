@@ -149,7 +149,7 @@ describe("scaffold feishu-send: the tool itself", () => {
     const workspace = join(fx.cwd, "workspace");
     await mkdir(definitionDir);
     await mkdir(workspace);
-    await writeFile(join(definitionDir, "persona.md"), "Send scheduled updates.\n");
+    await writeFile(join(definitionDir, "SYSTEM.md"), "Send scheduled updates.\n");
     fx.credentials();
     const calls = stubOpenApi();
     const { faux } = makeFaux();

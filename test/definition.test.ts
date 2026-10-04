@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { type Context, FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -17,13 +17,7 @@ import {
   type AgentEvent,
   z,
 } from "../src/index.ts";
-import {
-  CODING_TOOL_NAMES,
-  assemblePiFromDefinition,
-  assembleSystemPrompt,
-  piAllCodingTools,
-  piBasePrompt,
-} from "../src/engines/pi/create.ts";
+import { CODING_TOOL_NAMES, assemblePiFromDefinition, piAllCodingTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/paths.ts";
@@ -63,17 +57,95 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.skills).toEqual([]);
   });
 
-  it("loads persona.md into persona (segment ①); absent → undefined; AGENTS.md stays the ② field", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-persona-"));
+  it("reads SYSTEM.md and APPEND_SYSTEM.md, root spelling over .pi/, and reports the shadowed one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-system-"));
     await writeFile(join(dir, "AGENTS.md"), "# Repo spec\nProject rules here.\n");
     let def = await loadAgentDefinition(dir);
-    expect(def.persona).toBeUndefined(); // no persona.md → segment ① falls back to engine identity
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md → ② context, not persona
+    expect(def.systemPrompt).toBeUndefined(); // pi builds its default
+    expect(def.appendSystemPrompt).toBeUndefined();
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md stays context
 
-    await writeFile(join(dir, "persona.md"), "You are the Repo Bot. Reply briefly.\n");
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "SYSTEM.md"), "pi's spelling\n");
+    await writeFile(join(dir, ".pi", "APPEND_SYSTEM.md"), "pi's addendum\n");
     def = await loadAgentDefinition(dir);
-    expect(def.persona).toContain("Repo Bot"); // persona.md → persona (①)
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md unchanged, still ②
+    expect(def.systemPrompt).toEqual({ path: join(dir, ".pi", "SYSTEM.md"), content: "pi's spelling\n" });
+    expect(def.appendSystemPrompt?.content).toBe("pi's addendum\n");
+    expect(def.shadowed).toEqual([]);
+
+    await writeFile(join(dir, "SYSTEM.md"), "You are the Repo Bot.\n");
+    def = await loadAgentDefinition(dir);
+    expect(def.systemPrompt?.path).toBe(join(dir, "SYSTEM.md"));
+    expect(def.shadowed).toEqual([
+      { what: "system prompt", winnerPath: join(dir, "SYSTEM.md"), loserPath: join(dir, ".pi", "SYSTEM.md") },
+    ]);
+  });
+
+  it("refuses a persona.md, naming both files that replaced it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-persona-"));
+    await writeFile(join(dir, "persona.md"), "You are the Repo Bot.\n");
+    await expect(loadAgentDefinition(dir)).rejects.toThrow(
+      /persona\.md is no longer read.*SYSTEM\.md.*APPEND_SYSTEM\.md/,
+    );
+  });
+
+  it("reads skills from skills/, .pi/skills/, .agents/skills/ in that order, reporting a name held twice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-skill-dirs-"));
+    const skill = async (root: string, name: string, description: string) => {
+      await mkdir(join(dir, root, name), { recursive: true });
+      await writeFile(
+        join(dir, root, name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`,
+      );
+    };
+    await skill("skills", "deploy", "root");
+    await skill(".pi/skills", "deploy", "pi");
+    await skill(".agents/skills", "review", "standard");
+    const def = await loadAgentDefinition(dir);
+    expect(def.skills.map((s) => [s.name, s.description])).toEqual([
+      ["deploy", "root"],
+      ["review", "standard"],
+    ]);
+    expect(def.collisions).toEqual([
+      {
+        name: "deploy",
+        winnerPath: join(dir, "skills", "deploy", "SKILL.md"),
+        loserPath: join(dir, ".pi", "skills", "deploy", "SKILL.md"),
+      },
+    ]);
+  });
+
+  it("refuses a skill whose name holds a slash: the slash names a context's skills", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-skill-slash-"));
+    await mkdir(join(dir, "skills", "deploy"), { recursive: true });
+    await writeFile(join(dir, "skills", "deploy", "SKILL.md"), "---\nname: app/deploy\ndescription: d\n---\nbody\n");
+    await expect(loadAgentDefinition(dir)).rejects.toThrow(/skill "app\/deploy".*may not contain "\/"/);
+  });
+
+  it("reads prompt templates from prompts/ then .pi/prompts/, and reports .pi/extensions/ as not loaded", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-prompts-"));
+    await mkdir(join(dir, "prompts"), { recursive: true });
+    await mkdir(join(dir, ".pi", "prompts"), { recursive: true });
+    await mkdir(join(dir, ".pi", "extensions"), { recursive: true });
+    await writeFile(join(dir, "prompts", "review.md"), "---\ndescription: root review\n---\nReview $1\n");
+    await writeFile(join(dir, ".pi", "prompts", "review.md"), "pi review\n");
+    await writeFile(join(dir, ".pi", "prompts", "ship.md"), "Ship it\n");
+    const def = await loadAgentDefinition(dir);
+    expect(def.prompts.map((p) => [p.name, p.filePath])).toEqual([
+      ["review", join(dir, "prompts", "review.md")],
+      ["ship", join(dir, ".pi", "prompts", "ship.md")],
+    ]);
+    expect(def.prompts[0]?.description).toBe("root review");
+    expect(def.shadowed).toEqual([
+      {
+        what: 'prompt template "review"',
+        winnerPath: join(dir, "prompts", "review.md"),
+        loserPath: join(dir, ".pi", "prompts", "review.md"),
+      },
+    ]);
+    expect(def.ignored).toEqual([
+      { path: join(dir, ".pi", "extensions"), reason: "not loaded: a definition's extensions live in extensions/" },
+    ]);
   });
 
   it("skips a skill whose SKILL.md has no description and surfaces it as a diagnostic (not a crash)", async () => {
@@ -85,16 +157,16 @@ describe("definition: loadAgentDefinition", () => {
     expect(JSON.stringify(def.diagnostics)).toMatch(/description/); // and surfaced, not silently dropped
   });
 
-  it("agentDir ≠ cwd: persona from agentDir, ② context walked from cwd (the host repo's AGENTS.md) + agentDir's own", async () => {
+  it("agentDir ≠ cwd: the prompt from agentDir, context walked from cwd (the host repo's AGENTS.md) + agentDir's own", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-repo-"));
     await writeFile(join(root, "AGENTS.md"), "# Host repo spec\n"); // the repo's context, at cwd
     const agentDir = join(root, "agent");
     await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "persona.md"), "You are the Repo Bot.\n"); // ① identity, in agentDir
-    await writeFile(join(agentDir, "AGENTS.md"), "# Agent own note\n"); // agentDir's own ② too
+    await writeFile(join(agentDir, "SYSTEM.md"), "You are the Repo Bot.\n"); // the prompt, in agentDir
+    await writeFile(join(agentDir, "AGENTS.md"), "# Agent own note\n"); // agentDir's own context too
 
     const def = await loadAgentDefinition(agentDir, { cwd: root });
-    expect(def.persona).toContain("Repo Bot"); // ① from agentDir
+    expect(def.systemPrompt?.content).toContain("Repo Bot"); // from agentDir
     expect(def.dir).toBe(agentDir);
     const paths = def.contextFiles.map((f) => f.path);
     expect(paths).toContain(join(agentDir, "AGENTS.md")); // agentDir's own
@@ -104,12 +176,12 @@ describe("definition: loadAgentDefinition", () => {
 
   // Note: AGENTS.md read errors no longer throw — ② context is sourced via pi's loadProjectContextFiles,
   // which warns and continues on an unreadable file (a deliberate deviation from fastagent's fail-visibly,
-  // deferred with the ExecutionEnv/sandbox work; core.md §5). persona.md (below) still fails visibly.
+  // deferred with the ExecutionEnv/sandbox work; core.md §5). SYSTEM.md (below) still fails visibly.
 
-  it("persona.md read errors other than not_found throw instead of silently dropping the persona", async () => {
+  it("SYSTEM.md read errors other than not_found throw instead of silently falling back to pi's default", async () => {
     class DeniedEnv extends NodeExecutionEnv {
       override async readTextFile(path: string, context: Context) {
-        if (path.endsWith("persona.md")) {
+        if (path.endsWith("SYSTEM.md")) {
           return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
         }
         return super.readTextFile(path, context);
@@ -117,7 +189,7 @@ describe("definition: loadAgentDefinition", () => {
     }
     const env = new DeniedEnv({ cwd: fixtureDir });
     await expect(loadAgentDefinition(fixtureDir, { env })).rejects.toThrow(
-      /cannot read .*persona\.md.*permission denied/,
+      /cannot read .*SYSTEM\.md.*permission denied/,
     );
   });
 
@@ -165,54 +237,102 @@ describe("definition: loadAgentDefinition", () => {
   });
 });
 
-describe("create: assembleSystemPrompt (identity and project context)", () => {
-  it("assembles only the segments owned by fastagent", async () => {
-    const def = await loadAgentDefinition(fixtureDir);
-    const prompt = assembleSystemPrompt({
-      base: piBasePrompt(), // required: base and toolset must agree, no silent default
-      contextFiles: def.contextFiles,
+describe("create: the prompt pi builds from the definition", () => {
+  async function promptOf(dir: string, options: Partial<CreatePiAgentFromDefinitionOptions> = {}): Promise<string> {
+    const { faux } = makeFaux();
+    let seen = "";
+    faux.setResponses([
+      (context) => {
+        seen = sentPrompt(context);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      providers: [faux.provider],
+      model: "faux/faux-1",
+      ...options,
     });
-    // (1) base (inherited from the pi engine)
-    expect(prompt).toContain("operating inside pi");
-    // (2) instructions injected wrapped (not pasted bare)
-    expect(prompt).toContain("<project_instructions");
-    expect(prompt).toContain("Haiku Bot");
-    expect(prompt).not.toContain("<available_skills>");
-    expect(prompt).not.toContain("<cwd>");
-    expect(prompt.indexOf("operating inside pi")).toBeLessThan(prompt.indexOf("<project_instructions"));
+    await collect(agent.invoke({ session: "p" }, { text: "hi" }));
+    return seen;
+  }
+  const lookup = defineTool({
+    name: "lookup",
+    description: "Look up an order by id.\nLonger notes the list does not need.",
+    input: z.object({ id: z.string() }),
+    execute: async () => "found",
   });
 
-  it("base can be overridden; empty instructions/skills blocks are omitted", () => {
-    const prompt = assembleSystemPrompt({ base: "CUSTOM BASE" });
-    expect(prompt).toContain("CUSTOM BASE");
-    expect(prompt).not.toContain("operating inside pi"); // after override the engine base is gone
-    expect(prompt).not.toContain("<project_instructions");
-    expect(prompt).not.toContain("<available_skills>");
+  it("without SYSTEM.md is pi's own default: its identity, each tool by pi's line, its rules", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-default-prompt-"));
+    const prompt = await promptOf(dir, { tools: [...piAllCodingTools(dir), lookup] });
+    expect(prompt).toContain("You are an expert coding assistant operating inside pi");
+    for (const name of CODING_TOOL_NAMES) expect(prompt).toContain(`- ${name}:`);
+    // An authored tool is listed by the first line of its description, like pi lists its own.
+    expect(prompt).toContain("- lookup: Look up an order by id.");
+    expect(prompt).not.toContain("Longer notes");
+    expect(prompt).toContain("Use read to examine files instead of cat or sed."); // pi's guideline for its read tool
+    expect(prompt).toContain("Pi documentation");
   });
 
-  it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piAllCodingTools(process.cwd()) });
-    expect(withTools).toContain("- read:");
-    expect(withTools).toContain("- bash:");
-    expect(piBasePrompt()).toContain("(none)");
-  });
-
-  it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
-    const tools = piAllCodingTools(process.cwd());
-    const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
-    expect(persona).toContain("You are the Repo Bot.");
-    expect(persona).not.toContain("operating inside pi"); // default identity replaced
-    expect(persona).toContain("- read:"); // tools list kept
-    expect(persona).toContain("Be concise"); // guidelines kept
-    expect(piBasePrompt({ tools, persona: "   " })).toContain("operating inside pi"); // blank persona → default
-
-    // In a full assembly the persona is ① and AGENTS.md remains ② <project_instructions>.
-    const prompt = assembleSystemPrompt({
-      base: persona,
-      contextFiles: [{ path: "/x/AGENTS.md", content: "PROJECT CONTEXT LINE" }],
-    });
-    expect(prompt.indexOf("Repo Bot")).toBeLessThan(prompt.indexOf("<project_instructions"));
+  it("SYSTEM.md replaces pi's default, APPEND_SYSTEM.md follows it, AGENTS.md stays project context", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-system-prompt-"));
+    await writeFile(join(dir, "SYSTEM.md"), "You are the Repo Bot.");
+    await writeFile(join(dir, "APPEND_SYSTEM.md"), "Always cite the file you read.");
+    await writeFile(join(dir, "AGENTS.md"), "PROJECT CONTEXT LINE");
+    const prompt = await promptOf(dir);
+    expect(prompt.startsWith("You are the Repo Bot.")).toBe(true);
+    expect(prompt).not.toContain("operating inside pi");
+    expect(prompt).toContain("<addendum>\nAlways cite the file you read.\n</addendum>");
     expect(prompt).toContain("PROJECT CONTEXT LINE");
+    expect(prompt.indexOf("<addendum>")).toBeLessThan(prompt.indexOf("<project_context>"));
+  });
+
+  it("never takes the machine's SYSTEM.md or APPEND_SYSTEM.md: a prompt from a machine would make the agent its owner's", async () => {
+    const machine = await mkdtemp(join(tmpdir(), "fa-machine-prompt-"));
+    await writeFile(join(machine, "SYSTEM.md"), "MACHINE IDENTITY");
+    await writeFile(join(machine, "APPEND_SYSTEM.md"), "MACHINE ADDENDUM");
+    vi.stubEnv("PI_CODING_AGENT_DIR", machine);
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "fa-no-machine-prompt-"));
+      const prompt = await promptOf(dir);
+      expect(prompt).toContain("operating inside pi");
+      expect(prompt).not.toContain("MACHINE IDENTITY");
+      expect(prompt).not.toContain("MACHINE ADDENDUM");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("FastAgent's own sections hold under a SYSTEM.md that replaced pi's default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-sections-"));
+    await writeFile(join(dir, "SYSTEM.md"), "You are the Repo Bot.");
+    const deferred = defineTool({
+      name: "rare",
+      description: "Rarely needed.",
+      input: z.object({}),
+      exposure: "deferred",
+      execute: async () => "ok",
+    });
+    const prompt = await promptOf(dir, { tools: [...piAllCodingTools(dir), deferred] });
+    expect(prompt).toMatch(/<deferred_tools>\n1 additional tool\(s\) are registered but not loaded/);
+  });
+
+  it("refuses pi's default over replaced coding tools, at assembly and on the turn SYSTEM.md disappears", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-replaced-tools-"));
+    const options = { providers: [makeFaux().faux.provider], model: "faux/faux-1", tools: [lookup] };
+    await expect(createPiAgentFromDefinition(dir, options)).rejects.toThrow(
+      /coding tools were replaced \(read, bash, edit, write not mounted\).*pass `base` or write SYSTEM\.md/,
+    );
+    await expect(createPiAgentFromDefinition(dir, { ...options, base: "You look up orders." })).resolves.toBeDefined();
+
+    await writeFile(join(dir, "SYSTEM.md"), "You look up orders.");
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("ok")]);
+    const { agent } = await createPiAgentFromDefinition(dir, { ...options, providers: [faux.provider] });
+    await rm(join(dir, "SYSTEM.md"));
+    await expect(collect(agent.invoke({ session: "gone" }, { text: "hi" }))).rejects.toThrow(
+      /coding tools were replaced/,
+    );
   });
 });
 
@@ -462,10 +582,10 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     expect(seen[1]).toContain("late-skill"); // the listing comes from the SAME re-read as the prompt
   });
 
-  it("a persona.md edit between two invokes reaches the next turn's segment ① — no restart", async () => {
-    // Persona must come from the per-turn definition read rather than a boot-time snapshot.
-    const dir = await mkdtemp(join(tmpdir(), "fa-live-persona-"));
-    await writeFile(join(dir, "persona.md"), "You are DRAFT-BOT.\n");
+  it("a SYSTEM.md edit between two invokes reaches the next turn's prompt — no restart", async () => {
+    // The prompt must come from the per-turn definition read rather than a boot-time snapshot.
+    const dir = await mkdtemp(join(tmpdir(), "fa-live-system-"));
+    await writeFile(join(dir, "SYSTEM.md"), "You are DRAFT-BOT.\n");
     const seen: (string | undefined)[] = [];
     const { faux } = makeFaux();
     faux.setResponses([
@@ -481,11 +601,11 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
 
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    await writeFile(join(dir, "persona.md"), "You are FINAL-BOT.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are FINAL-BOT.\n");
     await collect(agent.invoke({ session: "s" }, { text: "again" }));
 
     expect(seen[0]).toContain("DRAFT-BOT");
-    expect(seen[0]).not.toContain("operating inside pi"); // persona overrides the default engine identity
+    expect(seen[0]).not.toContain("operating inside pi"); // SYSTEM.md replaces pi's default prompt
     expect(seen[1]).toContain("FINAL-BOT");
     expect(seen[1]).not.toContain("DRAFT-BOT"); // live re-read, not the boot-time closure value
   });
@@ -524,7 +644,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     class FlakyEnv extends NodeExecutionEnv {
       deny = false;
       override async readTextFile(path: string, context: Context) {
-        if (this.deny && path.endsWith("persona.md")) {
+        if (this.deny && path.endsWith("SYSTEM.md")) {
           return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
         }
         return super.readTextFile(path, context);
@@ -536,7 +656,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1", env });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
-    env.deny = true; // the live re-read now throws (unreadable persona.md)
+    env.deny = true; // the live re-read now throws (unreadable SYSTEM.md)
     const events: string[] = [];
     let details = "";
     for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
@@ -544,7 +664,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
       if (e.type === "failed") details = e.details;
     }
     expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
-    expect(details).toMatch(/persona\.md/);
+    expect(details).toMatch(/SYSTEM\.md/);
 
     env.deny = false; // the next good edit heals it — same agent, no restart
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
@@ -573,7 +693,7 @@ describe("create L2: an explicit tools list states its own coding capabilities",
     // all" — so an L2 caller who passed a reader got the capability-neutral identity AND a warning
     // that their model-visible skills had no way to read themselves.
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-caps-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await mkdir(join(dir, "skills", "triage"), { recursive: true });
     await writeFile(
       join(dir, "skills", "triage", "SKILL.md"),
@@ -605,7 +725,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
     await writeFile(join(workspace, "AGENTS.md"), "# Workspace context\n\nThe marker is FROM-WORKSPACE.\n");
     await writeFile(join(workspace, "marker.txt"), "READ-FROM-WORKSPACE\n");
-    await writeFile(join(definitionDir, "persona.md"), "You are terse.\n");
+    await writeFile(join(definitionDir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(definitionDir, "marker.txt"), "READ-FROM-DEFINITION-DIR\n");
 
     const { faux } = makeFaux();
@@ -650,7 +770,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
 describe("create L2: explicit tools replace the coding defaults", () => {
   it("keeps omitted built-ins inactive — the model is never offered one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     const { faux } = makeFaux();
     const { assembly } = await assemblePiFromDefinition(dir, {
       model: "faux/faux-1",
@@ -671,12 +791,11 @@ describe("create L2: explicit tools replace the coding defaults", () => {
     expect(session.getActiveToolNames()).toEqual(["read"]);
   });
 
-  it("does not claim a coding surface it did not mount", async () => {
-    // Reporting a capability set derived from "was `tools` passed?" rather than from the tools told
-    // the model it could execute commands and edit files while none of that was mounted. It has no
-    // way to find out except by trying.
+  it("does not claim a coding surface it did not mount: the caller's `base` is the prompt", async () => {
+    // pi's default says the agent executes commands and edits files, which is false with only read and grep mounted.
+    // The model has no way to find that out except by trying, so the caller states the prompt (`base`), and without
+    // one the assembly is refused (the prompt test above).
     const dir = await mkdtemp(join(tmpdir(), "fa-identity-"));
-    await writeFile(join(dir, "persona.md"), "");
     const { faux } = makeFaux();
     let prompt = "";
     faux.setResponses([
@@ -689,13 +808,11 @@ describe("create L2: explicit tools replace the coding defaults", () => {
       model: "faux/faux-1",
       providers: [faux.provider],
       tools: piAllCodingTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
+      base: "You read and search files.",
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
-    expect(prompt).toContain("- read:");
-    expect(prompt).toContain("- grep:");
-    expect(prompt).not.toContain("- bash:");
-    // ...and the identity is the capability-neutral one, not pi's "executing commands, editing code".
+    expect(prompt.startsWith("You read and search files.")).toBe(true);
     expect(prompt).not.toContain("executing commands");
   });
 });
@@ -705,7 +822,7 @@ describe("skills/: a plain note is not a broken skill", () => {
     // Our own scaffold ships one (writing-great-skills/GLOSSARY.md). Before pi 0.84.3 every such file
     // produced an `invalid_metadata` diagnostic on every start — a warning the author could not act on.
     const dir = await mkdtemp(join(tmpdir(), "fa-skills-note-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await mkdir(join(dir, "skills", "demo"), { recursive: true });
     await writeFile(
       join(dir, "skills", "demo", "SKILL.md"),

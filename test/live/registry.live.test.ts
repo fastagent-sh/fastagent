@@ -36,7 +36,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     // --no-install: the scaffold's own npm install would re-fetch the same package for nothing.
     await run(cli, ["init", "demo", "--no-install"], { cwd: dir });
     const agent = join(dir, "demo", "fastagent");
-    for (const file of ["persona.md", "package.json", "tools/fetch-url.ts"]) {
+    for (const file of ["APPEND_SYSTEM.md", "package.json", "tools/fetch-url.ts"]) {
       expect(await exists(join(agent, file)), `init did not produce ${file}`).toBe(true);
     }
     // The config's EXTENSION belongs to the probed version (0.21.1 wrote .mjs, later ones .ts) — this probe is about
@@ -48,7 +48,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     ).toBe(true);
     // The skill is a DIRECTORY in the payload — the shape most likely to be lost by a copy step.
     expect(await exists(join(agent, "skills", "writing-great-skills", "SKILL.md"))).toBe(true);
-    expect(await readFile(join(agent, "persona.md"), "utf8")).not.toBe("");
+    expect(await readFile(join(agent, "APPEND_SYSTEM.md"), "utf8")).not.toBe("");
 
     // Channel bundles are copied by the same postbuild step, from a different source root
     // (src/channels/<kind>/scaffold). `add <kind>` for slack/feishu/lark talks to the platform, so

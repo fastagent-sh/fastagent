@@ -5,16 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineTool, z } from "../src/index.ts";
+import { collect, defineTool, z } from "../src/index.ts";
 import { loadTools } from "../src/engines/pi/tool.ts";
 import {
   CODING_TOOL_NAMES,
   createPiAgentFromDefinition,
-  piBasePrompt,
+  fastagentPromptSections,
+  piAllCodingTools,
   resolveAgentTools,
 } from "../src/engines/pi/create.ts";
 import { log } from "../src/log.ts";
-import { makeFaux } from "./faux.ts";
+import { makeFaux, sentPrompt } from "./faux.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -240,7 +241,21 @@ describe("loadTools (filesystem discovery)", () => {
       { name: "invisible", reach: "hidden" },
       { name: "inactive", reach: "inactive" },
     ]);
-    const prompt = piBasePrompt({ tools: surface });
+    // What pi's default prompt lists, through the real assembly: the active tools, each by its line.
+    const { faux } = makeFaux();
+    let prompt = "";
+    faux.setResponses([
+      (context) => {
+        prompt = sentPrompt(context);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(agentDir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: [...piAllCodingTools(agentDir), ...surface],
+    });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(prompt).toContain("- direct:");
     expect(prompt).toContain("- modelOnly:");
     expect(prompt).not.toContain("- scriptOnly:");
@@ -270,7 +285,9 @@ describe("loadTools (filesystem discovery)", () => {
       { name: "lookup", reach: "unreachable" },
       { name: "scripted", reach: "codemode" },
     ]);
-    expect(piBasePrompt({ tools: [lookup], builtinExtensions: ["codemode"] })).not.toContain("tool_search");
+    expect(
+      fastagentPromptSections({ tools: [lookup], builtinExtensions: ["codemode"] }).deferred_tools,
+    ).toBeUndefined();
 
     const { faux } = makeFaux();
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
@@ -280,6 +297,7 @@ describe("loadTools (filesystem discovery)", () => {
         model: "faux/faux-1",
         cwd: workspace,
         tools: [lookup, scripted],
+        base: "You look up business records.",
       });
       const said = warn.mock.calls.flat().join("\n");
       expect(said).toContain('tool "lookup" (exposure: deferred) cannot be reached');

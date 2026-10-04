@@ -71,8 +71,7 @@ async function sessionFactory(
     // THE PRODUCT'S posture, called rather than transcribed: a hand-copied one stops matching the moment the
     // real one changes, and silently keeps passing. The empty machine comes from `test/setup.ts`'s empty HOME.
     resourceLoaderOptions: definitionResourceLoaderOptions({
-      systemPrompt: () => "test",
-      skills: () => [],
+      definition: { systemPrompt: "test", skills: [] },
       machine: await readMachine(cwd),
     }),
   });

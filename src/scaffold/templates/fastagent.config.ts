@@ -1,5 +1,5 @@
 // fastagent.config.ts — deployment choices only (model / http; code tools auto-discover from tools/).
-// Your agent's identity lives in persona.md; its capabilities in skills/ + tools/ — never here.
+// Your agent's prompt lives in SYSTEM.md / APPEND_SYSTEM.md; its capabilities in skills/ + tools/ — never here.
 // An AGENTS.md in the WORKSPACE (the directory the agent is started in) is read as project context.
 // Model precedence: `--model` flag > FASTAGENT_MODEL env > this default.
 // No model is preset: `fastagent dev` shows the full model catalog (models you already have

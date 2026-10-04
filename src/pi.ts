@@ -27,7 +27,14 @@ export {
   refreshMachineModelCatalog,
   refreshModelCatalog,
 } from "./engines/pi/open.ts";
-export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
+export type {
+  DefinitionDiagnostic,
+  DefinitionFile,
+  DefinitionPrompt,
+  DefinitionShadow,
+  LoadedDefinition,
+  SkillCollision,
+} from "./engines/pi/definition.ts";
 
 export {
   defineConfig,

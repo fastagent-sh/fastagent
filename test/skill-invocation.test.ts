@@ -34,7 +34,7 @@ const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather
 /** An agent over one real skill file, the path to that file, and the user text each turn sent to the model. */
 async function agentWithSkill(): Promise<{ agent: Agent; skillPath: string; sent: () => string }> {
   const dir = await mkdtemp(join(tmpdir(), "fa-skill-invoke-"));
-  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await mkdir(join(dir, "skills", "weather"), { recursive: true });
   const skillPath = join(dir, "skills", "weather", "SKILL.md");
   await writeFile(skillPath, SKILL("Call the METAR endpoint."));

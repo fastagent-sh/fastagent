@@ -29,7 +29,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const config = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
     for (const file of [
       "tsconfig.json",
-      "persona.md",
+      "APPEND_SYSTEM.md",
       "skills/review-batches/SKILL.md",
       "lib/batches.ts",
       "tools/plan-batches.ts",
@@ -62,7 +62,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     expect(info).toMatchObject({
       workspace,
       agentDir,
-      persona: true,
+      appendSystemPrompt: join(agentDir, "APPEND_SYSTEM.md"),
       tools: expect.arrayContaining(["fetch-url", "plan-batches"]),
       skills: expect.arrayContaining([expect.objectContaining({ name: "review-batches" })]),
       routines: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],
