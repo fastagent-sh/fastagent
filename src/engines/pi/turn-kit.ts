@@ -105,10 +105,11 @@ export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefi
 }
 
 /**
- * Whether a finished tool call asked to end its run (pi's `terminate`, set by the tool or a `tool_call` /
- * `tool_result` hook). pi ends the run after a batch whose EVERY result asks it, without another model call, so the run
- * completes on `tool` entries with no answer after them: the same shape a process killed after its tools leaves. A
- * call made from inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count.
+ * Whether a finished tool call asked to end its run (pi's `terminate`: returned by the tool, or set by a `tool_call`
+ * hook that blocks it; pi 0.99.2's `tool_result` hook cannot set it). After a batch whose EVERY result asks it, pi
+ * makes no further model call for that batch, so unless a queued steer or follow-up continues the run, it completes on
+ * `tool` entries with no answer after them: the same shape a process killed after its tools leaves. A call made from
+ * inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count.
  * The ONE reading: the live `tool_finished` and the flag {@link markEndsRun} records both come from it.
  */
 export function asksToEndRun(event: { result?: unknown; parentToolCallId?: string }): boolean {

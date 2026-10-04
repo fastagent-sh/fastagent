@@ -457,9 +457,12 @@ always: the retry can be stopped during its backoff, or the compaction it waits 
 died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
 
 `terminate: true` on a `tool` entry, and on its live `tool_finished`, means the call asked to end its run (pi's
-`terminate`, from the tool or a `tool_call` / `tool_result` hook). When every call answering one assistant entry
-asks it, the run ends there and settles `completed` with no answer after those `tool` entries. That is how a client
-tells it from a run whose process died after its tools ran, which leaves the same entries without the flag. A batch
+`terminate`: returned by the tool, or set by a `tool_call` hook that blocks the call; a `tool_result` hook cannot set
+it). When every call answering one assistant entry asks it, the model is not called again for that batch: unless a
+queued steer or follow-up continues the run, it ends there and settles `completed` with no answer after those
+`tool` entries. Live, whether the run ended is `run_settled`'s to say, not the flags'; read back, a run that went on
+shows its next `user` entry after them. The flag is how a client tells a run that ended there from one whose process
+died after its tools ran, which leaves the same entries without it. A batch
 in which only some calls ask goes on as usual, and a call made from inside another tool (`parentToolCallId`) never
 carries the flag, since it is not part of the batch.
 
