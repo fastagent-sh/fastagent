@@ -8,6 +8,8 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type AgentSession, type AgentSessionEvent, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { defineTool } from "../src/engines/pi/tool.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -225,6 +227,93 @@ describe("session control: observation plane", () => {
       isError: true,
     });
     expect(truncatedEntries.filter((e) => e.kind === "assistant").at(-1)?.data).toEqual({ text: "done" });
+  });
+
+  it("a run its tool batch ended says so, live and in the record it reopens from; one that went on does not end there", async () => {
+    const endTool: AgentTool = {
+      name: "finish",
+      label: "Finish",
+      description: "Hand off and end the run",
+      parameters: Type.Object({}),
+      async execute() {
+        return { content: [{ type: "text", text: "handed off" }], details: {}, terminate: true };
+      },
+    };
+    const cwd = await mkdtemp(join(tmpdir(), "fa-ends-run-"));
+    const dir = join(cwd, "sessions");
+    // ONE model response: a second model call would find none and fail the run.
+    const ended = await fauxControlledAgent(
+      [fauxAssistantMessage([fauxToolCall("finish", {}, { id: "call-end" })], { stopReason: "toolUse" })],
+      { tools: [endTool, echoTool], boundary: false, cwd, sessions: piSessionRecordStore({ dir, cwd }) },
+    );
+    const watch = watchUntilSettled(ended.control, "eEnded");
+    await drain(ended.agent.invoke({ session: "eEnded" }, { text: "go" }));
+    const live = await watch;
+    expect(live.at(-1)?.data).toMatchObject({ status: "completed" });
+    expect(live.find((e) => e.type === "tool_finished")?.data).toMatchObject({ id: "call-end", terminate: true });
+
+    // Read back from the file by a store that never saw the run: the record itself carries it.
+    const reopened = await fauxControlledAgent([], {
+      boundary: false,
+      cwd,
+      sessions: piSessionRecordStore({ dir, cwd }),
+    });
+    const entries = (await reopened.control.sessions.get("eEnded").entries()).entries;
+    expect(entries.at(-1)).toMatchObject({ kind: "tool", data: { toolCallId: "call-end", terminate: true } });
+
+    // One call of the batch asks, the other does not: the run goes on, and only the asking result carries it.
+    const wentOn = await fauxControlledAgent(
+      [
+        fauxAssistantMessage(
+          [fauxToolCall("finish", {}, { id: "call-a" }), fauxToolCall("echo", { value: "x" }, { id: "call-b" })],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage("done"),
+      ],
+      { tools: [endTool, echoTool], boundary: false },
+    );
+    const wentOnWatch = watchUntilSettled(wentOn.control, "eWentOn");
+    await drain(wentOn.agent.invoke({ session: "eWentOn" }, { text: "go" }));
+    const finished = (await wentOnWatch).filter((e) => e.type === "tool_finished").map((e) => e.data);
+    expect(finished).toEqual([
+      expect.objectContaining({ id: "call-a", terminate: true }),
+      expect.not.objectContaining({ terminate: expect.anything() }),
+    ]);
+    const wentOnEntries = (await wentOn.control.sessions.get("eWentOn").entries()).entries;
+    expect(
+      wentOnEntries.filter((e) => e.kind === "tool").map((e) => (e.data as { terminate?: true }).terminate),
+    ).toEqual([true, undefined]);
+    expect(wentOnEntries.at(-1)).toMatchObject({ kind: "assistant", data: { text: "done" } });
+
+    // Run from inside another tool, the asking call is not in the batch: the run goes on and nothing says it ended.
+    const finish = defineTool({
+      name: "finish",
+      description: "Hand off and end the run",
+      input: z.object({}),
+      execute: async () => ({ content: [{ type: "text", text: "handed off" }], details: {}, terminate: true }),
+    });
+    const outer = defineTool({
+      name: "outer",
+      description: "Runs finish",
+      input: z.object({}),
+      execute: async (_input, ctx) => (await ctx.executeTool?.("finish", {}))?.isError ?? "no executeTool",
+    });
+    const nested = await fauxControlledAgent(
+      [
+        fauxAssistantMessage([fauxToolCall("outer", {}, { id: "call-o" })], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+      { tools: [finish, outer], boundary: false },
+    );
+    const nestedWatch = watchUntilSettled(nested.control, "eNested");
+    await drain(nested.agent.invoke({ session: "eNested" }, { text: "go" }));
+    const nestedFinished = (await nestedWatch).filter((e) => e.type === "tool_finished").map((e) => e.data);
+    expect(nestedFinished).toContainEqual(expect.objectContaining({ parentToolCallId: "call-o" }));
+    expect(nestedFinished.filter((data) => "terminate" in (data as object))).toEqual([]);
+    expect((await nested.control.sessions.get("eNested").entries()).entries.at(-1)).toMatchObject({
+      kind: "assistant",
+      data: { text: "done" },
+    });
   });
 
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {

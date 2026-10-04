@@ -380,9 +380,14 @@ export type ToolProgressEvent = SessionEvent<
 > & {
   runId: string;
 };
+/**
+ * `terminate: true` when the call asked to end its run. Once every call answering one assistant message asks it, the
+ * model is not called again for them, and the run ends there with no answer after its `tool` entries (which carry the
+ * same flag) unless a queued steer or follow-up continues it. Whether the run ended is `run_settled`'s to say.
+ */
 export type ToolFinishedEvent = SessionEvent<
   "tool_finished",
-  { id: string; isError: boolean; content: Json; parentToolCallId?: string }
+  { id: string; isError: boolean; content: Json; parentToolCallId?: string; terminate?: true }
 > & {
   runId: string;
 };
