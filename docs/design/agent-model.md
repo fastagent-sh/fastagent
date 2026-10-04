@@ -69,8 +69,8 @@ them (§6) and not how widely a change is seen.
 
 `AGENTS.md` is context, and so are skills a project provides. They change how the agent behaves, but they belong
 to the project, not to the agent, the way a repository's `.eslintrc` changes how eslint behaves and is still the
-repository's file. The agent's identity belongs in its system prompt (`SYSTEM.md`, `APPEND_SYSTEM.md`, below). One
-reading holds everywhere: an `AGENTS.md` is
+repository's file. An identity of the agent's own belongs in `SYSTEM.md`; `APPEND_SYSTEM.md` holds standing
+instructions added to pi's default (below). One reading holds everywhere: an `AGENTS.md` is
 written for whoever works in its directory. The one in a project is for the agent working on that project. The
 one in an agent's own directory is for whoever changes the agent: the coding agent that develops it, or the agent
 itself. It is not loaded into every turn, since most turns do not change the agent; the agent is told where it is
@@ -96,13 +96,15 @@ and a served session lives one turn (#678).
 `tools/` holds tools. `extensions/` holds what is not a tool: event handlers, commands, model providers.
 
 Where pi and FastAgent both have a place for the same thing, the agent directory's root is the canonical spelling
-and `.pi/` is read too, for pi compatibility, below it. A name found in two places takes the first and reports the
-other, never silently:
+and `.pi/` is read too, for pi compatibility, below it. A name found in two places takes the first. Two places in
+the definition holding the same name is reported, never silent: the author has two files and one of them does
+nothing. The definition winning over the machine is not reported, because it is how an author overrides the
+machine on purpose (`fastagent add skill` vendors a machine skill into `skills/` for exactly that):
 
 | Resource | Read in this order |
 |---|---|
 | System prompt | `SYSTEM.md`, then `.pi/SYSTEM.md`, replace pi's default prompt; without either, pi builds its default itself, so it follows pi. `APPEND_SYSTEM.md`, then `.pi/APPEND_SYSTEM.md`, is added after it. Never the machine's (§1). FastAgent's own sections follow in every case (below) |
-| Skills | `skills/`, then `.pi/skills/`, then `.agents/skills/` in the agent directory, then the machine's (§1) |
+| Skills | `skills/`, then `.pi/skills/`, then `.agents/skills/` in the agent directory, then the machine's (§1). A context's skills are read from its `.pi/skills/`, then its `.agents/skills/`, the places pi reads a project's, and are named apart (below) |
 | Prompt templates | `prompts/`, then `.pi/prompts/`, then the machine's |
 | Extensions | `extensions/` only. `.pi/extensions/` is not loaded, and one that exists is reported as not loaded |
 
@@ -120,14 +122,23 @@ What FastAgent adds to the prompt does not depend on either file, because an age
 | Changing itself | What takes effect when, where a lasting result belongs, and how long this host keeps its files (§6) |
 | Tools not loaded yet | That deferred tools exist and are reached through `tool_search`, when there are any |
 
-The rest of what FastAgent writes today (`piBasePrompt`) goes away with its identity line: an authored tool gets
-the one-line `promptSnippet` pi lists in its default tool list, like pi's own tools, and a directory agent always
-mounts the coding tools, so pi's coding identity is accurate for it. An agent assembled in code with fewer tools
-passes its own prompt, as `createPiAgent({ instructions })` does today.
+The rest of what FastAgent writes today (`piBasePrompt`) goes away with its identity line:
+
+- **Authored tools stay listed.** pi's default lists a tool only when it has a `promptSnippet`. FastAgent sets one
+  for each authored tool from the first line of its description, the line `piBasePrompt` lists today, so
+  `defineTool` gains no field.
+- **The identity has to match the tools.** pi's default says the agent reads files, runs commands and edits code,
+  which is true of every agent a command opens: they all mount the coding tools. An embedder can replace them
+  (`createPiAgentFromDefinition(dir, { tools })`), and then that sentence is false. So replacing the coding tools
+  requires a prompt that matches what is left: the `base` option, which stays and replaces pi's default as
+  `SYSTEM.md` does, or a `SYSTEM.md`. Without either, assembling the agent is refused with that reason, rather than
+  serving an agent that claims tools it does not have. `createPiAgent({ instructions })` already takes its prompt
+  whole.
 
 **A context's skills carry its name.** A skill `deploy` that the context `app` provides is the skill `app/deploy`:
 it is about working in `app`, and the name says so. It never collides with the agent's own `deploy`, or with
-another context's, so contexts need no order and no precedence. Renaming a context renames its skills. That holds
+another context's, so contexts need no order and no precedence among them. Inside one context, `.pi/skills/deploy`
+wins over `.agents/skills/deploy`, and the two are reported like any two places holding one name. Renaming a context renames its skills. That holds
 because no other skill may have a `/` in its name. pi only warns about one, so FastAgent refuses a harness skill
 named that way and leaves such a machine skill out, saying so; the slash stays the namespace's. The part after it keeps the Agent Skills
 grammar; the whole name is FastAgent's convention.
@@ -279,7 +290,8 @@ directory to a synchronized one, and nothing else in the declaration does.
   directory is the project, and against a shell tool with a `cwd` argument, this made no difference: three models,
   180 runs, no command run in the wrong directory. So the shell tool stays as it is.
 - **Project instructions come from the contexts.** Each context's `AGENTS.md` at its root is loaded, marked with
-  the directory it applies to, and so are the skills each context provides, named `<context>/<skill>` (§2).
+  the directory it applies to, and so are the skills each context provides from its `.pi/skills/` and
+  `.agents/skills/`, named `<context>/<skill>` (§2).
   Nothing in the agent's own directory is loaded but its harness.
 - **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
   change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
@@ -419,7 +431,6 @@ These belong to other layers, the way a program does not do its own package mana
 | The workspace is the agent directory's parent, by placement | The agent directory and its contexts are separate directories, linked by the declaration; nesting is refused |
 | The working directory is that parent | The working directory is the agent's own directory |
 | `AGENTS.md` is read from the agent directory, and from the working directory up to the filesystem root | `AGENTS.md` is read from each context's root; never from the agent directory |
-| A project's skills are found by walking up from the working directory | A context's skills are read from each context |
 | A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a host receives; the definition is shipped |
 | `.secrets/` and `.state/` are part of the agent directory | They stay where they are, as the local instance's state ([CLI](agent-cli.md) §2): never part of the definition, never in a copied Agent |
 | A code-module change needs a restart under `start`; `dev` restarts at once and cuts off a running turn | Each serving process restarts once idle, onto a definition that loads |
@@ -428,5 +439,7 @@ These belong to other layers, the way a program does not do its own package mana
 | pi's project scope (`.pi/settings.json`, prompt templates, packages) is the workspace | It is the agent's own directory, part of the definition |
 | `persona.md` replaces the identity line of a prompt FastAgent writes (`piBasePrompt`); `.pi/SYSTEM.md` is ignored | pi builds the default prompt; `SYSTEM.md` replaces it, `APPEND_SYSTEM.md` adds to it, each also read from `.pi/` |
 | Prompt templates come from the workspace's `.pi/prompts/`, then the machine's | `prompts/` and `.pi/prompts/` in the agent directory, then the machine's |
-| A context's skills do not exist; the workspace's `.pi/skills/` and `.agents/skills/` up to the repository root are read as the machine's | A context's skills are `<context>/<skill>`; the agent directory's `.pi/skills/` and `.agents/skills/` are the definition's, `.agents/skills/` above it the machine's |
+| A project's skills are the workspace's `.pi/skills/` and the `.agents/skills/` found walking up to the repository root, read as the machine's; contexts do not exist | The agent directory's `.pi/skills/` and `.agents/skills/` are the definition's, `.agents/skills/` above it the machine's. Each context's `.pi/skills/` and `.agents/skills/` are its skills, named `<context>/<skill>` |
+| The definition's skills silently win over the machine's | Still silent; two places inside the definition holding one name are reported |
+| `createPiAgentFromDefinition` with replaced `tools` gets a non-coding identity line written by FastAgent | It needs `base` or a `SYSTEM.md`, and is refused without one |
 | A skill the agent writes lasts until the next deployment replaces it | The same for a hosted agent's harness, until distribution can source a harness from its own repository (§8) |
