@@ -146,7 +146,7 @@ Common options:
 | `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
 | `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads the definition's prompt files, skills and prompt templates. Project context and tools use the local process directly. This is not a sandbox. |
+| `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads the definition's prompt files, skills and prompt templates, and each context's `AGENTS.md` and skills. Tools use the local process directly. This is not a sandbox. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 | `authPath` / `credentialStore` | Where model credentials live: a credentials file, or your own `CredentialStore` ([Auth](#config-and-models)). One or neither, not both. |
@@ -170,11 +170,13 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, the project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). Project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` passes the workspace, which is always the agent dir's parent.
+Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, each context's `AGENTS.md` as project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). `dir` is the working directory: the coding tools operate there and session records are keyed to it. Its own `AGENTS.md` is not loaded.
+
+`contexts` (`ResolvedContext[]`, default none) is what the agent works on and knows: each one is named in the prompt, its `AGENTS.md` and skills (`<context>/<skill>`) load with the definition, and tools see it as `ctx.contexts`. Build it from a declaration with `resolveContexts(dir, declarations)` ([Contexts](#contexts)); `createPiAgentFromDir` passes the config's.
 
 `base` replaces pi's default prompt, as `SYSTEM.md` does, and outranks it; a blank `base` is refused. A `tools` list without `read`, `bash`, `edit` and `write` needs `base` or a `SYSTEM.md`: pi's default claims those tools, so the call is refused without one.
 
-`LoadedDefinition` carries `contextFiles: Array<{ path; content }>`, `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
+`LoadedDefinition` carries `contextFiles` (each context's `AGENTS.md`, `DefinitionFile[]`), `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
 
 ### `createAgentService`
 
@@ -189,7 +191,6 @@ function createAgentService(
   agent: Agent;
   routes: Routes;                        // what is served, for a startup line
   agentDir: string;
-  workspace: string;
   channels: { routes: string[]; longConnections: string[] };
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
@@ -219,8 +220,8 @@ function createPiAgentFromDir(
   config: FastagentConfig;
   configPath?: string;
   modelSpec: string;
-  agentDir: string; // where the agent lives
-  workspace: string; // the agent's cwd — the agent dir's parent
+  agentDir: string; // the agent directory: where it lives, and its working directory
+  contexts: ResolvedContext[]; // what it works on and knows, resolved for this instance
   stateRoot: string;
   sessionsDir: string;
   auth: { path: string; fallback?: string }; // credentials file, then the user-global one when none was named
@@ -230,7 +231,29 @@ function createPiAgentFromDir(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`.
+The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its contexts, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`.
+
+### Contexts
+
+```ts
+// From `@fastagent-sh/fastagent/node`.
+function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
+
+type ContextDeclaration =
+  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
+  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+
+interface ResolvedContext {
+  name: string;                         // unique ignoring case, one path segment
+  kind: "local" | "copy" | "github";
+  readonly: boolean;                    // the agent knows it and does not write it
+  location: string;                     // its absolute directory on this instance
+}
+```
+
+The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fastagent context list`. It refuses,
+naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
+directory or sits inside it ([Configuration](configuration.md#contexts)). A `github` context is not supported yet.
 
 ```ts
 interface FastagentConfig {
@@ -317,7 +340,8 @@ The second `execute` argument is a `ToolContext`:
 
 ```ts
 interface ToolContext {
-  cwd: string;
+  cwd: string; // the agent directory
+  contexts: readonly ResolvedContext[]; // what the agent works on and knows, each with its `location`
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
@@ -339,6 +363,9 @@ interface ReadonlySessionManager {
   getBranch(): Promise<PiSessionEntry[]>;
 }
 ```
+
+`cwd` is the agent's own directory. A tool that works on a project reads its location from `contexts`
+(`ctx.contexts.find((c) => c.name === "app")?.location`), never from `cwd`.
 
 During serving and `fastagent chat`, `sessionManager` is a read-only view of the current conversation; it is
 undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`
@@ -759,8 +786,8 @@ function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSession
 ```
 
 `piSessionRecordStore`'s `dir` is resolved against `cwd` (which itself defaults to `process.cwd()`), so
-a relative path means "inside the workspace this store serves". `cwd` also scopes lookups: two stores
-sharing one `dir` but serving different workspaces never open each other's sessions.
+a relative path means "inside the agent directory this store serves". `cwd` also scopes lookups: two stores
+sharing one `dir` but serving different agents never open each other's sessions.
 
 Session ids are the caller's and may contain any character (`-1001234567890`, `feishu:oc_x:omt_y`). The store
 encodes them into file names (`-1001234567890` → `s-1001234567890`). A new record is written as soon as it is

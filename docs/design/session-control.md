@@ -571,7 +571,7 @@ directory and session repository — never client-provided paths.
 
 `src/engines/pi/session-builder.ts` proves this assembly seam: it builds a resident pi
 `AgentSessionRuntime` over the same `PiAssembly` serving runs on (prompt, skills, tools, auth, reasoning
-effort, workspace), so only the session's shape differs; the TUI (`chat.ts`) is one consumer of it.
+effort, agent directory), so only the session's shape differs; the TUI (`chat.ts`) is one consumer of it.
 
 ## 11. Pi capability selection
 

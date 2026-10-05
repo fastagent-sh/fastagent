@@ -7,7 +7,7 @@
  * Needs the model's API key in the environment, under its provider's own variable: `stageModelKey`
  * writes it into the agent's `.secrets/.env`, the one way a deployment carries a model credential.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +17,9 @@ import { exists } from "../../src/paths.ts";
 import { CLI, answerOf, expectCompleted, installSpec, invoke, requireEnv, run, stageModelKey } from "./env.ts";
 
 const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "anthropic/claude-sonnet-4-5"');
-const COMPOSE = "fastagent/fastagent.compose.yml";
+const COMPOSE = "fastagent.compose.yml";
 
-let workspace = "";
+let agentDir = "";
 let port = 0;
 let baseUrl = "";
 
@@ -35,31 +35,29 @@ async function freePort(): Promise<number> {
   return taken;
 }
 
-const compose = (args: string[]) => run("docker", ["compose", "-f", COMPOSE, ...args], workspace);
+const compose = (args: string[]) => run("docker", ["compose", "-f", COMPOSE, ...args], agentDir);
 
 beforeAll(async () => {
   port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
-  workspace = await mkdtemp(join(tmpdir(), "fa-live-docker-"));
-  const agent = join(workspace, "fastagent");
-  await mkdir(agent, { recursive: true });
-  await writeFile(join(agent, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
+  agentDir = await mkdtemp(join(tmpdir(), "fa-live-docker-"));
+  await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(
-    join(agent, "fastagent.config.ts"),
+    join(agentDir, "fastagent.config.ts"),
     `export default { model: ${JSON.stringify(MODEL)}, http: { port: ${port} } };\n`,
   );
-  await stageModelKey(agent, MODEL);
+  await stageModelKey(agentDir, MODEL);
   // The agent declares the fastagent it runs, which is what puts the CHECKOUT in the image. Without a
   // package.json the generated Dockerfile takes the markdown-agent path and bakes
   // `npm i -g @fastagent-sh/fastagent@<this version>` (src/deploy/container.ts) — a registry install,
   // so the container would be the last published release while the CLI driving it is this tree.
   await writeFile(
-    join(agent, "package.json"),
+    join(agentDir, "package.json"),
     `${JSON.stringify(
       {
         name: "live-docker-probe",
         private: true,
-        dependencies: { "@fastagent-sh/fastagent": await installSpec(agent) },
+        dependencies: { "@fastagent-sh/fastagent": await installSpec(agentDir) },
       },
       null,
       2,
@@ -76,15 +74,15 @@ afterAll(async () => {
   // `--rmi local`: the Compose project name carries this run's mkdtemp suffix, so the built image is
   // unique per run and nothing else can reuse it. Without this every local `npm run test:live` leaves
   // another node:22-slim + full pi dependency tree behind.
-  if (workspace && (await exists(join(workspace, COMPOSE)))) await compose(["down", "-v", "--rmi", "local"]);
-  if (workspace) await rm(workspace, { recursive: true });
+  if (agentDir && (await exists(join(agentDir, COMPOSE)))) await compose(["down", "-v", "--rmi", "local"]);
+  if (agentDir) await rm(agentDir, { recursive: true });
 });
 
 describe("deploy docker --run: a definition serving real turns in a container", () => {
   it("builds, boots, answers, and keeps its sessions across a restart", async () => {
     // Every gate in the driver exits non-zero, so a refusal surfaces here as this call's rejection,
     // carrying the gate's own remediation text.
-    await run(process.execPath, [CLI, "deploy", "docker", "--run"], workspace);
+    await run(process.execPath, [CLI, "deploy", "docker", "--run"], agentDir);
 
     expect(await fetch(`${baseUrl}/health`).then((r) => r.text())).toBe("ok\n");
 

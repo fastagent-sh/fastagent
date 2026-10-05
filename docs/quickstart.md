@@ -22,25 +22,28 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The agent lands in `fastagent/`; the directory around it is its **workspace**: its working directory, and where
-its `AGENTS.md` is read from. The agent can edit its own definition; `APPEND_SYSTEM.md` and skills are re-read every turn.
+`my-agent/` is the agent: its definition, and its working directory. The agent can edit its own definition;
+`APPEND_SYSTEM.md` and skills are re-read every turn.
 
 ```txt
-my-agent/                              # the workspace — the agent's cwd, untouched by init
-└── fastagent/                         # the agent
-    ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
-    ├── skills/writing-great-skills/   # the example skill: how to author skills well
-    ├── tools/fetch-url.ts             # an example code tool
-    ├── fastagent.config.ts
-    ├── package.json
-    ├── .secrets/.env.example          # secrets live here, never committed
-    └── .gitignore
+my-agent/
+├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
+├── skills/writing-great-skills/   # the example skill: how to author skills well
+├── tools/fetch-url.ts             # an example code tool
+├── fastagent.config.ts            # model, contexts, http
+├── package.json
+├── .secrets/.env.example          # secrets live here, never committed
+└── .gitignore
 ```
 
 `APPEND_SYSTEM.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
-[mattpocock/skills](https://github.com/mattpocock/skills)) shows how. No `AGENTS.md` is scaffolded; the workspace's
-own is read as project context. Add skills with `fastagent add skill <owner/repo/path>`; delete
-`tools/fetch-url.ts` if you do not want it.
+[mattpocock/skills](https://github.com/mattpocock/skills)) shows how. Add skills with
+`fastagent add skill <owner/repo/path>`; delete `tools/fetch-url.ts` if you do not want it.
+
+**To have it work on a project**, declare the project as a context: `fastagent init my-agent --context ~/code/app`,
+or later `fastagent context add ~/code/app`. The agent stays in its own directory and is told where the project is;
+the project's `AGENTS.md` and its skills load with the agent. A context it should only read is added with
+`--readonly`. See [contexts](configuration.md#contexts).
 
 ## 2. Inspect it
 
@@ -48,11 +51,8 @@ own is read as project context. Add skills with `fastagent add skill <owner/repo
 fastagent info
 ```
 
-`info` is read-only. It prints the model, prompt, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
-
-**In an existing project**, run `fastagent init .`: the agent goes into `./fastagent/` with no writes elsewhere, and
-the project becomes its workspace. `--agent-dir bot` picks another directory name; a `fastagent.config.ts` is what
-makes a directory an agent.
+`info` is read-only. It prints the contexts, model, prompt, skills, discovered tools, channels, diagnostics, and
+session path without starting a server.
 
 A fresh agent presets no model. The first `fastagent dev` (or `start` / `invoke`) in a terminal shows the model
 catalog, providers with credentials first; picking one that needs auth runs the login, and the pick is written to
@@ -72,7 +72,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `skills/` apply on the next turn; code
+`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, a context's `AGENTS.md` and `skills/` apply on the next turn; code
 edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
 
 Send one turn:
@@ -93,7 +93,7 @@ data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"
 data: {"type":"completed"}
 ```
 
-Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `fastagent/.state/sessions`), so a dev restart keeps conversation history.
+Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions` in the agent directory), so a dev restart keeps conversation history.
 
 ## 4. Try authoring loops
 

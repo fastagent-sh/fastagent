@@ -19,13 +19,13 @@ function snippet(file: string): string {
 }
 
 it("the agent development guide's copied files typecheck, run, and reject a mistyped helper call", async () => {
-  const workspace = await realpath(await mkdtemp(join(tmpdir(), "fa-ai-start-")));
-  const agentDir = join(workspace, "fastagent");
+  const parent = await realpath(await mkdtemp(join(tmpdir(), "fa-ai-start-")));
+  const agentDir = join(parent, "my-agent");
   // Per-process, so a hung step fails naming its own command instead of the whole test.
-  const node = (args: string[], cwd = workspace) => exec(process.execPath, args, { cwd, timeout: 60_000 });
+  const node = (args: string[], cwd = agentDir) => exec(process.execPath, args, { cwd, timeout: 60_000 });
   const cli = (args: string[]) => node([join(root, "src/cli.ts"), ...args]);
   try {
-    await cli(["init", ".", "--no-install"]);
+    await node([join(root, "src/cli.ts"), "init", "my-agent", "--no-install"], parent);
     const config = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
     for (const file of [
       "tsconfig.json",
@@ -38,7 +38,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     ]) {
       const path = join(agentDir, file);
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, snippet(`fastagent/${file}`));
+      await writeFile(path, snippet(file));
     }
 
     // Like Vitest's alias, resolve public imports to current source without an install or stale dist/.
@@ -60,8 +60,8 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     expect(JSON.parse(tool.stdout)).toEqual({ batches: 3 });
     const info = JSON.parse((await cli(["info", "--json"])).stdout);
     expect(info).toMatchObject({
-      workspace,
       agentDir,
+      contexts: [],
       appendSystemPrompt: join(agentDir, "APPEND_SYSTEM.md"),
       tools: expect.arrayContaining(["fetch-url", "plan-batches"]),
       skills: expect.arrayContaining([expect.objectContaining({ name: "review-batches" })]),
@@ -83,7 +83,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const files = (await readdir(agentDir, { recursive: true })).filter((file) => !file.startsWith("node_modules/"));
     expect(files.filter((file) => /\.(?:js|d\.ts|map|tsbuildinfo)$/.test(file))).toEqual([]);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
+    await rm(parent, { recursive: true, force: true });
   }
   // Its OWN ceiling: seven subprocesses, two of them full `tsc` runs — ~14s idle here, which leaves
   // the global 30s no room for contention (a loaded dev machine and a few-core CI runner are the

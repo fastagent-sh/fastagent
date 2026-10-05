@@ -72,15 +72,14 @@ const ROUTINE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
 const CRON = "* * * * *";
 
-let workspace = "";
+let agentDir = "";
 
 beforeAll(async () => {
   // Gate on the credential's remaining lifetime before spending a deploy on it.
   await requireAwsAccount(45);
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
-  workspace = join(tmpdir(), NAME);
-  const agentDir = join(workspace, "fastagent");
+  agentDir = join(tmpdir(), NAME);
   await mkdir(join(agentDir, "routines"), { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
@@ -112,7 +111,7 @@ afterAll(async () => {
   try {
     await destroyAgentcoreDeployment(NAME);
   } finally {
-    if (workspace) await rm(workspace, { recursive: true, force: true });
+    if (agentDir) await rm(agentDir, { recursive: true, force: true });
   }
 }, 900_000);
 
@@ -185,7 +184,7 @@ async function waitForFire(
 describe("agentcore routines: EventBridge holds the clock and names each fire", () => {
   it("delivers a fire the container accepts, and runs the occurrence the clock named", async () => {
     const deployedAt = Date.now();
-    await deployAgentcore(workspace, STACK);
+    await deployAgentcore(agentDir, STACK);
 
     const outputs = await aws([
       "cloudformation",

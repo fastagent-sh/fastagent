@@ -27,6 +27,10 @@ restart, the routine floor).
 
 ## 2. The resolved agent
 
+Stage 2 built this for `local` and `copy` contexts ([core](core.md) §2 describes what exists): `ResolvedContext`
+carries `name`, `kind`, `readonly` and `location`, and `origin`, `travels` and `notices` are added with the stage
+that first needs them (3 and 4). What follows is the whole target.
+
 One engine-neutral module owns the declaration and its resolution: `src/contexts/` (`declare.ts` pure,
 `resolve.ts` with filesystem and git).
 
@@ -96,57 +100,23 @@ re-read today. A changed declaration is a config change, so it restarts the proc
 
 ## 3. Change by area
 
-### 3.1 Addressing (`src/paths.ts`, CLI)
+### 3.1–3.6 Addressing, working directory, prompt, definition loading, authored tools, `fastagent context`
 
-`resolvePlacement`, `findPlacement`, `agentsAt`, `selectAgent`, `placementDeadEnd`, `agentDefinitionOwner` and
-`DEFAULT_AGENT_DIRNAME` go. In their place, `resolveAgentDir(dir)`: `dir` holds `fastagent.config.ts` → it; `dir`
-is inside an agent directory → refused naming its root; else refused with `fastagent init`. `findAgentDir(dir)` stays
-for the commands that work without an agent (`login`, `models`), with the same rule. `FASTAGENT_AGENT` disappears
-from `paths.ts`, `deploy/container.ts`, `deploy/secrets.ts`, `start.ts` and the `.env.example` template. Every
-caller listed by `rg resolvePlacement` moves to `resolveAgent`/`resolveAgentDir`, including the two channel
-`shared-api.ts` files, whose send tools derive the state root from their working directory: that is now the agent
-directory itself.
+Landed in stage 2; [core](core.md) §2, [configuration](../configuration.md#contexts) and the
+[CLI reference](../cli.md#fastagent-context) describe them. Two choices were made there that this plan left open:
 
-### 3.2 Working directory and pi's project scope
-
-`AgentAssembly.workspace` goes; `cwd` everywhere is `agentDir`: `assembleFront`, `agentModels(..., { cwd })`,
-`readMachine(agentDir)`, `piAllCodingTools(agentDir)`, `session-builder.ts` (chat's `rootCwd`). `readMachine` keeps
-reading pi's user scope and the project scope, which is now the agent directory; its project-scope skills and
-prompts that lie **inside** the agent directory are dropped from the machine's half, because the definition loads
-them itself (§3.4), and those above it stay as machine environment.
-
-### 3.3 Prompt (`create.ts`, `agent-session-factory.ts`)
-
-Landed in stage 1; [core](core.md) §2 describes it. What remains is stage 2's: `agentsFilesOverride` returns each
-context's root `AGENTS.md` instead of the workspace walk, and FastAgent's sections gain the contexts section. The
-"changing itself" section is rewritten for the new rules in stage 5 (§3.8, §3.9).
-
-### 3.4 Definition loading (`definition.ts`)
-
-Landed in stage 1 for the agent directory ([where the definition's files are
-read](../configuration.md#where-the-definitions-files-are-read)), with `LoadedDefinition` keeping `contextFiles` until stage 2. What remains is stage 2's: `contextFiles`
-goes, and each context's `.pi/skills/` and `.agents/skills/` load after the definition's, renamed
-`<context>/<skill>` after loading.
-
-### 3.5 Authored tools (`tool.ts`, `tool-context.ts`)
-
-`ToolContext` gains `contexts: readonly ResolvedContext[]`; `cwd` is the agent directory. `TurnContext` carries
-the list, set where the turn binds. `fastagent tool` passes the same resolved list.
-
-### 3.6 Config and `fastagent context` (`config.ts`, new `cli/commands/context.ts`)
-
-`FastagentConfig.contexts?: ContextDeclaration[]`, added to the known keys and validated by `declare.ts`.
-`fastagent context add/remove` edits the source text the way `rewriteConfigModel` does for `model`: it locates the
-literal `contexts: [ … ]` block `init` writes and regenerates it from the new list. The candidate is written to a
-temporary file beside the config, under a name that is not a code input, imported, and compared with the list it
-meant to write; only a match is renamed over `fastagent.config.ts`. A refusal therefore leaves the config, and any
-serving process watching it, untouched. A missing block is created at the top of `export default {`; a computed
-value, or an import that differs, refuses with the reason. `list --json` is
-the resolved view (`ResolvedContext[]`) for clients.
+- **`context add` takes no `--copy`.** A directory is declared `{ local, copy: true }` by both `init --context` and
+  `context add`, so an agent stays deployable; a local context without `copy` is written by hand. `--ref` and
+  `--local` arrive with GitHub contexts (stage 3), which until then `init`, `context add` and the resolver refuse.
+- **The candidate config is `.fastagent.config.next.ts`** beside the real one: a dotfile `dev` does not watch, removed
+  whether or not it replaces the config.
 
 ### 3.7 Deploy (`deploy/`)
 
-Today the build context is the workspace and the image bakes it at `/app` with the agent under a prefix. New layout:
+Stage 2 made the agent directory the build context, baked at `/app/definition`, with every artifact at its root
+(Railway reads `railway.json` and the Dockerfile there, so `RAILWAY_DOCKERFILE_PATH` is gone), and the storage holds
+`definition/` beside `.state/` and `.secrets/`; storage laid out with `base/` is refused. Stage 4 adds copied contexts
+to the image. New layout:
 
 ```text
 /app/definition/          the agent directory, minus .state/ and .secrets/
@@ -169,8 +139,8 @@ outside the agent directory and no host's build context can reach it.
 - The Dockerfile loses `ENV FASTAGENT_AGENT` and the agent prefix. It installs `git` when the staged tree carries a
   `.git` (today's `shipsGit` rule in `preflight.ts`) or any context is `github`.
 
-On the host, `prepareStartWorkspace` and `applyDeploymentRelease` (`deploy/workspace.ts`) change from "seed the
-workspace once, then replace `base/<agent>`" to:
+On the host, `applyDeploymentRelease` (`deploy/workspace.ts`) already replaces only `definition/` (stage 2); stage 4
+adds:
 
 - the definition: replaced from the image on every release, as `base/<agent>` is today, so a hosted agent's own
   harness changes last until the next release (distribution, per the model);
@@ -221,11 +191,8 @@ passes every day, and one whose fires bunch only on some dates is refused every 
 
 ### 3.10 `init` and the scaffold
 
-`init <dir> [--context <source>]...` creates the agent in `<dir>` (new or empty). `--agent-dir` goes. Templates:
-`persona.md` becomes `APPEND_SYSTEM.md` (standing instructions only, no "You are"), `.env.example` loses the
-`FASTAGENT_AGENT` note. `--context` goes through the same code as `fastagent context add`: a checkout whose `origin`
-is on GitHub becomes `{ github, local }`, any other directory `{ local, copy: true }`, `github:owner/repo` stays
-remote; paths absolute; nesting refused with the command that puts the agent beside the project.
+Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every directory declared `{ local, copy: true }`.
+Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `github:owner/repo` a remote context.
 
 ## 4. Decisions
 
@@ -245,7 +212,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | Stage | Scope | Done when |
 |---|---|---|
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
-| 2. Agent directory and local contexts | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
+| 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
@@ -270,12 +237,14 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 
 ## 7. Public surface that changes
 
-`CreatePiAgentFromDirOptions` and `createPiAgentFromDir`'s result lose `workspace` and gain `contexts`;
-`LoadedDefinition` loses `persona` and `contextFiles`; `ToolContext` gains `contexts`, and its `cwd` changes meaning
-from the project to the agent directory with no type change, so an authored tool that reads project files through
-`cwd` moves to `contexts` (the release notes say so); `CreatePiAgentFromDefinitionOptions.cwd`
-means the agent directory; `FASTAGENT_AGENT` and `init --agent-dir` are removed; `[dir]` becomes `[agent]`. duang
-calls `createPiAgentFromDir` and stores an agent's directory, so it needs the same change in step with stage 2.
+As of stage 2: `createPiAgentFromDir`, `createAgentService` and `mountAgentService` take the agent directory itself
+and lose `workspace`; `createPiAgentFromDir` gains `contexts`; `LoadedDefinition` lost `persona` (stage 1) and its
+`contextFiles` now hold each context's `AGENTS.md`; `ToolContext` gains `contexts`, and its `cwd` changes meaning from
+the project to the agent directory with no type change, so an authored tool that reads project files through `cwd`
+moves to `contexts` (the release notes say so); `CreatePiAgentFromDefinitionOptions.cwd` is removed (the agent
+directory is the working directory) and `contexts` added; `resolveContexts` and its types are exported from `/node`;
+`FASTAGENT_AGENT` and `init --agent-dir` are removed; `[dir]` becomes `[agent]`. duang calls `createPiAgentFromDir`
+and stores an agent's directory, so it needs the same change before the next release.
 
 ## 8. Open
 

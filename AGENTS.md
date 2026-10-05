@@ -42,7 +42,7 @@ src/
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
 │   ├── program.ts          # the spec registry — the CLI surface's source of truth; lazy per-command imports
 │   ├── invoke-stream.ts    # `invoke`: stream → exit code
-│   ├── models-view.ts, auth-view.ts # `models` / auth-report output
+│   ├── models-view.ts, auth-view.ts, contexts-view.ts # `models` / auth-report / contexts output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
@@ -63,8 +63,12 @@ src/
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
-├── paths.ts                # PLACEMENT (which directory is the agent, which is the workspace) + the shared
-│                           # path predicates and the machinery paths that follow (.secrets/.state)
+├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
+│                           # shared path predicates and the machinery paths that follow (.secrets/.state)
+├── contexts/               # what an agent works on and knows — engine-neutral
+│   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
+│   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses
+│   └── config-text.ts      # the literal `contexts: [...]` block `fastagent context` rewrites
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel/defineRoutine): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
@@ -171,8 +175,8 @@ src/
 │   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
 │   │                       # that runs `login --stdio` inside that image where its server runs
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
-│                           # process lease, recoverable definition replacement (base/ is cwd; .state/ and
-│                           # .secrets/ stay outside the definition)
+│                           # process lease, recoverable definition replacement (definition/ is cwd; .state/
+│                           # and .secrets/ stay beside it)
 │   ├── secrets.ts          # both directions of the value carry: the NAMES a runbook lists, the VALUES
 │   │                       # `--run` sends, and the FASTAGENT_ENV the container expands back
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
@@ -219,7 +223,7 @@ src/
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
     ├── open.ts             # shared opener: directory → agent for dev/start/invoke
     ├── chat.ts             # `chat` channel: drive pi's interactive TUI with the assembled agent (its own records,
-    │                       # in pi's per-workspace location — a SERVED record belongs to the process serving it)
+    │                       # in pi's per-directory location — a SERVED record belongs to the process serving it)
     ├── tool.ts             # defineTool (Zod input/output + native exposure) + tools/ filesystem discovery
     ├── tool-context.ts     # ToolContext.session + the tool-activation bridge (AsyncLocalStorage)
     ├── wake-tool.ts        # the built-in `wake` tool; withWakeTool mounts it (serving path only)

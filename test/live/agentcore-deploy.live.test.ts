@@ -58,7 +58,7 @@ const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "an
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
 
-let workspace = "";
+let agentDir = "";
 
 beforeAll(async () => {
   // 45 = this probe's own declared budgets, 30 minutes for the deploy plus 15 for teardown.
@@ -70,8 +70,7 @@ beforeAll(async () => {
   // IAM policy forbids account-wide listing, which is what makes a written name the only way.
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
-  workspace = join(tmpdir(), NAME);
-  const agentDir = join(workspace, "fastagent");
+  agentDir = join(tmpdir(), NAME);
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
@@ -95,13 +94,13 @@ afterAll(async () => {
   try {
     await destroyAgentcoreDeployment(NAME);
   } finally {
-    if (workspace) await rm(workspace, { recursive: true, force: true });
+    if (agentDir) await rm(agentDir, { recursive: true, force: true });
   }
 }, 900_000);
 
 describe("deploy agentcore --run: a real stack, provisioned and destroyed", () => {
   it("converges the stack and completes a model turn", async () => {
-    await deployAgentcore(workspace, STACK);
+    await deployAgentcore(agentDir, STACK);
 
     // The stack's own Outputs, read through the driver's parser: RuntimeArn is what every later call
     // addresses, and the driver gates when it is absent.
@@ -125,7 +124,7 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
       name: NAME,
       session: "live-agentcore",
       text: "Reply with just: ok",
-      dir: workspace,
+      dir: agentDir,
       label: "invoke",
     });
 

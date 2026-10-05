@@ -33,7 +33,8 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
-| **Durable storage** | Docker, Fly and Railway keep `base/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
+| **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
+| **No contexts** | Deploying an agent that declares [contexts](configuration.md#contexts) is not supported yet: `deploy` refuses it, naming them. |
 
 ## Logging a deployment in
 
@@ -87,8 +88,8 @@ When the credential is missing or rejected later (revoked, volume lost), the box
   `fastagent login <provider> --deployment agentcore` again (the runtime's log names it). An agent that must keep
   answering unattended needs an API key there. Without a terminal, `deploy agentcore --run` therefore stops before building anything, rather than replace a
   serving runtime with one nobody can log in; for frequent or CI deploys, use an API key. The shell needs
-  `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its workspace
-  exists (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
+  `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its storage
+  is prepared (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
   an egress proxy set in `.secrets/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
   provider is reachable only through that proxy, use an API key on AgentCore.
 
@@ -100,8 +101,8 @@ Requires Docker Compose 2.3.3 or newer.
 fastagent deploy docker
 ```
 
-Generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fastagent/fastagent.compose.yml` with one
-`agent` service:
+Generates `Dockerfile`, `.dockerignore` and `fastagent.compose.yml` in the agent directory, with one `agent`
+service:
 
 - the generated or your own Dockerfile,
 - `127.0.0.1:<port>` published on the host,
@@ -111,11 +112,11 @@ Generates `fastagent/Dockerfile`, a workspace-root `.dockerignore`, and `fastage
 - `restart: unless-stopped`.
 
 ```bash
-docker compose -f fastagent/fastagent.compose.yml up -d --build
-docker compose -f fastagent/fastagent.compose.yml logs -f agent
-docker compose -f fastagent/fastagent.compose.yml ps
-docker compose -f fastagent/fastagent.compose.yml down     # keeps the state volume
-docker compose -f fastagent/fastagent.compose.yml down -v  # destructive: deletes all state
+docker compose -f fastagent.compose.yml up -d --build
+docker compose -f fastagent.compose.yml logs -f agent
+docker compose -f fastagent.compose.yml ps
+docker compose -f fastagent.compose.yml down     # keeps the state volume
+docker compose -f fastagent.compose.yml down -v  # destructive: deletes all state
 ```
 
 `--run` checks Docker and the daemon, gates missing values before building, runs `up -d --build`, checks the
@@ -200,9 +201,9 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.do
 fastagent deploy railway --run   # provisions an unlinked dir end to end
 ```
 
-`--run` refuses a dir already linked to a project unless `--into-linked`. The build uses the
-`RAILWAY_DOCKERFILE_PATH` variable; pointing the service at `fastagent/railway.json` (Settings → Config-as-code,
-dashboard only) adds the `/health` deploy gate.
+`--run` refuses a dir already linked to a project unless `--into-linked`. `railway.json` and the `Dockerfile` sit at
+the root of the upload, where Railway reads both: the build uses the Dockerfile, and the `/health` check marks a
+deploy whose box crashes on boot as failed.
 
 ## Scale to zero
 
@@ -229,7 +230,7 @@ fastagent deploy agentcore
 fastagent deploy agentcore --run
 ```
 
-Generates `fastagent/agentcore.template.yaml`, `fastagent/lambda/index.js`, container files and a release manifest.
+Generates `agentcore.template.yaml`, `lambda/index.js`, container files and a release manifest.
 The runbook: create the ECR repository, `docker buildx build --platform linux/arm64 … --push` with a unique tag
 per deploy, `aws cloudformation deploy`, read the outputs, register webhooks. `--run` does all of it.
 
@@ -299,44 +300,43 @@ complete stops the command. A stack that does not reach `DELETE_COMPLETE` stops 
 
 ## What deploy bakes
 
-Point deploy at the workspace or at its `fastagent/`; both resolve the same agent. The image initializes
-persistent storage once:
+The agent directory is the build context: the image holds it at `/app/definition`, minus what the ignore file
+excludes. Each start publishes it onto persistent storage:
 
 ```text
 <persistent-root>/
-├── base/                 # working directory, project files, optional .git
-│   └── fastagent/        # deployment-managed definition
+├── definition/           # the deployed definition: the agent's working directory on the host
 ├── .state/               # sessions, channels, scheduled work
 ├── .secrets/             # credentials, including refreshed auth.json
 └── .deployment/          # release and recovery metadata
 ```
 
-- Every `fastagent deploy <host>` writes a new release id to `fastagent/fastagent.release.json` (rewritten every
-  time; do not edit it). Restarting the same release keeps definition edits; a new release replaces only
-  `base/fastagent/`, deleting obsolete definition files. Other workspace files, uncommitted work, Git history and
-  credentials stay.
+- Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json` (rewritten every time; do not
+  edit it). Restarting the same release keeps what the agent wrote in `definition/`; a new release replaces
+  `definition/` whole, so a change the agent made to itself, or a file it left there, lasts until the next release.
+  `.state/` and `.secrets/` stay.
 - Updates are staged and an interrupted one completes before the agent opens. A file lock at
   `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
-- Only `fastagent/package.json` dependencies install at build time; keep the deploy CLI and the agent's FastAgent
+- Storage an earlier FastAgent laid out holds the agent's workspace in `base/`; a start refuses it rather than leave
+  it behind unread. Move out what you need and delete it, or deploy onto fresh storage.
+- The agent's `package.json` dependencies install at build time; keep the deploy CLI and the agent's FastAgent
   dependency on the same version.
-- Markdown in the definition is read every turn; tools, channels and config need a restart; a new release replaces
-  edits made on the box.
+- Markdown in the definition is read every turn; tools, channels and config need a restart.
 
-**Artifacts** land in the agent dir (`Dockerfile`, `Dockerfile.dockerignore`, `fastagent.compose.yml` /
-`fly.toml` / `railway.json`). The one file outside it is the workspace-root `.dockerignore`, which excludes
-`.secrets` contents (except `.env.example` and `.gitignore`), `**/.state`, `**/node_modules`, `**/.cache` and
-`**/.env*`, and keeps `.git`.
+**Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
+rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` / `railway.json` /
+`agentcore.template.yaml`. The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
+`**/.state`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
-- A kept `.dockerignore` that drops the agent dir or does not exclude `fastagent/.secrets/auth.json` gates `--run`;
-  an unexcluded `.state` or `node_modules` warns. Patterns are root-anchored: use `**/.secrets/**`.
+- A kept ignore file that drops `fastagent.config.ts` or does not exclude `.secrets/auth.json` gates `--run`; an
+  unexcluded `.state` or `node_modules` warns.
 
-**Git**: when the workspace is a repo, `git` is installed and `.git` ships, so the agent can pull and push;
-credentials go in `.secrets/.env` (e.g. `GH_TOKEN`) and the push policy in `APPEND_SYSTEM.md`. Some host CLIs strip
-`.git` (`railway up` does), so check `git status` on the box after the first deploy. A non-git workspace that needs
-git sets `deploy: { apt: ["git"] }`. Add `.git` to `.dockerignore` for a smaller image.
+**Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some
+host CLIs strip `.git` (`railway up` does). An agent that needs git without that sets `deploy: { apt: ["git"] }`.
+Add `.git` to `.dockerignore` for a smaller image.
 
 ## Other Docker hosts
 

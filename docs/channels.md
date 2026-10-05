@@ -28,7 +28,7 @@ A channel decides:
 
 The agent remains the same assembled agent.
 
-## Workspace discovery
+## Discovery
 
 An agent declares channels with files under `channels/`:
 

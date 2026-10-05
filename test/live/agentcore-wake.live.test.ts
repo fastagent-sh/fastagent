@@ -77,7 +77,7 @@ const ALARM_PREFIX = `fa-${NAME}-wk-`;
  *  against a 240s poll budget. */
 const WAKE_MS = MIN_WAKE_MS + 30_000;
 
-let workspace = "";
+let agentDir = "";
 /** Read off the converged stack by the probe below, consumed by the ingress assertions after it. */
 let forwarderUrl = "";
 
@@ -88,8 +88,7 @@ beforeAll(async () => {
 
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
-  workspace = join(tmpdir(), NAME);
-  const agentDir = join(workspace, "fastagent");
+  agentDir = join(tmpdir(), NAME);
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   // Every serve mounts the `wake` tool (open.ts), and every stack carries the forwarder, its Function URL and the
@@ -118,7 +117,7 @@ afterAll(async () => {
   try {
     await destroyAgentcoreDeployment(NAME);
   } finally {
-    if (workspace) await rm(workspace, { recursive: true, force: true });
+    if (agentDir) await rm(agentDir, { recursive: true, force: true });
   }
 }, 900_000);
 
@@ -145,7 +144,7 @@ async function getAlarm(name: string): Promise<{ ScheduleExpression?: string; Ac
 
 describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge one-shot", () => {
   it("the container registers an alarm with the forwarder, and it fires", async () => {
-    await deployAgentcore(workspace, STACK);
+    await deployAgentcore(agentDir, STACK);
 
     const outputs = await aws([
       "cloudformation",
@@ -184,7 +183,7 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
       text:
         `Call the wake tool exactly once, with in: ${seconds} and prompt: "Reply with just: awake". ` +
         "Then reply with just: scheduled",
-      dir: workspace,
+      dir: agentDir,
       label: "wake",
     });
     expect(body, `the wake turn did not complete:\n${body.slice(0, 600)}`).toContain('"type":"completed"');

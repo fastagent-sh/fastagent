@@ -36,7 +36,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 |---|---|---|
 | Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
 | An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
-| Project facts and conventions | `AGENTS.md` and existing project documents | Keep project context separate from the agent's identity. FastAgent reads the agent's own `AGENTS.md` and walks workspace ancestors for project context. |
+| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`; the agent directory's own `AGENTS.md` is for whoever changes the agent. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
@@ -56,22 +56,22 @@ Directory agents have coding tools, including a shell; authored code can access 
 network, and credentials. Constrain the whole process when isolation is required. The default
 `POST /invoke` route has no authentication; protect it before exposing it beyond a trusted environment.
 
-## 2. Choose placement and initialize once
+## 2. Create the agent beside what it works on
 
-The **workspace** is the directory passed to FastAgent: the agent's working directory and deployment
-build context. The **agent directory** holds `fastagent.config.ts` and the definition. They can be different
-directories or the same directory.
+An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
+`.state/` and `.secrets/`, and it is the agent's working directory. What the agent works on (a project, a folder) is
+declared as a **context**; the agent never sits inside it, and a project never sits inside the agent.
 
-| Situation | Placement |
+| Situation | Do |
 |---|---|
-| New agent or an agent for an existing project | `fastagent init [workspace]` creates `workspace/fastagent/`; existing workspace files stay untouched. |
-| A standalone agent repository | Run `fastagent init` in it: that repository is the WORKSPACE and the definition lands in `./fastagent/`. |
-| An existing application embeds the agent | Keep the application's layout and put the definition in its `fastagent/`; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
+| A new agent | `fastagent init my-agent`. Without a context it works only in its own directory. |
+| An agent for an existing project | `fastagent init <agent dir> --context <project>`: the agent lives beside the project, which gets no writes from `init`. |
+| An existing application embeds the agent | Keep the definition in its own directory beside the application; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
-A config file identifies an agent, not its directory name. Check the workspace itself and its direct
-children for `fastagent.config.ts` before running `init`. Reuse an existing definition.
-`--agent-dir bot` selects another name; multiple sibling agents are selected with `FASTAGENT_AGENT`.
-See [Configuration](configuration.md#more-than-one-agent). Optional directories remain optional.
+A config file identifies an agent, not its directory name. Before running `init`, check whether the owner already
+has an agent (a directory holding `fastagent.config.ts`) and reuse it. `fastagent context add <dir>` declares a
+context later, and `--readonly` declares one the agent only knows. See [contexts](configuration.md#contexts).
+Optional directories remain optional.
 
 The example below uses a **fresh, default scaffold**. Install the CLI once, then run:
 
@@ -81,28 +81,22 @@ fastagent init my-agent
 cd my-agent
 ```
 
-For an existing project, run `fastagent init .` from that project's root instead. Do not create an empty
-workspace that cuts the agent off from the project it should work on.
-
 ```text
-my-agent/                         # workspace; run FastAgent commands here
-└── fastagent/                    # agent directory; install its dependencies here
-    ├── APPEND_SYSTEM.md
-    ├── skills/writing-great-skills/
-    ├── tools/fetch-url.ts
-    ├── fastagent.config.ts
-    ├── package.json              # type: module; FastAgent is a local dependency
-    ├── .secrets/.env.example
-    └── .gitignore
+my-agent/                         # the agent directory; run FastAgent commands here
+├── APPEND_SYSTEM.md
+├── skills/writing-great-skills/
+├── tools/fetch-url.ts
+├── fastagent.config.ts
+├── package.json                  # type: module; FastAgent is a local dependency
+├── .secrets/.env.example
+└── .gitignore
 ```
 
-`init` installs dependencies in `fastagent/`. If installation fails, run `npm --prefix fastagent install`
-before continuing. `--no-install` defers that install.
+`init` installs dependencies in the agent directory. If installation fails, run `npm install` there before
+continuing. `--no-install` defers that install.
 A global CLI installation alone does not make package imports available to authored tools.
 
-**Working-directory convention for the rest of this guide:** stay in `my-agent/`, the workspace.
-Use `npm --prefix fastagent ...` for the agent's package. Commands give the same result run from `my-agent/` or
-from `my-agent/fastagent/`: the workspace is always the agent directory's parent.
+**Working-directory convention for the rest of this guide:** stay in `my-agent/`, the agent directory.
 
 ## 3. Use TypeScript for new authored code
 
@@ -128,16 +122,16 @@ See [Node 22.19's TypeScript support](https://nodejs.org/download/release/v22.19
 Install compatible development dependencies and add scripts to the **agent package**:
 
 ```bash
-npm --prefix fastagent install --save-dev typescript@^7.0.2 @types/node@22
-npm --prefix fastagent pkg set 'scripts.typecheck=tsc --noEmit' 'scripts.test=node --test test/*.test.ts'
-mkdir -p fastagent/lib fastagent/test fastagent/skills/review-batches
+npm install --save-dev typescript@^7.0.2 @types/node@22
+npm pkg set 'scripts.typecheck=tsc --noEmit' 'scripts.test=node --test test/*.test.ts'
+mkdir -p lib test skills/review-batches
 ```
 
 For an existing package, merge with its current scripts and TypeScript configuration instead of
 replacing them. The following strict baseline checks authored source without emitting build artifacts.
 Extend `include` when adding other source directories.
 
-**`fastagent/tsconfig.json`**
+**`tsconfig.json`**
 
 ```json
 {
@@ -164,7 +158,7 @@ checking; successfully executing a `.ts` file proves neither type safety nor inp
 This offline example is an agent that prepares review batches. Adapt the freshly scaffolded instructions;
 preserve an existing agent's responsibilities when applying the example elsewhere.
 
-**`fastagent/APPEND_SYSTEM.md`**
+**`APPEND_SYSTEM.md`**
 
 ```markdown
 # Review assistant
@@ -176,7 +170,7 @@ Ask before sending messages, publishing changes, or spending money. Record pendi
 of treating silence as permission.
 ```
 
-**`fastagent/skills/review-batches/SKILL.md`**
+**`skills/review-batches/SKILL.md`**
 
 ```markdown
 ---
@@ -188,7 +182,7 @@ Confirm which proposals are in scope and the owner's preferred batch size. Use p
 count. Group related proposals, explain uncertain evidence, and present a draft plan for approval.
 ```
 
-**`fastagent/lib/batches.ts`**
+**`lib/batches.ts`**
 
 ```ts
 export function batchCount(items: number, size: number): number {
@@ -196,7 +190,7 @@ export function batchCount(items: number, size: number): number {
 }
 ```
 
-**`fastagent/tools/plan-batches.ts`**
+**`tools/plan-batches.ts`**
 
 ```ts
 import { defineTool, z } from "@fastagent-sh/fastagent";
@@ -220,7 +214,7 @@ external JSON. Import `z` from FastAgent so schema construction and conversion u
 Keep helpers outside `tools/`, whose files must default-export tools. Add IO and authorization checks
 at the boundary that performs the real operation; keep imports free of network calls and side effects.
 
-**`fastagent/test/batches.test.ts`**
+**`test/batches.test.ts`**
 
 ```ts
 import assert from "node:assert/strict";
@@ -237,11 +231,11 @@ test("batch planning calculates counts and validates external arguments", async 
 });
 ```
 
-Run from the workspace, without a model or credentials:
+Run from the agent directory, without a model or credentials:
 
 ```bash
-npm --prefix fastagent run typecheck
-npm --prefix fastagent test
+npm run typecheck
+npm test
 fastagent tool plan-batches '{"items":5,"size":2}'
 fastagent info --json
 ```
@@ -252,7 +246,7 @@ reports the rest, so a broken file shows up there rather than as a non-zero exit
 what refuses to run on one.
 
 To confirm static checking is active, temporarily change `batchCount(5, 2)` in the test to
-`batchCount("5", 2)`. `npm --prefix fastagent run typecheck` must fail; restore the valid call afterward.
+`batchCount("5", 2)`. `npm run typecheck` must fail; restore the valid call afterward.
 Validation failures return tool error content, so a direct tool test checks that content rather than
 expecting a thrown exception.
 
@@ -263,13 +257,13 @@ permissions before relying on it. See [CLI reference](cli.md).
 ## 5. Authenticate and verify one real turn
 
 Choose a provider and model with the owner. `fastagent models` lists available specifications.
-Ask the owner to run `fastagent login` in this workspace's terminal, or have them configure an approved
-provider key in `fastagent/.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
-source files, and logs. The CLI reads the agent's `.secrets/.env`, not a workspace-root `.env`.
+Ask the owner to run `fastagent login` in the agent directory, or have them configure an approved
+provider key in `.secrets/.env`. Keep credentials out of chat transcripts, issue comments,
+source files, and logs. The CLI reads the agent's `.secrets/.env`, not a `.env` at its root.
 
 Set `model: "provider/model-id"` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
-from two sources only — that config value, or `FASTAGENT_MODEL` in `fastagent/.secrets/.env`, which
+from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/.env`, which
 `deploy` reads from the file and records in the release manifest. A `--model` flag is local to the run
 that passes it, and `deploy` has none. See [models and auth](configuration.md).
 
@@ -284,13 +278,14 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are
+`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, a context's `AGENTS.md`, skills and prompt
+templates are
 read on the next turn.
 With watching enabled, changes under the agent's `tools/`, `channels/`, `routines/`, and `extensions/`
 restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory).
 
-**After editing `fastagent/lib/batches.ts` or another imported helper outside those watched directories,
+**After editing `lib/batches.ts` or another imported helper outside those watched directories,
 stop and restart `fastagent dev`.** `lib/` is not watched, and imported modules remain cached in the
 running worker. `start` serves without watching. `chat` opens the same definition in an interactive TUI.
 A coding agent should background servers with a cleanup path or delegate them to the owner.
@@ -300,7 +295,7 @@ A coding agent should background servers with a cleanup path or delegate them to
 A file in `channels/` enables a channel. Prefer the existing integrations over application-authored
 webhook servers, token refresh loops, or reply pipelines:
 
-| Channel | Command from the workspace | Owner action and reference |
+| Channel | Command from the agent directory | Owner action and reference |
 |---|---|---|
 | Telegram | `fastagent add telegram` | Supply the bot token and webhook verification secret. [Telegram](telegram.md) |
 | Slack | `fastagent add slack` | Complete interactive app configuration and OAuth installation. [Slack](slack.md) |
@@ -349,7 +344,7 @@ environment-specific, so declare it in `secrets` and build the prompt from it �
 `OWNER_APPROVED_CHAT_ID` in `.secrets/.env` before running it; no destination is inferred from a
 previous chat.
 
-**`fastagent/routines/daily-review.ts`**
+**`routines/daily-review.ts`**
 
 ```ts
 import { defineRoutine } from "@fastagent-sh/fastagent";
@@ -363,7 +358,7 @@ export default defineRoutine({
 });
 ```
 
-Create `fastagent/routines/` only when needed. Inspect and test from the workspace:
+Create `routines/` only when needed. Inspect and test from the agent directory:
 
 ```bash
 fastagent routine list
@@ -397,7 +392,7 @@ See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
 Install FastAgent in the application package that imports it as well as in the agent package
 that imports it; keep package versions aligned.
 
-- For the whole service, use `createAgentService(workspace)`, mount its Fetch `handler`, await `ready`,
+- For the whole service, use `createAgentService(agentDir)`, mount its Fetch `handler`, await `ready`,
   and close the service on application shutdown. This includes discovered channels and scheduling.
 - For invocation only, use `createPiAgentFromDefinition` / `createPiAgentFromDir` and
   `createInvokeHandler(agent)`, or consume `agent.invoke` directly. An invoke handler alone does not
@@ -410,7 +405,8 @@ the service assembly, Slack transport, or a separate scheduler. `ExecutionEnv` i
 ## 9. Deploy and preserve the right data
 
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
-host's artifacts from the **workspace**, preserving the CLI's formats and existing user-owned files:
+host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
+Deploying an agent that declares contexts is not supported yet; `deploy` refuses it.
 
 | Host | Generate only | Deploy after approval |
 |---|---|---|
@@ -439,10 +435,10 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 
 | Data | What must survive, and how |
 |---|---|
-| Persona, skills, tools, config, and package lockfile | The image seeds the local workspace and installs only the agent package's dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
+| Prompt files, skills, tools, config, and package lockfile | The image holds the agent directory and installs its dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
 | Runtime session journals, channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
 | Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
-| Business notes, approvals, generated artifacts | Write ongoing work under the volume's `base/`, outside the release-managed definition. Docker, Fly, and Railway preserve it across deploys; AgentCore resets it. Use an external store when the host's retention is insufficient. |
+| Business notes, approvals, generated artifacts | Locally, write ongoing work into a context the agent works on. On a host, the agent's own directory is replaced by every release and contexts are not deployed yet, so use an external store. |
 
 Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,
 so side effects must tolerate repetition.

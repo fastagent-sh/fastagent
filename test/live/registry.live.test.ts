@@ -35,7 +35,7 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
 
     // --no-install: the scaffold's own npm install would re-fetch the same package for nothing.
     await run(cli, ["init", "demo", "--no-install"], { cwd: dir });
-    const agent = join(dir, "demo", "fastagent");
+    const agent = join(dir, "demo");
     for (const file of ["APPEND_SYSTEM.md", "package.json", "tools/fetch-url.ts"]) {
       expect(await exists(join(agent, file)), `init did not produce ${file}`).toBe(true);
     }

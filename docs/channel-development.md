@@ -25,7 +25,7 @@ For first-party channels, the adapter is `@fastagent-sh/fastagent/telegram`, `@f
 
 For a community channel, publish the adapter as a separate package and keep the user's glue in their agent.
 
-## Workspace discovery
+## Discovery
 
 An agent channel is a module in `channels/` that default-exports either a route `ChannelModule` or a `LongConnectionChannelModule`. Route form:
 
