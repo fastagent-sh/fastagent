@@ -1,4 +1,4 @@
-/** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
+/** `fastagent tool <name> '<json>' [agent]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
@@ -6,22 +6,25 @@ import { loadConfig } from "../../engines/pi/config.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";
-import { failStartup, failUsage, gateSecretsOrExit, placementOrExit } from "../fail.ts";
+import { resolveContexts } from "../../contexts/resolve.ts";
+import { agentDirOrExit, failStartup, failUsage, gateSecretsOrExit } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
   // Argument shape first: malformed JSON is a USAGE error (exit 2), independent of whether the directory is an agent
   // (a runtime failure, exit 1).
   const args = parseToolArgs(argsJson);
-  const { agentDir, workspace } = placementOrExit(resolve(dirArg));
+  const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // a tool may read a key from .env — and fetch through the proxy it declares
   const { config } = await loadConfig(agentDir).catch(failStartup);
+  // The same resolution a serve makes, so a tool run here sees the contexts it would see in a turn.
+  const contexts = await Promise.resolve()
+    .then(() => resolveContexts(agentDir, config.contexts))
+    .catch(failStartup);
   // The same tool set dev/start mount (all coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served.
-  const { tools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
-    config,
-    agentDir,
-    workspace,
-  ).catch(failStartup);
+  const { tools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(config, agentDir).catch(
+    failStartup,
+  );
   for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
@@ -42,8 +45,10 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   // that a refusal never hides them, and it cannot know a caller already reported. A repeated line on
   // the refusal path is the cheaper failure than one that depends on this call site remembering.
   gateSecretsOrExit({ declared: toolSecrets, failures: toolFailures, owner: name });
-  // Authored tools read cwd from turnContext; coding tools are already rooted at the workspace.
-  const result = await turnContext.run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
+  // Authored tools read cwd from turnContext; coding tools are already rooted at the agent directory.
+  const result = await turnContext
+    .run({ cwd: agentDir, contexts }, () => tool.execute(`cli-${name}`, args))
+    .catch(failStartup);
   // What the MODEL receives, which is not what is printed below: the printed form is `details` (readable, indented),
   // the model's is the content text (compact JSON). Piping stdout through `wc -c` therefore answers the wrong
   // question, and there is nowhere else to ask this one — so the run that a tool author already does reports it.

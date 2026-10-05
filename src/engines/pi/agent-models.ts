@@ -72,8 +72,6 @@ export interface AgentModels {
 }
 
 export interface AgentModelsOptions {
-  /** Workspace for extension model registration; defaults to agentDir for standalone definitions. */
-  cwd?: string;
   /** Where `extensions/` is listed from; Node's filesystem by default. */
   env?: ExecutionEnv;
   /** Extra providers registered on top of the built-ins (a same id replaces one). */
@@ -131,18 +129,17 @@ export function agentModels(
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
-  const cwd = options.cwd ?? agentDir;
   let discovered: Promise<readonly string[]> | undefined;
   const extensionPaths = (): Promise<readonly string[]> =>
     (discovered ??= agentDir
-      ? loadExtensionPaths(agentDir, { ...(cwd ? { cwd } : {}), ...(options.env ? { env: options.env } : {}) })
+      ? loadExtensionPaths(agentDir, options.env ? { env: options.env } : {})
       : Promise.resolve([]));
   let registry: Promise<ModelRuntime> | undefined;
   const runtime = (): Promise<ModelRuntime> => {
     registry ??= createRuntime().then(async (models) => {
       if (agentDir) {
         await definitionServices({
-          cwd: cwd ?? agentDir,
+          cwd: agentDir,
           modelRuntime: models,
           definition: { skills: [] },
           extensionPaths: await extensionPaths(),

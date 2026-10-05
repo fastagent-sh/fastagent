@@ -3,6 +3,7 @@
  * resolveModelSpec).
  */
 import { existsSync, statSync } from "node:fs";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -15,6 +16,9 @@ import { assertCorsOrigins } from "../../channels/serve.ts";
 import type { HttpSurface } from "../../service.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE } from "../../paths.ts";
+import { type ContextDeclaration, declareContexts } from "../../contexts/declare.ts";
+import { canonicalDeclaration, rewriteContexts } from "../../contexts/config-text.ts";
+import { resolveContexts } from "../../contexts/resolve.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -24,6 +28,11 @@ export interface FastagentConfig {
   model?: string;
   /** Reasoning effort for the model, pi's scale ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"). */
   thinkingLevel?: ThinkingLevel;
+  /**
+   * What the agent works on, or only knows (`readonly`): directories and repositories of their own, never the agent's
+   * directory or one around it. `fastagent context` edits this literal list (docs/configuration.md "Contexts").
+   */
+  contexts?: ContextDeclaration[];
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
   /** What the serve publishes on its port, and to which browsers (each key is documented on {@link HttpSurface}). */
@@ -94,6 +103,15 @@ function refuseUnknownKeys(level: object, valid: readonly string[], prefix: stri
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const path = join(dir, AGENT_CONFIG_FILE);
   if (!existsSync(path)) return { config: {} };
+  return { config: await loadConfigFile(path, dir), path };
+}
+
+/**
+ * Load and validate the config module at `path` for the agent in `dir`. Not only `loadConfig`'s: `fastagent context`
+ * imports a candidate file through it before replacing the real one, so a candidate is held to every rule the real
+ * file is.
+ */
+async function loadConfigFile(path: string, dir: string): Promise<FastagentConfig> {
   let mod: { default?: unknown };
   try {
     // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process (the first-run
@@ -115,7 +133,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw. This is NOT redundant with `defineConfig`'s types: Node strips types without checking them,
   // so `modle:` reaches here whatever the editor said, and silently degrading to defaults is the failure it would
   // otherwise cause.
-  refuseUnknownKeys(c, ["model", "thinkingLevel", "tools", "http", "deploy", "sessionControl"], "", path);
+  refuseUnknownKeys(c, ["model", "thinkingLevel", "contexts", "tools", "http", "deploy", "sessionControl"], "", path);
+  try {
+    declareContexts(c.contexts, dir);
+  } catch (error) {
+    throw new Error(`${path}: ${(error as Error).message}`);
+  }
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
   }
@@ -175,7 +198,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   // apt entries are Debian package names.
   validateStringList(c.deploy?.apt, "deploy.apt", /^[a-z0-9][a-z0-9.+-]*$/, "a Debian package name", path);
-  return { config: c, path };
+  return c;
 }
 
 /** The provider prefix of a "provider/modelId" spec. */
@@ -236,6 +259,40 @@ export function resolveModelSpec(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? (env.FASTAGENT_MODEL || config.model);
+}
+
+/** Where a candidate config is imported before it replaces the real one: beside it, and not a code input `dev` watches. */
+const CANDIDATE_CONFIG_FILE = ".fastagent.config.next.ts";
+
+/**
+ * Replace the agent's `contexts` with `declarations`, in the literal list in fastagent.config.ts. Every context is
+ * resolved first (it exists, it is not nested with the agent); then the candidate file is written beside the config,
+ * imported, and compared with what it meant to declare. Only a match replaces the config, so a refusal leaves it, and
+ * any process watching it, untouched.
+ */
+export async function writeContexts(agentDir: string, declarations: readonly ContextDeclaration[]): Promise<void> {
+  resolveContexts(agentDir, declarations);
+  const path = join(agentDir, AGENT_CONFIG_FILE);
+  const src = await readFile(path, "utf8");
+  let next: string;
+  try {
+    next = rewriteContexts(src, declarations);
+  } catch (error) {
+    throw new Error(`cannot edit ${path}: ${(error as Error).message}`);
+  }
+  const candidate = join(agentDir, CANDIDATE_CONFIG_FILE);
+  await writeFile(candidate, next);
+  try {
+    const written = (await loadConfigFile(candidate, agentDir)).contexts ?? [];
+    const meant = JSON.stringify(declarations.map(canonicalDeclaration));
+    const got = JSON.stringify(written.map(canonicalDeclaration));
+    if (got !== meant) {
+      throw new Error(`cannot edit ${path}: the edited file would declare ${got}, not ${meant} — edit it by hand`);
+    }
+    await rename(candidate, path);
+  } finally {
+    await rm(candidate, { force: true });
+  }
 }
 
 /**

@@ -24,7 +24,7 @@ import {
   scaffoldCompanionTools,
 } from "../../scaffold/add-channel.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
-import { failStartup, failUsage, placementOrExit } from "../fail.ts";
+import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -37,9 +37,9 @@ export async function runAddChannel(
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
+  const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
-  // Paths are printed to someone standing in their CWD, usually the workspace, while every file belongs to the AGENT
+  // Paths are printed to someone standing in their CWD, which may be elsewhere, while every file belongs to the AGENT
   // dir — prefix them, or they point at nothing.
   const agentFromCwd = displayPath(process.cwd(), target);
   const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
@@ -259,7 +259,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
+  const target = agentDirOrExit(resolve(dirArg));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare missing-argument line.
     failUsage(

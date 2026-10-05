@@ -1,4 +1,8 @@
-/** Deployment-owned initialization; the workspace itself belongs to the running agent. */
+/**
+ * Deployment-owned initialization of a host's storage: the lease, the release journal, and the definition each
+ * release replaces. The instance's state and credentials (`.state/`, `.secrets/`) sit beside the definition and
+ * outlive every release.
+ */
 import { cp, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -11,6 +15,9 @@ import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
+
+/** Where the storage holds the deployed definition, the agent's working directory on the host. */
+export const DEPLOYED_DEFINITION_DIR = "definition";
 
 /** The deployment's own bookkeeping on the storage: the lease, the release journal, the install marker. */
 const deploymentMeta = (root: string): string => join(root, ".deployment");
@@ -28,9 +35,9 @@ export interface DeploymentRelease {
   model?: string;
 }
 
-/** The manifest names a directory the container joins onto the workspace root, so the spelling is
- *  constrained. `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects
- *  is the author's directory name, not a corrupt manifest. */
+/** The manifest names the agent the storage belongs to, and that name is also a context's name rule (one path
+ *  segment). `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects is the author's
+ *  directory name, not a corrupt manifest. */
 export function isReleaseAgentName(name: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(name);
 }
@@ -52,7 +59,7 @@ export function parseDeploymentRelease(raw: string): DeploymentRelease {
 
 /**
  * Project a release's own declarations into the environment it was resolved FOR — the receiving half of the model
- * chain, run by `prepareStartWorkspace` BEFORE the workspace's `.env` is read (so either source outranks a value
+ * chain, run by `prepareStartWorkspace` BEFORE the agent's `.env` is read (so either source outranks a value
  * edited on the box).
  *
  * `||=`: a variable the platform already holds still wins, because the deployment declares only the half of this
@@ -71,7 +78,7 @@ export function applyReleaseEnv(release: DeploymentRelease, env: NodeJS.ProcessE
             release.model ? ", which outranks the release manifest" : ""
           }`
         : "the release manifest (redeploy to change it)"
-    }; editing FASTAGENT_MODEL in this workspace's .env does not override it`,
+    }; editing FASTAGENT_MODEL in the deployed agent's .env does not override it`,
   );
 }
 
@@ -81,32 +88,30 @@ export function isModelSpec(value: string): boolean {
   return /^\S+\/\S+$/.test(value);
 }
 
-interface PendingRelease {
-  release: DeploymentRelease;
-  initial: boolean;
-}
-
 /** A completed staging tree is published before its journal; readers start only after recovery. */
-async function finishRelease(root: string, pending: PendingRelease): Promise<void> {
+async function finishRelease(root: string, release: DeploymentRelease): Promise<void> {
   const meta = deploymentMeta(root),
     staged = join(meta, "staged"),
     previous = join(meta, "previous");
-  const target = pending.initial ? join(root, "base") : join(root, "base", pending.release.agent);
+  const target = join(root, DEPLOYED_DEFINITION_DIR);
   if (await exists(staged)) {
     if (await exists(target)) {
-      if (pending.initial || (await exists(previous))) throw new Error(`deployment recovery conflict at ${target}`);
+      if (await exists(previous)) throw new Error(`deployment recovery conflict at ${target}`);
       await rename(target, previous);
     }
     await rename(staged, target);
   } else if (!(await exists(target))) {
     throw new Error(`deployment recovery has neither staged nor active content: ${target}`);
   }
-  writeFileAtomic(join(meta, "applied.json"), JSON.stringify(pending.release));
+  writeFileAtomic(join(meta, "applied.json"), JSON.stringify(release));
   await rm(previous, { recursive: true, force: true });
   await rm(join(meta, "pending.json"));
 }
 
-/** Call while holding the workspace lease. No deployment replaces existing work outside the definition. */
+/**
+ * Call while holding the deployment lease. Replaces the deployed definition with the release's (`source`, the image's
+ * copy) and returns where it now is; nothing else on the storage is touched.
+ */
 export async function applyDeploymentRelease(
   source: string,
   root: string,
@@ -116,41 +121,43 @@ export async function applyDeploymentRelease(
     staged = join(meta, "staged"),
     pendingPath = join(meta, "pending.json");
   await mkdir(meta, { recursive: true });
+  // A storage an earlier FastAgent laid out holds the agent's whole workspace there, which this one would leave
+  // behind unread: said, never silently abandoned.
+  const formerWorkspace = join(root, "base");
+  if (await exists(formerWorkspace)) {
+    throw new Error(
+      `${formerWorkspace} holds a workspace from an earlier FastAgent, which no longer copies one to the host — ` +
+        `move out what you need and delete it, or deploy onto fresh storage`,
+    );
+  }
   if (await exists(pendingPath)) {
-    const pending = JSON.parse(await readFile(pendingPath, "utf8")) as PendingRelease;
-    pending.release = parseDeploymentRelease(JSON.stringify(pending.release));
-    if (typeof pending.initial !== "boolean") throw new Error("invalid pending deployment journal");
+    const pending = parseDeploymentRelease(await readFile(pendingPath, "utf8"));
     await finishRelease(root, pending);
   }
   const appliedPath = join(meta, "applied.json");
   const applied = (await exists(appliedPath)) ? parseDeploymentRelease(await readFile(appliedPath, "utf8")) : undefined;
-  const workspace = join(root, "base");
+  const definition = join(root, DEPLOYED_DEFINITION_DIR);
   if (applied?.agent !== undefined && applied.agent !== release.agent) {
-    throw new Error(`deployment selects ${release.agent}, but this workspace belongs to ${applied.agent}`);
+    throw new Error(`deployment selects ${release.agent}, but this storage belongs to ${applied.agent}`);
   }
   // Logged on BOTH paths: rebuilding an image without regenerating the manifest keeps the id, and a
   // deployment that silently kept the old definition looks identical to one that took the new one.
   if (applied?.id === release.id) {
-    log.info(`[fastagent] release ${release.id} is already applied — keeping the workspace's definition`);
-    return workspace;
+    log.info(`[fastagent] release ${release.id} is already applied — keeping the deployed definition`);
+    return definition;
   }
-  const initial = applied === undefined;
-  if (initial && (await exists(workspace)))
-    throw new Error(`refusing to initialize over an existing unowned workspace: ${workspace}`);
-  const definition = join(source, release.agent);
-  if (!(await exists(definition)) || !(await lstat(definition)).isDirectory())
-    throw new Error(`the release must contain its agent directory: ${definition}`);
-  log.info(
-    initial
-      ? `[fastagent] seeding the workspace from release ${release.id}`
-      : `[fastagent] publishing release ${release.id} over base/${release.agent}`,
-  );
+  if (applied === undefined && (await exists(definition))) {
+    throw new Error(`refusing to initialize over an existing unowned definition: ${definition}`);
+  }
+  if (!(await exists(source)) || !(await lstat(source)).isDirectory()) {
+    throw new Error(`the release must contain its agent directory: ${source}`);
+  }
+  log.info(`[fastagent] publishing release ${release.id} as ${DEPLOYED_DEFINITION_DIR}/`);
   await rm(staged, { recursive: true, force: true });
-  await cp(initial ? source : join(source, release.agent), staged, { recursive: true, verbatimSymlinks: true });
-  const pending: PendingRelease = { release, initial };
-  writeFileAtomic(pendingPath, JSON.stringify(pending));
-  await finishRelease(root, pending);
-  return workspace;
+  await cp(source, staged, { recursive: true, verbatimSymlinks: true });
+  writeFileAtomic(pendingPath, JSON.stringify(release));
+  await finishRelease(root, release);
+  return definition;
 }
 
 async function mountedPaths(): Promise<string[]> {
@@ -187,7 +194,7 @@ export async function leaseDeployment(metadata: string, waitSeconds = 35): Promi
     });
     const [code, signal] = await once(child, "close");
     if (code !== 0)
-      throw new Error(`could not acquire workspace lease at ${metadata}: flock ${signal ?? code} ${stderr.trim()}`);
+      throw new Error(`could not acquire deployment lease at ${metadata}: flock ${signal ?? code} ${stderr.trim()}`);
     return async () => {
       closeSync(fd);
     };
@@ -196,13 +203,13 @@ export async function leaseDeployment(metadata: string, waitSeconds = 35): Promi
     // A custom base image without util-linux fails every boot; the bare spawn error names neither
     // the binary nor why a lease needs one.
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      throw new Error(`the deployed workspace lease needs the \`flock\` binary (util-linux): ${String(error)}`);
+      throw new Error(`the deployment lease needs the \`flock\` binary (util-linux): ${String(error)}`);
     throw error;
   }
 }
 
 /**
- * Prepare the deployed workspace and return its path.
+ * Prepare the deployed definition and return its path.
  *
  * The lease is NOT returned: it stays held for the process lifetime, because channel activation can
  * start background writers that `close()` does not drain. The kernel drops it when the process exits.

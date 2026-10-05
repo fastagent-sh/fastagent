@@ -23,14 +23,12 @@ export interface RailwayRunPlan {
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
-  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
   /** Opt-in (CLI `--into-linked`) to provision INTO the project this directory is already linked to. */
   intoLinked: boolean;
-  /** `RAILWAY_DOCKERFILE_PATH` value (`/fastagent/Dockerfile`). */
-  dockerfilePath: string;
   /**
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
@@ -183,7 +181,6 @@ export async function deployRailwayRun(
   const machineryVars = [
     `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
     `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
-    `RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`,
   ];
   // The secret NAMES, not a count: `--run` uploads the whole value file, so the operator has to be able to see the
   // list on every host.
@@ -214,7 +211,7 @@ export async function deployRailwayRun(
       return gate("`railway volume add` failed — see the railway output above");
     }
     // Deploying before the volume is attached boots a container with no volume, which `start` refuses (it must
-    // never seed a workspace onto a disk that vanishes on restart).
+    // never publish a definition onto a disk that vanishes on restart).
     let status: string | undefined;
     for (let waited = 0; ; waited += VOLUME_POLL_MS) {
       const read = await volumeStatus();

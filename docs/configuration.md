@@ -7,7 +7,8 @@ status: current
 # Configuration
 
 - Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`), `skills/`, `prompts/`, `tools/`, and
-  `AGENTS.md` project context.
+  what its contexts provide: each one's `AGENTS.md` and skills.
+- What it works on and knows is declared in `fastagent.config.ts` as `contexts`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
@@ -20,6 +21,7 @@ accept `.ts`, `.js`, or `.mjs`.)
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
+  contexts: [{ local: "/Users/me/code/app", copy: true }],
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
 } satisfies FastagentConfig;
@@ -32,6 +34,7 @@ Every key is optional. Unknown keys fail at startup.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `contexts` | `[]` | What the agent works on and knows. See [Contexts](#contexts). |
 | `model` | none | Default model spec, `provider/modelId`. With none set, the first-run picker asks and writes the choice here. |
 | `thinkingLevel` | `"medium"` | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Levels a model does not support are clamped. |
 | `tools` | `[]` | Extra programmatic tools appended after the coding tools. Prefer `tools/` files. |
@@ -190,10 +193,50 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
   takes over again.
 - A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.
 
+## Contexts
+
+An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
+`.secrets/`. What it works on is declared, never inferred from where the directory sits:
+
+```ts
+export default {
+  contexts: [
+    { local: "/Users/me/code/app" },                             // works on, on this machine
+    { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
+  ],
+} satisfies FastagentConfig;
+```
+
+| Key | Meaning |
+|---|---|
+| `local` | The directory, absolute or relative to the agent directory |
+| `copy` | An instance on a host gets its own copy, so its contents ship in the image. Without it the context exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
+| `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
+| `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's name |
+
+`fastagent init <dir> --context <dir>` and `fastagent context add/remove` edit this list
+([CLI](cli.md#fastagent-context)); it can be edited by hand too. Their order means nothing. A context may not
+contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one. Every
+command refuses such a declaration at load, and one whose directory does not exist.
+
+What each context gives the agent, re-read every turn:
+
+- **Its `AGENTS.md`**, at the context's root, as project context. The agent directory's own `AGENTS.md` is not
+  loaded: it is for whoever changes the agent, and the agent is told so.
+- **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<context>/<skill>`: the `deploy` skill of the
+  context `app` is `app/deploy`, so it never collides with the agent's own or another context's.
+- **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
+  runs a command in it with `cd <location> && …`.
+- **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
+
+The locations are resolved when a process starts; editing `contexts` restarts `dev`. A GitHub repository as a
+context, and deploying an agent that has contexts, are not supported yet: `deploy` refuses an agent that declares
+one, by name.
+
 ## The system prompt
 
 pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from `AGENTS.md`, the skills, and the working directory. Two files in the agent directory
+is), the project context from each context's `AGENTS.md`, the skills, and the working directory. Two files in the agent directory
 change it, both re-read every turn:
 
 | File | Effect |
@@ -206,8 +249,9 @@ pi's default says the agent is "an expert coding assistant", so an identity ("Yo
 in one of the two. A blank `SYSTEM.md` or `APPEND_SYSTEM.md` is reported and not used, since pi treats an empty
 prompt as none. `deploy` loads the definition too, so any of these refusals stops it before an image is built.
 
-FastAgent adds its own sections after these, whichever wrote the prompt: a note about tools that are registered but
-not loaded yet, and on a deployed host how long its storage lasts and how the agent changes itself.
+FastAgent adds its own sections after these, whichever wrote the prompt: where the agent is and what it works on and
+knows ([contexts](#contexts)), a note about tools that are registered but not loaded yet, and on a deployed host how
+long its storage lasts and how the agent changes itself.
 
 The machine's `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are never read: a system prompt from someone's machine
 would make the agent theirs.
@@ -228,14 +272,17 @@ below it. A name found twice in the definition takes the first and is reported, 
 | Prompt templates | `prompts/`, `.pi/prompts/`, then the machine's (below) |
 | Extensions | `extensions/` only; a `.pi/extensions/` is reported as not loaded |
 
-A skill's name may not contain `/`: it is refused in the definition and left out of the machine's.
+A skill's name may not contain `/`, which names the context a skill comes from: it is refused in the definition and
+left out, with a warning, from the machine's and a context's.
 
 ## What the machine lends the agent
 
 **Skills** and **prompt templates** also load from this machine, through pi's
-[Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, project
-`.pi/skills/` and `.agents/skills/` around the working directory). A name in the definition wins over the machine's
-silently: `fastagent add skill <name>` vendors one into `skills/` for exactly that.
+[Agent Skills](https://agentskills.io/specification) discovery (`~/.pi/agent/skills/`, `~/.agents/skills/`, and
+`.agents/skills/` in the directories above the agent's, up to its repository's root). pi's project scope is the agent
+directory, so its `.pi/skills/`, `.agents/skills/` and `.pi/prompts/` are the definition's, not the machine's. A name
+in the definition wins over the machine's silently: `fastagent add skill <name>` vendors one into `skills/` for
+exactly that.
 
 Skills and prompts from installed pi **packages** load too. A listed package that is not installed is skipped with
 a warning; fastagent never installs one. The machine is read once, at startup.
@@ -250,8 +297,9 @@ machine's `prompts/` for `chat`, or put a template that belongs to the agent in 
 ## Engine settings: `~/.pi/agent/settings.json`
 
 Compaction, retries, prompt-cache warming and transport timeouts are pi settings. `dev`, `start` and `chat` read
-the machine's `~/.pi/agent/settings.json` and the project's `<workspace>/.pi/settings.json` (deep-merged, project
-wins) once at startup. The project file is inside the workspace, so it ships with a deploy.
+the machine's `~/.pi/agent/settings.json` and the agent directory's `.pi/settings.json` (deep-merged, the agent's
+wins) once at startup. The agent's file is part of its definition, so it ships with a deploy. Nothing of pi's
+project scope is read from a context.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -268,8 +316,8 @@ wins) once at startup. The project file is inside the workspace, so it ships wit
 
 ### The prompt lives in the session record
 
-pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or
-`AGENTS.md` is appended
+pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or a
+context's `AGENTS.md` is appended
 as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
 others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
 
@@ -329,7 +377,8 @@ Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
 
-Generated deployments keep the workspace at `<persistent-root>/base/`, with `.state/` and `.secrets/` beside it.
+Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
+with `.state/` and `.secrets/` beside it.
 The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
 [Deploy](deploy.md#aws-bedrock-agentcore)).
 
@@ -431,29 +480,16 @@ A served command settles the invoke:
 Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
 Extension code changes need a restart; `dev` restarts on its own.
 
-### When the repo already owns `tools/` or `channels/`
-
-No conflict: the agent lives in `./fastagent/`, and FastAgent scans only the agent's own directories. An enabled
-file under `tools/`, `channels/` or `routines/` that cannot load fails the run.
-
 ### More than one agent
 
-Several agent directories can share one workspace:
+Each agent is a directory of its own, with its own config, prompt, skills, tools, channels, routines, `.state/` and
+`.secrets/`. Several agents can work on one project: each declares it as a context.
 
 ```bash
-fastagent init . --agent-dir reviewer
-fastagent init . --agent-dir releaser
-FASTAGENT_AGENT=reviewer fastagent dev .
-FASTAGENT_AGENT=releaser fastagent deploy fly .
+fastagent init ~/agents/reviewer --context ~/code/app
+fastagent init ~/agents/releaser --context ~/code/app
+fastagent dev ~/agents/reviewer
 ```
-
-Each has its own config, prompt, skills, tools, channels, routines, `.state/`, and `.secrets/`. With one agent,
-selection is automatic; with several, the one named `fastagent` answers unless `FASTAGENT_AGENT` (shell or
-`.envrc`) names another.
-
-The workspace is always the agent directory's parent: `fastagent dev .` and `fastagent dev reviewer` both work on
-the project. For separate workspaces, run `fastagent init reviewer` and `fastagent init releaser` (creating
-`reviewer/fastagent/` and `releaser/fastagent/`). `init` refuses a placement that would hide another definition.
 
 ## Channels
 

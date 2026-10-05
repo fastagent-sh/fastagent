@@ -1,10 +1,10 @@
-/** `fastagent destroy agentcore [dir]`: remove every AWS resource the deploy created. */
+/** `fastagent destroy agentcore [agent]`: remove every AWS resource the deploy created. */
 import { basename, resolve } from "node:path";
 import { destroyAgentcoreDeployment } from "../../deploy/agentcore/destroy.ts";
 import { agentcoreName } from "../../deploy/agentcore/plan.ts";
 import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
-import { failStartup, failUsage, placementOrExit } from "../fail.ts";
+import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface DestroyOptions {
   run?: boolean;
@@ -16,13 +16,11 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
   // the other hosts' own commands. This stays as the seam: a host added to `choices` must not be silently
   // treated as agentcore.
   if (host !== "agentcore") failUsage(`destroy: unsupported host "${host}"`);
-  const placement = placementOrExit(resolve(dirArg));
-  enterAgentEnv(placement.agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy
-  const name = agentcoreName(basename(placement.workspace));
-  const outcome = await destroyAgentcoreDeployment(
-    { name, run: opts.run === true },
-    awsRunner(placement.workspace),
-    (message) => console.error(`[fastagent] destroy: ${message}`),
+  const agentDir = agentDirOrExit(resolve(dirArg));
+  enterAgentEnv(agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy
+  const name = agentcoreName(basename(agentDir));
+  const outcome = await destroyAgentcoreDeployment({ name, run: opts.run === true }, awsRunner(agentDir), (message) =>
+    console.error(`[fastagent] destroy: ${message}`),
   );
   if (!outcome.ok) {
     // THE WHOLE PICTURE, before the gate: a half-finished teardown is exactly when an operator needs to know

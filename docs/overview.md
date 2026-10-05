@@ -8,30 +8,32 @@ status: current
 
 **Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, expose it as an API endpoint, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. Add a `fastagent/` folder to any project (`fastagent init`), grow it with `APPEND_SYSTEM.md`, `skills/`, `tools/`, channels, and markdown context, and FastAgent serves it as a live service that works on the project around it.
+It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own (`fastagent init`): grow it with `APPEND_SYSTEM.md`, `skills/`, `tools/`, channels, and markdown context, declare the projects it works on as contexts, and FastAgent serves it as a live service.
 
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
-project/                    # the workspace: what the agent works on
-├── AGENTS.md               # optional project context
-└── fastagent/              # the agent
-    ├── fastagent.config.ts # the marker, plus deployment choices
-    ├── APPEND_SYSTEM.md    # optional standing instructions (SYSTEM.md replaces pi's default prompt)
-    ├── skills/             # optional reusable markdown expertise
-    ├── tools/              # optional code tools
-    ├── channels/           # optional webhook/bot adapters
-    ├── routines/           # optional named units of work (a cron, an API call, or both)
-    ├── extensions/         # optional pi extension modules (see configuration.md)
-    └── reference.md        # optional markdown context (any file layout)
+reviewer/                   # the agent, and its working directory
+├── fastagent.config.ts     # the marker, its contexts, plus deployment choices
+├── APPEND_SYSTEM.md        # optional standing instructions (SYSTEM.md replaces pi's default prompt)
+├── skills/                 # optional reusable markdown expertise
+├── tools/                  # optional code tools
+├── channels/               # optional webhook/bot adapters
+├── routines/               # optional named units of work (a cron, an API call, or both)
+├── extensions/             # optional pi extension modules (see configuration.md)
+└── reference.md            # optional markdown context (any file layout)
+
+app/                        # a context it works on, declared in fastagent.config.ts
+├── AGENTS.md               # optional project context, loaded with the agent
+└── .agents/skills/         # optional skills the project provides, named app/<skill>
 ```
 
 ## What FastAgent provides
 
-1. **The agent is a folder in your project** — `fastagent/` holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`), `skills/`, `tools/`, `channels/`, and markdown context as files you can inspect, edit, and commit. The project around it is the agent's workspace, and its `AGENTS.md` is project context.
+1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`), `skills/`, `tools/`, `channels/`, and markdown context as files you can inspect, edit, and commit. What it works on and knows is declared as [contexts](configuration.md#contexts), each with its `AGENTS.md` as project context.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
-3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
+3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
+4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent routine history`).
 
@@ -122,7 +124,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
-- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
+- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.

@@ -40,10 +40,9 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   mountPath: "/data",
   secrets: {},
   missingSecrets: [],
-  valueFile: "fastagent/.secrets/.env",
+  valueFile: ".secrets/.env",
   channels: [],
   intoLinked: false,
-  dockerfilePath: "/fastagent/Dockerfile",
   ...over,
 });
 
@@ -92,8 +91,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       "status --json",
       "init --name bot",
       "add --service bot --variables FASTAGENT_STATE_DIR=/data/.state", // a bare `add` prompts in a terminal
-      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets " +
-        "RAILWAY_DOCKERFILE_PATH=/fastagent/Dockerfile --service bot", // first --service cmd, BEFORE the volume
+      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
       "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
       "volume list --json",
@@ -138,28 +136,6 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       gate: expect.stringMatching(/^not logged in: …\. This deploy registered no webhook.*railway --run --into-linked/),
     });
     expect(order).toEqual(["health", "login"]);
-  });
-
-  it("RAILWAY_DOCKERFILE_PATH rides with the machinery variables, BEFORE the first up", async () => {
-    // Railway's documented service-variable route to a non-root Dockerfile — without it the build
-    // auto-detects the workspace root (config-as-code could carry the path, but pointing Railway at
-    // fastagent/railway.json is dashboard-only; the variable keeps --run a one-command deploy).
-    const { railway, cmds } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: "" };
-      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
-      return {};
-    });
-    const out = await run(plan({ dockerfilePath: "/fastagent/Dockerfile" }), railway);
-    expect(out.ok).toBe(true);
-    expect(cmds()).toContain(
-      "variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets " +
-        "RAILWAY_DOCKERFILE_PATH=/fastagent/Dockerfile --service bot",
-    );
-    // The variable precedes `up` — the FIRST build must already use the workspace Dockerfile.
-    const list = cmds();
-    expect(list.findIndex((c) => c.includes("RAILWAY_DOCKERFILE_PATH"))).toBeLessThan(
-      list.findIndex((c) => c.startsWith("up")),
-    );
   });
 
   // What is railway's here is the MINTED domain reaching the shared registrar and the gate becoming

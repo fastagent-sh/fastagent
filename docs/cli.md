@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, routine, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, context, dev, chat, invoke, tool, start, login, models, add, routine, and deploy commands with flags."
 status: current
 ---
 
@@ -10,33 +10,35 @@ status: current
 fastagent <command> [args] [options]
 ```
 
-Most commands take an optional workspace directory (the agent is there, or in its `./fastagent/`). The default is
-the current directory.
+Most commands take an optional `[agent]`: the agent directory, the one holding `fastagent.config.ts`. The default is
+the current directory. Run inside an agent's subdirectory, a command refuses and names the agent's root; anywhere
+else that is not an agent, it refuses and points at `fastagent init`. Nothing is searched for.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `init [dir]` | Scaffold a runnable agent. |
-| `info [dir]` | Show what an agent assembles into, without serving. |
+| `init <dir>` | Create an agent in a directory of its own; `--context` declares what it works on. |
+| `info [agent]` | Show what an agent assembles into, without serving. |
+| `context list\|add\|remove` | List, add or remove what the agent works on and knows. |
 | `models [search]` | List model specs. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
-| `dev [dir]` | Serve locally with watch/reload. |
-| `chat [dir]` | Open the assembled agent in pi's interactive TUI. |
-| `invoke <message> [dir]` | Run one turn and exit. |
-| `routine run <name> [dir]` | Run one routine's turn now, cron or not. |
-| `routine history <name> [dir]` | Print a routine's recent fires. |
-| `routine list [dir] [--json]` | Every declared routine (next cron instant, or `on demand`) plus pending wake-ups. |
-| `tool <name> <json> [dir]` | Run one tool directly. |
-| `add telegram\|slack\|feishu\|lark [dir]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. |
-| `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
-| `deploy docker [dir]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
-| `deploy fly [dir]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
-| `deploy railway [dir]` | Generate `railway.json`, `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
-| `deploy agentcore [dir]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
-| `logs agentcore [dir]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
-| `destroy agentcore [dir] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
-| `start [dir]` | Serve without watch. |
+| `dev [agent]` | Serve locally with watch/reload. |
+| `chat [agent]` | Open the assembled agent in pi's interactive TUI. |
+| `invoke <message> [agent]` | Run one turn and exit. |
+| `routine run <name> [agent]` | Run one routine's turn now, cron or not. |
+| `routine history <name> [agent]` | Print a routine's recent fires. |
+| `routine list [agent] [--json]` | Every declared routine (next cron instant, or `on demand`) plus pending wake-ups. |
+| `tool <name> <json> [agent]` | Run one tool directly. |
+| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. |
+| `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
+| `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
+| `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
+| `deploy railway [agent]` | Generate `railway.json`, `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
+| `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
+| `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
+| `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
+| `start [agent]` | Serve without watch. |
 
 `deploy` writes artifacts and prints a runbook; only `--run` touches a host. Existing artifacts are kept unless
 `--force`; a generated one that no longer matches the definition is flagged stale and gates `--run`. See
@@ -45,39 +47,64 @@ the current directory.
 ## `fastagent init`
 
 ```bash
-fastagent init [dir] [--no-install] [--agent-dir <name>]
+fastagent init <dir> [--context <dir>]... [--copy] [--no-install]
 ```
 
-Creates the agent in `./fastagent/` (or `--agent-dir <name>`) inside `dir`: `APPEND_SYSTEM.md`, a
-`writing-great-skills` example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`,
-`.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`. No
-`AGENTS.md` is scaffolded; an existing one in the workspace is read as project context. The directory around the
-agent gets no writes and becomes its workspace.
+Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
+example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
+`.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`.
 
-`init` refuses when the target already holds a `fastagent.config.ts` or other content. `--agent-dir` must be a
-single directory name; to deploy, keep it to letters, digits, `-` and `_`. A second agent beside an existing one is
-supported; see [More than one agent](configuration.md#more-than-one-agent).
+Each `--context <dir>` declares a directory the agent works on, as `{ local: "<absolute path>" }` in the config's
+`contexts` list (see [contexts](configuration.md#contexts)). `--copy` declares each with `copy: true`, so an instance
+on a host gets its own copy; without it the context stays on this machine and deploying refuses the agent. Every
+context is checked before anything is written: it must exist, and it may not contain the agent directory or sit
+inside it. Without `--context` the agent has none and works only in its own directory.
+
+`init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
+the agent elsewhere and attaches the project: `fastagent init <new directory> --context <project>`. It also refuses a
+directory inside another agent. To deploy, keep the directory's name to letters, digits, `-` and `_`.
 
 A `fastagent.config.ts` makes a directory an agent, whatever its name. Its contents may be `export default {}`.
 
 ## `fastagent info`
 
 ```bash
-fastagent info [dir] [--json] [--model provider/modelId]
+fastagent info [agent] [--json] [--model provider/modelId]
 ```
 
 Prints, without serving:
 
-- agent and workspace directories, config path, model and its source,
-- the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`) and context files (`AGENTS.md`),
-- skills and their diagnostics,
+- the agent directory, its contexts (`works on` / `knows`, each with its location), config path, model and its
+  source,
+- the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
+- skills (each context's named `<context>/<skill>`) and their diagnostics,
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
 - routines with their next fire instant (a broken routine file is reported),
 - declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
-Read-only.
+A context that cannot be resolved (its directory is missing, say) is reported, not fatal. `--json` carries
+`contexts`, `contextsError` and `contextFiles` (each context's `AGENTS.md`). Read-only.
+
+## `fastagent context`
+
+```bash
+fastagent context list [agent] [--json]
+fastagent context add <dir> [agent] [--readonly] [--copy] [--name <name>]
+fastagent context remove <name> [agent]
+```
+
+Edits the literal `contexts` list in `fastagent.config.ts`. `add` declares the directory as `{ local }`, with an
+absolute path, the way `init --context` does; `--readonly` makes it a context the agent knows rather than works on,
+and `--copy` gives an instance on a host its own copy (its contents ship in the image; without it, deploying
+refuses). A context's name defaults to its directory's; `add` asks for `--name` when that name is taken (ignoring
+case) or is not one segment of letters, digits, `-` and `_`. `remove` drops the declaration; the directory itself is
+untouched.
+
+Both write a candidate file beside the config, import it, and replace the config only when it declares exactly the
+intended list, so a refusal leaves the config as it was. A list that is computed (a variable, a spread) is refused:
+edit it by hand. `list --json` prints each context as every command resolves it.
 
 ## `fastagent models`
 
@@ -87,8 +114,8 @@ fastagent models [search] [--refresh] [-g|--global]
 
 Lists the model specs (`provider/modelId`) the agent in the current directory can name, optionally filtered: pi's
 built-ins, its `models-store.json` and `models.json` over the machine's (`~/.fastagent/`). Outside an agent, or with
-`-g`, it lists the machine's. Inside an agent's subdirectory, or among several agents with no default, it refuses
-(as `login` does) rather than list the machine's without the agent's own files: `cd` to the agent, or pass `-g`.
+`-g`, it lists the machine's. Inside an agent's subdirectory it refuses (as `login` does) rather than list the
+machine's without the agent's own files: `cd` to the agent, or pass `-g`.
 
 `--refresh` first fetches the model catalog from pi.dev into `models-store.json`, so models released after the
 installed pi appear: the agent's, with its credentials (commit the file; it ships with a deploy), or with `-g` the
@@ -126,11 +153,11 @@ refuses and says where to `cd`.
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
+fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are re-read every
-turn. A supervisor restarts the
+Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates
+are re-read every turn. A supervisor restarts the
 worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`.
 
 With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `routine run`,
@@ -142,14 +169,13 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId]
+fastagent chat [agent] [--model provider/modelId]
 ```
 
-Opens the agent in pi's TUI with the definition's prompt files, `AGENTS.md`, skills, prompt templates, `tools/` and
-`extensions/`,
-plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
+Opens the agent in pi's TUI with the definition's prompt files, its contexts' `AGENTS.md`, skills, prompt
+templates, `tools/` and `extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
-- Sessions are pi's per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), separate from served
+- Sessions are pi's per-directory records (`~/.pi/agent/sessions/<encoded agent directory>`), separate from served
   sessions.
 - Auth is fastagent's (`FASTAGENT_AUTH_PATH` > the agent's `auth.json`); pi's `/login` writes to the same file.
 - TUI settings (theme, keybindings, editor) come from `~/.pi/agent/settings.json`. Reasoning effort comes from
@@ -158,7 +184,7 @@ plus the machine's skills and prompt templates. Your pi extensions and `APPEND_S
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [dir] [--model provider/modelId] [--no-input]
+fastagent invoke <message> [agent] [--model provider/modelId] [--no-input]
 ```
 
 Runs one turn and exits: answer text to stdout, tool and diagnostic lines to stderr, non-zero exit on `failed`.
@@ -166,7 +192,7 @@ Runs one turn and exits: answer text to stdout, tool and diagnostic lines to std
 ## `fastagent routine run`
 
 ```bash
-fastagent routine run <name> [dir] [--model provider/modelId] [--no-input]
+fastagent routine run <name> [agent] [--model provider/modelId] [--no-input]
 ```
 
 Fires `routines/<name>.ts` now, in the routine's session, and streams like `invoke`. It does not advance the
@@ -176,7 +202,7 @@ routine's fire state. No name → exit 2; an unknown name → exit 1 with the av
 ## `fastagent routine history`
 
 ```bash
-fastagent routine history <name> [dir] [--json]
+fastagent routine history <name> [agent] [--json]
 ```
 
 Prints a routine's recent fires: time, outcome, and duration. Text output shows the last 20; `--json` shows all
@@ -197,7 +223,7 @@ Wake-ups have no history here, only log lines.
 ## `fastagent routine list`
 
 ```bash
-fastagent routine list [dir] [--json]
+fastagent routine list [agent] [--json]
 ```
 
 Lists every declared routine with its next cron instant (or `on demand`), and the agent's pending wake-ups (id,
@@ -207,10 +233,11 @@ resort, edit `<state root>/schedule/wakeups.json`.
 ## `fastagent tool`
 
 ```bash
-fastagent tool <name> '<json-args>' [dir]
+fastagent tool <name> '<json-args>' [agent]
 ```
 
-Runs one tool directly, without a model or server. It gets the workspace cwd but no session.
+Runs one tool directly, without a model or server. It gets the agent directory as `cwd` and the agent's contexts,
+but no session.
 
 ```bash
 fastagent tool fetch-url '{"url":"https://example.com"}'
@@ -222,10 +249,10 @@ The result goes to stdout; stderr reports its size in model tokens. See
 ## `fastagent add telegram|slack|feishu|lark`
 
 ```bash
-fastagent add telegram [dir]
-fastagent add slack [dir]    # create/install an internal app; --no-onboard scaffolds only
-fastagent add feishu [dir]   # 飞书: scan-to-create the app
-fastagent add lark [dir]     # Lark international: console + credential validation
+fastagent add telegram [agent]
+fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
+fastagent add feishu [agent]   # 飞书: scan-to-create the app
+fastagent add lark [agent]     # Lark international: console + credential validation
                              # feishu/lark take --ingress websocket|webhook (asked when omitted)
 ```
 
@@ -249,7 +276,7 @@ See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](fe
 ## `fastagent add skill`
 
 ```bash
-fastagent add skill <source> [dir] [--update]
+fastagent add skill <source> [agent] [--update]
 ```
 
 Vendors a skill into the agent's `skills/<name>/`. `<source>` is a GitHub-style ref, a local path, or a bare name
@@ -258,7 +285,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-invoke] [--no-input]
+fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-invoke] [--no-input]
 ```
 
 Serves without watch. Binds all interfaces by default.
@@ -270,9 +297,6 @@ bind:     --bind > all interfaces
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets
 ```
-
-`FASTAGENT_AGENT` selects the agent by directory name when a workspace holds several; a name that matches nothing
-fails. Set it per repository (`.envrc`) or per command. `deploy` bakes the selected agent into the image.
 
 ## Global options
 

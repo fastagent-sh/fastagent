@@ -1,7 +1,7 @@
 /**
  * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
  * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`. `--deployment` runs the same login on this
- * workspace's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
+ * agent's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -9,11 +9,11 @@ import { enterAgentEnv } from "../../env.ts";
 import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
 import { agentModels } from "../../engines/pi/agent-models.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
-import { findAgentDir, globalHome, placementDeadEnd, resolvePlacement } from "../../paths.ts";
+import { findAgentDir, globalHome } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
 import { environmentAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
-import { failStartup, failUsage, placementOrExit } from "../fail.ts";
+import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";
 import { isInteractive, terminalLoginIO } from "../shared.ts";
 import { HOSTS } from "./deploy.ts";
@@ -23,7 +23,7 @@ export interface LoginOptions {
   global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
-  /** `--deployment [host]`: log in this workspace's deployment (`true` when no host was named). */
+  /** `--deployment [host]`: log in this agent's deployment (`true` when no host was named). */
   deployment?: string | boolean;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
   stdio?: boolean;
@@ -34,10 +34,8 @@ export interface LoginOptions {
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.stdio) return runStdioLogin(provider, opts);
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
-  const cwd = process.cwd();
-  const agentDir = findAgentDir(cwd);
-  // "Outside an agent" must mean exactly that.
-  if (!agentDir && placementDeadEnd(cwd)) placementOrExit(cwd);
+  // "Outside an agent" must mean exactly that: inside one is refused (findAgentDir), never a global login.
+  const agentDir = optionalAgentDirOrExit(process.cwd());
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
   // need no "is this $HOME?" special case to infer it.
   const loginDir = agentDir ?? globalHome();
@@ -56,7 +54,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // lands somewhere no agent will read.
   if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
     console.error(
-      `[fastagent] no agent here (no fastagent.config.ts, here or one level inside) — ` +
+      `[fastagent] no agent here (no fastagent.config.ts) — ` +
         `logging in GLOBALLY (${authPath}). An agent on this machine uses this file for a provider it has no ` +
         `credential of its own for (no entry in its .secrets/auth.json, no apiKey in its models.json, no env ` +
         `variable), so this is usually what you want; \`cd\` into an agent to give that one its own account instead.`,
@@ -103,9 +101,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
  */
 async function runDeploymentLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.global) failUsage("--deployment logs the deployment in; -g names this machine's global file — pick one");
-  const placement = placementOrExit(process.cwd());
+  const agentDir = agentDirOrExit(process.cwd());
   // The host's CLI must reach the account/region/proxy the deploy used, and those may be definition-local.
-  enterAgentEnv(placement.agentDir);
+  enterAgentEnv(agentDir);
   let host: DeployHost;
   if (typeof opts.deployment === "string") {
     if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment)) {
@@ -116,11 +114,11 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     }
     host = opts.deployment as DeployHost;
   } else {
-    const found = DEPLOY_HOSTS.filter((h) => existsSync(join(placement.agentDir, HOSTS[h].artifact)));
+    const found = DEPLOY_HOSTS.filter((h) => existsSync(join(agentDir, HOSTS[h].artifact)));
     if (found.length !== 1) {
       failUsage(
         found.length === 0
-          ? `no deployment artifacts in ${placement.agentDir} — name the host: --deployment <${DEPLOY_HOSTS.join("|")}>`
+          ? `no deployment artifacts in ${agentDir} — name the host: --deployment <${DEPLOY_HOSTS.join("|")}>`
           : `this agent deploys to ${found.join(" and ")} — name one: --deployment <${found.join("|")}>`,
       );
     }
@@ -132,8 +130,7 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
   }
   const failed = await loginOnBox({
     host,
-    shell: await HOSTS[host].shell(placement).catch(failStartup),
-    placement,
+    shell: await HOSTS[host].shell(agentDir).catch(failStartup),
     ...(provider ? { provider } : {}),
     input,
   });
@@ -171,7 +168,7 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   enterAgentEnv(agentDir);
   // The model environment the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will
   // use.
-  const models = agentModels(agentDir, {}, { cwd: resolvePlacement(agentDir).workspace });
+  const models = agentModels(agentDir);
   const { auth } = models;
   if (opts.ifMissing && provider) {
     // The server's own answer (`authStatus`), the one its startup report prints. Known ceiling: nothing is asked of

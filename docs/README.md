@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `APPEND_SYSTEM.md` holds its standing instructions and `SYSTEM.md` an identity of its own (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `APPEND_SYSTEM.md` holds its standing instructions and `SYSTEM.md` an identity of its own (a context's `AGENTS.md` is project context the agent reads), but the directory is the unit.
 
 ## Recommended path
 
@@ -52,7 +52,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 
 ## Core concepts
 
-- **The agent is a folder in your project.** Runtime behavior comes from the agent directory (`fastagent/`, whose parent is the workspace): optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, `AGENTS.md` (project context), and markdown context.
+- **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, and markdown context. What it works on is declared as contexts, whose `AGENTS.md` is project context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
@@ -67,7 +67,7 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Design notes](design/README.md) | What belongs in public design docs |
 | [Core design](design/core.md) | pi reference implementation, assembly ladder, sessions, auth, and deployment model |
 | [Configuration and credential ownership](design/configuration.md) | Where each configuration fact lives, deployment environments, and who owns which credential |
-| [Distribution and provenance](design/distribution.md) | Why a workspace has no manifest, and where a vendored skill's origin should be recorded |
+| [Distribution and provenance](design/distribution.md) | Why an agent directory has no manifest, and where a vendored skill's origin should be recorded |
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Session control plane](design/session-control.md) | Serving extension beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions |
 

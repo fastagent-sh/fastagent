@@ -1,4 +1,4 @@
-/** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
+/** `fastagent info [agent] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
@@ -20,7 +20,9 @@ import { reportModuleLoadFailures } from "../../loader.ts";
 import { readMachine, withMachine } from "../../engines/pi/machine.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
-import { failStartup, placementOrExit } from "../fail.ts";
+import { agentDirOrExit, failStartup } from "../fail.ts";
+import { contextLines } from "../contexts-view.ts";
+import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -28,21 +30,26 @@ export interface InfoOptions {
 }
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
-  const dir = resolve(dirArg);
-  const { agentDir, workspace } = placementOrExit(dir);
+  const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
-  // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose
-  // AGENTS.md ancestors are ② context).
-  const definition = await loadAgentDefinition(agentDir, { cwd: workspace }).catch(failStartup);
+  // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a context is missing.
+  let contexts: ResolvedContext[] = [];
+  let contextsError: string | undefined;
+  try {
+    contexts = resolveContexts(agentDir, config.contexts);
+  } catch (error) {
+    contextsError = (error as Error).message;
+  }
+  const definition = await loadAgentDefinition(agentDir, { contexts }).catch(failStartup);
   // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
-  const machineResources = await readMachine(workspace);
+  const machineResources = await readMachine(agentDir);
   const skills = withMachine(definition.skills, machineResources.skills);
   const prompts = withMachine(definition.prompts, machineResources.prompts);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
   // isolated the same way everywhere (G2).
-  const tools = await resolveAgentTools(config, agentDir, workspace)
+  const tools = await resolveAgentTools(config, agentDir)
     .then((r) => ({
       names: r.toolNames,
       indirect: r.indirectTools,
@@ -88,7 +95,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDir(agentDir);
   // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
   // a file the agent dir does not contain.
-  const models = agentModels(agentDir, {}, { cwd: workspace });
+  const models = agentModels(agentDir);
   const { auth } = models;
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own
@@ -115,7 +122,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       JSON.stringify(
         {
           agentDir,
-          workspace,
+          contexts,
+          contextsError: contextsError ?? null,
+          contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
@@ -124,7 +133,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           machineModelsError: machine.error ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
           codingTools: [...CODING_TOOL_NAMES],
-          context: definition.contextFiles.map((f) => f.path),
           systemPrompt: definition.systemPrompt?.path ?? null,
           appendSystemPrompt: definition.appendSystemPrompt?.path ?? null,
           skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
@@ -160,14 +168,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
-  line("workspace", workspace);
+  for (const [label, value] of contextLines(contexts)) line(label, value);
+  if (contextsError) cont(`⚠ ${contextsError}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (modelFromMachine) cont(`endpoint from the machine's ${machine.value?.path} (does not ship with a deploy)`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   line("codingTools", CODING_TOOL_NAMES.join(", "));
-  line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("prompt", describePrompt(definition));
   line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
   line("prompts", prompts.map((prompt) => prompt.name).join(", ") || "(none)");

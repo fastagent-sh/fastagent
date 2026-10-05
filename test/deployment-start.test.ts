@@ -13,12 +13,11 @@ import { expect, it } from "vitest";
 // stays the tighter of the two so a hung child is reported as itself, not as an opaque test timeout.
 const CHILD_TIMEOUT_MS = 45_000;
 
-it("retries interrupted installs, opens the workspace's runtime and preserves tool context and rotated credentials", async () => {
+it("retries interrupted installs, opens the deployed agent's runtime and preserves tool context and rotated credentials", async () => {
   const repo = dirname(dirname(fileURLToPath(import.meta.url)));
   const dir = await mkdtemp(join(tmpdir(), "fa-deployment-start-"));
-  const image = join(dir, "image"),
-    root = join(dir, "data"),
-    agent = join(image, "fastagent");
+  const root = join(dir, "data"),
+    agent = join(dir, "image", "definition"); // the image's baked definition
   const packageDir = join(agent, "node_modules/@fastagent-sh/fastagent");
   const exec = promisify(execFile);
   let requests = 0;
@@ -86,7 +85,7 @@ it("retries interrupted installs, opens the workspace's runtime and preserves to
 export default defineTool({ name: "context", description: "Read invocation context", input: z.object({}), execute: (_, ctx) => ({ session: ctx.sessionManager?.getSessionId() ?? "missing", cwd: ctx.cwd }) });`,
     );
     const manifest = join(dir, "release.json");
-    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "fastagent" }));
+    await writeFile(manifest, JSON.stringify({ version: 1, id: "one", agent: "reviewer" }));
     await mkdir(join(root, ".secrets"), { recursive: true });
     const rotated = JSON.stringify({ openai: { type: "api_key", key: "rotated" } });
     await writeFile(join(root, ".secrets/auth.json"), rotated);
@@ -131,12 +130,12 @@ mock.module(${JSON.stringify(workspaceUrl)}, { namedExports: { ...storage,
 } });
 const { openStartService } = await import(${JSON.stringify(startUrl)});
 if (process.argv[1] === "fail") {
-  await assert.rejects(openStartService(${JSON.stringify(image)}, { input: false }), /dependency install failed/);
+  await assert.rejects(openStartService(${JSON.stringify(agent)}, { input: false }), /dependency install failed/);
 } else {
-const service = await openStartService(${JSON.stringify(image)}, { input: false });
+const service = await openStartService(${JSON.stringify(agent)}, { input: false });
 try {
   const events = [];
-  for await (const event of service.agent.invoke({ session: "workspace-conversation" }, { text: "Read my context" })) events.push(event);
+  for await (const event of service.agent.invoke({ session: "deployed-conversation" }, { text: "Read my context" })) events.push(event);
   console.log(JSON.stringify(events));
 } finally {
   await service.close();
@@ -155,8 +154,9 @@ try {
     const events = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as { type: string; content?: unknown }[];
     expect(events.at(-1)).toEqual({ type: "completed" });
     const result = events.find((event) => event.type === "tool_ended");
-    expect(JSON.stringify(result)).toContain("workspace-conversation");
-    expect(JSON.stringify(result)).toContain(join(root, "base"));
+    expect(JSON.stringify(result)).toContain("deployed-conversation");
+    // The tool's working directory is the deployed definition on the storage, not the image's copy.
+    expect(JSON.stringify(result)).toContain(`"cwd":"${join(root, "definition")}"`);
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);
     expect(await readFile(attempts, "utf8")).toBe("failed\nretry\n");

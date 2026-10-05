@@ -55,7 +55,7 @@ async function recordingStore(
   };
 }
 
-/** A workspace whose agent runs anthropic, with no credentials file anywhere. */
+/** An agent that runs anthropic, with no credentials file anywhere. */
 async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   const host = await mkdtemp(join(tmpdir(), "fa-credstore-"));
   const agent = join(host, "fastagent");
@@ -83,16 +83,16 @@ afterEach(() => {
 describe("a caller's credential store replaces the credentials file", () => {
   it("the directory opener and the model list run on the store, and no file is read or written", async () => {
     noAnthropicEnv();
-    const { host, agent } = await agentWorkspace();
+    const { agent } = await agentWorkspace();
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
 
-    const opened = await createPiAgentFromDir(host, { credentialStore: store });
+    const opened = await createPiAgentFromDir(agent, { credentialStore: store });
     expect(opened.models.auth).toBeUndefined(); // no file is in use, so none is reported
     expect(store.calls).toContain("list"); // the runtime was built over the store
 
     const anthropic = (models: { spec: string }[]) => models.some((model) => model.spec.startsWith("anthropic/"));
-    expect(anthropic(await availableModelsFromDir(host, { credentialStore: store }))).toBe(true);
-    expect(anthropic(await availableModelsFromDir(host))).toBe(false); // the files hold nothing
+    expect(anthropic(await availableModelsFromDir(agent, { credentialStore: store }))).toBe(true);
+    expect(anthropic(await availableModelsFromDir(agent))).toBe(false); // the files hold nothing
     noCredentialFiles(agent);
   });
 
@@ -110,9 +110,9 @@ describe("a caller's credential store replaces the credentials file", () => {
 
   it("createAgentService hands the store to the opener", async () => {
     noAnthropicEnv();
-    const { host, agent } = await agentWorkspace();
+    const { agent } = await agentWorkspace();
     const store = await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } });
-    const service = await createAgentService(host, { credentialStore: store });
+    const service = await createAgentService(agent, { credentialStore: store });
     try {
       expect(store.calls).toContain("list");
       noCredentialFiles(agent);
@@ -183,10 +183,10 @@ describe("a caller's credential store replaces the credentials file", () => {
   });
 
   it("refuses both sources, and a login with neither", async () => {
-    const { host } = await agentWorkspace();
+    const { host, agent } = await agentWorkspace();
     const both = { authPath: join(host, "auth.json"), credentialStore: await recordingStore() };
-    await expect(createPiAgentFromDir(host, both)).rejects.toThrow(/not both/);
-    await expect(availableModelsFromDir(host, both)).rejects.toThrow(/not both/);
+    await expect(createPiAgentFromDir(agent, both)).rejects.toThrow(/not both/);
+    await expect(availableModelsFromDir(agent, both)).rejects.toThrow(/not both/);
     expect(() => createPiModels(both)).toThrow(/not both/);
     const interaction = { signal: new AbortController().signal, notify: () => {}, prompt: async () => "" };
     // A JavaScript caller can pass either shape the types forbid.

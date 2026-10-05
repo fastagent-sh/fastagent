@@ -57,10 +57,8 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // it creates (stack `fastagent-<name>`, repo `fastagent/<name>`, lambda
     // `fastagent-<name>-forwarder`), so a directory already called `fastagent-...` yields
     // `fastagent-fastagent-...` and escapes the IAM policy that scopes this credential.
-    const dir = await mkdtemp(join(tmpdir(), "live-probe-"));
-    dirs.push(dir);
-    const agentDir = join(dir, "fastagent");
-    await mkdir(agentDir);
+    const agentDir = await mkdtemp(join(tmpdir(), "live-probe-"));
+    dirs.push(agentDir);
     await writeFile(join(agentDir, "SYSTEM.md"), "You are terse.\n");
     // A schedule file, so the branch that carries the YAML most likely to be wrong is the one CloudFormation
     // reads: the forwarder Lambda, its Function URL, the two Lambda permissions and the wake/scheduler IAM roles
@@ -76,7 +74,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     );
     await writeFile(join(agentDir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);
     // Generation only: `deploy agentcore` without --run writes artifacts and touches no AWS API.
-    const generated = await run(process.execPath, [CLI, "deploy", "agentcore"], dir);
+    const generated = await run(process.execPath, [CLI, "deploy", "agentcore"], agentDir);
     expect(generated.stderr, "generation did not write a template").toContain(TEMPLATE_FILE);
 
     const validated = await aws([

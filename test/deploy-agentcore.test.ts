@@ -34,12 +34,12 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   runtime: "node",
   hasLockfile: false,
   version: "0.15.0",
-  agentPrefix: "fastagent/",
+  agent: "my-agent",
   ...over,
 });
 
 describe("deploy agentcore: name/id helpers", () => {
-  it("agentcoreName is the stable workspace-basename → stack-name mapping", () => {
+  it("agentcoreName is the stable agent-directory-name → stack-name mapping", () => {
     expect(agentcoreName("My Agent!!")).toBe("my-agent");
     expect(agentcoreName("---")).toBe("agent");
   });
@@ -110,12 +110,12 @@ describe("deploy agentcore: the plan", () => {
   it("minimal shape (no channel, no schedule): the forwarder is still there — it carries the wake alarms", () => {
     const plan = planAgentcoreDeploy(baseInput());
     expect(plan.artifacts.map((a) => a.path)).toEqual([
-      `fastagent/${TEMPLATE_FILE}`,
-      `fastagent/${FORWARDER_FILE}`,
-      "fastagent/fastagent.release.json",
-      "fastagent/Dockerfile",
+      TEMPLATE_FILE,
+      FORWARDER_FILE,
+      "fastagent.release.json",
+      "Dockerfile",
       ".dockerignore",
-      "fastagent/Dockerfile.dockerignore",
+      "Dockerfile.dockerignore",
     ]);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::BedrockAgentCore::Runtime");
@@ -147,7 +147,7 @@ describe("deploy agentcore: the plan", () => {
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
-    expect(plan.artifacts.map((a) => a.path)).toContain(`fastagent/${FORWARDER_FILE}`);
+    expect(plan.artifacts.map((a) => a.path)).toContain(FORWARDER_FILE);
     const template = plan.artifacts[0]!.content;
     expect(template).toContain("Type: AWS::Lambda::Function");
     expect(template).toContain("Type: AWS::Lambda::Url");
@@ -176,7 +176,7 @@ describe("deploy agentcore: the plan", () => {
       "aws logs put-retention-policy --log-group-name /aws/lambda/fastagent-my-agent-forwarder --retention-in-days 14",
     );
     // The shipped artifact IS the forwarder source (it becomes the Lambda package verbatim).
-    const forwarder = plan.artifacts.find((a) => a.path === `fastagent/${FORWARDER_FILE}`)!;
+    const forwarder = plan.artifacts.find((a) => a.path === FORWARDER_FILE)!;
     expect(forwarder.content).toBe(forwarderSource());
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
@@ -227,14 +227,6 @@ describe("deploy agentcore: the plan", () => {
   it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {
     const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
     expect(template).toContain("Timeout: 900");
-  });
-
-  it("kit layout namespaces the template + forwarder under the kit", () => {
-    const plan = planAgentcoreDeploy(baseInput({ agentPrefix: "agent/", channels: declaredChannels(["telegram"]) }));
-    const paths = plan.artifacts.map((a) => a.path);
-    expect(paths).toContain(`agent/${TEMPLATE_FILE}`);
-    expect(paths).toContain(`agent/${FORWARDER_FILE}`);
-    expect(plan.runbook.join("\n")).toContain("-f agent/Dockerfile");
   });
 
   it("every stack carries the full wake-alarm topology: forwarder, secret param, roles, env", () => {
@@ -336,7 +328,7 @@ describe("deploy agentcore: the plan", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
     expect(FORWARDER_FILE).toBe("lambda/index.js");
-    expect(plan.artifacts.map((a) => a.path)).toContain("fastagent/lambda/index.js");
+    expect(plan.artifacts.map((a) => a.path)).toContain("lambda/index.js");
     const template = plan.artifacts[0]!.content;
     expect(template).not.toContain("ZipFile");
     expect(template).toContain("S3Bucket: !Ref ForwarderBucket");

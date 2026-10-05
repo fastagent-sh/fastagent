@@ -14,10 +14,10 @@ import type { AddressInfo } from "node:net";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
-/** A storage root laid out as a deployed box's (`<root>/base/<agent>`), and a bin dir for the `fastagent` on PATH. */
+/** A storage root laid out as a deployed box's (`<root>/definition`), and a bin dir for the `fastagent` on PATH. */
 async function box(): Promise<{ root: string; agentDir: string; bin: string }> {
   const root = await mkdtemp(join(tmpdir(), "fa-box-"));
-  const agentDir = join(root, "base", "fastagent");
+  const agentDir = join(root, "definition");
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};\n");
   const bin = join(root, "bin");
@@ -48,7 +48,7 @@ describe("the box half of `login --deployment`", () => {
     const { root, agentDir, bin } = await box();
     await executable(join(bin, "fastagent"), `echo "global $PWD $FASTAGENT_SECRETS_DIR $*"`);
     const run = async () => {
-      const { child } = onBox(boxLoginCommand("fastagent", ["codex", "--if-missing"]), envFor(root, bin));
+      const { child } = onBox(boxLoginCommand(["codex", "--if-missing"]), envFor(root, bin));
       let out = "";
       child.stdout.on("data", (d) => (out += d));
       await new Promise((resolve) => child.on("close", resolve));
@@ -66,14 +66,14 @@ describe("the box half of `login --deployment`", () => {
   });
 
   it("refuses a value it could not pass to the box's shell verbatim", () => {
-    expect(() => boxLoginCommand("fastagent", ["codex'; rm -rf /"])).toThrow(/cannot pass/);
+    expect(() => boxLoginCommand(["codex'; rm -rf /"])).toThrow(/cannot pass/);
   });
 
   it("reports a credential the box already holds, and a missing one without asking, as one result line", async () => {
     const { root, bin } = await box();
     await executable(join(bin, "fastagent"), `exec "${process.execPath}" "${CLI}" "$@"`);
     const relay = async (args: string[]) => {
-      const { child, stderr } = onBox(boxLoginCommand("fastagent", args), envFor(root, bin));
+      const { child, stderr } = onBox(boxLoginCommand(args), envFor(root, bin));
       const noQuestions = {
         select: async () => {
           throw new Error("asked");
@@ -102,22 +102,20 @@ describe("the box half of `login --deployment`", () => {
   });
 
   it("a host CLI that is not installed is named, not waited on", async () => {
-    const { root, agentDir } = await box();
+    const { root } = await box();
     const failed = await loginOnBox({
       host: "fly",
       shell: processShell("fastagent-test-no-such-cli", (command) => ["-c", command], root),
-      placement: { agentDir, workspace: root },
       input: false,
     });
     expect(failed).toMatch(/could not run fastagent-test-no-such-cli/);
   });
 
   it("a shell that ends without the result line is a failure, whatever its exit code", async () => {
-    const { root, agentDir } = await box();
+    const { root } = await box();
     const failed = await loginOnBox({
       host: "railway",
       shell: processShell("sh", () => ["-c", "echo Connection closed; exit 0"], root),
-      placement: { agentDir, workspace: root },
       input: false,
     });
     expect(failed).toMatch(/ended without a login result \(exit 0\).*login --deployment railway/);
@@ -138,7 +136,6 @@ describe("the box half of `login --deployment`", () => {
         host: "fly",
         // As `fly ssh console --command` and `railway ssh` receive it: one single-quoted word.
         shell: processShell("sh", (command) => ["-c", `sh -c '${command}'`], root),
-        placement: { agentDir, workspace: root },
         provider: "openai-codex",
         input: false,
       });
@@ -149,12 +146,11 @@ describe("the box half of `login --deployment`", () => {
   });
 
   it("the command it hands back names the provider the model needs, so no menu offers another", async () => {
-    const { root, agentDir } = await box();
+    const { root } = await box();
     const missing = '{"type":"result","ok":false,"reason":"missing","message":"no openai-codex credential"}';
     const failed = await loginOnBox({
       host: "fly",
       shell: processShell("sh", () => ["-c", `echo '${missing}'`], root),
-      placement: { agentDir, workspace: root },
       provider: "openai-codex",
       input: false,
     });

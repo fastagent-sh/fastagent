@@ -43,7 +43,7 @@ describe("auth-view: formatAuthReport", () => {
     expect(box.warn).toBe(
       "ANTHROPIC_API_KEY is set but unused: the stored anthropic oauth credential in /data/.secrets/auth.json " +
         "outranks it. To run on ANTHROPIC_API_KEY, log in with it instead: `fastagent login anthropic --deployment` " +
-        'from the workspace this was deployed from, choosing "API key"',
+        'from the agent directory this was deployed from, choosing "API key"',
     );
   });
 });

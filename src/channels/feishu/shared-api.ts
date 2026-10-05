@@ -1,5 +1,5 @@
 /** The mounted channel and proactive tools share credentials, token cache, gateway and retry policy. */
-import { findAgentDir, resolveStateRoot } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { cloudFor, type FeishuCloudKind } from "./cloud.ts";
 import { createFeishuApi, type FeishuApi } from "./feishu-api.ts";
 
@@ -17,8 +17,8 @@ export function registerFeishuApi(stateRoot: string, kind: FeishuCloudKind, api:
 }
 
 function cloudTransport(cwd: string, kind: FeishuCloudKind): FeishuTransport {
-  // Embedded senders may use a bare definition directory or an independent workspace.
-  const stateRoot = resolveStateRoot(findAgentDir(cwd) ?? cwd);
+  // A tool's working directory is its agent's directory, so the agent's state root follows from it.
+  const stateRoot = resolveStateRoot(cwd);
   const transports = byKind[kind];
   let api = transports.get(stateRoot);
   if (!api) {
@@ -35,12 +35,12 @@ function cloudTransport(cwd: string, kind: FeishuCloudKind): FeishuTransport {
   return api;
 }
 
-/** Resolve the Feishu transport for a tool's workspace (`ctx.cwd`). */
+/** Resolve the Feishu transport for a tool's agent directory (`ctx.cwd`). */
 export function feishuTransport(cwd: string): FeishuTransport {
   return cloudTransport(cwd, "feishu");
 }
 
-/** Resolve the Lark transport for a tool's workspace (`ctx.cwd`). */
+/** Resolve the Lark transport for a tool's agent directory (`ctx.cwd`). */
 export function larkTransport(cwd: string): FeishuTransport {
   return cloudTransport(cwd, "lark");
 }

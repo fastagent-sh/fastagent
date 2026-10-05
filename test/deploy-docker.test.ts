@@ -15,8 +15,8 @@ const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join
 
 const base = {
   releaseId: "release-one",
-  agentPrefix: "fastagent/",
-  valueFile: "fastagent/.secrets/.env",
+  agent: "bot",
+  valueFile: ".secrets/.env",
   projectName: "fastagent-bot",
   port: 8787,
   hasPackageJson: true,
@@ -35,11 +35,11 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("generates only the app topology: loopback port + persistent state, no tunnel/ingress coupling", () => {
     const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
-      "fastagent/fastagent.compose.yml",
-      "fastagent/fastagent.release.json",
-      "fastagent/Dockerfile",
+      "fastagent.compose.yml",
+      "fastagent.release.json",
+      "Dockerfile",
       ".dockerignore",
-      "fastagent/Dockerfile.dockerignore",
+      "Dockerfile.dockerignore",
     ]);
 
     const yaml = compose(plan);
@@ -115,19 +115,12 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain('FASTAGENT_AUTH_PATH: "/data/.secrets/auth.json"');
   });
 
-  it("namespaces artifacts under fastagent/ and builds from the workspace root", () => {
+  it("puts the Compose file beside the Dockerfile and builds the agent directory itself", () => {
     const plan = planDockerDeploy({ ...base, channels: [] });
-    expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
-      ".dockerignore",
-      "fastagent/Dockerfile",
-      "fastagent/Dockerfile.dockerignore",
-      "fastagent/fastagent.compose.yml",
-      "fastagent/fastagent.release.json",
-    ]);
-    expect(plan.composePath).toBe("fastagent/fastagent.compose.yml");
-    expect(compose(plan)).toContain("context: ..");
-    expect(compose(plan)).toContain("dockerfile: fastagent/Dockerfile");
-    expect(runbook(plan)).toContain("Run from the WORKSPACE ROOT");
+    expect(plan.composePath).toBe("fastagent.compose.yml");
+    expect(compose(plan)).toContain("context: .\n");
+    expect(compose(plan)).toContain("dockerfile: Dockerfile\n");
+    expect(runbook(plan)).toContain("Run from the agent directory");
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
@@ -135,7 +128,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
     for (const cmd of ["up -d --build", "logs -f agent", "ps", "down"]) {
-      expect(out).toContain(`docker compose -f fastagent/fastagent.compose.yml ${cmd}`);
+      expect(out).toContain(`docker compose -f fastagent.compose.yml ${cmd}`);
     }
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");

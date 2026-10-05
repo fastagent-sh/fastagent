@@ -101,7 +101,7 @@ export function callerSessionId(recordId: string): string | undefined {
 /** Disk-backed store under `dir`: restart the process, conversations continue. */
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
-  // Resolved against the workspace this store serves, not against wherever the process happens to have been started.
+  // Resolved against the agent directory this store serves, not against wherever the process happens to have been started.
   const root = resolve(cwd, options.dir);
   const own = join(root, OWN_RECORDS_DIR);
   /** Where a forked record is finished before it becomes discoverable. */

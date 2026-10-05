@@ -36,7 +36,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | [agent-cli.md](agent-cli.md) | **Proposed.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing contexts, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
-| [distribution.md](distribution.md) | Why a workspace has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |
+| [distribution.md](distribution.md) | Why an agent directory has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |
 | [conformance-levels.md](conformance-levels.md) | Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
 | [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [session-control.md](session-control.md) | Session control plane beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions. |

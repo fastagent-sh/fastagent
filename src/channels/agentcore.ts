@@ -141,8 +141,8 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     const trusted = fromForwarder(envelope, ingressSecret);
     if (!trusted) {
       // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted. A `probe`
-      // here only opens the workspace (the deferred wrapper did that before this line) and says so: it is how
-      // `login --deployment` gets a workspace to log in, after a reset, on a runtime nothing has invoked yet.
+      // here only opens the deployed definition (the deferred wrapper did that before this line) and says so: it is
+      // how `login --deployment` gets a definition to log in, after a reset, on a runtime nothing has invoked yet.
       if (envelope.kind !== "invoke" && envelope.kind !== "routine-run" && envelope.kind !== "probe") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);
         return text("forbidden\n", 403);

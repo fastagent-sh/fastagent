@@ -55,7 +55,7 @@ The mapping is derived from deployment facts, not preference:
 |---|---|---|
 | channels, schedules | `per-invoke` | Many concurrent "places" (a room, a thread) and horizontal scaling. Residency would make the live-session set an unbounded resource with an eviction policy attached. |
 | AgentCore | `per-invoke` | The platform has no resident process — compute exists per invocation ([core.md](core.md) §9). MUST 6 is not a preference here, it is the runtime. |
-| `chat`, a desktop client | either | One user, one workspace, one live conversation. Location dependence costs nothing, and residency buys the engine's own continuity (queues, in-flight state) for free. |
+| `chat`, a desktop client | either | One user, one agent, one live conversation. Location dependence costs nothing, and residency buys the engine's own continuity (queues, in-flight state) for free. |
 
 A deployment that claims serverless portability MUST be `per-invoke`. Everything else is a choice with
 a stated bill (§5).

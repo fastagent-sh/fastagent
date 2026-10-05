@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
-import { AGENT_MODEL_CATALOG_FILE, resolveSessionsDir, resolveStateRoot, resolvePlacement } from "../../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, resolveAgentDir, resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import type { AgentCommand, ModelDescriptor, SessionControl } from "../../session.ts";
 import { describeModels } from "./session-settings.ts";
 import { type IndirectTool, type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
@@ -30,6 +30,7 @@ import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
+import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
@@ -45,19 +46,19 @@ import type { HttpSurface } from "../../service.ts";
  */
 export async function agentCommands(
   agentDir: string,
-  workspace: string,
+  contexts: readonly ResolvedContext[],
   served: { extensionPaths: readonly string[]; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
   // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
   // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
   // one set from both readers instead of warning again after every menu request.
-  const own = await loadAgentDefinition(agentDir, { cwd: workspace });
+  const own = await loadAgentDefinition(agentDir, { contexts });
   reportFindingsIfChanged(own.dir, own);
-  const machine = await readMachine(workspace);
+  const machine = await readMachine(agentDir);
   const prompts = withMachine(own.prompts, machine.prompts);
   const { extensionPaths } = served;
   const extensionCommands = await servedExtensionCommands({
-    cwd: workspace,
+    cwd: agentDir,
     modelRuntime: await served.modelRuntime(),
     extensionPaths,
   });
@@ -125,10 +126,10 @@ export interface AgentAssembly {
    * `missing_model` at invoke.
    */
   modelSpec?: string;
-  /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
+  /** Absolute agent dir — definition, config and machinery live here, and it is the agent's working directory. */
   agentDir: string;
-  /** Absolute workspace — the agent's cwd and the start of the ②-context walk. */
-  workspace: string;
+  /** What the agent works on and knows, resolved for this instance — the one answer every reader uses. */
+  contexts: ResolvedContext[];
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
   /** The credential store and model registry every turn and every report reads ({@link agentModels}). */
@@ -146,14 +147,14 @@ export async function resolveAgentAssembly(
   dir: string,
   options: { model?: string } & CredentialSourceOptions = {},
 ): Promise<AgentAssembly> {
-  // Placement is structural (resolvePlacement): the AGENT DIR carries definition + config + machinery; its parent.
-  const { agentDir, workspace } = resolvePlacement(dir);
+  const agentDir = resolveAgentDir(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
+  // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
+  const contexts = resolveContexts(agentDir, config.contexts);
   const modelSpec = resolveModelSpec(options.model, config);
   const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
-    workspace,
   );
   // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
   // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
@@ -176,10 +177,10 @@ export async function resolveAgentAssembly(
     configPath,
     ...(modelSpec ? { modelSpec } : {}),
     agentDir,
-    workspace,
+    contexts,
     stateRoot,
     // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
-    models: agentModels(agentDir, options, { cwd: workspace }),
+    models: agentModels(agentDir, options),
     tools,
     toolNames,
     indirectTools,
@@ -200,8 +201,8 @@ export function assembleFront(
   return assemblePiFromDefinition(front.agentDir, {
     ...(front.modelSpec ? { model: front.modelSpec } : {}),
     thinkingLevel: front.config.thinkingLevel,
-    cwd: front.workspace,
     tools: extra.tools ?? front.tools,
+    contexts: front.contexts,
     models: front.models,
     ...(extra.sessions ? { sessions: extra.sessions } : {}),
   });
@@ -211,7 +212,7 @@ export function assembleFront(
  * The models `createPiAgentFromDir(dir, { authPath })` could run now, as a picker shows them (spec, name, the thinking
  * levels a session on it accepts, context window), sorted by spec: the agent's registry (pi's built-ins, its
  * `models.json`, and what its `extensions/` declare) filtered to the providers whose credentials are configured. The
- * directory needs no model set, and the same placement and credential layers as the opener apply, so a listed spec
+ * directory needs no model set, and the same directory and credential layers as the opener apply, so a listed spec
  * authenticates there. Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
  * A Sign in with ChatGPT on `openai` lists the account's own models (openai-account-models.ts), not pi's built-ins.
  *
@@ -224,8 +225,7 @@ export async function availableModelsFromDir(
   dir: string,
   options: FastagentAuthOptions & CredentialSourceOptions = {},
 ): Promise<ModelDescriptor[]> {
-  const { agentDir, workspace } = resolvePlacement(dir);
-  const environment = agentModels(agentDir, options, { cwd: workspace });
+  const environment = agentModels(resolveAgentDir(dir), options);
   const available = await (await environment.runtime()).getAvailable();
   const missing = missingAccountModels(await environment.credentials.read(OPENAI_PROVIDER));
   if (missing) log.warn(missing);
@@ -255,7 +255,7 @@ export async function refreshModelCatalogOver(
   options: FastagentAuthOptions & CredentialSourceOptions & { signal?: AbortSignal },
   catalogBaseUrl?: string,
 ): Promise<void> {
-  const { agentDir } = resolvePlacement(dir);
+  const agentDir = resolveAgentDir(dir);
   const { credentials } = agentModels(agentDir, options);
   await refreshCatalog(
     join(agentDir, AGENT_MODEL_CATALOG_FILE),
@@ -300,10 +300,7 @@ export async function refreshMachineModelCatalogOver(
   );
 }
 
-/**
- * "Point at a directory → agent": resolve the placement (`dir` may be either end — the workspace or the agent dir
- * itself), load the config, resolve model and tools, then L2.
- */
+/** "Point at a directory → agent": `dir` is the agent directory; load the config, resolve model and tools, then L2. */
 export async function createPiAgentFromDir(
   dir: string,
   options: CreatePiAgentFromDirOptions = {},
@@ -314,10 +311,10 @@ export async function createPiAgentFromDir(
   configPath?: string;
   /** The default "provider/modelId" spec, or undefined when the agent sets none ({@link AgentAssembly.modelSpec}). */
   modelSpec?: string;
-  /** Absolute agent dir in use — channels/tools/prompt come from here. */
+  /** Absolute agent dir in use — channels/tools/prompt come from here, and it is the agent's working directory. */
   agentDir: string;
-  /** Absolute workspace in use — the agent's cwd: ALWAYS the directory that was pointed at. */
-  workspace: string;
+  /** What the agent works on and knows, resolved for this instance. */
+  contexts: ResolvedContext[];
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <agentDir>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
@@ -344,7 +341,7 @@ export async function createPiAgentFromDir(
     configPath,
     modelSpec,
     agentDir,
-    workspace,
+    contexts,
     stateRoot,
     models,
     tools,
@@ -355,11 +352,11 @@ export async function createPiAgentFromDir(
   // Every serve mounts the built-in `wake` tool: the agent's own follow-up work is a default capability, and a serve
   // is where the poller that honors it runs. A one-shot `invoke` has no poller, so nothing there would fire it.
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving);
-  // An explicit value is used as given (the store resolves a relative one against the WORKSPACE); without one, the
+  // An explicit value is used as given (the store resolves a relative one against the agent directory); without one, the
   // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
-  const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
+  const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: agentDir });
   // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
   const { assembly, definition } = await assembleFront(front, { tools: mountedTools, sessions });
   // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
@@ -390,7 +387,7 @@ export async function createPiAgentFromDir(
       // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
       // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
       commands: () =>
-        agentCommands(agentDir, workspace, {
+        agentCommands(agentDir, contexts, {
           extensionPaths: assembly.extensionPaths,
           modelRuntime: assembly.createModelRuntime,
         }),
@@ -416,7 +413,7 @@ export async function createPiAgentFromDir(
     publishControl: publish,
     http: config.http,
     agentDir,
-    workspace,
+    contexts,
     config,
     configPath,
     ...(modelSpec ? { modelSpec } : {}),

@@ -12,14 +12,7 @@ import {
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { openExternalUrl } from "../../../open-url.ts";
-import {
-  type ResolvedPlacement,
-  SECRETS_DIRNAME,
-  SECRET_FILE_MODE,
-  exists,
-  readTextIfExists,
-  resolveStateRoot,
-} from "../../../paths.ts";
+import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
 import { dotEnvPath } from "../../../env.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
@@ -33,11 +26,11 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
   artifact: DOCKER_COMPOSE_FILE,
-  shell: async ({ agentDir, workspace }) => composeShell(`${basename(agentDir)}/${DOCKER_COMPOSE_FILE}`, workspace),
+  shell: async (agentDir) => composeShell(DOCKER_COMPOSE_FILE, agentDir),
   async deploy(ctx) {
-    const { opts, agentDir, workspace, channels, webhookChannels, pre, write } = ctx;
+    const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
-    // The generated Compose names `<agent>/.secrets/.env` unconditionally, so it has to be there — Compose refuses
+    // The generated Compose names `.secrets/.env` unconditionally, so it has to be there — Compose refuses
     // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
     // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
     const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
@@ -50,7 +43,7 @@ export const dockerHost: HostDeploy = {
     if (resolve(dotEnvPath(agentDir)) !== resolve(composeValueFile)) {
       const issue =
         `FASTAGENT_SECRETS_DIR points this run's values at ${valueFile}, but the generated Compose reads ` +
-        `${relative(workspace, composeValueFile)} (a committed artifact cannot carry this machine's path), so the ` +
+        `${relative(agentDir, composeValueFile)} (a committed artifact cannot carry this machine's path), so the ` +
         `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
       console.error(`[fastagent] warn: ${issue}`);
@@ -69,7 +62,7 @@ export const dockerHost: HostDeploy = {
       );
     }
     const hasDeclaredChannels = channels.length > 0;
-    const projectName = toDockerProjectName(basename(workspace));
+    const projectName = toDockerProjectName(basename(agentDir));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({
         projectName,
@@ -88,7 +81,7 @@ export const dockerHost: HostDeploy = {
     let plan = dockerPlan(requestedTunnel);
     // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk, regardless
     // of the current flag.
-    const composeFile = join(workspace, plan.composePath);
+    const composeFile = join(agentDir, plan.composePath);
     let keptWithoutRequestedTunnel = false;
     // Same ownership question as fly.toml: a hand-owned compose file survives --force, so the plan must describe the
     // topology that will actually be there.
@@ -102,7 +95,6 @@ export const dockerHost: HostDeploy = {
     if (opts.run) {
       return runDeployDocker({
         agentDir,
-        workspace,
         composeFile: plan.composePath,
         port,
         requireTunnel: requestedTunnel,
@@ -127,23 +119,22 @@ export const dockerHost: HostDeploy = {
 };
 
 /** `deploy docker --run`: reconcile the user-owned local topology, then log the box in if it must. */
-async function runDeployDocker(
-  params: ResolvedPlacement & {
-    composeFile: string;
-    port: number;
-    requireTunnel: boolean;
-    modelAuth: string | undefined;
-    /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
-    boxLogin: string | undefined;
-    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-    input: boolean;
-    channels: readonly DeclaredChannel[];
-    declaredSecrets: readonly DeclaredSecret[];
-    values: ReadonlyMap<string, string>;
-    valueFile: string;
-  },
-): Promise<void> {
-  const { agentDir, workspace, composeFile, port, requireTunnel, channels } = params;
+async function runDeployDocker(params: {
+  agentDir: string;
+  composeFile: string;
+  port: number;
+  requireTunnel: boolean;
+  modelAuth: string | undefined;
+  /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
+  boxLogin: string | undefined;
+  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+  input: boolean;
+  channels: readonly DeclaredChannel[];
+  declaredSecrets: readonly DeclaredSecret[];
+  values: ReadonlyMap<string, string>;
+  valueFile: string;
+}): Promise<void> {
+  const { agentDir, composeFile, port, requireTunnel, channels } = params;
   const { secrets, missingSecrets } = assembleSecrets({
     modelAuth: params.modelAuth,
     declared: params.declaredSecrets,
@@ -158,14 +149,14 @@ async function runDeployDocker(
       valueFile: params.valueFile,
       requireTunnel,
       channels,
-      ...boxLoginStep("docker", params, () => composeShell(composeFile, workspace)),
+      ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
       announce: (tunnelUrl) =>
         announceWebhooks(agentDir, tunnelUrl, channels, {
           openUrl: openExternalUrl,
           stateRoot: resolveStateRoot(agentDir),
         }),
     },
-    spawnRunner("docker", workspace),
+    spawnRunner("docker", agentDir),
     (message) => console.error(`[fastagent] ${message}`),
   );
   const compose = `docker compose -f ${composeFile}`;
@@ -195,10 +186,10 @@ async function runDeployDocker(
 }
 
 /** `docker compose exec` into the running agent service. */
-function composeShell(composeFile: string, workspace: string): BoxShell {
+function composeShell(composeFile: string, agentDir: string): BoxShell {
   return processShell(
     "docker",
     (command) => ["compose", "-f", composeFile, "exec", "-T", "agent", "sh", "-c", command],
-    workspace,
+    agentDir,
   );
 }

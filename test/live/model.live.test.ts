@@ -48,7 +48,7 @@ afterAll(async () => {
 
 /**
  * An agent directory as an author would write one: a system prompt and a config naming the model. The
- * directory IS the agent (no nesting), so the opener resolves it as both agent dir and workspace.
+ * directory IS the agent, and its working directory.
  */
 async function agentDirectory(model: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-live-model-"));

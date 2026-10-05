@@ -17,7 +17,7 @@ import { missingDefaultModel, resolveModel } from "./config.ts";
 import { canonicalPath } from "./definition.ts";
 import { reportToolCollisions } from "./report.ts";
 import { assembleFront, resolveAgentAssembly } from "./open.ts";
-import { resolvePlacement } from "../../paths.ts";
+import { resolveAgentDir } from "../../paths.ts";
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). */
@@ -48,15 +48,15 @@ export async function buildAgentSessionRuntime(
     return { modelSpec, assembly, definition: await assembly.readDefinition() };
   }
 
-  // The workspace, like serving's: where tools run and what session records are keyed to. Canonical, because pi's
-  // process.cwd() fallback is a realpath and a symlinked workspace would otherwise mismatch it.
-  const rootCwd = canonicalPath(resolvePlacement(dir).workspace);
+  // The agent directory, like serving's: where tools run and what session records are keyed to. Canonical, because
+  // pi's process.cwd() fallback is a realpath and a symlinked agent directory would otherwise mismatch it.
+  const rootCwd = canonicalPath(resolveAgentDir(dir));
   // pi calls the factory again on /new, /resume, switch, and fork; the assembly is built once.
   let assembly: ReturnType<typeof resolveAssembly> | undefined;
   const assemblyFor = (cwd: string) => {
     const activeCwd = canonicalPath(cwd);
     if (activeCwd !== rootCwd) {
-      throw workspaceScopeError(activeCwd);
+      throw agentScopeError(activeCwd);
     }
     assembly ??= resolveAssembly();
     return assembly;
@@ -84,8 +84,9 @@ export async function buildAgentSessionRuntime(
       thinkingLevel: assembly.thinkingLevel,
       tools: assembly.tools,
       excludedToolNames: assembly.excludedToolNames,
-      // A tool must see one spelling of the workspace, including when opened through a symlink.
+      // A tool must see one spelling of the agent directory, including when opened through a symlink.
       cwd: rootCwd,
+      contexts: assembly.contexts,
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };
@@ -95,14 +96,12 @@ export async function buildAgentSessionRuntime(
     agentDir: getAgentDir(),
     sessionManager: sessionManager ?? SessionManager.create(rootCwd),
   });
-  enforceWorkspaceScopedSessionSwitches(runtime, rootCwd);
+  enforceAgentScopedSessionSwitches(runtime, rootCwd);
   return runtime;
 }
 
-function workspaceScopeError(targetCwd: string): Error {
-  return new Error(
-    `fastagent sessions are workspace-scoped: cannot switch to ${targetCwd}; open that workspace instead`,
-  );
+function agentScopeError(targetCwd: string): Error {
+  return new Error(`fastagent sessions belong to one agent: cannot switch to ${targetCwd}; open that agent instead`);
 }
 
 function readSessionHeaderCwd(sessionPath: string): string | undefined {
@@ -120,11 +119,11 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
   return undefined;
 }
 
-/** Keep resume/import inside the runtime's single workspace, deciding BEFORE delegating to pi. */
-function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
+/** Keep resume/import inside the runtime's single agent directory, deciding BEFORE delegating to pi. */
+function enforceAgentScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
   const rejectForeignTarget = (sessionPath: string, cwdOverride: string | undefined): void => {
     const target = cwdOverride !== undefined ? canonicalPath(cwdOverride) : readSessionHeaderCwd(sessionPath);
-    if (target !== undefined && target !== rootCwd) throw workspaceScopeError(target);
+    if (target !== undefined && target !== rootCwd) throw agentScopeError(target);
   };
 
   const switchSession = runtime.switchSession.bind(runtime);

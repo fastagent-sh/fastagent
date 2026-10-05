@@ -1,38 +1,36 @@
 ---
 title: Distribution and provenance
-description: "Why a workspace has no manifest: what is derivable from the filesystem, what must be recorded, and why a record belongs beside the thing it describes rather than in the directory around it."
+description: "Why there is no manifest of agents: what is derivable from the filesystem, what must be recorded, and why a record belongs beside the thing it describes rather than in a directory around it."
 status: current
 ---
 
 # Distribution and provenance
 
-**A workspace has no marker file, and will not get one until one of the triggers in §6 fires.** What such a
-file would hold is either derivable from the filesystem or belongs to an agent rather than to the directory
+**There is no manifest of agents, and there will not be one until one of the triggers in §6 fires.** What such a
+file would hold is either derivable from the filesystem or belongs to an agent rather than to a directory
 around it. The one genuine gap is **provenance** — where a vendored skill or agent came from — and that
 record travels *with* the thing it describes.
 
 ## 1. The test a file has to pass
 
 A file earns its existence by carrying information that cannot be derived from what is already on disk.
-Applied to the four things a `fastagent.json` at the workspace root would plausibly hold:
+Applied to the four things a `fastagent.json` in a directory of agents would plausibly hold:
 
 | Candidate fact | Derivable? |
 |---|---|
-| "this directory is a workspace" | **Yes.** The workspace is the agent directory's parent |
-| "these are the agents here" | **Yes.** `agentsAt()` scans one level; `fastagent.config.ts` is the marker. A second list is a second truth, and it drifts |
-| "this one answers by default" | **Already conventional.** The agent named `fastagent` wins; `FASTAGENT_AGENT` overrides |
+| "this directory is an agent" | **Yes.** `fastagent.config.ts` is the marker |
+| "these are the agents here" | **Not needed.** A command names its agent by path and nothing lists them. A second list is a second truth, and it drifts |
+| "this one answers by default" | **Not needed.** A path selects exactly one agent; there is no default to choose |
 | **"this skill/agent came from X at commit Y"** | **No.** `vendorSkill` writes the files and keeps nothing about where they came from |
 
-Only the last row is real, and it is not about the workspace.
+Only the last row is real, and it is not about a directory of agents.
 
-## 2. Provenance belongs to the definition, not the workspace
+## 2. Provenance belongs to the definition
 
-A vendored skill lands in `<agent>/skills/<name>/`. It is part of **that agent's definition**. The initial
-deploy does carry the whole source workspace: generated Dockerfiles use `COPY . .`, and the first publish
-seeds persistent storage from that workspace. Later publishes replace only the selected agent directory.
-Agents can also be selected, run, and moved independently of the workspace where they were created. A
-provenance record at the workspace root would therefore stop following the skill after an agent-only update
-or move.
+A vendored skill lands in `<agent>/skills/<name>/`. It is part of **that agent's definition**, and the definition
+is what a deploy ships: the agent directory is the build context, and every release replaces the deployed copy.
+Agents are also run and moved independently of wherever they were created. A provenance record anywhere outside
+the agent directory would therefore stop following the skill after a deploy or a move.
 
 The rule generalizes, and it is the same one the secrets-file work arrived at the expensive way: **a record
 lives beside what it describes, not in a larger container that happens to hold it.** So a future
@@ -44,9 +42,8 @@ it.
 **Workspace manifests** (`pnpm-workspace.yaml`, npm's `workspaces` field, Cargo workspaces) declare which
 source packages participate so their package manager can resolve local dependencies and run cross-package
 install, build, test, or publish operations. Package members are source code; `node_modules` contains the
-rebuildable installed dependencies. FastAgent has no cross-agent dependency graph or workspace-wide package
-operation today. It only needs to find selectable agents, which declare themselves with
-`fastagent.config.ts` and are discovered by a one-level scan.
+rebuildable installed dependencies. FastAgent has no cross-agent dependency graph or package operation across
+agents today. It only needs to open the agent a command names, which declares itself with `fastagent.config.ts`.
 
 **Agent-asset package managers** — Microsoft's [APM](https://microsoft.github.io/apm/reference/lockfile-spec/)
 (`apm.yml` + `apm.lock.yaml`), agentpack (`agentpack.toml` + lock), harness-ai-kit, AgentNode — converged on
@@ -56,12 +53,12 @@ when the installed thing is a dependency you do not edit.
 
 **Claude Code plugins** take a third route: installs are recorded in `settings.json` (`enabledPlugins`) while
 the sources are cached under `~/.claude/plugins/cache`, outside the project. The `marketplace.json` in that
-ecosystem is the **publisher's** catalog, not a marker in the consumer's workspace — a distinction worth
+ecosystem is the **publisher's** catalog, not a marker in the consumer's project — a distinction worth
 keeping straight when reading it as a precedent.
 
 ## 4. The fork that actually decides this
 
-Not "does a workspace need a file" but **is an installed agent vendored source or a dependency**:
+Not "does a directory of agents need a file" but **is an installed agent vendored source or a dependency**:
 
 | | Vendored source (what we are) | Dependency |
 |---|---|---|
@@ -71,18 +68,18 @@ Not "does a workspace need a file" but **is an installed agent vendored source o
 
 `add skill` is explicitly the left column today: the docs say the scaffold is written once and is yours after
 that. The left column needs one line of provenance next to the vendored directory. It does not need a
-manifest, a lockfile, or a workspace file.
+manifest, a lockfile, or a file listing agents.
 
 ## 5. What is missing right now
 
 `vendorSkill` (`src/scaffold/vendor-skill.ts`) resolves a giget ref, writes `skills/<name>/`, and records
 nothing. After `fastagent add skill <owner>/<repo>/<path>` there is no way to answer where it came from,
 which commit it was, or whether upstream has changed — and `--update` overwrites blind. Closing that is a
-per-skill file, not a workspace one.
+per-skill file, not one for a directory of agents.
 
 ## 6. When to revisit
 
-Two triggers, either of which makes a workspace-level file the right answer rather than a premature one:
+Two triggers, either of which makes a file describing several agents the right answer rather than a premature one:
 
 1. **Installed agents stop being committed.** If they become gitignored and rebuildable, reproducibility
    requires a manifest + lockfile, and §3's B-shape becomes ours.
@@ -96,7 +93,7 @@ Until then, adding the file would be building a mechanism for a need nothing has
 
 | Rejected | Why |
 |---|---|
-| `fastagent.json` / `fastagent.yaml` at the workspace root | §1: three of its four facts are derivable or already conventional |
-| A declared list of the workspace's agents | A second truth beside the filesystem, free to drift from it |
+| `fastagent.json` / `fastagent.yaml` in a directory of agents | §1: three of its four facts are derivable or not needed |
+| A declared list of agents | A second truth beside the filesystem, free to drift from it |
 | A lockfile for skills or agents | §4: vendored source is already pinned by being committed |
 | A registry or marketplace of our own | Nothing has asked for discovery; `giget` refs already reach GitHub, and a catalog is a publisher-side concern (§3) |

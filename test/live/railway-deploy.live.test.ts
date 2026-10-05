@@ -45,18 +45,17 @@ const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "an
 requireEnv("RAILWAY_API_TOKEN", "an ACCOUNT-scoped Railway token — this probe creates and destroys a project");
 
 /** The SERVICE this run owns inside the standing project. Derived through the product's own slug rule
- *  (deploy.ts: `toRailwayName(basename(workspace))`), so the name torn down is the one deployed into.
+ *  (deploy.ts: `toRailwayName(basename(agentDir))`), so the name torn down is the one deployed into.
  *  Per-run uuid: concurrent runs share the project and must not collide. */
 const SERVICE = toRailwayName(`fastagent-live-${randomUUID().slice(0, 8)}`);
 
-let workspace = "";
+let agentDir = "";
 /** Gates teardown: a `service delete` for a service that was never added reports a confusing failure
  *  and hides whichever real error stopped the run before it. */
 let serviceCreated = false;
 
 beforeAll(async () => {
-  workspace = join(tmpdir(), SERVICE);
-  const agentDir = join(workspace, "fastagent");
+  agentDir = join(tmpdir(), SERVICE);
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
@@ -80,10 +79,10 @@ beforeAll(async () => {
   const linked = await run(
     "railway",
     ["link", "--project", RAILWAY_PROBE_PROJECT, "--environment", "production"],
-    workspace,
+    agentDir,
   );
   if (linked.stderr.includes("error")) throw new Error(`could not link ${RAILWAY_PROBE_PROJECT}: ${linked.stderr}`);
-  await run("railway", ["add", "--service", SERVICE], workspace);
+  await run("railway", ["add", "--service", SERVICE], agentDir);
   serviceCreated = true;
 });
 
@@ -91,23 +90,23 @@ afterAll(async () => {
   const errors: unknown[] = [];
   try {
     // The SERVICE, not the project: `service delete` runs against the linked directory, which is the
-    // workspace the deploy linked. What leaks if this is skipped is a service holding the model
+    // agent directory the deploy linked. What leaks if this is skipped is a service holding the model
     // credential and serving `/invoke` unauthenticated — same stake as the project delete it replaces,
     // one level down.
     if (serviceCreated) {
       // Deleting a service KEEPS its volume, so read the volume's id first and remove it after: otherwise every
       // run leaves a 50 GB volume billing in the standing project.
-      const listed = await run("railway", ["volume", "list", "--json"], workspace);
+      const listed = await run("railway", ["volume", "list", "--json"], agentDir);
       const ours = (JSON.parse(listed.stdout) as { volumes: { id: string; serviceName: string | null }[] }).volumes
         .filter((volume) => volume.serviceName === SERVICE)
         .map((volume) => volume.id);
-      await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], workspace);
-      for (const id of ours) await run("railway", ["volume", "delete", "--volume", id, "--yes"], workspace);
+      await run("railway", ["service", "delete", "--service", SERVICE, "--yes"], agentDir);
+      for (const id of ours) await run("railway", ["volume", "delete", "--volume", id, "--yes"], agentDir);
     }
   } catch (error) {
     errors.push(error);
   }
-  if (workspace) await rm(workspace, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
+  if (agentDir) await rm(agentDir, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
   if (errors.length > 0)
     throw new AggregateError(errors, `teardown failed — check for service ${SERVICE} in ${RAILWAY_PROBE_PROJECT}`);
 }, 300_000);
@@ -133,7 +132,7 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
     try {
       // flyctl's lesson: execFile's error carries the CLI's output but its message does not, and
       // "Command failed" is all an unattended nightly would otherwise report.
-      const result = await run(process.execPath, [CLI, "deploy", "railway", "--run", "--into-linked"], workspace);
+      const result = await run(process.execPath, [CLI, "deploy", "railway", "--run", "--into-linked"], agentDir);
       // BOTH streams: fastagent's own progress and result lines go to stderr (console.error), the
       // railway CLI's build log to stdout. The minted URL is on the former.
       output = result.stdout + result.stderr;
@@ -150,7 +149,7 @@ describe("deploy railway --run: a real project, provisioned and destroyed", () =
     // WHY it never came up is in the deployment's own log, and teardown deletes the service — and the log with
     // it — right after this assertion. Read it first, so an unattended run reports the cause, not the symptom.
     const healthy = await waitForHealth(`${url}/health`, 180_000, 3_000);
-    const why = healthy ? "" : await deploymentLog(SERVICE, workspace);
+    const why = healthy ? "" : await deploymentLog(SERVICE, agentDir);
     expect(healthy, `${url}/health never came up. The deployment's log (last 200 lines):\n${why}`).toBe(true);
 
     const session = "live-railway";

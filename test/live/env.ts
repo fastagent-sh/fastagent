@@ -152,14 +152,14 @@ export const run = (file: string, args: string[], cwd?: string) =>
 export const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
 
 /**
- * `deploy agentcore --run` from `workspace`, the way every AgentCore probe drives it. On failure the error
+ * `deploy agentcore --run` from `agentDir`, the way every AgentCore probe drives it. On failure the error
  * carries CloudFormation's own per-resource reasons, read HERE because the probe's teardown deletes the stack
  * next — and with it the only place a nightly could have read why. The driver's own message names the
  * command to run; an unattended run has nobody to run it before the stack is gone.
  */
-export async function deployAgentcore(workspace: string, stack: string): Promise<void> {
+export async function deployAgentcore(agentDir: string, stack: string): Promise<void> {
   try {
-    await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], workspace);
+    await run(process.execPath, [CLI, "deploy", "agentcore", "--run"], agentDir);
   } catch (error) {
     const e = error as { stderr?: string; stdout?: string };
     const events = await aws([

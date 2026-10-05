@@ -345,22 +345,21 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
 
 describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engine side)", () => {
   it("assembles config + definition and returns everything the entrypoint needs; flag beats config", async () => {
-    const { host, agent } = await agentWorkspace();
-    await writeFile(join(host, "AGENTS.md"), "# Test Agent\nBe concise.\n");
+    const { agent } = await agentWorkspace();
     await writeFile(
       join(agent, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", http: { port: 9999 } };`,
     );
 
-    const ws = await createPiAgentFromDir(host);
+    const ws = await createPiAgentFromDir(agent);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // from config
     expect(ws.configPath).toMatch(/fastagent\.config\.ts$/);
     expect(ws.config.http?.port).toBe(9999);
     expect(typeof ws.agent.invoke).toBe("function");
     expect(ws.definition.dir).toBe(agent);
-    expect(ws.workspace).toBe(host);
+    expect(ws.agentDir).toBe(agent);
 
-    const overridden = await createPiAgentFromDir(host, { model: "openai-codex/gpt-5.4" });
+    const overridden = await createPiAgentFromDir(agent, { model: "openai-codex/gpt-5.4" });
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
   });
 
@@ -368,9 +367,9 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     // fastagent used to (re)write and VERIFY machinery .gitignores on every open, which meant a
     // library caller's directory got edited behind its back — and an author's own edit could abort
     // the command. Opening resolves paths; it does not have opinions about the user's repo.
-    const { host, agent } = await agentWorkspace();
+    const { agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await createPiAgentFromDir(host);
+    await createPiAgentFromDir(agent);
     expect(existsSync(join(agent, ".state", ".gitignore"))).toBe(false);
     expect(existsSync(join(agent, ".secrets", ".gitignore"))).toBe(false);
   });
@@ -378,12 +377,12 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
   it("sessionsDir overrides the default <agentDir>/.state/sessions (an embedder's option)", async () => {
     // The CLI has no spelling of it: sessions move with the state root (FASTAGENT_STATE_DIR). An embedder
     // that wants the records elsewhere passes `sessionsDir`; lock that it wins and the default lands under .state.
-    const { host, agent } = await agentWorkspace();
+    const { agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
     const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
-    const overridden = await createPiAgentFromDir(host, { sessionsDir: ext });
+    const overridden = await createPiAgentFromDir(agent, { sessionsDir: ext });
     expect(overridden.sessionsDir).toBe(ext);
-    const defaulted = await createPiAgentFromDir(host);
+    const defaulted = await createPiAgentFromDir(agent);
     expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
   });
 
@@ -391,12 +390,12 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     // The feature: each project carries its own credential (own OAuth refresh lifecycle), not a shared
     // global file. Lock that the opener defaults project-level and an explicit path (e.g. the shared
     // global one) overrides — the same precedence shape as sessionsDir.
-    const { host, agent } = await agentWorkspace();
+    const { agent } = await agentWorkspace();
     await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };`);
-    const defaulted = await createPiAgentFromDir(host);
+    const defaulted = await createPiAgentFromDir(agent);
     expect(defaulted.models.auth?.path).toBe(join(agent, ".secrets", "auth.json"));
     const shared = join(tmpdir(), "shared-auth.json");
-    const overridden = await createPiAgentFromDir(host, { authPath: shared });
+    const overridden = await createPiAgentFromDir(agent, { authPath: shared });
     expect(overridden.models.auth).toEqual({ path: shared }); // named: no second layer
   });
 });

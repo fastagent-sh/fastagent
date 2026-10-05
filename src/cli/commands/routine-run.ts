@@ -19,20 +19,21 @@ export interface RoutineRunOptions {
 }
 
 export async function runRoutine(name: string, dirArg: string, opts: RoutineRunOptions): Promise<void> {
-  const placement = await enterAgentDirectory(dirArg, opts);
+  const entered = await enterAgentDirectory(dirArg, opts);
+  const { agentDir } = entered;
   // Routines are agent surface — discovered where dev/start/`routine list` do (the agent dir), so this command
   // sees the same set the clock serves.
-  const { routines, secrets, failures } = await loadRoutines(placement.agentDir).catch(failStartup);
+  const { routines, secrets, failures } = await loadRoutines(agentDir).catch(failStartup);
   // Reported BEFORE the name is looked up: a routine file that failed to import is missing from
   // `routines`, so "unknown routine" is the case where the author most needs to hear about it.
   reportModuleLoadFailures(failures);
   const routine = routines.find((r) => r.name === name);
   if (!routine) {
-    // Name the discovery path: a schedule misplaced in the workspace (outside the agent dir) should read as "wrong
-    // place", not "broken file".
+    // Name the discovery path: a routine misplaced outside the agent dir should read as "wrong place", not "broken
+    // file".
     failStartup(
       new Error(
-        `unknown routine "${name}" (looked in ${displayPath(process.cwd(), join(placement.agentDir, "routines")) ?? "routines"}). ` +
+        `unknown routine "${name}" (looked in ${displayPath(process.cwd(), join(agentDir, "routines")) ?? "routines"}). ` +
           `available: ${routines.map((r) => r.name).join(", ") || "(none)"}`,
       ),
     );
@@ -47,8 +48,8 @@ export async function runRoutine(name: string, dirArg: string, opts: RoutineRunO
   // were printed above: its guarantee must not depend on this call site remembering (a repeated line
   // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
-  const { modelSpec } = requireDefaultModel(placement);
-  const { agent, models } = await createPiAgentFromDir(placement.agentDir, { model: modelSpec }).catch(failStartup);
+  const { modelSpec } = requireDefaultModel(entered);
+  const { agent, models } = await createPiAgentFromDir(agentDir, { model: modelSpec }).catch(failStartup);
   console.error(`[fastagent] routine run: ${name} (${modelSpec})`);
   await reportAuth(models, modelSpec);
   const exitCode = await runInvokeStream(

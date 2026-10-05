@@ -1,7 +1,7 @@
 /**
  * The ONE Slack transport per state root a process holds: the mounted channel's, shared with the scaffolded send tool.
  */
-import { resolvePlacement, resolveStateRoot } from "../../paths.ts";
+import { resolveStateRoot } from "../../paths.ts";
 import { type SlackApi, createSlackApi } from "./slack-api.ts";
 
 /** What a proactive sender needs: Markdown delivery and file upload. */
@@ -14,9 +14,9 @@ export function registerSlackApi(stateRoot: string, api: SlackApi): void {
   byStateRoot.set(stateRoot, api);
 }
 
-/** The transport of the agent whose workspace is `cwd` (a tool's `ctx.cwd`). */
+/** The transport of the agent whose directory is `cwd` (a tool's `ctx.cwd`). */
 export function slackTransport(cwd: string): SlackTransport {
-  const stateRoot = resolveStateRoot(resolvePlacement(cwd).agentDir);
+  const stateRoot = resolveStateRoot(cwd);
   let api = byStateRoot.get(stateRoot);
   if (!api) {
     const botToken = process.env.SLACK_BOT_TOKEN;

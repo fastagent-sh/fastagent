@@ -17,6 +17,8 @@ export interface FlagSpec {
   description: string;
   /** Parsed but left out of help: an internal seam between two fastagent processes, not a user-facing flag. */
   hidden?: boolean;
+  /** May be given more than once; the command receives every value, in order, as an array. */
+  repeatable?: boolean;
 }
 
 interface ExampleSpec {
@@ -120,7 +122,11 @@ function register(parent: Command, spec: CommandSpec): void {
     }
     cmd.addArgument(arg);
   }
-  for (const f of spec.flags ?? []) cmd.addOption(new Option(f.flags, f.description).hideHelp(f.hidden === true));
+  for (const f of spec.flags ?? []) {
+    const option = new Option(f.flags, f.description).hideHelp(f.hidden === true);
+    if (f.repeatable) option.argParser((value: string, previous: string[] = []) => [...previous, value]);
+    cmd.addOption(option);
+  }
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;
   if (run) {

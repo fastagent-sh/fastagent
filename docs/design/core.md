@@ -32,7 +32,7 @@ pi is the reference implementation. The contract does not require pi, but pi-spe
 sessions, models, and tool types live under `src/engines/pi/` and the public `/pi` subpath.
 Engine-neutral consumers use `/core`.
 
-## 2. Workspace shape and prompt assembly
+## 2. Agent shape, contexts and prompt assembly
 
 One agent shape, one marker:
 
@@ -40,60 +40,52 @@ One agent shape, one marker:
 <agent dir>/                # any name — the config below is what makes it an agent
 ├── SYSTEM.md               # optional: replaces pi's default system prompt
 ├── APPEND_SYSTEM.md        # optional: standing instructions added to it
-├── AGENTS.md               # optional project context
+├── AGENTS.md               # optional: for whoever changes the agent — not loaded into a turn
 ├── skills/  prompts/  tools/  channels/  routines/
-├── fastagent.config.ts     # THE marker
+├── fastagent.config.ts     # THE marker, and the agent's declared contexts
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
 │                           # under it as environment and does not travel
 ├── models-store.json       # optional model catalog (`models --refresh`): models newer than the installed
 │                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
 ├── .gitignore              # scaffolded once by init, yours after
-├── .secrets/               # .env + auth.json; only the tracked .env.example + .gitignore travel
-└── .state/                 # mutable machine state: sessions, channel state, schedule state
+├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
+└── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
 ```
 
-The other noun is the **workspace** — what the agent works on: its cwd, its coding tools' root,
-deploy's build context, and whose `AGENTS.md` ancestors are ② context.
+**The agent directory is the agent's working directory**, its coding tools' root, the key its session records
+are kept under, pi's project scope, and deploy's build context. What it works on is not derived from where it sits:
+it is declared as **contexts** ([agent model](agent-model.md) §3):
 
-**The workspace is the agent directory's parent**, wherever the command is pointed:
-
-```txt
-repo/                       # `fastagent dev` here  → agent = repo/agent, workspace = repo
-├── AGENTS.md
-├── src/
-└── agent/                  # `fastagent dev` here  → agent = repo/agent, workspace = repo
-    ├── APPEND_SYSTEM.md  skills/  tools/  channels/  routines/
-    ├── fastagent.config.ts
-    └── .secrets/  .state/
+```ts
+contexts: [{ local: "/Users/me/code/app", copy: true }, { local: "../handbook", readonly: true }],
 ```
 
-An agent is a folder you add to a project, like `.github/`. Where a command runs cannot change what the agent works
-on, and every command that re-opens an agent passes its `agentDir`, which resolves to the same placement.
+`src/contexts/` owns them, engine-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
+keys, a name that is not one path segment or collides ignoring case, and a location that contains the agent
+directory or sits inside it. `resolve.ts` answers where each one is for this instance (`ResolvedContext`:
+name, kind, readonly, location), once per process start; the content at those locations is re-read per turn. The
+prompt's `contexts` section, `ctx.contexts`, `info`, `fastagent context list` and the opener all read that one
+resolution. `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
+`writeContexts` imports a candidate file beside the config and replaces the config only when the import declares
+exactly the intended list. GitHub contexts and deploying an agent with contexts are not built yet: the resolver and
+the deploy preflight refuse them by name.
 
-| `dir` | Result |
-|---|---|
-| holds a `fastagent.config.ts` | `{ agentDir: dir, workspace: parent of dir }` |
-| exactly one directory inside it holds one | `{ agentDir: <that dir>, workspace: dir }` |
-| several do | `FASTAGENT_AGENT` names one, else the one named `fastagent` — else throws, naming them |
-| none | throws: not a fastagent agent, with the exit that fits the position |
+A command names its agent by path (`[agent]`, default `.`): a directory holding `fastagent.config.ts` is the agent;
+inside one, the command refuses naming its root; anything else refuses with `fastagent init`. Nothing is searched
+for, and no environment variable selects an agent.
 
-- **The marker is the config, at every position, and it is a declaration rather than configuration.**
-  Nothing in an agent directory is logically required to serve a turn, so the marker has to be the one
-  artifact present in every agent and absent from every non-agent. `SYSTEM.md`, `skills/`, `tools/`,
-  `channels/` and `routines/` are each optional and generic enough that scanning for them would read
-  half the world's repositories as agents. `export default {}` is a signature — the same job
-  `package.json`, `Cargo.toml` and `pyproject.toml` do. A directory holding nothing but a config is a
-  complete agent, and `--agent-dir` calls it anything.
-- **The scan is one level.** Deeper is that directory's own workspace: for `repo/packages/reviewer/`
-  you point at the package.
-- Resolution never walks up, but the refusal reads the path so each dead end gets its own exit: inside
-  an agent → `cd` to it; on a directory holding several → point at one.
-- **An agent directory used as its own project is not supported.** A config at a repository's root makes the
-  repository's parent the workspace; put the definition in `./fastagent/` (what `init` does).
+- **The marker is the config, and it is a declaration rather than configuration.** Nothing in an agent directory is
+  logically required to serve a turn, so the marker has to be the one artifact present in every agent and absent
+  from every non-agent. `SYSTEM.md`, `skills/`, `tools/`, `channels/` and `routines/` are each optional and generic
+  enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
+  signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
+- **A context and the agent directory are kept apart.** A harness is released to every instance; a writable
+  context must keep what an instance wrote. One directory cannot be both, so nesting is refused at load, on the
+  declared paths and again on the real ones.
 
-`init` either creates or refuses with the reason. It always writes the complete scaffold into an empty
-direct subdirectory of `dir`; an agent already at `dir` is refused because it would hide that child.
+`init <dir>` creates the agent in `dir` itself, which must be new or empty and not inside another agent, and
+declares each `--context` (checked before anything is written) through the same `writeContexts`.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
@@ -109,39 +101,24 @@ credential. A secrets dir named by `FASTAGENT_SECRETS_DIR` belongs to the operat
 template there would hide that directory's other contents from `git add`, so `add <channel>` states
 the fact instead.
 
-**Several agents on one workspace** is a supported shape: an engineer's, a PM's and a content owner's
-agent can each drive the same repository. `FASTAGENT_AGENT` selects between them; the directory named
-`fastagent` breaks the tie.
-
-- **The env selects, a file does not.** Selection is per-person, and a committed workspace file is
-  shared by construction. `.envrc` is the per-repo, per-person file this needs and is not ours to
-  invent. A workspace registry could only drift from the one-level scan that already answers "which
-  agents are here".
-- **It asserts, at any count.** A directory holding no agent by that name resolves to nothing even when
-  exactly one agent sits there: serving a different agent than the one asked for is the silent
-  wrong-target this codebase refuses everywhere. Stated cost: a value exported in a shell profile
-  refuses in every unrelated directory it travels into — scope it per-repo, which the refusal says.
-- **`deploy` bakes it.** The container re-resolves placement at `/app`, so the generated Dockerfile
-  pins `ENV FASTAGENT_AGENT=<name>`. Otherwise the artifact would depend on the builder's environment.
-
 pi builds the prompt; FastAgent hands it the pieces and adds its own sections:
 
 | Section | Source |
 |---|---|
 | preamble, tools, rules, docs | pi's default, built by pi so it follows pi; L2's `base` (else `SYSTEM.md`, else `.pi/SYSTEM.md`) replaces all four; a blank file or `base` is no prompt (pi would build its default), so it is reported or refused. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
 | addendum | `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`; never the machine's |
-| project context | `AGENTS.md` files loaded from the agent dir and the workspace ancestor walk, handed to pi through `agentsFilesOverride` |
-| skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`) and the machine's (§5) — when `read` is active |
+| project context | each context's root `AGENTS.md`, in declaration order, handed to pi through `agentsFilesOverride`; the agent directory's own is never loaded |
+| skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`), each context's (`.pi/skills/`, `.agents/skills/`, named `<context>/<skill>`) and the machine's (§5) — when `read` is active |
 | cwd | pi appends it, without a date line that would invalidate the prefix cache daily |
-| FastAgent's sections | `deferred_tools` and, on a deployed host, `self_change`, added on `before_agent_start` as named sections, so they hold under a `SYSTEM.md` |
+| FastAgent's sections | `contexts` (the agent's own directory, then what it works on and knows, each with its location), `deferred_tools` and, on a deployed host, `self_change`, added on `before_agent_start` as named sections, so they hold under a `SYSTEM.md` |
 
 pi lists a tool only when it has a `promptSnippet`. The coding tools FastAgent mounts are pi's `AgentTool`s, which
 carry none, so FastAgent copies pi's own snippets and guidelines onto them; an authored tool's snippet is the
 first line of its description. pi's default says the agent reads files, runs commands and edits code, so an L2
 `tools` list without the coding tools needs `base` or a `SYSTEM.md`, checked at assembly and every turn.
 
-`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; `AGENTS.md` is project
-context. A `persona.md` is refused, naming both files. The definition is re-read for every invocation, so prompt,
+`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; a context's `AGENTS.md`
+is project context. A `persona.md` is refused, naming both files. The definition is re-read for every invocation, so prompt,
 context and skill edits take effect on the next turn; code modules are reloaded by
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
@@ -183,8 +160,8 @@ separate tag in `engines/pi/session-effects.ts` because it is control flow, not 
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromDir` sits above L2 and resolves placement, config, model, auth, tools, sessions, and
-machinery paths. `dev`, `start`, `invoke`, and `routine run` share it rather than carrying parallel
+`createPiAgentFromDir` sits above L2 and resolves the agent directory, config, contexts, model, auth, tools,
+sessions, and machinery paths. `dev`, `start`, `invoke`, and `routine run` share it rather than carrying parallel
 implementations.
 
 Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
@@ -263,7 +240,7 @@ discovery, installed pi packages included (fastagent never installs one) — and
 come from the box too. A name in the definition wins a collision; `fastagent add skill` vendors one in.
 The machine is read once per process, like any environment; the definition stays live.
 
-Deploying ships the project scope, the workspace. What the machine lends is not compared against a
+Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
 machine too, and whatever its builder put in it is that environment's answer
 (`src/engines/pi/machine.ts`).
@@ -272,7 +249,7 @@ The machine's extensions stay out of this: they are its owner's setup, and a ser
 definition's own `extensions/` (`docs/configuration.md#extensions`). So does the system prompt — inheriting
 capability is one thing, inheriting an identity would be the agent becoming someone else's.
 
-Workspace tools merge in this order: all pi coding tools
+A directory agent's tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
 `tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
 refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `routines/`. The coding set is fixed for directory agents: isolation belongs around the whole
@@ -284,8 +261,9 @@ integrations export ordinary `FastagentTool[]` for explicit `config.tools` mount
 Every `defineTool` execution receives the same runtime context. Serving adapts the session it binds for
 the turn, chat adapts its resident one, both through the same adapter onto the FastAgent-owned
 read-only port (`getSessionId`, `getHeader`, `getBranch`) — `getSessionId` answers the *caller's* id,
-not pi's encoded record name. Sessionless direct execution provides cwd but no manager. Native pi tools
-receive the same workspace cwd and caller session id; their `thinkingLevel` getter reads the bound
+not pi's encoded record name, and `contexts` is the agent's resolved contexts. Sessionless direct execution
+provides cwd and contexts but no manager. Native pi tools receive the same cwd (the agent directory) and caller
+session id; their `thinkingLevel` getter reads the bound
 `AgentSession`.
 
 **Tool exposure and discovery** use Pi's native `direct`, `model-only`, `codemode`, `deferred`, and `hidden`
@@ -703,19 +681,17 @@ persistent-volume wiring, required secret names, and a runbook. Docker adds a us
 ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
 reads the Quick Tunnel URL and registers webhooks.
 
-The image seeds the persistent workspace once; later releases
-replace only the definition subtree. Artifacts sit under the agent prefix, with the workspace-root
-`.dockerignore` the host context packers require; preflight checks that a kept ignore file ships the
-definition and excludes credentials. Git history ships when the host packer permits it, and the image
-installs Git when the workspace contains `.git` — git is an optional collaboration mechanism, and
-storage preserves unfinished work without commits or pushes.
+The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its
+root, and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. An agent
+that declares contexts is refused: nothing carries them to a host yet. Git history ships when the host packer
+permits it, and the image installs Git when the agent directory contains `.git`.
 
-`deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `base/` (cwd), `.state/`,
-`.secrets/` and `.deployment/`, and a generated release manifest selects the definition. A
-process-lifetime lease precedes initialization; staged trees and a pending journal make definition
-replacement recoverable. The same release preserves agent edits; a new one removes obsolete definition
-files while keeping everything outside the definition. Nothing is mounted or unmounted by fastagent:
-the host's volume is the only storage.
+`deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
+`.secrets/` and `.deployment/`; the release manifest names the agent the storage belongs to. A process-lifetime
+lease precedes initialization; staged trees and a pending journal make definition replacement recoverable. The same
+release keeps what the agent wrote in `definition/`; a new one replaces it whole, while `.state/` and `.secrets/`
+stay. Storage laid out by an earlier FastAgent (`base/`) is refused rather than left behind unread. Nothing is
+mounted or unmounted by fastagent: the host's volume is the only storage.
 
 No credentials file travels. A model whose key is not in the value file logs in on the box: `fastagent
 login --deployment` runs `login --stdio` inside the running image through the host's own
@@ -756,7 +732,7 @@ last `InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy`. All
 one fixed runtime session, since channel state is single-writer by design.
 
 The two process boundaries stay two explicit log sources: Runtime application stdout/stderr and the
-forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the workspace name,
+forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the agent directory's name,
 discovers the Runtime endpoint log group from its `RuntimeArn`, and tails it; `--source forwarder`
 selects the Lambda group. It applies no stream filter: AgentCore names streams
 `YYYY/MM/DD/[runtime-logs]<session>`, so the marker is an infix after the UTC date path and a
@@ -769,7 +745,7 @@ minted at runtime by the container. The wait on `stack-delete-complete` decides 
 DELETE_FAILED stack still holds a billing runtime, and the image and forwarder zip below it are what a retry
 needs. Webhook registrations are out of scope — they live on the platforms, not in the account.
 
-**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `base/`,
+**AgentCore uses managed SessionStorage at `/mnt/data`, and a deploy resets it.** The same `definition/`,
 `.state/`, `.secrets/` layout applies on the platform's own mount: it survives compute stop/resume, so
 an idle-reclaimed agent resumes with its memory, and AWS wipes it on every runtime version update — i.e.
 every deploy — and after 14 idle days. That is this host's stated semantics, not a gap: AWS's only
@@ -789,7 +765,7 @@ API key in the value file avoids the login.
 
 Runtime filesystems appear on invocation, so `deferAgentcoreService` exposes `/ping` before any
 persistent definition or credentials are opened. Initialization runs in two stages, split by what a
-retry would cost. Taking the workspace (`prepareStartWorkspace`) starts nothing and releases its lease
+retry would cost. Taking the storage (`prepareStartWorkspace`) starts nothing and releases its lease
 before failing, so a failed attempt is retried by the next envelope — an unmounted volume and a lease
 the outgoing session still holds clear on their own, and caching them would make a healthy microVM
 refuse every envelope until it is reclaimed. Assembling the service (`openPreparedWorkspace`) mounts
@@ -797,7 +773,7 @@ channels and starts the scheduler, so both its outcomes are cached; a second att
 schedulers over one claim state. Concurrent envelopes share one attempt at each stage, and mount or
 initialization failures cannot start an empty agent.
 
-The process retains its workspace lease until exit, including failed activation and shutdown, since
+The process retains its deployment lease until exit, including failed activation and shutdown, since
 service close does not drain every background writer. Only the OPEN is caught there: a failure inside
 the opened service's handler is its own, and reporting it as an initialization failure would also read
 a body the handler already consumed. `flock` acquires the parent's open-file-description lock through

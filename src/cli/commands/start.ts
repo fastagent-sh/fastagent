@@ -96,21 +96,20 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
 /** What the storage stage hands the opening stage. */
 export interface PreparedWorkspace {
-  /** The workspace to open — the volume's `base/` when a release manifest selected one. */
+  /** The agent directory to open — the storage's deployed definition when a release manifest selected one. */
   dir: string;
-  /** Set when this process took a deployed workspace. */
-  deployed?: { root: string; agent: string };
+  /** The storage root, set when this process took a deployment's storage. */
+  deployed?: { root: string };
 }
 
 /**
- * Stage one — TAKE the workspace: verify the storage is mounted, apply the release, and point the machinery at the
- * volume.
+ * Stage one — TAKE the storage: verify it is mounted, apply the release, and point the machinery at the volume.
  */
 export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWorkspace> {
   const manifestPath = process.env.FASTAGENT_RELEASE_FILE;
   if (!manifestPath) return { dir: dirArg };
   const storage = process.env.FASTAGENT_STORAGE_DIR;
-  if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployed workspace");
+  if (!storage) throw new Error("FASTAGENT_STORAGE_DIR is required for a deployment");
   const root = resolve(storage);
   const manifest = parseDeploymentRelease(await readFile(manifestPath, "utf8"));
   const dir = await prepareDeployment(resolve(dirArg), root, manifest);
@@ -118,27 +117,25 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
-  process.env.FASTAGENT_AGENT = manifest.agent;
   // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
-  // `enterAgentEnv` reads the workspace's `.env`, which is what makes either source outrank a value edited on the
+  // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
   applyReleaseEnv(manifest);
   process.chdir(dir);
-  return { dir, deployed: { root, agent: manifest.agent } };
+  return { dir, deployed: { root } };
 }
 
 /**
- * Stage two — RUN in the prepared workspace: install the agent's dependencies, then open through the workspace's own
- * FastAgent install.
+ * Stage two — RUN the prepared agent directory: install its dependencies, then open through its own FastAgent install.
  */
 async function openPreparedWorkspace(prepared: PreparedWorkspace, opts: StartOptions): Promise<StartedService> {
   let open = openPreparedStartService;
   if (prepared.deployed) {
-    const { root, agent } = prepared.deployed;
-    const agentDir = join(prepared.dir, agent);
+    const { root } = prepared.deployed;
+    const agentDir = prepared.dir;
     if (await exists(join(agentDir, "package.json"))) {
       await installAgentDependencies(root, agentDir);
-      // Tools and their session context must share the workspace's runtime module instance.
+      // Tools and their session context must share the agent's runtime module instance.
       const entry = createRequire(join(agentDir, "package.json")).resolve("@fastagent-sh/fastagent");
       const local = (await import(
         new URL("./cli/commands/start.js", pathToFileURL(entry)).href
@@ -160,16 +157,16 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
   return openPreparedWorkspace(await prepareStartWorkspace(dirArg), opts);
 }
 
-/** Internal entry loaded from the active workspace's installed package after storage initialization. */
+/** Internal entry loaded from the agent's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  const placement = await enterAgentCommand(dirArg, opts);
-  const opened = await createPiAgentFromDir(placement.agentDir, {
-    model: placement.modelSpec,
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
+  const opened = await createPiAgentFromDir(agentDir, {
+    model: modelSpec,
     serving: true,
   });
-  const { agent, agentDir, config, stateRoot, sessionsDir } = opened;
+  const { agent, config, stateRoot, sessionsDir } = opened;
   await reportAssembly(
-    { ...opened, modelSpec: placement.modelSpec },
+    { ...opened, modelSpec },
     {
       afterTools: [
         ["state", stateRoot],

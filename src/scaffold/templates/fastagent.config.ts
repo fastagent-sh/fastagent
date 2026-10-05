@@ -1,6 +1,5 @@
 // fastagent.config.ts — deployment choices only (model / http; code tools auto-discover from tools/).
 // Your agent's prompt lives in SYSTEM.md / APPEND_SYSTEM.md; its capabilities in skills/ + tools/ — never here.
-// An AGENTS.md in the WORKSPACE (the directory the agent is started in) is read as project context.
 // Model precedence: `--model` flag > FASTAGENT_MODEL env > this default.
 // No model is preset: `fastagent dev` shows the full model catalog (models you already have
 // credentials for come first; picking one that needs auth logs you in inline) and writes your choice
@@ -15,6 +14,9 @@
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
+  // What the agent works on, and what it only knows ({ ..., readonly: true }): directories of their own, never
+  // this one or one around it. `fastagent context add <dir>` / `remove <name>` edit this list.
+  contexts: [],
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   // add `host: "127.0.0.1"` here to pin the bind address; default: `start` all interfaces (what containers

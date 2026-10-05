@@ -1,7 +1,9 @@
 /**
  * Definition domain: read an agent definition directory into memory — its system prompt files, its skills and prompt
  * templates (each from the agent directory's root spelling first, then pi's `.pi/` and the standard `.agents/` ones),
- * and, until contexts exist, the AGENTS.md project context. docs/design/agent-model.md §2 is the rule this follows.
+ * and what its contexts provide: each one's root AGENTS.md and its skills, named `<context>/<skill>`. The agent
+ * directory's own AGENTS.md is not loaded: it is for whoever changes the agent. docs/design/agent-model.md §2 is the
+ * rule this follows.
  */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -15,9 +17,9 @@ import {
   loadSkills,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
+import type { ResolvedContext } from "../../contexts/resolve.ts";
 
 /** A same-name skill collision (the discarded side). */
 export interface SkillCollision {
@@ -55,17 +57,18 @@ export type DefinitionDiagnostic = SkillDiagnostic | PromptTemplateDiagnostic;
 
 /** Result of loading a definition directory. */
 export interface LoadedDefinition {
-  /** Project-context files (AGENTS.md), sourced via pi's `loadProjectContextFiles`; pi renders them. */
-  contextFiles: Array<{ path: string; content: string }>;
+  /** Each context's root AGENTS.md, in declaration order; pi renders them as project context. */
+  contextFiles: DefinitionFile[];
   /** `SYSTEM.md`, else `.pi/SYSTEM.md`: replaces pi's default prompt. Absent → pi builds its default. */
   systemPrompt?: DefinitionFile;
   /** `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`: added after the prompt, whichever it is. */
   appendSystemPrompt?: DefinitionFile;
+  /** The definition's skills, then each context's, named `<context>/<skill>`. */
   skills: Skill[];
   prompts: DefinitionPrompt[];
   /** Non-fatal per-file problems reported by pi's skill and prompt-template loaders. */
   diagnostics: DefinitionDiagnostic[];
-  /** Same-name skill conflicts across the definition's skill directories (first wins). */
+  /** Same-name skill conflicts across the definition's skill directories, or one context's (first wins). */
   collisions: SkillCollision[];
   /** Same-name files and prompt templates across the definition's locations (first wins). */
   shadowed: DefinitionShadow[];
@@ -76,9 +79,9 @@ export interface LoadedDefinition {
 }
 
 export interface LoadAgentDefinitionOptions {
-  /** Working directory whose ancestors are walked for context files. */
-  cwd?: string;
   env?: ExecutionEnv;
+  /** The agent's contexts, resolved: their AGENTS.md and skills are read with the definition. */
+  contexts?: readonly ResolvedContext[];
 }
 
 /** Where each resource is read from, in order: the root spelling first, then pi's, then the standard one. */
@@ -87,21 +90,24 @@ const APPEND_SYSTEM_PROMPT_FILES = ["APPEND_SYSTEM.md", ".pi/APPEND_SYSTEM.md"] 
 const SKILL_DIRS = ["skills", ".pi/skills", ".agents/skills"] as const;
 const PROMPT_DIRS = ["prompts", ".pi/prompts"] as const;
 
+/**
+ * The definition's locations pi also reads as a project's (its project scope is the agent directory): the machine's
+ * half leaves what it finds there to the definition, which reads them with its own precedence and reports.
+ */
+export const PI_PROJECT_RESOURCE_DIRS = {
+  skills: SKILL_DIRS.filter((dir) => dir !== "skills"),
+  prompts: PROMPT_DIRS.filter((dir) => dir !== "prompts"),
+};
+
 /** The file `SYSTEM.md` and `APPEND_SYSTEM.md` replaced. Refused rather than ignored: its text would do nothing. */
 const RETIRED_PERSONA = "persona.md";
 
-/**
- * Read an agent definition: its prompt files, skills and prompt templates from `agentDir`; the project context from
- * pi's loadProjectContextFiles({ cwd, agentDir }).
- */
+/** Read an agent definition: its prompt files, skills and prompt templates from `agentDir`, and what its contexts add. */
 export async function loadAgentDefinition(
   agentDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
-  // One resolved default for the working directory (env cwd AND the context-walk start), so they can never diverge if
-  // a caller passes a relative agentDir.
-  const cwd = options.cwd ?? agentDir;
-  const e = options.env ?? new NodeExecutionEnv({ cwd });
+  const e = options.env ?? new NodeExecutionEnv({ cwd: agentDir });
   const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) {
     throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
@@ -109,10 +115,6 @@ export async function loadAgentDefinition(
   const root = rootResult.value;
 
   await refuseRetiredPersona(e, root);
-
-  // Project context, following pi: the agentDir's own AGENTS.md + every AGENTS.md walking cwd up to root
-  // (loadProjectContextFiles).
-  const contextFiles = loadProjectContextFiles({ cwd, agentDir: root });
 
   const shadowed: DefinitionShadow[] = [];
   const ignored: LoadedDefinition["ignored"] = [];
@@ -128,6 +130,15 @@ export async function loadAgentDefinition(
   const { skills, diagnostics: skillDiagnostics, collisions } = await readSkills(e, root);
   const { prompts, diagnostics: promptDiagnostics } = await readPrompts(e, root, shadowed);
   ignored.push(...(await ignoredPaths(e, root)));
+  const contextFiles: DefinitionFile[] = [];
+  for (const context of options.contexts ?? []) {
+    const instructions = await readIfExists(e, join(context.location, "AGENTS.md"));
+    if (instructions !== undefined) contextFiles.push(instructions);
+    const provided = await readContextSkills(e, context, ignored);
+    skills.push(...provided.skills);
+    skillDiagnostics.push(...provided.diagnostics);
+    collisions.push(...provided.collisions);
+  }
   return {
     contextFiles,
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -140,6 +151,50 @@ export async function loadAgentDefinition(
     ignored,
     dir: root,
   };
+}
+
+/** The file's content, or undefined when there is none; any other read failure throws. */
+async function readIfExists(e: ExecutionEnv, path: string): Promise<DefinitionFile | undefined> {
+  const read = await e.readTextFile(path, BACKGROUND_CONTEXT);
+  if (read.ok) return { path, content: read.value };
+  if (read.error.code === "not_found") return undefined;
+  throw new Error(`cannot read ${path}: ${read.error.message}`);
+}
+
+/** Where a context's skills are read from, in order: the places pi reads a project's. */
+const CONTEXT_SKILL_DIRS = [".pi/skills", ".agents/skills"] as const;
+
+/**
+ * A context's skills, named `<context>/<skill>`: about working in that context, and never colliding with the agent's
+ * own or another context's. A skill of the project's whose own name holds a `/` is left out and said; it is not the
+ * author's to rename.
+ */
+async function readContextSkills(
+  e: ExecutionEnv,
+  context: ResolvedContext,
+  ignored: LoadedDefinition["ignored"],
+): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
+  const { skills: raw, diagnostics } = await loadSkills(
+    e,
+    CONTEXT_SKILL_DIRS.map((dir) => join(context.location, dir)),
+    BACKGROUND_CONTEXT,
+  );
+  const byName = new Map<string, Skill>();
+  const collisions: SkillCollision[] = [];
+  for (const skill of raw) {
+    if (skill.name.includes("/")) {
+      ignored.push({
+        path: skill.filePath,
+        reason: `not loaded: a skill's name may not contain "/" ("${skill.name}")`,
+      });
+      continue;
+    }
+    const name = `${context.name}/${skill.name}`;
+    const existing = byName.get(name);
+    if (existing) collisions.push({ name, winnerPath: existing.filePath, loserPath: skill.filePath });
+    else byName.set(name, { ...skill, name });
+  }
+  return { skills: [...byName.values()], diagnostics, collisions };
 }
 
 async function exists(e: ExecutionEnv, path: string): Promise<boolean> {
@@ -197,12 +252,8 @@ async function ignoredPaths(e: ExecutionEnv, root: string): Promise<LoadedDefini
 }
 
 /** Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none. */
-export async function loadExtensionPaths(
-  agentDir: string,
-  options: { cwd?: string; env?: ExecutionEnv } = {},
-): Promise<string[]> {
-  const cwd = options.cwd ?? agentDir;
-  const e = options.env ?? new NodeExecutionEnv({ cwd });
+export async function loadExtensionPaths(agentDir: string, options: { env?: ExecutionEnv } = {}): Promise<string[]> {
+  const e = options.env ?? new NodeExecutionEnv({ cwd: agentDir });
   const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
   if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
   const root = rootResult.value;

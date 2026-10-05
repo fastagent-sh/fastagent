@@ -54,7 +54,7 @@ export interface VendoredSkill {
   /** The skill's real name (from SKILL.md frontmatter, per the Agent Skills spec). */
   name: string;
   description?: string;
-  /** Workspace-relative destination (e.g. `skills/pdf`). */
+  /** Agent-dir-relative destination (e.g. `skills/pdf`). */
   dest: string;
   /** The skill ships a `scripts/` dir (executable code) — a trust signal for the caller. */
   hasScripts: boolean;

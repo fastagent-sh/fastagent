@@ -88,7 +88,7 @@ describe("declared secrets: where they are declared", () => {
       secrets: ["GH_TOKEN"],
       execute: () => "ok",
     });
-    const resolved = await resolveAgentTools({ tools: [configured] }, dir, dir);
+    const resolved = await resolveAgentTools({ tools: [configured] }, dir);
     // BY TOOL, so a caller running one of them (`fastagent tool`) can ask for just that one.
     expect([...resolved.toolSecrets]).toEqual([
       ["x-post", [{ name: "X_API_KEY", source: "tools/x-post.mjs" }]],
@@ -200,7 +200,7 @@ describe("declared secrets: only what actually runs", () => {
       "tools/read.mjs": `export default { name: "read", description: "r", parameters: {},
          secrets: ["FA_TEST_SHADOWED"], execute: async () => ({ content: [] }) };\n`,
     });
-    const resolved = await resolveAgentTools({}, dir, dir);
+    const resolved = await resolveAgentTools({}, dir);
     expect(resolved.toolCollisions.map((c) => c.name)).toContain("read");
     expect(allSecrets(resolved.toolSecrets)).toEqual([]);
   });
@@ -217,7 +217,7 @@ describe("declared secrets: only what actually runs", () => {
       secrets: ["FA_TEST_CONFIG_SHADOWED"],
       execute: () => "ok",
     });
-    const resolved = await resolveAgentTools({ tools: [shadowed] }, dir, dir);
+    const resolved = await resolveAgentTools({ tools: [shadowed] }, dir);
     expect(resolved.toolCollisions).toContainEqual({ name: "read", source: "config.tools" });
     expect(allSecrets(resolved.toolSecrets)).toEqual([]);
   });

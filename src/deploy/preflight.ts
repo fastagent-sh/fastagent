@@ -10,11 +10,12 @@ import { type FastagentConfig, providerOf } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/auth.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, exists } from "../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
+import { declareContexts } from "../contexts/declare.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -61,7 +62,7 @@ interface DeployFacts {
    * what this deployment carries. The environment running `deploy` is deliberately absent from it (§9).
    */
   values: ReadonlyMap<string, string>;
-  /** That file, workspace-relative — the name every "set it here" message must use. */
+  /** That file, agent-dir-relative — the name every "set it here" message must use. */
   valueFile: string;
   /**
    * The variable the value file carries the model's key in (the provider's own, or a models.json `"$NAME"`), or
@@ -106,7 +107,7 @@ class DeployGate {
 }
 
 interface PreflightInput {
-  placement: ResolvedPlacement;
+  agentDir: string;
   config: FastagentConfig;
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
@@ -143,13 +144,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const {
-    placement: { agentDir, workspace },
-    config,
-    force,
-    externalClock,
-    publicUrl = true,
-  } = input;
+  const { agentDir, config, force, externalClock, publicUrl = true } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -159,13 +154,22 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `makes it an agent, never its name)`,
     );
   }
-  const agentPrefix = `${basename(agentDir)}/`;
+
+  // A deployment ships the definition and nothing else yet, and an instance must never start with a context silently
+  // missing (agent-model.md §3), so an agent that declares one is not deployed.
+  const contexts = declareContexts(config.contexts, agentDir);
+  if (contexts.length > 0) {
+    throw new DeployGate(
+      `this agent declares contexts (${contexts.map((c) => c.name).join(", ")}), and deploying an agent with ` +
+        `contexts is not supported yet — remove them from fastagent.config.ts to deploy it`,
+    );
+  }
 
   // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
   // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
   // invocation on AgentCore. This is the boundary that turns that refusal into a deploy finding, so the error is
   // carried whole into the issue rather than rethrown.
-  await loadAgentDefinition(agentDir, { cwd: workspace }).catch((error: unknown) => {
+  await loadAgentDefinition(agentDir).catch((error: unknown) => {
     report.issue(
       `the definition does not load, so the deployed agent would not start: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -173,7 +177,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
-  const valueFile = relative(workspace, dotEnvPath(agentDir));
+  const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
   const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
@@ -287,7 +291,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // A model only the definition's extensions declare (a virtual model, or a provider one registers) is authenticated
   // by that code on the box, per request: a virtual model's credential is whichever physical model it routes to.
   // Asked of the catalog the box builds, extensions included, so deploy judges the model the box will run.
-  const fromExtension = modelSpec ? await extensionDeclared(agentDir, workspace, modelSpec, deployed) : false;
+  const fromExtension = modelSpec ? await extensionDeclared(agentDir, modelSpec, deployed) : false;
   if (fromExtension && modelSpec) {
     report.note(
       `${modelSpec} is declared by the definition's extensions, which resolve its credentials on the box — deploy ` +
@@ -336,20 +340,19 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const hasOtherLock =
     runtime === "node" &&
     ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
-  // Does the baked workspace ship a `.git`?
-  const shipsGit = await exists(join(workspace, ".git"));
+  // Does the baked agent directory ship a `.git`?
+  const shipsGit = await exists(join(agentDir, ".git"));
   // After the facts: the deps sentence must match the agent's actual shape (a markdown-only agent has no package.json
   // and installs nothing — the note must not point at a file that doesn't exist).
   const deps = hasPackageJson
-    ? `only the agent's deps (${agentPrefix}package.json) are installed — the workspace's own deps are the agent's runtime concern`
+    ? `its package.json dependencies are installed in the image`
     : `the agent has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
   // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own answer and its
   // runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
   report.note(
-    `the whole directory is baked as the agent's workspace (WYSIWYG — what you see is what ships, ` +
-      `git or not, clean or not); ${deps}. The image seeds the storage once; a later release replaces ` +
-      `only ${agentPrefix} and leaves the rest of the workspace, state and credentials in place — for ` +
-      `how long, see this host's storage note below`,
+    `the agent directory is baked as the definition (WYSIWYG — what you see is what ships, git or not, clean or ` +
+      `not); ${deps}. Every release replaces the deployed definition and leaves the instance's state and ` +
+      `credentials in place — for how long, see this host's storage note below`,
   );
   // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not reproducible.
   if (hasPackageJson && !hasLockfile) {
@@ -369,14 +372,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     );
   }
-  const paths = await buildContextPaths(workspace, agentDir, agentPrefix, authPath);
-  await checkKeptIgnoreFiles({ workspace, agentDir, agentPrefix, force, paths }, report);
+  const paths = await buildContextPaths(agentDir, authPath);
+  await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's).
   const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),
-    agentPrefix,
+    agent: basename(agentDir),
     machineryPaths: paths.machineryPaths,
     hasPackageJson,
     runtime,
@@ -391,7 +394,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // EVERYTHING the definition declared it needs, from wherever it was declared. Read through the SAME resolver
   // dev/start mount with, so "which tool declarations count" has one answer (config.tools declare too; a shadowed
   // file's declaration is dropped in both places).
-  const resolvedTools = await resolveAgentTools(config, agentDir, workspace);
+  const resolvedTools = await resolveAgentTools(config, agentDir);
   // A code input we could not READ is a code input whose declarations we cannot carry — and the box
   // WILL read it (its deps are installed there), so its gate fires after the deploy reported success:
   // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
@@ -453,19 +456,14 @@ async function credentialRoute(
 }
 
 /** Whether `spec` exists only once the definition's extensions have registered their models. */
-async function extensionDeclared(
-  agentDir: string,
-  workspace: string,
-  spec: string,
-  deployed: ModelRuntime,
-): Promise<boolean> {
+async function extensionDeclared(agentDir: string, spec: string, deployed: ModelRuntime): Promise<boolean> {
   const provider = providerOf(spec);
   const id = spec.slice(provider.length + 1);
   if (deployed.getModel(provider, id)) return false;
   const catalog = await agentModels(
     agentDir,
     { credentialStore: new InMemoryCredentialStore() },
-    { machineLayer: false, cwd: workspace },
+    { machineLayer: false },
   ).runtime();
   return catalog.getModel(provider, id) !== undefined;
 }

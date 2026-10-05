@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
- * How to install and run the AGENT: its package.json + lockfile decide, never the surrounding workspace's (whose
- * toolchain is the agent's runtime concern, not fastagent's).
+ * How to install and run the AGENT: its own package.json + lockfile decide.
  */
 export interface AgentRuntime {
   /**

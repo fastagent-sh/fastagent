@@ -1,18 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/engines/pi/config.ts";
 import { globalCatalogPath } from "../src/engines/pi/models.ts";
 import { createPiModels } from "../src/engines/pi/agent-models.ts";
 
-/** A workspace with an agent in it, as `init` produces (`<host>/fastagent/`); returns the AGENT DIR.
- *  `files` land in the agent dir; the workspace around it is always `dirname(agentDir)`. */
-async function workspace(files: Record<string, string> = {}): Promise<string> {
+/** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
+ *  directory's, and the temp prefix would not pass the release-name rule. */
+async function agent(files: Record<string, string> = {}): Promise<string> {
   const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
-  await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
-  const dir = join(host, "fastagent");
+  const dir = join(host, "agent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
   await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
@@ -28,7 +27,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
 
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
-    placement: { agentDir: target, workspace: dirname(target) },
+    agentDir: target,
     config,
     run: false,
     force: false,
@@ -53,7 +52,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
-    const dir = await workspace(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
+    const dir = await agent(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
     vi.stubEnv("FASTAGENT_MODEL", undefined);
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
@@ -65,7 +64,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // FASTAGENT_MODEL set here sees `fastagent info` report a model, so the gate has to say which environment it
     // looked in rather than just "no model resolves". It must NOT call the value the operator's, though: the
     // first-run picker sets the same variable a second earlier when it cannot write the choice back to a config.
-    const dir = await workspace();
+    const dir = await agent();
     vi.stubEnv("FASTAGENT_MODEL", "openai/gpt-4o-mini");
     const pre = await call(dir, {}, { run: true });
     expect(pre.ok).toBe(false);
@@ -78,12 +77,12 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("reads the model from the value file, reports the source, and hands back the value to carry", async () => {
     // The value file is how a deployment picks a model without editing the committed default; the operator's
     // shell is deliberately not a source, so this cannot be satisfied by exporting FASTAGENT_MODEL.
-    const dir = await workspace();
+    const dir = await agent();
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
     const pre = await call(dir, { model: "openai/other" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
-    const source = `${basename(dir)}/.secrets/.env`; // as READ, relative to the workspace
+    const source = ".secrets/.env"; // as READ, relative to the agent directory
     expect(pre.messages).toContainEqual({ level: "note", text: `model openai/gpt-4o-mini (source: ${source})` });
     // It travels BAKED into the image, not as a host variable: an image cannot interpolate the operator's shell,
     // and it is not a credential, so it stays out of the secret channel and every runbook's required list.
@@ -92,7 +91,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("a config model bakes nothing extra — the config is already in the image", async () => {
-    const pre = await call(await workspace(), { model: "openai/gpt-4o-mini" }, { run: true });
+    const pre = await call(await agent(), { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.messages).toContainEqual({ level: "note", text: "model openai/gpt-4o-mini (source: fastagent.config)" });
@@ -105,7 +104,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // typo: 795 of pi's 1354 built-in specs look like `baseten/zai-org/GLM-5.3`, and resolution splits on the first
     // slash. Gated with or without `--run` — the manifest validates the spec on the way out, so there is no artifact
     // to produce either.
-    const dir = await workspace();
+    const dir = await agent();
     for (const bad of ["openai/gpt-4o mini", "gpt-4o"]) {
       await writeFile(join(dir, ".secrets", ".env"), `FASTAGENT_MODEL=${bad}\n`);
       const pre = await call(dir, {});
@@ -126,7 +125,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // `prepareStartWorkspace` returns early without FASTAGENT_RELEASE_FILE, so a model living only in the value
     // file would be reported here and missing on the box. The question is whether that ENV is set, not whether we
     // generated the file: a hand-written Dockerfile that sets it works, and must not be refused.
-    const dir = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    const dir = await agent({ Dockerfile: "FROM node:22-slim\n" });
     await writeFile(join(dir, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
     const gated = await call(dir, {}, { run: true });
     expect(gated.ok).toBe(false);
@@ -145,36 +144,36 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "ENV FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
       "ENV FASTAGENT_STORAGE_DIR=/data FASTAGENT_RELEASE_FILE=/app/fastagent/fastagent.release.json",
     ]) {
-      const own = await workspace({ Dockerfile: `FROM node:22-slim\n${env}\n` });
+      const own = await agent({ Dockerfile: `FROM node:22-slim\n${env}\n` });
       await writeFile(join(own, ".secrets", ".env"), "FASTAGENT_MODEL=openai/gpt-4o-mini\n");
       expect((await call(own, {}, { run: true })).ok).toBe(true);
     }
 
     // And a config model needs no manifest at all.
-    const fromConfig = await workspace({ Dockerfile: "FROM node:22-slim\n" });
+    const fromConfig = await agent({ Dockerfile: "FROM node:22-slim\n" });
     expect((await call(fromConfig, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
 
-  it("container facts come from the AGENT DIR; git auto-baked when the workspace ships .git", async () => {
-    const agentDir = await workspace({
+  it("container facts come from the AGENT DIR; git auto-baked when it ships .git", async () => {
+    const agentDir = await agent({
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
     });
-    await mkdir(join(dirname(agentDir), ".git")); // the workspace is a git repo — the image gets the git binary
+    await mkdir(join(agentDir, ".git")); // the agent is a git repo — the image gets the git binary
 
     const ok = await call(agentDir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { run: true });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.container.hasPackageJson).toBe(true); // the AGENT's manifest, not the workspace's
-      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (workspace ships .git), deploy.apt kept, deduped
-      expect(JSON.stringify(ok.messages)).toMatch(/baked as the agent's workspace/); // the WYSIWYG note is stated
+      expect(ok.container.hasPackageJson).toBe(true);
+      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (it ships .git), deploy.apt kept, deduped
+      expect(JSON.stringify(ok.messages)).toMatch(/baked as the definition/); // the WYSIWYG note is stated
     }
   });
 
-  it("git is baked iff the baked workspace ships a .git — a non-git dir gets no silent git layer", async () => {
+  it("git is baked iff the agent directory ships a .git — a non-git dir gets no silent git layer", async () => {
     // No .git: only the author's declared packages reach the image (history without a binary is a
     // dead loop; a binary without history is dead weight — deploy.apt is the explicit escape hatch).
-    const noGit = await workspace();
+    const noGit = await agent();
     const pre = await call(noGit, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -183,8 +182,8 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
 
     // .git present: git rides in.
-    const gitDir = await workspace();
-    await mkdir(join(dirname(gitDir), ".git"));
+    const gitDir = await agent();
+    await mkdir(join(gitDir, ".git"));
     const pre2 = await call(gitDir, { model: "openai/gpt-4o-mini" });
     expect(pre2.ok).toBe(true);
     if (pre2.ok) {
@@ -193,11 +192,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("a kept workspace .dockerignore: warns for missing secret/machinery/node_modules excludes; notes a .git exclude", async () => {
-    const agentDir = await workspace({ "package.json": `{"type":"module"}` });
+  it("a kept .dockerignore: warns for missing secret/machinery/node_modules excludes; notes a .git exclude", async () => {
+    const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
     await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
-    await writeFile(join(dirname(agentDir), ".dockerignore"), ".git\nnode_modules\n"); // the workspace's own — kept, not ours
+    await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -214,10 +213,10 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // The regression this pins: the leak check used to ask about the secrets DIRECTORY, which the
     // generated `**/.secrets/**` (contents-only, so the tracked scaffolds can be re-included) answers
     // "not excluded" — fastagent's own default output gated fastagent's own deploy on every fresh
-    // kit-layout workspace without --force. auth.json and .secrets/.env ARE excluded; nothing leaks.
-    const agentDir = await workspace();
+    // agent without --force. auth.json and .secrets/.env ARE excluded; nothing leaks.
+    const agentDir = await agent();
     await writeFile(
-      join(dirname(agentDir), ".dockerignore"),
+      join(agentDir, ".dockerignore"),
       "# Generated by `fastagent deploy`. Delete this line to take ownership (deploy then keeps your file).\n" +
         "**/node_modules\n**/.secrets/**\n**/.state\n**/.cache\n**/.env\n**/.env.*\n!**/.env.example\n" +
         "!**/.secrets/.gitignore\n**/*.log\n",
@@ -228,26 +227,26 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("a kept ignore that misses the secrets gates NAMING the leaking FILE, not the directory", async () => {
-    const agentDir = await workspace();
-    await writeFile(join(dirname(agentDir), ".dockerignore"), "**/node_modules\n");
+    const agentDir = await agent();
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n");
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
       expect(gated.gate).toMatch(/BAKE SECRETS INTO THE IMAGE/);
-      expect(gated.gate).toMatch(/fastagent\/\.secrets\/auth\.json/); // the FILE — actionable, not a directory
-      expect(gated.gate).toMatch(/fastagent\/\.secrets\/\.env/);
+      expect(gated.gate).toMatch(/`\.secrets\/auth\.json`/); // the FILE — actionable, not a directory
+      expect(gated.gate).toMatch(/`\.secrets\/\.env`/);
     }
   });
 
   it("a secrets dir holding only the tracked scaffolds is not a leak — they travel on purpose", async () => {
-    const agentDir = await workspace();
+    const agentDir = await agent();
     await rm(join(agentDir, ".secrets", "auth.json"));
     await rm(join(agentDir, ".secrets", ".env"));
     await writeFile(join(agentDir, ".secrets", ".gitignore"), "*\n");
     await writeFile(join(agentDir, ".secrets", ".env.example"), "TOKEN=\n");
     // An ignore with NO secrets rule at all: with nothing bakeable inside, there is nothing to gate —
     // the existence rule ("a file that is not there cannot be baked") applied per file.
-    await writeFile(join(dirname(agentDir), ".dockerignore"), "**/node_modules\n");
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n");
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
   });
@@ -255,7 +254,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it.skipIf(process.getuid?.() === 0)(
     "a directory under the secrets dir it cannot read stops the pre-flight instead of reading as empty",
     async () => {
-      const agentDir = await workspace({ ".secrets/gcp/key.json": "{}\n" });
+      const agentDir = await agent({ ".secrets/gcp/key.json": "{}\n" });
       const nested = join(agentDir, ".secrets", "gcp");
       await chmod(nested, 0o000);
       try {
@@ -266,42 +265,38 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     },
   );
 
-  it("the .env family is interrogated at BOTH levels, like the generated rules — not just the root", async () => {
-    // The generated file excludes `**/.env` + `**/.env.*` (minus .env.example). A kept file must be
-    // asked about the same set, or the two most likely credential files ship: `<agent>/.env` (the file
-    // habit puts there — env.ts warns about it by name) and a host `.env.local`.
-    const agentDir = await workspace();
-    const host = dirname(agentDir);
+  it("the .env family at the agent's root is interrogated, like the generated rules", async () => {
+    // The generated file excludes `**/.env` + `**/.env.*` (minus .env.example). A kept file must be asked about the
+    // same set, or the likeliest credential files ship: a root `.env` (the file habit puts there — env.ts warns
+    // about it by name) and a `.env.local`.
+    const agentDir = await agent();
     await writeFile(join(agentDir, ".env"), "TELEGRAM_BOT_TOKEN=real\n");
-    await writeFile(join(host, ".env.local"), "DATABASE_URL=real\n");
+    await writeFile(join(agentDir, ".env.local"), "DATABASE_URL=real\n");
     await writeFile(join(agentDir, ".secrets", ".env.example"), "TOKEN=\n"); // committable by design
-    await writeFile(join(host, ".dockerignore"), "**/.secrets\n**/.state\nnode_modules\n");
+    await writeFile(join(agentDir, ".dockerignore"), "**/.secrets\n**/.state\nnode_modules\n");
 
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
       expect(gated.gate).toMatch(/BAKE SECRETS INTO THE IMAGE/);
-      expect(gated.gate).toMatch(/fastagent\/\.env/);
-      expect(gated.gate).toMatch(/\.env\.local/);
+      expect(gated.gate).toMatch(/`\.env`/);
+      expect(gated.gate).toMatch(/`\.env\.local`/);
       expect(gated.gate).not.toMatch(/\.env\.example/); // never gated — the template travels on purpose
     }
   });
 
-  it("the drop-the-agent check asks about a DIRECTORY: `fastagent/` gates, an allowlist does not", async () => {
-    // Both halves of one rule. `fastagent/` is a directory-only pattern — the spelling a hand-written
-    // ignore file most likely carries — and a bare-name test answers `false` for it, so the agent would
-    // be dropped from the build context with no warning. An allowlist that re-includes the agent must
-    // still not gate a deployment that is actually correct.
-    const dropped = await workspace();
-    await writeFile(join(dirname(dropped), ".dockerignore"), "fastagent/\n");
+  it("a kept ignore that drops the agent's config gates; an allowlist that keeps it does not", async () => {
+    // Without `fastagent.config.ts` the box has no agent to open. An allowlist that re-includes it must still not
+    // gate a deployment that is actually correct.
+    const dropped = await agent();
+    await writeFile(join(dropped, ".dockerignore"), "*.ts\n");
     const gated = await call(dropped, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/would ship WITHOUT the agent/);
+    if (!gated.ok) expect(gated.gate).toMatch(/would ship WITHOUT the agent's config/);
 
-    const allowed = await workspace();
-    await writeFile(join(dirname(allowed), ".dockerignore"), "*\n!fastagent\n!fastagent/**\n");
-    // warn posture, so the OTHER checks (this allowlist really does re-include `fastagent/.secrets`)
-    // report instead of gating — leaving exactly the agent-drop branch under test.
+    const allowed = await agent();
+    await writeFile(join(allowed, ".dockerignore"), "*\n!fastagent.config.ts\n!skills/**\n");
+    // warn posture, so the OTHER checks report instead of gating — leaving exactly the config branch under test.
     const pre = await call(allowed, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) expect(JSON.stringify(pre.messages)).not.toMatch(/ship WITHOUT the/);
@@ -310,15 +305,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("the secret checks follow FASTAGENT_SECRETS_DIR — a custom in-tree dir is gated AND excluded", async () => {
     // The name-based `**/.secrets` excludes reach a directory called `.secrets`; an override pointing
     // somewhere else in the baked tree is invisible to them, and `COPY . .` would ship the credential.
-    const agentDir = await workspace();
-    const host = dirname(agentDir);
-    const creds = join(host, "creds");
+    const agentDir = await agent();
+    const creds = join(agentDir, "creds");
     await mkdir(creds);
     await writeFile(join(creds, "auth.json"), "{}\n"); // exists → the gate has something to protect
     const env = { ...process.env, FASTAGENT_SECRETS_DIR: creds };
     const call2 = (over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
       preflightDeploy({
-        placement: { agentDir, workspace: host },
+        agentDir,
         config: { model: "openai/gpt-4o-mini" },
         run: false,
         force: false,
@@ -333,10 +327,10 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       if (clean.ok)
         // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
         // beside auth.json must not ship either.
-        expect(clean.container.machineryPaths).toEqual(["creds", "fastagent/.state"]);
+        expect(clean.container.machineryPaths).toEqual(["creds", ".state"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
-      await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
+      await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
       const gated = await call2({ run: true });
       expect(gated.ok).toBe(false);
       // The gate names the leaking FILE inside the relocated dir (the leak question is per file;
@@ -349,58 +343,58 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("the per-Dockerfile ignore is interrogated too — it is what BuildKit prefers", async () => {
-    // `deploy docker` builds through `fastagent/Dockerfile`, and BuildKit prefers the ignore file BESIDE
-    // it. Checking only the workspace-root one left the credential gate not covering the file that
-    // actually decides that build.
-    const agentDir = await workspace();
-    const host = dirname(agentDir);
-    await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
+    // BuildKit prefers the ignore file BESIDE the Dockerfile over the context root's, so checking only one left the
+    // credential gate not covering the file that actually decides that build.
+    const agentDir = await agent();
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
     await writeFile(join(agentDir, "Dockerfile.dockerignore"), "node_modules\n"); // theirs, and it leaks
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/fastagent\/Dockerfile\.dockerignore \(kept\) does not exclude/);
+    if (!gated.ok) expect(gated.gate).toMatch(/your Dockerfile\.dockerignore \(kept\) does not exclude/);
   });
 
   it("--run gates on a kept .dockerignore that would bake secrets or drop the agent", async () => {
     // Missing **/.secrets and **/.env excludes: warn generate-only (asserted above), GATE under --run —
     // a full deploy must not push a secret-laden image (same discipline as the model-travel gate).
-    const agentDir = await workspace();
-    const host = dirname(agentDir);
-    await writeFile(join(host, ".dockerignore"), "node_modules\n");
+    const agentDir = await agent();
+    await writeFile(join(agentDir, ".dockerignore"), "node_modules\n");
     const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/BAKE SECRETS/);
 
-    // Dockerignore patterns are ROOT-ANCHORED, unlike .gitignore's: a bare `.secrets` covers only the
-    // workspace root, NOT the agent's own `fastagent/.secrets` where the credentials actually live.
-    await writeFile(join(host, ".dockerignore"), ".secrets\n.env\n");
-    const rootOnly = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(rootOnly.ok).toBe(false);
-    if (!rootOnly.ok) expect(rootOnly.gate).toMatch(/does not exclude `fastagent\/\.secrets\/\.env`/);
-
-    // A rule matching the agent dir: the context ships WITHOUT the agent — the whole deploy is
-    // meaningless (crash-loop with no persona/config), so gate regardless of where the rule came from.
-    await writeFile(join(host, ".dockerignore"), "**/fastagent\n**/.secrets\n**/.env\n");
+    // A rule matching the config: the image ships WITHOUT the agent — the whole deploy is meaningless
+    // (crash-loop with no agent to open), so gate regardless of where the rule came from.
+    await writeFile(join(agentDir, ".dockerignore"), "fastagent.config.ts\n**/.secrets\n**/.env\n");
     const noAgent = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(noAgent.ok).toBe(false);
     if (!noAgent.ok) expect(noAgent.gate).toMatch(/WITHOUT the agent/);
 
     // Negation is the ignore matcher's job, with git's last-match-wins: a later `!` re-includes the
     // path, so the secrets are back in the context → still gates.
-    await writeFile(join(host, ".dockerignore"), "**/.secrets\n!**/.secrets\n**/.env\n");
+    await writeFile(join(agentDir, ".dockerignore"), "**/.secrets\n!**/.secrets\n**/.env\n");
     const negated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(negated.ok).toBe(false);
     if (!negated.ok) expect(negated.gate).toMatch(/\.secrets/);
 
     // The generated excludes satisfy every check — no gate, no secret/state/node_modules warning.
-    await writeFile(join(host, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
+    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
     const clean = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(clean.ok).toBe(true);
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
+  it("refuses an agent that declares contexts, naming them — a host would start without them", async () => {
+    const dir = await agent();
+    const pre = await call(dir, {
+      model: "openai/gpt-4o-mini",
+      contexts: [{ local: "/srv/app" }, { local: "/srv/docs" }],
+    });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toMatch(/declares contexts \(app, docs\), and deploying an agent with contexts/);
+  });
+
   it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
-    const dir = await workspace({ "persona.md": "You are terse.\n" });
+    const dir = await agent({ "persona.md": "You are terse.\n" });
     const config = { model: "openai-codex/gpt-5.5" };
     const gated = await call(dir, config, { run: true });
     expect(gated.ok).toBe(false);
@@ -415,14 +409,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {
-    const pre = await call(await workspace(), {}, { run: false });
+    const pre = await call(await agent(), {}, { run: false });
     expect(pre.ok).toBe(true);
     if (pre.ok)
       expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/no model resolves/) });
   });
 
   it("computes container facts and no model WARNING when the model is in config (markdown agent)", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
@@ -433,7 +427,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("recognizes Slack as a first-party route channel for secrets/deploy guidance", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(join(dir, "channels", "slack.mjs"), "export default () => ({ '/slack': () => new Response() });\n");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
@@ -445,7 +439,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("notes a custom channel (its webhook is the author's to wire; its variables travel like every other)", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     const { mkdir } = await import("node:fs/promises");
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(join(dir, "channels", "discord.ts"), "export default () => ({});\n");
@@ -456,14 +450,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       expect(pre.messages).toContainEqual({
         level: "note",
         text: expect.stringContaining(
-          'route channel "discord" is custom — its variables travel from fastagent/.secrets/.env like every other',
+          'route channel "discord" is custom — its variables travel from .secrets/.env like every other',
         ),
       });
     }
   });
 
   it("a custom channel's declared secrets join the required list", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(
       join(dir, "channels", "discord.mjs"),
@@ -476,7 +470,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("recognizes a long-connection module structurally and reports its always-on requirement", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(
       join(dir, "channels", "feishu.mjs"),
@@ -494,7 +488,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("keeps a custom long-connection channel always-on without pretending it has a webhook", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(join(dir, "channels", "socket.mjs"), `export default { name: "custom socket", connect() {} };\n`);
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
@@ -509,7 +503,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("fails visibly when an enabled channel throws during deployment inspection", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "channels"), { recursive: true });
     await writeFile(join(dir, "channels", "broken.mjs"), `throw new Error("import exploded");\n`);
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
@@ -518,7 +512,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
     // `--force` does not rescue it: writeArtifacts refuses a file it did not generate whatever the flag says, so the
     // packages are dropped either way. Suppressing the warning under `--force` only hid that.
-    const dir = await workspace({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
+    const dir = await agent({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
     const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
 
     for (const force of [false, true]) {
@@ -533,7 +527,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("a declared cron keeps a machine up and names its way out; the agent's own wake-ups do not", async () => {
     // Nothing → false, no note. Every serve mounts `wake`, so a wake-up is NOT a reason to stay up: a box that slept
     // fires what is due when a request next wakes it.
-    const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
+    const none = await call(await agent(), { model: "openai/gpt-4o-mini" });
     expect(none.ok && !none.hasCron).toBe(true);
     if (none.ok) expect(none.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
 
@@ -541,7 +535,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // counting routine files answered a different question and made a by-name-only definition pay for an idle
     // box forever, while printing a note about a cron instant it does not have.
     const { mkdir, writeFile: wf } = await import("node:fs/promises");
-    const byNameOnly = await workspace();
+    const byNameOnly = await agent();
     await mkdir(join(byNameOnly, "routines"), { recursive: true });
     await wf(join(byNameOnly, "routines", "reindex.ts"), `export default { prompt: "refresh" };\n`);
     const onDemand = await call(byNameOnly, { model: "openai/gpt-4o-mini" });
@@ -552,7 +546,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
     // A routines/ file WITH a cron → hasCron, and the note names `POST /run`: a cron is a time, and a time can
     // be kept elsewhere, so an operator paying for an idle box has a real option and should be told it exists.
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "routines"), { recursive: true });
     // A file that fails to LOAD still counts, conservatively: it may well declare a cron, and scaling to zero
     // because it did not parse would hide that behind silence.
@@ -570,7 +564,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("does not offer the cron's way out when a long connection also pins the machine", async () => {
-    const dir = await workspace({
+    const dir = await agent({
       "routines/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
       "channels/socket.mjs": `export default { name: "socket", connect() {} };\n`,
     });
@@ -580,7 +574,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {
-    const dir = await workspace({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
+    const dir = await agent({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
@@ -591,7 +585,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("names a package.json it cannot parse instead of reporting it as missing a dependency", async () => {
-    const dir = await workspace({ "package.json": "{ not json" });
+    const dir = await agent({ "package.json": "{ not json" });
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/package\.json.*not valid JSON/);
   });
 });
@@ -606,7 +600,7 @@ describe("preflight: a model credential that does not travel", () => {
     noAnthropicEnv();
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
     for (const stored of [oauth, { type: "api_key", key: "k" }]) {
-      const dir = await workspace({ ".secrets/auth.json": JSON.stringify({ anthropic: stored }) });
+      const dir = await agent({ ".secrets/auth.json": JSON.stringify({ anthropic: stored }) });
       const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
       if (!pre.ok) throw new Error(`preflight gated: ${pre.gate}`);
       expect(pre.boxLogin).toBe("anthropic");
@@ -619,7 +613,7 @@ describe("preflight: a model credential that does not travel", () => {
   });
 
   it("a model only the definition's extensions declare is not gated: its credentials are that code's, on the box", async () => {
-    const dir = await workspace({
+    const dir = await agent({
       "extensions/router.ts": `export default (pi) => pi.registerVirtualModel({
   provider: "router", id: "auto", name: "Automatic",
   route: (_request, ctx) => ({ model: ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5"), thinkingLevel: "off" }),
@@ -636,13 +630,13 @@ describe("preflight: a model credential that does not travel", () => {
 
   it("with nothing stored here either: the box still logs in, since this machine's login was never the source", async () => {
     noAnthropicEnv();
-    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     expect(pre.ok && pre.boxLogin).toBe("anthropic");
   });
 
   it("a key in the value file travels, and nothing logs in", async () => {
     noAnthropicEnv(); // the value file alone decides (§9), not the shell running deploy
-    const dir = await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
+    const dir = await agent({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" });
     const pre = await call(dir, { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     expect(pre.ok && pre.boxLogin).toBeUndefined();
     expect(pre.ok && pre.modelAuth).toBe("ANTHROPIC_API_KEY");
@@ -653,7 +647,7 @@ describe("preflight: a model credential that does not travel", () => {
     // deploy into a "no value for ANTHROPIC_API_KEY" refusal, nor decide which path the deploy takes at all.
     noAnthropicEnv();
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-from-the-shell");
-    const pre = await call(await workspace(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
+    const pre = await call(await agent(), { model: "anthropic/claude-sonnet-4-5" }, { run: true });
     if (!pre.ok) throw new Error(pre.gate);
     expect(pre.boxLogin).toBe("anthropic");
     expect(pre.secrets.map((s) => s.name)).not.toContain("ANTHROPIC_API_KEY");
@@ -665,7 +659,7 @@ describe("preflight: a model credential that does not travel", () => {
     noAnthropicEnv();
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
     const keyedBy = (env: string) =>
-      workspace({
+      agent({
         "models.json": JSON.stringify({ providers: { anthropic: { apiKey: "$MY_ANT_KEY" } } }),
         ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
         ".secrets/.env": env,
@@ -693,11 +687,7 @@ describe("preflight: a model credential that does not travel", () => {
     await writeFile(adc, "{}");
     const vertex = createPiModels().getProvider("google-vertex")?.getModels()[0]?.id as string;
     const env = `GOOGLE_CLOUD_PROJECT=p\nGOOGLE_CLOUD_LOCATION=us-central1\nGOOGLE_APPLICATION_CREDENTIALS=${adc}\n`;
-    const pre = await call(
-      await workspace({ ".secrets/.env": env }),
-      { model: `google-vertex/${vertex}` },
-      { run: true },
-    );
+    const pre = await call(await agent({ ".secrets/.env": env }), { model: `google-vertex/${vertex}` }, { run: true });
     expect(pre.ok && pre.boxLogin).toBe("google-vertex");
   });
 
@@ -707,7 +697,7 @@ describe("preflight: a model credential that does not travel", () => {
     const bedrock = createPiModels().getProvider("amazon-bedrock")?.getModels()[0]?.id as string;
     const aws = "AWS_ACCESS_KEY_ID=AKIAEXAMPLE\nAWS_SECRET_ACCESS_KEY=secret\nAWS_REGION=us-east-1\n";
     const carried = await call(
-      await workspace({ ".secrets/.env": aws }),
+      await agent({ ".secrets/.env": aws }),
       { model: `amazon-bedrock/${bedrock}` },
       { run: true },
     );
@@ -718,7 +708,7 @@ describe("preflight: a model credential that does not travel", () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_REGION", "us-east-1");
-    const shellOnly = await call(await workspace(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
+    const shellOnly = await call(await agent(), { model: `amazon-bedrock/${bedrock}` }, { run: true });
     expect(shellOnly.ok && shellOnly.boxLogin).toBe("amazon-bedrock");
   });
 
@@ -727,7 +717,7 @@ describe("preflight: a model credential that does not travel", () => {
     // what reaches the box, and a key the author put in the value file for the deployment is exactly that.
     noAnthropicEnv();
     const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
-    const dir = await workspace({
+    const dir = await agent({
       ".secrets/auth.json": JSON.stringify({ anthropic: oauth }),
       ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n",
     });
@@ -750,7 +740,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // What made this wrong: probeAuthSource answers "is it authenticated here" ("configured API key"),
     // not "how does the credential reach the host". Reporting the display label left `--run` seeing no
     // credential at all, and it stopped a correctly configured agent with two impossible remedies.
-    const dir = await workspace({ "models.json": GATEWAY("$FA_PREFLIGHT_GW_KEY") });
+    const dir = await agent({ "models.json": GATEWAY("$FA_PREFLIGHT_GW_KEY") });
     process.env.FA_PREFLIGHT_GW_KEY = "sk-x";
     try {
       const pre = await call(dir, { model: "mygw/m1" });
@@ -770,7 +760,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // prescribe for a keyless local server (`"apiKey": "ollama"`). So: report, never refuse.
     return (async () => {
       for (const baseUrl of ["https://gw.example.com/v1", "http://localhost:11434/v1"]) {
-        const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file", baseUrl) });
+        const dir = await agent({ "models.json": GATEWAY("sk-literal-in-file", baseUrl) });
         const pre = await call(dir, { model: "mygw/m1" }, { run: true });
         expect(pre.ok).toBe(true);
         if (pre.ok) {
@@ -782,7 +772,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   });
 
   it("every provider is reported, not just the selected model's — the file ships whole", async () => {
-    const dir = await workspace({
+    const dir = await agent({
       "models.json": JSON.stringify({
         providers: {
           mygw: {
@@ -807,7 +797,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   });
 
   it("a !command key is not reported — it runs on the box and the credential never travels", async () => {
-    const dir = await workspace({ "models.json": GATEWAY("!printf sk-from-a-command") });
+    const dir = await agent({ "models.json": GATEWAY("!printf sk-from-a-command") });
     const pre = await call(dir, { model: "mygw/m1" }, { run: true });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
@@ -832,17 +822,17 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       }),
     );
     vi.stubEnv("FASTAGENT_MODELS_PATH", machine);
-    const pre = await call(await workspace(), { model: "localgw/m" });
+    const pre = await call(await agent(), { model: "localgw/m" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/localgw.*does not ship/) });
     }
     // No built-in "localgw" to fall back on, so running the deployment is refused, not warned about.
-    const running = await call(await workspace(), { model: "localgw/m" }, { run: true });
+    const running = await call(await agent(), { model: "localgw/m" }, { run: true });
     expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/unknown model/) });
 
     // The agent's own entry for the provider is what ships, so nothing is said.
-    const own = await workspace({
+    const own = await agent({
       "models.json": JSON.stringify({
         providers: {
           localgw: {
@@ -866,18 +856,18 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     await mkdir(dirname(globalCatalogPath()), { recursive: true });
     await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
     try {
-      const running = await call(await workspace(), { model: "anthropic/claude-newer" }, { run: true });
+      const running = await call(await agent(), { model: "anthropic/claude-newer" }, { run: true });
       expect(running).toMatchObject({ ok: false, gate: expect.stringMatching(/does not ship.*models --refresh/) });
 
       // An entry pi ignores (dated no later than its bundled catalog, as pi writes a 404) supplies nothing here either,
       // so it is no reason to send anyone to refresh the agent.
       await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: { ...entry, lastModified: 0 } }));
-      const ignored = await call(await workspace(), { model: "anthropic/claude-newer" });
+      const ignored = await call(await agent(), { model: "anthropic/claude-newer" });
       expect(ignored.ok && ignored.messages.some((m) => /machine's model catalog/.test(m.text))).toBe(false);
       await writeFile(globalCatalogPath(), JSON.stringify({ anthropic: entry }));
 
       // The same entry in the agent's own models-store.json travels with the definition: nothing to say.
-      const own = await workspace({ "models-store.json": JSON.stringify({ anthropic: entry }) });
+      const own = await agent({ "models-store.json": JSON.stringify({ anthropic: entry }) });
       const shipped = await call(own, { model: "anthropic/claude-newer" }, { run: true });
       if (!shipped.ok) throw new Error(shipped.gate);
       expect(shipped.messages.some((m) => /does not ship/.test(m.text))).toBe(false);
@@ -901,7 +891,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
 
     // The deployment's key, where a deployment's key lives: the value file.
     const pre = await call(
-      await workspace({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" }),
+      await agent({ ".secrets/.env": "ANTHROPIC_API_KEY=sk-ant\n" }),
       { model: `anthropic/${anthropic}` },
       { run: true },
     );
@@ -920,7 +910,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   });
 
   it("requires what tools and schedules DECLARED, and lists the rest of the value file after them", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "tools"), { recursive: true });
     await mkdir(join(dir, "routines"), { recursive: true });
     await writeFile(
@@ -947,7 +937,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       { name: "X_API_KEY", hint: "required by tools/x-post.mjs" },
       { name: "X_API_SECRET", hint: "required by tools/x-post.mjs" },
       { name: "SLACK_DIGEST_CHANNEL", hint: "required by routines/digest.mjs" },
-      { name: "GH_TOKEN", hint: "from fastagent/.secrets/.env" },
+      { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });
 
@@ -955,7 +945,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // Generate-only warns: the operator may be producing artifacts on a machine that never installed
     // the agent's deps. `--run` gates, because the BOX will load that file successfully and refuse to
     // start on a declaration this deploy could not read — a crash loop after a "successful" deploy.
-    const dir = await workspace();
+    const dir = await agent();
     await mkdir(join(dir, "tools"), { recursive: true });
     await writeFile(join(dir, "tools", "broken.mjs"), `throw new Error("boom");\n`);
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
@@ -971,7 +961,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
   });
 
   it("sessionControl needs no secret of ours — it warns that the deployed plane is unauthenticated", async () => {
-    const dir = await workspace();
+    const dir = await agent();
     const off = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(off.ok && off.declaredSecrets).toEqual([]);
     // WITHOUT the control plane the warning still fires, naming `POST /invoke`: it is on every
@@ -997,7 +987,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // assembly uses. The combination this protects is the last line: `http.invoke: false` +
     // `http.run: true` leaves that route as the ONLY anonymous turn endpoint on a public URL, and
     // it used to produce an empty list, i.e. no warning at all.
-    const withSchedule = await workspace({
+    const withSchedule = await agent({
       "routines/daily.ts": `export default { cron: "0 9 * * *", prompt: "go" };\n`,
     });
     const bothOn = unauthenticated(await call(withSchedule, { model: "openai/gpt-4o-mini" }));

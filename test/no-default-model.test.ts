@@ -2,7 +2,7 @@
  * An agent with no default model still opens: its conversations are readable and a session that records its model
  * runs on it. Only a session with no model of its own is refused, at invoke, with `missing_model` (#706).
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -114,8 +114,7 @@ describe("an agent with no default model", () => {
   it("createPiAgentFromDir opens a directory whose config sets no model, with its session control", async () => {
     vi.stubEnv("FASTAGENT_MODEL", undefined);
     const dir = await mkdtemp(join(tmpdir(), "fa-no-model-"));
-    await mkdir(join(dir, "agent"));
-    await writeFile(join(dir, "agent", "fastagent.config.ts"), "export default {};");
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};");
     const opened = await createPiAgentFromDir(dir, { sessionControl: true });
     expect(opened.modelSpec).toBeUndefined();
     expect(opened.sessionControl).toBeDefined();

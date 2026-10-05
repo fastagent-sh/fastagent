@@ -1,51 +1,58 @@
-/** `fastagent init [dir]`: scaffold a runnable agent and install its dependencies. */
+/** `fastagent init <dir> [--context <dir>]...`: scaffold a runnable agent and install its dependencies. */
 import { spawn } from "node:child_process";
-import { basename, resolve } from "node:path";
-import { DEFAULT_AGENT_DIRNAME, agentsAt, displayPath } from "../../paths.ts";
-import { agentDirName, agentDirNameError, scaffoldAgent } from "../../scaffold/init.ts";
+import { resolve } from "node:path";
+import { displayPath } from "../../paths.ts";
+import { scaffoldAgent } from "../../scaffold/init.ts";
+import { writeContexts } from "../../engines/pi/config.ts";
+import { declarationFor } from "../../contexts/declare.ts";
+import { resolveContexts } from "../../contexts/resolve.ts";
+import { contextLines } from "../contexts-view.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
-  /** The agent directory's name inside `dir` — undefined = the default. */
-  agentDir?: string;
+  /** `--context` sources, each a directory the agent works on. */
+  contexts: string[];
+  /** `--copy`: a host gets its own copy of each of them. */
+  copy: boolean;
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  // A rejected flag VALUE is the usage class, same as one the parser rejects.
-  const requested = agentDirName(opts.agentDir);
-  const invalid = agentDirNameError(requested);
-  if (invalid) failUsage(`--agent-dir "${requested}" ${invalid}`);
-  const { agentDir: rel, created } = await scaffoldAgent(dir, { agentDir: requested }).catch(failStartup);
-  // The agent dir is where the manifest lives, so the install runs there — never against a surrounding workspace's
-  // package.json (its deps are its own concern).
-  const agentDir = resolve(dir, rel);
-  console.error(`[fastagent] initialized ${dir} — agent in ./${rel}/`);
-  console.error(`  created: ${created.join(", ")}`);
-  // A second agent beside an existing one is a supported shape, not an accident (an engineer's, a PM's and a content
-  // owner's agent can drive one repository), but it changes how this workspace resolves from now on — so say it HERE,
-  // at the moment it becomes true, instead of at the next command's refusal.
-  const siblings = agentsAt(dir).map((a) => basename(a));
-  if (siblings.length > 1) {
-    const pick = siblings.includes(DEFAULT_AGENT_DIRNAME)
-      ? `\`${DEFAULT_AGENT_DIRNAME}\` answers by default; set FASTAGENT_AGENT=<name> for another`
-      : `set FASTAGENT_AGENT=<name> (in your shell or .envrc) to pick one`;
-    console.error(`[fastagent] note: ${dir} now holds ${siblings.length} agents (${siblings.join(", ")}) — ${pick}`);
+  if (opts.copy && opts.contexts.length === 0) failUsage("--copy applies to the --context directories; none was given");
+  // Every context is checked BEFORE anything is created — a nested or missing one refuses with the scaffold unwritten.
+  const declarations = await Promise.resolve()
+    .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd(), { copy: opts.copy })))
+    .catch(failStartup);
+  const contexts = await Promise.resolve()
+    .then(() => resolveContexts(dir, declarations))
+    .catch(failStartup);
+  const { created, undo } = await scaffoldAgent(dir).catch(failStartup);
+  // The same write `fastagent context add` makes: the literal list, imported and compared before it is kept. The
+  // contexts were checked above, so a refusal here is one that check could not foresee (the disk changed in between);
+  // the scaffold goes with it, or a retry would find "already an agent" holding no contexts.
+  if (declarations.length > 0) {
+    await writeContexts(dir, declarations).catch(async (error: unknown) => {
+      await undo();
+      failStartup(error);
+    });
   }
+  console.error(`[fastagent] created ${dir}`);
+  if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);
+  console.error(`  files: ${created.join(", ")}`);
   let installFailed = false;
   if (opts.install) {
-    console.error(`[fastagent] installing dependencies (npm install in ${rel})…`);
-    installFailed = (await npmInstall(agentDir)) !== 0;
+    console.error(`[fastagent] installing dependencies (npm install)…`);
+    installFailed = (await npmInstall(dir)) !== 0;
     if (installFailed)
-      console.error(`[fastagent] warn: npm install failed — run it manually in ${agentDir} before \`fastagent dev\``);
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
   }
 
   console.error(`  next steps:`);
   const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (!opts.install || installFailed) console.error(`    (cd ${rel} && npm install)`);
+  if (!opts.install || installFailed) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }

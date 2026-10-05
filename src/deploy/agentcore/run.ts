@@ -41,7 +41,7 @@ export interface AgentcoreRunPlan {
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
-  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
@@ -495,7 +495,7 @@ export async function deployAgentcoreRun(
 
   // Verify storage initialization and channel construction before registering webhooks.
   if (url) {
-    log("probing the deployed runtime (workspace initialization + channel construction)…");
+    log("probing the deployed runtime (storage initialization + channel construction)…");
     const verdict = await probeRuntime(
       `${url}${RESERVED_PATHS.probe}`,
       plan.secrets.FASTAGENT_INGRESS_SECRET ?? "",
@@ -504,7 +504,7 @@ export async function deployAgentcoreRun(
       probe.intervalMs,
     );
     if (!verdict.ok) return gate(verdict.gate);
-    log("runtime verified (workspace ready, channels constructed)");
+    log("runtime verified (storage ready, channels constructed)");
   }
   const notLoggedIn = await plan.boxLogin?.run(runtimeArn);
   if (notLoggedIn) {

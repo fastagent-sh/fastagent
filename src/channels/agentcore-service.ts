@@ -41,7 +41,7 @@ export function deferAgentcoreService<T>(stages: {
         throw error;
       });
       const taken = await prepared;
-      // Shutdown may have arrived while the workspace was being taken.
+      // Shutdown may have arrived while the storage was being taken.
       if (closed) throw new Error("service closed during initialization");
       assembling ??= stages.assemble(taken);
       service = await assembling;
@@ -103,7 +103,7 @@ export async function mountAgentcoreService(
   opened: MountableAgent,
   options: MountAgentcoreServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, workspace, stateRoot, sessionControl } = opened;
+  const { agentDir, stateRoot, sessionControl } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
   // NO control plane on this host, and `sessionControl: true` cannot change that. The only public way in is the
@@ -180,7 +180,6 @@ export async function mountAgentcoreService(
     // The adapter IS the surface here; the channel routes arrive lazily BEHIND it.
     routes: adapterRoutes,
     agentDir,
-    workspace,
     // Channels remain lazy until the adapter receives trusted ingress.
     channels: { routes: [], longConnections: [] },
     // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.

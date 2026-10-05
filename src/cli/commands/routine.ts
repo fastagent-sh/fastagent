@@ -13,7 +13,7 @@ import { loadRoutines } from "../../schedule/discover.ts";
 import { routineSession } from "../../schedule/routine.ts";
 import { type Fire, isSafeScheduleName, readFires } from "../../schedule/state.ts";
 import { listWakeups } from "../../schedule/wakeups.ts";
-import { failStartup, placementOrExit } from "../fail.ts";
+import { failStartup, agentDirOrExit } from "../fail.ts";
 
 /**
  * `fastagent routine history <name> [dir]`: print this routine's fired slots — when each fired, how it ended, how
@@ -30,7 +30,7 @@ import { failStartup, placementOrExit } from "../fail.ts";
  * moves a human's judgement into a heuristic that cannot be right about a session other writers also append to.
  */
 export function runRoutineHistory(name: string, dirArg: string, json: boolean): void {
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
+  const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
   // A name that cannot be a routine is a MISTYPED ARGUMENT, and it must not look like an empty history: exit 1 the
@@ -89,7 +89,7 @@ export function runRoutineHistory(name: string, dirArg: string, json: boolean): 
  * open `<stateRoot>/schedule/wakeups.json` by hand.
  */
 export async function runRoutineList(dirArg: string, json: boolean): Promise<void> {
-  const { agentDir: target } = placementOrExit(resolve(dirArg));
+  const target = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(target);
   const { routines, failures } = await loadRoutines(target).catch(failStartup);
   reportModuleLoadFailures(failures);

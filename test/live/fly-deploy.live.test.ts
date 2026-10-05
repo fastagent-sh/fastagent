@@ -34,13 +34,12 @@ requireEnv("FLY_API_TOKEN", "a Fly API token WITH write scope — this probe cre
 const APP = toFlyAppName(`fastagent-live-${randomUUID().slice(0, 8)}`);
 const URL_BASE = `https://${APP}.fly.dev`;
 
-let workspace = "";
+let agentDir = "";
 
 beforeAll(async () => {
-  // basename(workspace) IS the app name (deploy.ts: toFlyAppName(basename(workspace))), so the
+  // basename(agentDir) IS the app name (deploy.ts: toFlyAppName(basename(agentDir))), so the
   // directory is named deliberately rather than by mkdtemp.
-  workspace = join(tmpdir(), APP);
-  const agentDir = join(workspace, "fastagent");
+  agentDir = join(tmpdir(), APP);
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
@@ -91,7 +90,7 @@ afterAll(async () => {
   } catch (error) {
     errors.push(error);
   }
-  if (workspace) await rm(workspace, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
+  if (agentDir) await rm(agentDir, { recursive: true, force: true }).catch((e: unknown) => errors.push(e));
   if (errors.length > 0) throw new AggregateError(errors, `teardown failed — check whether app ${APP} still exists`);
 }, 300_000);
 
@@ -101,7 +100,7 @@ describe("deploy fly --run: a real app, provisioned and destroyed", () => {
     // flyctl's own output is spliced in: execFile's error carries stderr but its message does not,
     // and "Command failed" is all an unattended nightly would otherwise report.
     try {
-      await run(process.execPath, [CLI, "deploy", "fly", "--run"], workspace);
+      await run(process.execPath, [CLI, "deploy", "fly", "--run"], agentDir);
     } catch (error) {
       const { stderr, stdout } = error as { stderr?: string; stdout?: string };
       throw new Error(`deploy fly --run failed for ${APP}:\n${(stderr || stdout || String(error)).slice(-4000)}`);

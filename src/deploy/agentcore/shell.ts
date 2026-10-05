@@ -194,7 +194,7 @@ export function openShellChannel(url: string, command: string): BoxChannel {
 
 /**
  * The shell `login --deployment` opens on an AgentCore runtime, on the session its server runs in. `wake` first sends
- * that session an IAM `probe`: the runtime prepares its workspace only on an invocation, and after a deploy or an idle
+ * that session an IAM `probe`: the runtime prepares its storage only on an invocation, and after a deploy or an idle
  * reset nothing may have invoked it yet, which would leave the login no agent directory to run in.
  */
 export function agentcoreShell(runtimeArn: string, sessionId: string, aws: CliRunner): BoxShell {
@@ -210,11 +210,11 @@ export function agentcoreShell(runtimeArn: string, sessionId: string, aws: CliRu
         const sent = await awsCli(aws).present(args);
         if (!("ok" in sent)) {
           const why = "absent" in sent ? "the runtime is not there" : sent.unreadable;
-          throw new Error(`could not open the AgentCore runtime's workspace (${why})`);
+          throw new Error(`could not open the AgentCore runtime's storage (${why})`);
         }
         const answer = await readFile(reply, "utf8");
         if (!/"ok"\s*:\s*true/.test(answer)) {
-          throw new Error(`the AgentCore runtime did not open its workspace: ${answer.trim().slice(0, 300)}`);
+          throw new Error(`the AgentCore runtime did not open its storage: ${answer.trim().slice(0, 300)}`);
         }
       } finally {
         await rm(dir, { recursive: true, force: true });
