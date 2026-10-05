@@ -68,6 +68,8 @@ export interface FauxControlledAgentOptions extends FauxAgentOptions {
   boundary?: boolean;
   /** The definition's own `extensions/` files, loaded into every bound session. */
   extensionPaths?: string[];
+  /** Wire no default model, as an agent whose config sets none: a session runs on the model it records, or not at all. */
+  noDefaultModel?: boolean;
 }
 
 /**
@@ -105,7 +107,7 @@ export async function fauxControlledAgent(
       runtime.registerNativeProvider(modelRuntime.getProvider(faux.provider.id) ?? faux.provider);
       return { modelRuntime: runtime };
     },
-    modelSpec: `${model.provider}/${model.id}`,
+    ...(options.noDefaultModel ? {} : { modelSpec: `${model.provider}/${model.id}` }),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
     ...(options.extensionPaths ? { extensionPaths: options.extensionPaths } : {}),
@@ -121,7 +123,10 @@ export async function fauxControlledAgent(
             lease,
             models: modelRuntime,
             sessionFactory,
-            defaults: { model, thinkingLevel: options.thinkingLevel ?? "medium" },
+            defaults: {
+              ...(options.noDefaultModel ? {} : { model }),
+              thinkingLevel: options.thinkingLevel ?? "medium",
+            },
           },
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.tap ? { tap: options.tap } : {}),

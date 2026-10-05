@@ -31,7 +31,7 @@ import {
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
 import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { type ImageRef, type Json, SESSION_BUSY_CODE } from "../../agent.ts";
+import { type ImageRef, type Json, MISSING_MODEL_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -60,12 +60,25 @@ import {
 } from "../../session.ts";
 import { forkProvenance, isConversationMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
-import { type RunControls, type SessionObserver, type Lease, answerOutcome, endsRun } from "./turn-kit.ts";
+import {
+  type RunControls,
+  type SessionObserver,
+  type Lease,
+  answerOutcome,
+  answerThinking,
+  endsRun,
+} from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { startCompaction } from "./agent-session-factory.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
-import { THINKING_LEVELS, activePath, describeModels, resolveSessionSettings } from "./session-settings.ts";
+import {
+  MissingModel,
+  THINKING_LEVELS,
+  activePath,
+  describeModels,
+  resolveSessionSettings,
+} from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
@@ -145,6 +158,9 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
         .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args: b.arguments ?? {} }));
       const data: Json = { text: contentText(m.content, "") };
       if (toolCalls.length > 0) (data as { toolCalls?: Json }).toolCalls = toolCalls;
+      // The same text the live `message_delta { channel: "thinking" }` added up to (turn-kit.ts answerThinking).
+      const thinking = answerThinking(m);
+      if (thinking !== undefined) (data as { thinking?: Json }).thinking = thinking;
       const outcome = answerOutcome(m);
       if (outcome) (data as { outcome?: Json }).outcome = outcome;
       return { ...base, kind: "assistant", data };
@@ -263,8 +279,9 @@ export interface PiBoundaryWiring {
   /** The assembly's configured PAIR — what a session with no overrides runs on. One field because
    *  model and thinking level are one setting: which levels exist is a property of the model, so a
    *  wiring that could carry them apart could carry a pair no run uses. Must be what
-   *  {@link sessionFactory} was built with. */
-  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel };
+   *  {@link sessionFactory} was built with. No model when the agent sets no default: a session then runs on the model
+   *  it records, and `state()` of one that records none reports no model. */
+  defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel };
 }
 
 export interface CreatePiSessionControlOptions {
@@ -619,7 +636,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
 
   const failed = (error: unknown): Extract<SessionResult, { ok: false }> => ({
     ok: false,
-    error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+    // A command that binds the session (compaction is a model call) on a session with no model: the same code the
+    // invoke answers, since the same fix (`update({ model })`) applies.
+    error:
+      error instanceof MissingModel
+        ? { code: MISSING_MODEL_CODE, message: error.message, retryable: false }
+        : { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
   });
 
   const runBoundary = (
@@ -763,7 +785,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           // The same set `state()` showed the client. Reject here rather than record a level the run
           // would not use. The read is guarded because this must never REJECT — the contract promises a
           // SessionResult, so an unreadable chain has to arrive as a code.
-          let resolved: ReturnType<typeof resolveSessionSettings>;
+          let resolved: ReturnType<typeof resolveSessionSettings> | undefined;
           try {
             // Against the path this patch LANDS on: a leaf move is written first, and the branch it
             // moves to can carry a model override of its own — validating on the path being left would
@@ -774,13 +796,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             return failed(error);
           }
           // An explicit model in the same patch wins over the one that path resolves to: it is applied
-          // after the move, so it is what the session ends up running.
-          const target = model ?? resolved.model;
-          const levels = model ? (getSupportedThinkingLevels(model) as string[]) : resolved.availableThinkingLevels;
-          if (!levels.includes(patch.thinkingLevel)) {
-            return invalid(
-              `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
-            );
+          // after the move, so it is what the session ends up running. With neither (no model recorded, no
+          // default), any level of the vocabulary is recorded, and clamped once the session has a model, like a
+          // recorded level after a model change.
+          const target = model ?? resolved?.model;
+          if (target) {
+            const levels = getSupportedThinkingLevels(target) as string[];
+            if (!levels.includes(patch.thinkingLevel)) {
+              return invalid(
+                `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
+              );
+            }
           }
         }
 

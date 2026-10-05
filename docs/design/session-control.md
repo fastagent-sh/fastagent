@@ -154,7 +154,15 @@ user→sessions mapping this call would return. That is also why there is no pre
 
 There is no `prompt` action: starting work is the data plane's definition. A session id is the
 Caller's, so an id nothing has written yet is an empty conversation at the defaults: `state()` reports
-what its first turn will run on, and `update()` sets its properties, which creates its record. That is
+what its first turn will run on, and `update()` sets its properties, which creates its record.
+
+A deployment may have no default model. A session then runs on the model its record names (the pi
+reference writes the model a session starts on into its record), and one whose record names none, or
+names one the registry no longer has, reports no `model`, `thinkingLevel` or `availableThinkingLevels`
+in `state()`. Its invoke fails `missing_model` (not retryable) and leaves no record behind (a new thread
+whose parent supplied no model included), and `compact` answers the same code. `update({ model })` gives it one. `update({ thinkingLevel })` without a
+model accepts any level of the vocabulary and records it as asked; once the session has a model, the
+level runs clamped to what that model supports, as a recorded level does after a model change. That is
 the "next turn" a property applies to, so a client sets a new conversation's model or thinking level
 before its first message. It refuses an id no client could address, as `fork` does for `into`. Every
 other write needs a record (`compact`, `fork`'s source, `delete`) and refuses an id with none with
@@ -439,9 +447,16 @@ where the engine preserves them — `parentId` exists because branches objective
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
-`{ text, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
+`{ text, thinking?, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
 `tool` `{ toolCallId, toolName, isError, text, images?, terminate? }`. Engine-specific kinds may appear beyond the
 guaranteed minimum and MUST be skippable.
+
+`thinking` is the answer's recorded reasoning: exactly the text its live `message_delta { channel: "thinking" }`
+deltas add up to, absent when it has none, so a run reopened after the fact shows the reasoning a watcher saw.
+Redacted reasoning (a provider's opaque payload with no readable text) is in neither. One exception: a block that
+streams readable text and only then turns redacted (possible on the pi reference's Bedrock path, whose readable and
+encrypted reasoning arrive separately) streamed that text live, and is not read back, since the record keeps one
+flag per block. How long the thinking took is not recorded.
 
 `outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
 did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a

@@ -159,18 +159,21 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 
 /** Internal entry loaded from the agent's installed package after storage initialization. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  const agentDir = await enterAgentCommand(dirArg, opts);
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   const opened = await createPiAgentFromDir(agentDir, {
-    model: opts.model,
+    model: modelSpec,
     serving: true,
   });
   const { agent, config, stateRoot, sessionsDir } = opened;
-  await reportAssembly(opened, {
-    afterTools: [
-      ["state", stateRoot],
-      ["sessions", sessionsDir],
-    ],
-  });
+  await reportAssembly(
+    { ...opened, modelSpec },
+    {
+      afterTools: [
+        ["state", stateRoot],
+        ["sessions", sessionsDir],
+      ],
+    },
+  );
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
       "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",

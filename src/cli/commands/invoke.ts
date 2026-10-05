@@ -12,10 +12,8 @@ export interface InvokeOptions {
 }
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
-  const agentDir = await enterAgentCommand(dirArg, opts);
-  const { agent, modelSpec, models } = await createPiAgentFromDir(agentDir, {
-    model: opts.model,
-  }).catch(failStartup);
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
+  const { agent, models } = await createPiAgentFromDir(agentDir, { model: modelSpec }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
   await reportAuth(models, modelSpec);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,

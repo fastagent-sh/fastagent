@@ -219,7 +219,7 @@ function createPiAgentFromDir(
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
-  modelSpec: string;
+  modelSpec?: string; // the default model; absent when none is set (see below)
   agentDir: string; // the agent directory: where it lives, and its working directory
   contexts: ResolvedContext[]; // what it works on and knows, resolved for this instance
   stateRoot: string;
@@ -254,6 +254,15 @@ interface ResolvedContext {
 The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fastagent context list`. It refuses,
 naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
 directory or sits inside it ([Configuration](configuration.md#contexts)). A `github` context is not supported yet.
+
+The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
+`createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
+`entries()`, `state()` and `update()` work, and a session that records its model (pi writes it into every session it
+starts, and `update({ model })` sets it) runs on that model. A session with no model of its own fails its invoke with
+`failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }` and leaves no record behind, including a
+new thread whose `parentSession` supplied no model; `update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
+registry does not know still fails the open. The CLI's `dev`, `start`, `invoke`, `routine run` and `chat` still
+refuse to start without a default (`missing model`), since every new conversation they took would fail.
 
 ```ts
 interface FastagentConfig {

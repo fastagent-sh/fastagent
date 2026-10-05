@@ -6,7 +6,7 @@ import type { DeployHost } from "../../deploy/hosts.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentCommand } from "../shared.ts";
+import { enterAgentDirectory } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
@@ -73,9 +73,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  // The picker's write-back lands the model in fastagent.config.ts.
-  // ONE deploy semantic: bake the agent directory (WYSIWYG).
-  const agentDir = await enterAgentCommand(dirArg, opts);
+  // The picker's write-back lands the model in fastagent.config.ts. ONE deploy semantic: bake the agent directory
+  // (WYSIWYG).
+  const { agentDir } = await enterAgentDirectory(dirArg, opts);
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The host-neutral pre-flight (the model and its source, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts.

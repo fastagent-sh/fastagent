@@ -1,6 +1,12 @@
 /** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
 import { stripVTControlCharacters } from "node:util";
-import { type AssistantMessage, type ImageContent, type ToolResultMessage, contentText } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type ImageContent,
+  type ThinkingContent,
+  type ToolResultMessage,
+  contentText,
+} from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { AnswerOutcome, PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
@@ -102,6 +108,40 @@ export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefi
     default:
       return undefined;
   }
+}
+
+/**
+ * Whether a thinking block is PUBLISHED: readable reasoning. A redacted one holds a provider's opaque payload and a
+ * placeholder (pi writes "[Reasoning redacted]" for it), not reasoning anyone can read, so it is neither streamed nor
+ * read back. The ONE rule: the live `message_delta { channel: "thinking" }` ({@link streamsThinkingDelta}) and the
+ * `assistant` entry's `thinking` ({@link answerThinking}) both apply it, so a client reads the same text either way.
+ *
+ * One exception, by when the flag is read: live reads it as each delta arrives, the record as the answer ended. pi's
+ * Bedrock path flags a block redacted when its first encrypted chunk arrives, and its readable text and its encrypted
+ * chunks are separate fields, so a block that streamed readable text BEFORE turning redacted had that text streamed
+ * and is then not read back. Not separable after the fact: the record keeps one flag and one string per block, with
+ * pi's placeholder appended. Whether a Bedrock model sends both in one block is unverified.
+ */
+function isPublishedThinking(block: AssistantMessage["content"][number] | undefined): block is ThinkingContent {
+  return block?.type === "thinking" && block.redacted !== true;
+}
+
+/**
+ * An answer's recorded thinking: its published thinking blocks, in order, joined with nothing between them, exactly as
+ * their live deltas add up (the stream marks no block boundary, and the answer's `text` is joined the same way).
+ * Undefined when it has none.
+ */
+export function answerThinking(message: AssistantMessage): string | undefined {
+  const text = message.content
+    .filter(isPublishedThinking)
+    .map((block) => block.thinking)
+    .join("");
+  return text === "" ? undefined : text;
+}
+
+/** Whether a live thinking delta is streamed: the block it extends is one {@link answerThinking} will publish. */
+export function streamsThinkingDelta(event: { contentIndex: number; partial: AssistantMessage }): boolean {
+  return isPublishedThinking(event.partial.content[event.contentIndex]);
 }
 
 /**

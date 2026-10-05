@@ -120,8 +120,12 @@ export interface CreatePiAgentFromDirOptions {
 export interface AgentAssembly {
   config: FastagentConfig;
   configPath?: string;
-  /** The resolved "provider/modelId" spec in use. */
-  modelSpec: string;
+  /**
+   * The default "provider/modelId" spec (`--model` > `FASTAGENT_MODEL` > config), or undefined when the agent sets none:
+   * it still opens, a session that records its model runs on it, and one that records none is refused with
+   * `missing_model` at invoke.
+   */
+  modelSpec?: string;
   /** Absolute agent dir — definition, config and machinery live here, and it is the agent's working directory. */
   agentDir: string;
   /** What the agent works on and knows, resolved for this instance — the one answer every reader uses. */
@@ -148,11 +152,6 @@ export async function resolveAgentAssembly(
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   const contexts = resolveContexts(agentDir, config.contexts);
   const modelSpec = resolveModelSpec(options.model, config);
-  if (!modelSpec) {
-    throw new Error(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-    );
-  }
   const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
@@ -176,7 +175,7 @@ export async function resolveAgentAssembly(
   return {
     config,
     configPath,
-    modelSpec,
+    ...(modelSpec ? { modelSpec } : {}),
     agentDir,
     contexts,
     stateRoot,
@@ -200,7 +199,7 @@ export function assembleFront(
   extra: { tools?: MountedTool[]; sessions?: PiSessionRecordStore } = {},
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   return assemblePiFromDefinition(front.agentDir, {
-    model: front.modelSpec,
+    ...(front.modelSpec ? { model: front.modelSpec } : {}),
     thinkingLevel: front.config.thinkingLevel,
     tools: extra.tools ?? front.tools,
     contexts: front.contexts,
@@ -213,7 +212,7 @@ export function assembleFront(
  * The models `createPiAgentFromDir(dir, { authPath })` could run now, as a picker shows them (spec, name, the thinking
  * levels a session on it accepts, context window), sorted by spec: the agent's registry (pi's built-ins, its
  * `models.json`, and what its `extensions/` declare) filtered to the providers whose credentials are configured. The
- * directory needs no model set, and the same placement and credential layers as the opener apply, so a listed spec
+ * directory needs no model set, and the same directory and credential layers as the opener apply, so a listed spec
  * authenticates there. Configuration is checked, not validity: no OAuth token is refreshed and no provider is called.
  * A Sign in with ChatGPT on `openai` lists the account's own models (openai-account-models.ts), not pi's built-ins.
  *
@@ -310,8 +309,8 @@ export async function createPiAgentFromDir(
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
-  /** The resolved "provider/modelId" spec actually in use. */
-  modelSpec: string;
+  /** The default "provider/modelId" spec, or undefined when the agent sets none ({@link AgentAssembly.modelSpec}). */
+  modelSpec?: string;
   /** Absolute agent dir in use — channels/tools/prompt come from here, and it is the agent's working directory. */
   agentDir: string;
   /** What the agent works on and knows, resolved for this instance. */
@@ -378,7 +377,7 @@ export async function createPiAgentFromDir(
           lease: assembly.lease,
           models: modelRuntime,
           sessionFactory: assembly.sessionFactory,
-          defaults: { model, thinkingLevel: assembly.thinkingLevel },
+          defaults: { ...(model ? { model } : {}), thinkingLevel: assembly.thinkingLevel },
         }))
       : undefined;
     hub = createPiSessionControl({
@@ -417,7 +416,7 @@ export async function createPiAgentFromDir(
     contexts,
     config,
     configPath,
-    modelSpec,
+    ...(modelSpec ? { modelSpec } : {}),
     stateRoot,
     sessionsDir,
     models,

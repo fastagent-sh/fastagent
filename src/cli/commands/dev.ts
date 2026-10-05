@@ -34,9 +34,9 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
-  const agentDir = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
-    await serveOnce(agentDir, opts);
+    await serveOnce(agentDir, modelSpec, opts);
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
@@ -46,17 +46,17 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
-async function serveOnce(agentDir: string, opts: DevOptions): Promise<void> {
+async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
   const a = await createPiAgentFromDir(agentDir, {
-    model: opts.model,
+    model: modelSpec,
     serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).
-  await reportAssembly(a, { beforeModel: [["config", a.configPath ?? "(none)"]] });
+  await reportAssembly({ ...a, modelSpec }, { beforeModel: [["config", a.configPath ?? "(none)"]] });
   // The SAME assembly an embedder gets from `createAgentService` — channels, control plane, schedules, long
   // connections.
   const service = await mountAgentService(withRunOverrides(a, opts), cliMountOptions(logAgentLoop)).catch(failStartup);

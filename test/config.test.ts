@@ -398,17 +398,6 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     const overridden = await createPiAgentFromDir(agent, { authPath: shared });
     expect(overridden.models.auth).toEqual({ path: shared }); // named: no second layer
   });
-
-  it("missing every model source throws a clear startup error (fail visibly)", async () => {
-    const { agent } = await agentWorkspace();
-    const saved = process.env.FASTAGENT_MODEL;
-    delete process.env.FASTAGENT_MODEL;
-    try {
-      await expect(createPiAgentFromDir(agent)).rejects.toThrow(/missing model/);
-    } finally {
-      if (saved !== undefined) process.env.FASTAGENT_MODEL = saved;
-    }
-  });
 });
 
 describe("config: resolveModelSpec (precedence flag > env > config)", () => {

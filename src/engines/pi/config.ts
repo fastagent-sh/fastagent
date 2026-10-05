@@ -294,3 +294,14 @@ export async function writeContexts(agentDir: string, declarations: readonly Con
     await rm(candidate, { force: true });
   }
 }
+
+/**
+ * The refusal of a process that runs the agent here (the CLI's dev/start/invoke/routine run, and chat) when no
+ * default model resolves. The agent itself opens without one; such a process would fail every new conversation, so it
+ * stops at startup instead.
+ */
+export function missingDefaultModel(): Error {
+  return new Error(
+    `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
+  );
+}

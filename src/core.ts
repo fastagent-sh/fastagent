@@ -1,9 +1,10 @@
 // Engine-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
-// VALUES, not types: each caller does something DIFFERENT with these two codes (retry with backoff, skip the
-// occurrence, steer the live run instead of failing), which is why they are named at all. Without an export an
-// embedder copies the literal, and the copy is how the first-event rule goes silently wrong.
-export { ABORTED_CODE, SESSION_BUSY_CODE } from "./agent.ts";
+// VALUES, not types: each caller does something DIFFERENT with these codes (busy: retry with backoff, skip the
+// occurrence, or steer the live run instead of failing; aborted: settle a deliberate stop, never replay it;
+// missing_model: do not retry, give the session a model or the agent a default), which is why they are named at all.
+// Without an export an embedder copies the literal, and the copy is how the first-event rule goes silently wrong.
+export { ABORTED_CODE, MISSING_MODEL_CODE, SESSION_BUSY_CODE } from "./agent.ts";
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 

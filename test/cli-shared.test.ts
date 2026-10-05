@@ -2,13 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enterAgentCommand, reportAssembly, reportAuth } from "../src/cli/shared.ts";
+import { enterAgentDirectory, reportAssembly, reportAuth } from "../src/cli/shared.ts";
 import { setLogLevel } from "../src/log.ts";
 import * as models from "../src/engines/pi/models.ts";
 import { agentModels } from "../src/engines/pi/agent-models.ts";
 import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
 
-// enterAgentCommand installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
+// enterAgentDirectory installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
 // Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
@@ -80,7 +80,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
   });
 });
 
-describe("enterAgentCommand: --no-input never reaches the picker", () => {
+describe("enterAgentDirectory: --no-input never reaches the picker", () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -110,7 +110,8 @@ describe("enterAgentCommand: --no-input never reaches the picker", () => {
     process.stdout.isTTY = true;
 
     const dir = modellessAgent();
-    expect(await enterAgentCommand(dir, { input: false })).toBe(dir);
+    // The directory half, which owns the picker: the full command then refuses the missing default at startup.
+    expect(await enterAgentDirectory(dir, { input: false })).toEqual({ agentDir: dir });
     expect(runtime).not.toHaveBeenCalled();
   });
 });
