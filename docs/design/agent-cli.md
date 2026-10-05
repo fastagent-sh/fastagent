@@ -69,7 +69,7 @@ A hosted instance keeps its state in the host's storage; how is a deployment que
 ## 3. `init`
 
 ```bash
-fastagent init <dir> [--context <source>]...
+fastagent init <dir> [--context <source>]... [--copy]
 ```
 
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per

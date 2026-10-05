@@ -296,8 +296,7 @@ directory to a synchronized one, and nothing else in the declaration does.
 - **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
   change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
   directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's
-  project scope is read from a context: a context contributes its `AGENTS.md` and its skills only. Today that scope
-  is the workspace, the project around the agent.
+  project scope is read from a context: a context contributes its `AGENTS.md` and its skills only.
 - **What the agent creates lands in its own directory unless it puts it elsewhere.** Whether a file is temporary
   or part of the agent often cannot be decided when it is written: a helper script that proves useful is how a
   skill begins. The author decides what stays, with the tool every repository uses: version control and ignore
