@@ -119,8 +119,12 @@ export interface CreatePiAgentFromDirOptions {
 export interface AgentAssembly {
   config: FastagentConfig;
   configPath?: string;
-  /** The resolved "provider/modelId" spec in use. */
-  modelSpec: string;
+  /**
+   * The default "provider/modelId" spec (`--model` > `FASTAGENT_MODEL` > config), or undefined when the agent sets none:
+   * it still opens, a session that records its model runs on it, and one that records none is refused with
+   * `missing_model` at invoke.
+   */
+  modelSpec?: string;
   /** Absolute agent dir — definition + config + machinery live here (resolvePlacement().agentDir). */
   agentDir: string;
   /** Absolute workspace — the agent's cwd and the start of the ②-context walk. */
@@ -146,11 +150,6 @@ export async function resolveAgentAssembly(
   const { agentDir, workspace } = resolvePlacement(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   const modelSpec = resolveModelSpec(options.model, config);
-  if (!modelSpec) {
-    throw new Error(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-    );
-  }
   const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,
     agentDir,
@@ -175,7 +174,7 @@ export async function resolveAgentAssembly(
   return {
     config,
     configPath,
-    modelSpec,
+    ...(modelSpec ? { modelSpec } : {}),
     agentDir,
     workspace,
     stateRoot,
@@ -199,7 +198,7 @@ export function assembleFront(
   extra: { tools?: MountedTool[]; sessions?: PiSessionRecordStore } = {},
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   return assemblePiFromDefinition(front.agentDir, {
-    model: front.modelSpec,
+    ...(front.modelSpec ? { model: front.modelSpec } : {}),
     thinkingLevel: front.config.thinkingLevel,
     cwd: front.workspace,
     tools: extra.tools ?? front.tools,
@@ -313,8 +312,8 @@ export async function createPiAgentFromDir(
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
-  /** The resolved "provider/modelId" spec actually in use. */
-  modelSpec: string;
+  /** The default "provider/modelId" spec, or undefined when the agent sets none ({@link AgentAssembly.modelSpec}). */
+  modelSpec?: string;
   /** Absolute agent dir in use — channels/tools/prompt come from here. */
   agentDir: string;
   /** Absolute workspace in use — the agent's cwd: ALWAYS the directory that was pointed at. */
@@ -381,7 +380,7 @@ export async function createPiAgentFromDir(
           lease: assembly.lease,
           models: modelRuntime,
           sessionFactory: assembly.sessionFactory,
-          defaults: { model, thinkingLevel: assembly.thinkingLevel },
+          defaults: { ...(model ? { model } : {}), thinkingLevel: assembly.thinkingLevel },
         }))
       : undefined;
     hub = createPiSessionControl({
@@ -420,7 +419,7 @@ export async function createPiAgentFromDir(
     workspace,
     config,
     configPath,
-    modelSpec,
+    ...(modelSpec ? { modelSpec } : {}),
     stateRoot,
     sessionsDir,
     models,

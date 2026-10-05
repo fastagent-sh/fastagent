@@ -1907,8 +1907,8 @@ describe("session control: boundary mutations", () => {
       models,
       { model: thinker, thinkingLevel: "low" },
     );
-    expect(out.model).toBe(plain);
-    expect(out.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
+    expect(out?.model).toBe(plain);
+    expect(out?.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
   });
 
   it("one resolution answers all three surfaces — state, the dispatch gate, and execution", async () => {
@@ -1935,7 +1935,7 @@ describe("session control: boundary mutations", () => {
     expect(lastOverrideEntries(entries).thinkingLevel).toBe("high");
     // … while every surface agrees on what actually happens.
     expect(state.thinkingLevel).toBe("off");
-    expect(executed.thinkingLevel).toBe("off");
+    expect(executed?.thinkingLevel).toBe("off");
     expect(state.availableThinkingLevels).toEqual(["off"]);
     expect(await control.sessions.get("sOne").update({ thinkingLevel: "high" })).toMatchObject({ ok: false });
     // Back to a capable model: the preference returns, unsent.
@@ -1992,7 +1992,7 @@ describe("session control: boundary mutations", () => {
       models,
       { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
     );
-    expect(resolved.thinkingLevel).toBe("high");
+    expect(resolved?.thinkingLevel).toBe("high");
   });
 
   it("navigate moves the leaf, so the NEXT turn branches from the target", async () => {
@@ -2344,8 +2344,8 @@ describe("session control: boundary mutations", () => {
       two.models,
       base,
     );
-    expect(overridden.model).toBe(recorded); // the session override rides the next turn
-    expect(overridden.model).not.toBe(base.model);
+    expect(overridden?.model).toBe(recorded); // the session override rides the next turn
+    expect(overridden?.model).not.toBe(base.model);
 
     const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
     const fallback = { model: faux.getModel(), thinkingLevel: "medium" as const };
@@ -2358,11 +2358,11 @@ describe("session control: boundary mutations", () => {
       models,
       fallback,
     );
-    expect(out.model).toBe(fallback.model);
-    expect(out.thinkingLevel).toBe("low");
+    expect(out?.model).toBe(fallback.model);
+    expect(out?.thinkingLevel).toBe("low");
     // Unknown thinking level → fallback.
     const bad = resolveSessionSettings([{ type: "thinking_level_change", thinkingLevel: "ultra" }], models, fallback);
-    expect(bad.thinkingLevel).toBe("medium");
+    expect(bad?.thinkingLevel).toBe("medium");
   });
 
   it("a malformed override record reads as ABSENT on both surfaces — never skipped over", async () => {
@@ -2377,7 +2377,7 @@ describe("session control: boundary mutations", () => {
     ];
     // Execution surface: malformed = absent → the default, NOT the earlier valid record.
     const resolved = resolveSessionSettings(entries, models, fallback);
-    expect(resolved.model).toBe(fallback.model);
+    expect(resolved?.model).toBe(fallback.model);
     // Fact surface agrees: no override reported.
     const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
     expect(lastOverrideEntries(entries).model).toBeUndefined();

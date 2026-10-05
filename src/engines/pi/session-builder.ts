@@ -13,7 +13,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { bindPiSession, definitionServices } from "./agent-session-factory.ts";
-import { resolveModel } from "./config.ts";
+import { missingDefaultModel, resolveModel } from "./config.ts";
 import { canonicalPath } from "./definition.ts";
 import { reportToolCollisions } from "./report.ts";
 import { assembleFront, resolveAgentAssembly } from "./open.ts";
@@ -38,11 +38,14 @@ export async function buildAgentSessionRuntime(
 ): Promise<AgentSessionRuntime> {
   async function resolveAssembly() {
     const front = await resolveAgentAssembly(dir, options);
+    // chat's TUI always starts a conversation, so it needs the default the served agent can do without.
+    const modelSpec = front.modelSpec;
+    if (!modelSpec) throw missingDefaultModel();
     reportToolCollisions(front.toolCollisions);
     const { assembly } = await assembleFront(front);
     // Read ONCE per runtime: a rebuild (/new, fork) keeps the startup snapshot, because config and tools stay in the
     // import cache and a half-refreshed agent is worse than a stale one. Restart chat to pick up edits.
-    return { modelSpec: front.modelSpec, assembly, definition: await assembly.readDefinition() };
+    return { modelSpec, assembly, definition: await assembly.readDefinition() };
   }
 
   // The workspace, like serving's: where tools run and what session records are keyed to. Canonical, because pi's

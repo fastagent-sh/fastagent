@@ -10,7 +10,7 @@ import { runInvokeStream } from "../invoke-stream.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { routineSession } from "../../schedule/routine.ts";
 import { failStartup, gateSecretsOrExit } from "../fail.ts";
-import { enterAgentCommand, reportAuth } from "../shared.ts";
+import { enterAgentDirectory, reportAuth, requireDefaultModel } from "../shared.ts";
 
 export interface RoutineRunOptions {
   model?: string;
@@ -19,7 +19,7 @@ export interface RoutineRunOptions {
 }
 
 export async function runRoutine(name: string, dirArg: string, opts: RoutineRunOptions): Promise<void> {
-  const placement = await enterAgentCommand(dirArg, opts);
+  const placement = await enterAgentDirectory(dirArg, opts);
   // Routines are agent surface — discovered where dev/start/`routine list` do (the agent dir), so this command
   // sees the same set the clock serves.
   const { routines, secrets, failures } = await loadRoutines(placement.agentDir).catch(failStartup);
@@ -47,9 +47,8 @@ export async function runRoutine(name: string, dirArg: string, opts: RoutineRunO
   // were printed above: its guarantee must not depend on this call site remembering (a repeated line
   // on the refusal path is the cheaper failure).
   gateSecretsOrExit({ declared: secrets, failures, owner: name });
-  const { agent, modelSpec, models } = await createPiAgentFromDir(placement.agentDir, {
-    model: opts.model,
-  }).catch(failStartup);
+  const { modelSpec } = requireDefaultModel(placement);
+  const { agent, models } = await createPiAgentFromDir(placement.agentDir, { model: modelSpec }).catch(failStartup);
   console.error(`[fastagent] routine run: ${name} (${modelSpec})`);
   await reportAuth(models, modelSpec);
   const exitCode = await runInvokeStream(

@@ -58,6 +58,11 @@ With none set, a serving command (`dev` / `start` / `invoke`) in a terminal show
 credentials first; picking one that needs auth runs `login` inline) and writes the choice to the config.
 Non-interactive runs fail with `missing model`.
 
+The default is optional for an app embedding the agent (`createPiAgentFromDir`, `createAgentService`): without one
+the agent still opens and lists its conversations, each existing conversation runs on the model it recorded, and a
+conversation with no model of its own is refused with `missing_model` until it is given one
+(`docs/api-reference.md`, `createPiAgentFromDir`).
+
 ```bash
 fastagent dev --model openai-codex/gpt-5.5
 FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start

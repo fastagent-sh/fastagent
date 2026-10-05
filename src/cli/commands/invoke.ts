@@ -13,9 +13,8 @@ export interface InvokeOptions {
 
 export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
   const placement = await enterAgentCommand(dirArg, opts);
-  const { agent, modelSpec, models } = await createPiAgentFromDir(placement.agentDir, {
-    model: opts.model,
-  }).catch(failStartup);
+  const { modelSpec } = placement;
+  const { agent, models } = await createPiAgentFromDir(placement.agentDir, { model: modelSpec }).catch(failStartup);
   // BOTH directories, like dev/start: which agent ran, and what it worked on.
   console.error(`[fastagent] invoke: ${placement.agentDir} (workspace ${placement.workspace}, ${modelSpec})`);
   await reportAuth(models, modelSpec);

@@ -81,12 +81,16 @@ export interface SessionSettings {
   dropped?: { model?: string; thinkingLevel?: { recorded: string; running: string; known: boolean } };
 }
 
-/** `defaults` is the assembly's configured pair — what a session with no overrides runs on. */
+/**
+ * `defaults` is the assembly's configured pair — what a session with no overrides runs on. An agent may set no default
+ * model, so a session runs on the model it records, else the default, else none: undefined then, and the session
+ * cannot run until it is given one ({@link MissingModel}).
+ */
 export function resolveSessionSettings(
   entries: OverrideEntryLike[],
   models: Models,
-  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel },
-): SessionSettings {
+  defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel },
+): SessionSettings | undefined {
   const recorded = lastOverrideEntries(entries);
   const dropped: NonNullable<SessionSettings["dropped"]> = {};
 
@@ -97,6 +101,7 @@ export function resolveSessionSettings(
     if (found) model = found as AnyModel;
     else dropped.model = `${recorded.model.provider}/${recorded.model.modelId}`;
   }
+  if (!model) return undefined;
 
   const availableThinkingLevels = getSupportedThinkingLevels(model) as string[];
   let thinkingLevel = clampThinkingLevel(model, defaults.thinkingLevel) as ThinkingLevel;
@@ -119,6 +124,24 @@ export function resolveSessionSettings(
     availableThinkingLevels,
     ...(dropped.model || dropped.thinkingLevel ? { dropped } : {}),
   };
+}
+
+/**
+ * A turn has no model to run on: its session records none this registry knows, and the agent sets no default. Its own
+ * class so the invoke answers it with `missing_model` instead of a prose failure.
+ */
+export class MissingModel extends Error {
+  constructor(session: string, entries: OverrideEntryLike[]) {
+    const recorded = lastOverrideEntries(entries).model;
+    super(
+      `session "${session}" has no model: ${
+        recorded
+          ? `the model it records, ${recorded.provider}/${recorded.modelId}, is not one this agent knows,`
+          : "it records none,"
+      } and the agent sets no default — give the session one (session control's update({ model })), or the agent ` +
+        `a default ("model" in fastagent.config.ts, or FASTAGENT_MODEL)`,
+    );
+  }
 }
 
 /** The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks. */
