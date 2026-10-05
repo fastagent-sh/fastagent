@@ -453,8 +453,10 @@ guaranteed minimum and MUST be skippable.
 
 `thinking` is the answer's recorded reasoning: exactly the text its live `message_delta { channel: "thinking" }`
 deltas add up to, absent when it has none, so a run reopened after the fact shows the reasoning a watcher saw.
-Redacted reasoning (a provider's opaque payload with no readable text) is in neither. How long the thinking took is
-not recorded.
+Redacted reasoning (a provider's opaque payload with no readable text) is in neither. One exception: a block that
+streams readable text and only then turns redacted (possible on the pi reference's Bedrock path, whose readable and
+encrypted reasoning arrive separately) streamed that text live, and is not read back, since the record keeps one
+flag per block. How long the thinking took is not recorded.
 
 `outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
 did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a

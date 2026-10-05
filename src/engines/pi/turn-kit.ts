@@ -115,6 +115,12 @@ export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefi
  * placeholder (pi writes "[Reasoning redacted]" for it), not reasoning anyone can read, so it is neither streamed nor
  * read back. The ONE rule: the live `message_delta { channel: "thinking" }` ({@link streamsThinkingDelta}) and the
  * `assistant` entry's `thinking` ({@link answerThinking}) both apply it, so a client reads the same text either way.
+ *
+ * One exception, by when the flag is read: live reads it as each delta arrives, the record as the answer ended. pi's
+ * Bedrock path flags a block redacted when its first encrypted chunk arrives, and its readable text and its encrypted
+ * chunks are separate fields, so a block that streamed readable text BEFORE turning redacted had that text streamed
+ * and is then not read back. Not separable after the fact: the record keeps one flag and one string per block, with
+ * pi's placeholder appended. Whether a Bedrock model sends both in one block is unverified.
  */
 function isPublishedThinking(block: AssistantMessage["content"][number] | undefined): block is ThinkingContent {
   return block?.type === "thinking" && block.redacted !== true;
