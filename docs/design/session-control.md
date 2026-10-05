@@ -463,7 +463,10 @@ did not end normally, and is absent when it did. The answer's `message_finished`
 client applies one rule to the live event and to the entry it reads back, and a failure a client never watched (a
 channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
 output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
-a later complete answer. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
+a later complete answer. `aborted` is an answer the run's stop ended, wherever the stop landed: while the model was
+writing, or during a tool, after which the engine's next model request fails on the stop (the stopped call's own
+`tool` entry is `isError: true`). A failure recorded BEFORE the stop stays `failed`: a provider error whose retry
+was then stopped during its backoff failed on its own. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
 `tool` entry follow them. A `truncated` answer's calls do not run either, because their arguments may be cut off,
 but each is reported as failed: live as `tool_started` followed by `tool_finished { isError: true }`, durably as a
 `tool` entry with `isError: true`. An answer a `context_edit { omitted: true }` targets, `failed` or `truncated`,

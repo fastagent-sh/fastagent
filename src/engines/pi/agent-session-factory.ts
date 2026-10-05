@@ -52,7 +52,7 @@ import { resolveModel } from "./config.ts";
 import { MissingModel, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
 import { registerAccountModels } from "./openai-account-models.ts";
-import { asksToEndRun, markEndsRun } from "./turn-kit.ts";
+import { abortedAnswer, asksToEndRun, markEndsRun } from "./turn-kit.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 import type { DefinitionPrompt } from "./definition.ts";
 
@@ -339,6 +339,7 @@ export function definitionResourceLoaderOptions(source: {
       ...nativeExtensions,
       compactAdmission,
       recordEndsRun,
+      recordAbortedAnswers,
       ...(definition.sections && Object.keys(definition.sections).length > 0
         ? [fastagentSections(definition.sections)]
         : []),
@@ -397,6 +398,23 @@ const recordEndsRun: InlineExtension = {
       const message = event.message;
       if (message.role !== "toolResult" || !asked.delete(message.toolCallId)) return;
       return { message: markEndsRun(message) };
+    });
+  },
+};
+
+/**
+ * Records an answer that failed because its run was stopped as aborted ({@link abortedAnswer}), through pi's
+ * `message_end` replacement, which runs before pi appends the message to the record and before the plane's own
+ * listener sees it. `ctx.signal` is the run's own abort signal, the one pi's readings use.
+ */
+const recordAbortedAnswers: InlineExtension = {
+  name: "fastagent-record-aborted-answers",
+  hidden: true,
+  factory: (pi) => {
+    pi.on("message_end", (event, ctx) => {
+      if (event.message.role !== "assistant") return;
+      const aborted = abortedAnswer(event.message, ctx.signal);
+      return aborted ? { message: aborted } : undefined;
     });
   },
 };
