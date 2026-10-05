@@ -192,6 +192,55 @@ describe("session control: observation plane", () => {
     }
   });
 
+  it("a run stopped during a tool records its last answer as aborted, as it settled, in the record it reopens from", async () => {
+    let started = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const waitTool: AgentTool = {
+      name: "wait",
+      label: "Wait",
+      description: "Waits until stopped",
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal) {
+        started();
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("Command aborted");
+      },
+    };
+    const cwd = await mkdtemp(join(tmpdir(), "fa-abort-tool-"));
+    const dir = join(cwd, "sessions");
+    const { agent, control } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage([{ type: "text", text: "Running it." }, fauxToolCall("wait", {}, { id: "c1" })], {
+          stopReason: "toolUse",
+        }),
+      ],
+      { tools: [waitTool], boundary: false, cwd, sessions: piSessionRecordStore({ dir, cwd }) },
+    );
+    const watched = watchUntilSettled(control, "aTool");
+    const invoked = drain(agent.invoke({ session: "aTool" }, { text: "go" }));
+    await running;
+    expect(await control.sessions.get("aTool").abort()).toMatchObject({ ok: true });
+    expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+    const live = await watched;
+    expect(live.at(-1)?.data).toMatchObject({ status: "aborted" });
+    expect(live.filter((e) => e.type === "message_finished").at(-1)?.data).toMatchObject({
+      outcome: { status: "aborted" },
+    });
+
+    // Read back by a store that never saw the run: the record itself says the answer was stopped.
+    const reopened = await fauxControlledAgent([], {
+      boundary: false,
+      cwd,
+      sessions: piSessionRecordStore({ dir, cwd }),
+    });
+    const entries = (await reopened.control.sessions.get("aTool").entries()).entries;
+    // The stopped call itself did fail to complete.
+    expect(entries.find((e) => e.kind === "tool")?.data).toMatchObject({ toolCallId: "c1", isError: true });
+    expect(entries.at(-1)).toMatchObject({ kind: "assistant", data: { outcome: { status: "aborted" } } });
+  });
+
   it("an answer's thinking reads back as the live thinking deltas added up", async () => {
     const cases = [
       {
