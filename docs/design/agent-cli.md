@@ -75,8 +75,10 @@ fastagent init <dir> [--workdir <source>] [--context <source>]... [--copy]
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per
 `--context`. `--workdir <source>` adds one more, declared as its working directory (`workdir: true`): the agent
 works there and what it creates lands there, apart from its definition ([agent model](agent-model.md) §4). A
-`--workdir` directory that does not exist yet is created, and the output says so, since giving an agent a folder of
-its own is what the flag is mostly for; a `--context` directory must exist. Without `--workdir` the working directory
+`--workdir` directory that does not exist yet is created, after every check has passed and with the rest of the
+scaffold (a failure removes it again), and the output says so, since giving an agent a folder of its own is what the
+flag is mostly for; a `--context` directory must exist. `--copy` applies to every directory `init` declares,
+`--workdir` included. Without `--workdir` the working directory
 is the agent's own directory; without any context the agent only talks. A context it only knows is added afterwards
 with `fastagent context add --readonly`.
 
