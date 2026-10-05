@@ -214,19 +214,34 @@ one it is the agent directory, as now.
 - **A record belongs to whoever stores it, never to its header.** Several agents may declare one working directory
   (a context can be the data of several agents), so a record's `cwd` cannot say whose it is. Where it lives does:
   - Serving already works this way: records live in the agent's own `<state root>/sessions`, located by that
-    directory, never filtered by cwd (`piSessionRecordStore`). Its `cwd` becomes the working directory, for the
-    headers it writes.
+    directory, never filtered by cwd (`piSessionRecordStore`). The store's one `cwd` does two jobs today, so it
+    splits: the cwd its records' headers carry (the working directory), and the base a relative `dir` resolves
+    against (the agent directory, as now). Otherwise an embedder's relative `sessionsDir` would land in the user's
+    working folder, and declaring a `workdir` would lose the agent's earlier records.
   - `chat` gets the same rule: `SessionManager.create(<working directory>, <session directory>)`, where the session
     directory is the one pi gives the agent directory, where `chat`'s records are today (what
     `SessionManager.create(agentDir).getSessionDir()` answers; pi does not export the function behind it). pi keeps a session's directory at `/new` and fork (`getSessionDir()`), and `/resume` lists that directory
     filtered to the current cwd, so two agents sharing a working directory never see each other's records.
-  - `chat`'s guard on switching and importing checks both: the record is in this agent's session directory, and its
-    `cwd` is the current working directory (pi would otherwise rebuild the runtime for another directory, which this
-    assembly does not serve).
-  - Cost, accepted: after an agent's working directory changes, `chat`'s `/resume` starts from an empty list. The
-    earlier records stay on disk under the agent's session directory; served sessions are unaffected.
+  - `chat`'s guards. Switching (`switchSession`) checks both that the record is in this agent's session directory and
+    that its `cwd` is the current working directory: pi would otherwise rebuild the runtime for another directory,
+    which this assembly does not serve. Importing (`importFromJsonl`) checks the `cwd` only: its argument is the
+    source file, which is almost never in the session directory, and pi copies it there before opening it, so the
+    imported record is this agent's by the same rule.
+  - Cost, accepted: after an agent's working directory changes, `chat`'s `/resume` lists nothing in its current
+    folder scope. Its All scope lists the agent's session directory, earlier records included; choosing one of those
+    is refused with its own message, that the record was made while the agent worked in `<its cwd>` and the agent
+    works in `<working directory>` now, not with the other-agent message. The records stay on disk; served sessions
+    are unaffected.
 - **What is the agent's is handed to pi from the agent directory, never derived from pi's cwd.** pi would read its
   project scope from the cwd, so each piece is passed explicitly:
+  - the machine read: `definitionServices` takes one `cwd` today and hands it to both `readMachine` and
+    `createAgentSessionServices`, so it gains an `agentDir` and `readMachine` takes only that. Otherwise a session
+    would read the machine a second time keyed to the working directory: the working directory's
+    `.pi/settings.json` (its `packages`, its built-in toggles, its engine settings) as project settings, the
+    `.agents/skills` above it as the machine's, and built-in extensions that disagree with the ones
+    `assemblePiFromDefinition` read for the prompt. The `cwd` that `PiAgentSessionFactoryOptions` and
+    `BindPiSessionOptions` carry ("what fastagent-defined tools see") is the working directory; the session factory
+    and `chat`'s runtime pass the agent directory beside it;
   - the settings: `machine.settingsManager()` for serving, and in `chat` a file-backed manager on the agent
     directory, so `/settings` writes `<agent dir>/.pi/settings.json`, never `SettingsManager.create(<cwd>)`;
   - every resource the loader would discover in the project: prompt files, skills, prompt templates, `AGENTS.md`,
@@ -235,8 +250,9 @@ one it is the agent directory, as now.
   - the session directory above.
 
   Everything else that reads the definition already takes the agent directory: `loadAgentDefinition`,
-  `readMachine`, `extensions/`, `dev`'s watcher, the deploy build. A test proves a `.pi/` in the working directory
-  (settings, skills, prompts, themes) changes nothing.
+  `extensions/`, `dev`'s watcher, the deploy build. The working directory is a context like any other, so its
+  `.pi/skills/` and `.agents/skills/` load as `<context>/<skill>`; its `.pi/settings.json`, `.pi/prompts/`,
+  `.pi/themes/` and `.pi/extensions/` take no effect.
 - **`ToolContext`.** `cwd` becomes the working directory, the directory pi's own tools and the shell run in, so an
   authored tool and `bash` agree on where a relative path goes. It gains `agentDir`, the agent directory: what a tool
   needs to find the agent's own files or its instance state. Every place that runs a tool sets both from the same
@@ -268,9 +284,12 @@ one it is the agent directory, as now.
 
 Tests: the one-resolution test covers `workdir`, including `ToolContext.cwd` and `agentDir` in a turn and in
 `fastagent tool`; `contexts.test.ts` refuses two and a `readonly` one; a turn's relative write lands in the working
-directory while the definition is read from the agent directory; a `.pi/` in the working directory (settings,
-skills, prompts, themes) changes nothing; two agents declaring one working directory keep their `chat` records
-apart through `/new`, fork and `/resume`, and `/settings` writes the agent directory's file; a send tool finds the
+directory while the definition is read from the agent directory; a working directory's `.pi/settings.json`,
+`.pi/prompts/`, `.pi/themes/` and `.pi/extensions/` take no effect, and its `.pi/skills/` appear only as
+`<context>/<skill>`; one machine read per process, keyed to the agent directory, whatever the working directory; a
+relative `sessionsDir` resolves against the agent directory; two agents declaring one working directory keep their
+`chat` records apart through `/new`, fork and `/resume`, `/import` of an outside file works, a record made in an
+earlier working directory is refused with its own message, and `/settings` writes the agent directory's file; a send tool finds the
 channel's transport with a `workdir` declared; `init --workdir` creates a missing directory and `--context` does
 not.
 

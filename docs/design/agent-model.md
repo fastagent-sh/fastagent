@@ -308,7 +308,9 @@ directory to a synchronized one, and nothing else in the declaration does.
   change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
   directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's
   project scope is read from a context, the working directory included: a context contributes its `AGENTS.md` and
-  its skills only, so a `.pi/` in the working directory cannot change the agent.
+  its skills only. So a working directory's `.pi/settings.json`, `.pi/prompts/`, `.pi/themes/` and
+  `.pi/extensions/` take no effect, and its `.pi/skills/` load the way any context's do, as `<context>/<skill>`,
+  never as skills of the agent's own.
 - **What the agent creates lands in its working directory unless it puts it elsewhere.** Without a `workdir`
   context that is the agent's own directory, and whether a file is temporary or part of the agent often cannot be
   decided when it is written: a helper script that proves useful is how a skill begins. The author decides what
