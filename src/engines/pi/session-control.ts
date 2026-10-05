@@ -60,7 +60,14 @@ import {
 } from "../../session.ts";
 import { forkProvenance, isConversationMessage, isNavigable, publishedLeaf } from "./session-markers.ts";
 import { entryImages, imageAt } from "./entry-images.ts";
-import { type RunControls, type SessionObserver, type Lease, answerOutcome, endsRun } from "./turn-kit.ts";
+import {
+  type RunControls,
+  type SessionObserver,
+  type Lease,
+  answerOutcome,
+  answerThinking,
+  endsRun,
+} from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { startCompaction } from "./agent-session-factory.ts";
@@ -151,6 +158,9 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
         .map((b) => ({ id: b.id ?? "", name: b.name ?? "", args: b.arguments ?? {} }));
       const data: Json = { text: contentText(m.content, "") };
       if (toolCalls.length > 0) (data as { toolCalls?: Json }).toolCalls = toolCalls;
+      // The same text the live `message_delta { channel: "thinking" }` added up to (turn-kit.ts answerThinking).
+      const thinking = answerThinking(m);
+      if (thinking !== undefined) (data as { thinking?: Json }).thinking = thinking;
       const outcome = answerOutcome(m);
       if (outcome) (data as { outcome?: Json }).outcome = outcome;
       return { ...base, kind: "assistant", data };

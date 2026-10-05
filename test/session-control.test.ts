@@ -192,6 +192,55 @@ describe("session control: observation plane", () => {
     }
   });
 
+  it("an answer's thinking reads back as the live thinking deltas added up", async () => {
+    const cases = [
+      {
+        // Two blocks around the text: the read-back is the blocks joined as streamed.
+        session: "kSteps",
+        answer: fauxAssistantMessage([
+          fauxThinking("first step. "),
+          { type: "text", text: "answer" },
+          fauxThinking("second step."),
+        ]),
+        thinking: "first step. second step.",
+      },
+      {
+        // Stopped mid-answer: what was thought so far was streamed, and stays readable.
+        session: "kAborted",
+        answer: fauxAssistantMessage([fauxThinking("half a thought")], {
+          stopReason: "aborted",
+          errorMessage: "Request aborted",
+        }),
+        thinking: "half a thought",
+      },
+      { session: "kNone", answer: fauxAssistantMessage("no thinking"), thinking: undefined },
+    ];
+    for (const c of cases) {
+      const { agent, control } = await makeObserved([c.answer]);
+      const watched = watchUntilSettled(control, c.session);
+      await drain(agent.invoke({ session: c.session }, { text: "go" }));
+      const live = (await watched)
+        .filter((e) => e.type === "message_delta" && (e.data as { channel: string }).channel === "thinking")
+        .map((e) => (e.data as { delta: string }).delta)
+        .join("");
+      const entry = (await control.sessions.get(c.session).entries()).entries.find((e) => e.kind === "assistant");
+
+      expect(live, c.session).toBe(c.thinking ?? "");
+      if (c.thinking === undefined) expect(entry?.data, c.session).not.toHaveProperty("thinking");
+      else expect(entry?.data, c.session).toMatchObject({ thinking: c.thinking });
+    }
+
+    // A redacted block is not read back. Only the record half: faux streams a scripted block without its `redacted`
+    // flag, which no provider does, so the live half is turn-kit.test.ts's, over the partial a provider sends.
+    const redacted = { ...fauxThinking("[Reasoning redacted]"), redacted: true, thinkingSignature: "opaque" };
+    const { agent, control } = await makeObserved([
+      fauxAssistantMessage([fauxThinking("readable"), redacted, { type: "text", text: "ok" }]),
+    ]);
+    await drain(agent.invoke({ session: "kRedacted" }, { text: "go" }));
+    const entry = (await control.sessions.get("kRedacted").entries()).entries.find((e) => e.kind === "assistant");
+    expect(entry?.data).toMatchObject({ thinking: "readable" });
+  });
+
   it("a failed answer's tool calls never ran; a truncated answer's calls are recorded as failed and the run goes on", async () => {
     const failed = await makeObserved([
       fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "call-f" }), {

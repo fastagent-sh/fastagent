@@ -34,6 +34,7 @@ import {
   inProcessLease,
   agentEventProjection,
   answerOutcome,
+  streamsThinkingDelta,
   asksToEndRun,
   toPiPromptOptions,
   toTerminal,
@@ -56,7 +57,8 @@ function displayToolResult(result: AgentToolResult<unknown>): Json {
   return display as unknown as Json;
 }
 
-function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
+/** pi's session event as the observation plane's, or null for one it does not publish. Exported for tests only. */
+export function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (event.type) {
     case "message_start":
@@ -65,8 +67,9 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
     case "message_update": {
       const ev = event.assistantMessageEvent;
       if (ev.type === "text_delta" || ev.type === "thinking_delta") {
-        // Empty deltas must not spend the silent window in which a provider retry is safe.
-        return ev.delta === ""
+        // Empty deltas must not spend the silent window in which a provider retry is safe. A redacted block's
+        // placeholder is not reasoning, and its entry will not carry it either (turn-kit.ts answerThinking).
+        return ev.delta === "" || (ev.type === "thinking_delta" && !streamsThinkingDelta(ev))
           ? null
           : {
               type: "message_delta",

@@ -355,6 +355,10 @@ export type UserMessageEvent = SessionEvent<
   "user_message",
   { entryId: string; text: string; images?: EntryImage[] }
 > & { runId: string };
+/**
+ * A piece of the answer being written. The `thinking` deltas of one answer add up to its `assistant` entry's
+ * `thinking`, as its `text` deltas add up to its `text`; redacted reasoning is streamed in neither.
+ */
 export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
   runId: string;
 };
