@@ -53,6 +53,33 @@ describe("an agent with no default model", () => {
     expect(ran.at(-1)).toEqual({ type: "completed" });
   });
 
+  it("a new thread takes its model from its parent, and one whose parent has none leaves no record behind", async () => {
+    const sessions = piInMemorySessionRecordStore();
+    const withDefault = await fauxControlledAgent([fauxAssistantMessage("in the room")], { faux: FAUX, sessions });
+    expect((await drain(withDefault.agent.invoke({ session: "room" }, { text: "hi" }))).at(-1)).toEqual({
+      type: "completed",
+    });
+
+    const { agent, control } = await fauxControlledAgent([fauxAssistantMessage("in the thread")], {
+      faux: FAUX,
+      sessions,
+      noDefaultModel: true,
+    });
+    expect(await control.sessions.get("bare").update({ name: "a parent with no model" })).toEqual({ ok: true });
+    for (const parentSession of ["nowhere", "bare"]) {
+      const child = `child-of-${parentSession}`;
+      const refused = await drain(agent.invoke({ session: child, parentSession }, { text: "hi" }));
+      expect(refused.at(-1), parentSession).toMatchObject({ type: "failed", code: MISSING_MODEL_CODE });
+      expect(
+        (await control.sessions.list()).map((s) => s.session),
+        parentSession,
+      ).not.toContain(child);
+    }
+
+    const inherited = await drain(agent.invoke({ session: "thread", parentSession: "room" }, { text: "go on" }));
+    expect(inherited.at(-1)).toEqual({ type: "completed" });
+  });
+
   it("runs a session on the model it records, and names a recorded model this registry does not know", async () => {
     const sessions = piInMemorySessionRecordStore();
     // Recorded under an agent that HAD a default: pi writes the model a new session starts on into its record.

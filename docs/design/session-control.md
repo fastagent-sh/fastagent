@@ -159,8 +159,8 @@ what its first turn will run on, and `update()` sets its properties, which creat
 A deployment may have no default model. A session then runs on the model its record names (the pi
 reference writes the model a session starts on into its record), and one whose record names none, or
 names one the registry no longer has, reports no `model`, `thinkingLevel` or `availableThinkingLevels`
-in `state()`. Its invoke fails `missing_model` (not retryable) without creating a record, and
-`compact` answers the same code. `update({ model })` gives it one. `update({ thinkingLevel })` without a
+in `state()`. Its invoke fails `missing_model` (not retryable) and leaves no record behind (a new thread
+whose parent supplied no model included), and `compact` answers the same code. `update({ model })` gives it one. `update({ thinkingLevel })` without a
 model accepts any level of the vocabulary and records it as asked; once the session has a model, the
 level runs clamped to what that model supports, as a recorded level does after a model change. That is
 the "next turn" a property applies to, so a client sets a new conversation's model or thinking level

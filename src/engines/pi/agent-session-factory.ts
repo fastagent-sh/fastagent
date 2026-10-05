@@ -554,11 +554,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       initTheme();
       themeReady = true;
     }
-    // A new record with nothing to inherit records no model. Refused BEFORE it is created, so a turn that cannot run
-    // leaves no empty conversation behind in the listing.
-    if (!options.modelSpec && !inherit && !(await sessions.openIfExists(sessionId))) {
-      throw new MissingModel(sessionId, []);
-    }
+    // Without a default, a turn that cannot run must leave no conversation behind in the listing. A new record with
+    // nothing to inherit records no model, so it is refused before it is created. One that inherits may get a model
+    // from its parent, which only the copy decides (the store's cut), so it is created and, if still model-less,
+    // removed below. The caller holds this session's lease, so nothing else creates the record in between.
+    const existed = options.modelSpec ? true : (await sessions.openIfExists(sessionId)) !== undefined;
+    if (!existed && !inherit) throw new MissingModel(sessionId, []);
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
@@ -572,7 +573,17 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       ...(model ? { model } : {}),
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    if (!settings) throw new MissingModel(sessionId, path);
+    if (!settings) {
+      const missing = new MissingModel(sessionId, path);
+      if (!existed) {
+        // The record this bind created for a thread whose parent supplied no model. A failed removal is reported on
+        // its own and does not replace `missing`: the caller still needs the missing_model answer and its fix.
+        await sessions.delete(sessionId).catch((error: unknown) => {
+          log.warn(`[fastagent] session ${sessionId}: could not remove the record of a refused turn: ${String(error)}`);
+        });
+      }
+      throw missing;
+    }
     const { session } = await bindPiSession({
       services,
       sessionManager,

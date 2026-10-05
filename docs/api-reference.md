@@ -236,8 +236,8 @@ The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.co
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
 `entries()`, `state()` and `update()` work, and a session that records its model (pi writes it into every session it
 starts, and `update({ model })` sets it) runs on that model. A session with no model of its own fails its invoke with
-`failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }`, before any record is created for it;
-`update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
+`failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }` and leaves no record behind, including a
+new thread whose `parentSession` supplied no model; `update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
 registry does not know still fails the open. The CLI's `dev`, `start`, `invoke`, `routine run` and `chat` still
 refuse to start without a default (`missing model`), since every new conversation they took would fail.
 
