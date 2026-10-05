@@ -14,7 +14,7 @@ import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
-import { type LoadedDefinition, loadAgentPrompts, loadAgentSkills } from "./definition.ts";
+import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
@@ -48,11 +48,13 @@ export async function agentCommands(
   workspace: string,
   served: { extensionPaths: readonly string[]; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
-  const own = await loadAgentSkills(agentDir, { cwd: workspace });
-  // A skill whose frontmatter broke simply is not in `skills` — it would vanish from the composer with no signal.
+  // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
+  // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
+  // one set from both readers instead of warning again after every menu request.
+  const own = await loadAgentDefinition(agentDir, { cwd: workspace });
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(workspace);
-  const prompts = withMachine(await loadAgentPrompts(agentDir, { cwd: workspace }), machine.prompts);
+  const prompts = withMachine(own.prompts, machine.prompts);
   const { extensionPaths } = served;
   const extensionCommands = await servedExtensionCommands({
     cwd: workspace,

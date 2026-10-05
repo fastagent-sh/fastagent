@@ -11,7 +11,6 @@ import type { IndirectTool, ToolReach } from "./create.ts";
 type Findings = {
   collisions: SkillCollision[];
   diagnostics: DefinitionDiagnostic[];
-  /** Absent for a skills-only read ({@link loadAgentSkills}). */
   shadowed?: DefinitionShadow[];
   ignored?: LoadedDefinition["ignored"];
 };

@@ -198,7 +198,8 @@ change it, both re-read every turn:
 
 pi's default says the agent is "an expert coding assistant", so an identity ("You are…") written into
 `APPEND_SYSTEM.md` gives the model two; put it in `SYSTEM.md` instead. A `persona.md` is refused: its text belongs
-in one of the two.
+in one of the two. A blank `SYSTEM.md` or `APPEND_SYSTEM.md` is reported and not used, since pi treats an empty
+prompt as none. `deploy` loads the definition too, so any of these refusals stops it before an image is built.
 
 FastAgent adds its own sections after these, whichever wrote the prompt: a note about tools that are registered but
 not loaded yet, and on a deployed host how long its storage lasts and how the agent changes itself.

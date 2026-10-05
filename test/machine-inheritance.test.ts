@@ -318,3 +318,63 @@ it("an unreadable pi settings file is said, not silently replaced by pi's defaul
 
   expect(warned).toMatch(/pi global settings \(.*settings\.json\) could not be read, so pi's defaults apply/);
 });
+
+it("a definition's prompt template expands in a served turn, wins the machine's name, and is listed by `commands()`", async () => {
+  await machine({ prompts: { review: "MACHINE review of $@", ship: "Ship $1" } });
+  const dir = await definition();
+  await mkdir(join(dir, "prompts"), { recursive: true });
+  await writeFile(
+    join(dir, "prompts", "review.md"),
+    "---\ndescription: The definition's review.\n---\nDEFINITION review of $@\n",
+  );
+
+  const { faux } = makeFaux();
+  let asked = "";
+  faux.setResponses([
+    (context) => {
+      const user = context.messages.filter((message) => message.role === "user").at(-1);
+      asked = JSON.stringify(user?.content);
+      return fauxAssistantMessage("ok");
+    },
+  ]);
+  const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+  await collect(agent.invoke({ session: "s" }, { text: "/review the plan" }));
+  expect(asked).toContain("DEFINITION review of the plan");
+  expect(asked).not.toContain("MACHINE");
+
+  expect((await agentCommands(dir, dir, noExtensions)).filter((c) => c.source === "prompt")).toEqual([
+    { name: "review", description: "The definition's review.", source: "prompt" },
+    expect.objectContaining({ name: "ship", source: "prompt" }),
+  ]);
+});
+
+it("a machine skill named with a slash is left out and said: the slash names a context's skills", async () => {
+  const agent = await machine({ skills: { metar: "Read aviation weather." } });
+  await mkdir(join(agent, "skills", "slashed"), { recursive: true });
+  await writeFile(
+    join(agent, "skills", "slashed", "SKILL.md"),
+    "---\nname: app/deploy\ndescription: Deploy.\n---\nBody.\n",
+  );
+  const dir = await definition();
+
+  let names: string[] = [];
+  const warned = await warnings(async () => {
+    names = (await agentCommands(dir, dir, noExtensions)).map((c) => c.name);
+  });
+  expect(names).toEqual(["metar"]);
+  expect(warned).toMatch(/machine skill "app\/deploy" .* is not loaded: a skill's name may not contain "\/"/);
+});
+
+it("`commands()` and a turn report the definition's findings once between them, not once per alternation", async () => {
+  await machine();
+  const dir = await definition();
+  await mkdir(join(dir, ".pi", "extensions"), { recursive: true });
+
+  const warned = await warnings(async () => {
+    for (let i = 0; i < 3; i++) {
+      await agentCommands(dir, dir, noExtensions);
+      await promptSentBy(dir);
+    }
+  });
+  expect(warned.split("\n").filter((line) => line.includes("is not loaded"))).toHaveLength(1);
+});

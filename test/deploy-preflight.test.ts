@@ -399,6 +399,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
+  it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
+    const dir = await workspace({ "persona.md": "You are terse.\n" });
+    const config = { model: "openai-codex/gpt-5.5" };
+    const gated = await call(dir, config, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/definition does not load.*persona\.md is no longer read/);
+    const warned = await call(dir, config, { run: false });
+    expect(warned.ok).toBe(true);
+    if (warned.ok)
+      expect(warned.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(/definition does not load/),
+      });
+  });
+
   it("warns (not gates) about the same model issue without --run", async () => {
     const pre = await call(await workspace(), {}, { run: false });
     expect(pre.ok).toBe(true);

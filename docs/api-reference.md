@@ -172,7 +172,7 @@ function createPiAgentFromDefinition(
 
 Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, the project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). Project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` passes the workspace, which is always the agent dir's parent.
 
-`base` replaces pi's default prompt, as `SYSTEM.md` does, and outranks it. A `tools` list without `read`, `bash`, `edit` and `write` needs `base` or a `SYSTEM.md`: pi's default claims those tools, so the call is refused without one.
+`base` replaces pi's default prompt, as `SYSTEM.md` does, and outranks it; a blank `base` is refused. A `tools` list without `read`, `bash`, `edit` and `write` needs `base` or a `SYSTEM.md`: pi's default claims those tools, so the call is refused without one.
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>`, `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
 

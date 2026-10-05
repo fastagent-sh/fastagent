@@ -14,6 +14,7 @@ import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, type ResolvedPlacement, ex
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
+import { loadAgentDefinition } from "../engines/pi/definition.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -159,6 +160,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
   const agentPrefix = `${basename(agentDir)}/`;
+
+  // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
+  // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
+  // invocation on AgentCore. This is the boundary that turns that refusal into a deploy finding, so the error is
+  // carried whole into the issue rather than rethrown.
+  await loadAgentDefinition(agentDir, { cwd: workspace }).catch((error: unknown) => {
+    report.issue(
+      `the definition does not load, so the deployed agent would not start: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.

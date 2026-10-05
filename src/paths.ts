@@ -55,7 +55,18 @@ export interface ResolvedPlacement {
  * The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded inside
  * ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
  */
-const LOADED_SURFACE = ["SYSTEM.md", "APPEND_SYSTEM.md", "skills", "prompts", "tools", "channels", "routines"] as const;
+const LOADED_SURFACE = [
+  "SYSTEM.md",
+  "APPEND_SYSTEM.md",
+  "skills",
+  "prompts",
+  "tools",
+  "channels",
+  "routines",
+  // pi's and the standard spellings the definition also reads: `.pi/skills`, `.pi/prompts`, `.agents/skills`.
+  ".pi",
+  ".agents",
+] as const;
 
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent

@@ -196,7 +196,7 @@ describe("init: scaffoldAgent", () => {
     // EVERY entry of that surface, because the list is the only thing `agentDefinitionOwner` reads and a
     // rename that updates the loader but not the list silently reopens one directory (`routines/` was
     // exactly that — the loader moved, `LOADED_SURFACE` still said `schedules`).
-    for (const name of ["skills", "tools", "channels", "routines"]) {
+    for (const name of ["skills", "prompts", "tools", "channels", "routines", ".pi", ".agents"]) {
       const surface = join(inside, name);
       await mkdir(surface);
       await expect(scaffoldAgent(surface)).rejects.toThrow(/is inside the definition of the agent at .*fastagent/);

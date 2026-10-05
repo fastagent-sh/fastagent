@@ -128,7 +128,7 @@ pi builds the prompt; FastAgent hands it the pieces and adds its own sections:
 
 | Section | Source |
 |---|---|
-| preamble, tools, rules, docs | pi's default, built by pi so it follows pi; `SYSTEM.md` (else `.pi/SYSTEM.md`, else L2's `base`) replaces all four. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
+| preamble, tools, rules, docs | pi's default, built by pi so it follows pi; L2's `base` (else `SYSTEM.md`, else `.pi/SYSTEM.md`) replaces all four; a blank file or `base` is no prompt (pi would build its default), so it is reported or refused. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
 | addendum | `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`; never the machine's |
 | project context | `AGENTS.md` files loaded from the agent dir and the workspace ancestor walk, handed to pi through `agentsFilesOverride` |
 | skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`) and the machine's (§5) — when `read` is active |

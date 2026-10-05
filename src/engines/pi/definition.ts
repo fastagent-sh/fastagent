@@ -115,11 +115,19 @@ export async function loadAgentDefinition(
   const contextFiles = loadProjectContextFiles({ cwd, agentDir: root });
 
   const shadowed: DefinitionShadow[] = [];
-  const systemPrompt = await readFirstFile(e, root, SYSTEM_PROMPT_FILES, "system prompt", shadowed);
-  const appendSystemPrompt = await readFirstFile(e, root, APPEND_SYSTEM_PROMPT_FILES, "appended prompt", shadowed);
+  const ignored: LoadedDefinition["ignored"] = [];
+  const systemPrompt = await readFirstFile(e, root, SYSTEM_PROMPT_FILES, "system prompt", shadowed, ignored);
+  const appendSystemPrompt = await readFirstFile(
+    e,
+    root,
+    APPEND_SYSTEM_PROMPT_FILES,
+    "appended prompt",
+    shadowed,
+    ignored,
+  );
   const { skills, diagnostics: skillDiagnostics, collisions } = await readSkills(e, root);
   const { prompts, diagnostics: promptDiagnostics } = await readPrompts(e, root, shadowed);
-  const ignored = await ignoredPaths(e, root);
+  ignored.push(...(await ignoredPaths(e, root)));
   return {
     contextFiles,
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -151,13 +159,18 @@ async function refuseRetiredPersona(e: ExecutionEnv, root: string): Promise<void
   );
 }
 
-/** The first of `names` that exists, read; every later one that also exists is shadowed by it. */
+/**
+ * The first of `names` that exists, read; every later one that also exists is shadowed by it. A blank file counts as
+ * absent and is reported: pi treats an empty prompt as none, so it would change nothing while looking like a prompt
+ * of the agent's own.
+ */
 async function readFirstFile(
   e: ExecutionEnv,
   root: string,
   names: readonly string[],
   what: string,
   shadowed: DefinitionShadow[],
+  ignored: LoadedDefinition["ignored"],
 ): Promise<DefinitionFile | undefined> {
   let found: DefinitionFile | undefined;
   for (const name of names) {
@@ -166,6 +179,10 @@ async function readFirstFile(
     if (!read.ok) {
       if (read.error.code === "not_found") continue;
       throw new Error(`cannot read ${path}: ${read.error.message}`);
+    }
+    if (read.value.trim() === "") {
+      ignored.push({ path, reason: `empty, so it is not used as the ${what}` });
+      continue;
     }
     if (found) shadowed.push({ what, winnerPath: found.path, loserPath: path });
     else found = { path, content: read.value };
@@ -248,7 +265,7 @@ function warnSymlinkRefused(path: string): void {
   );
 }
 
-/** The skills half, shared by the full load and {@link loadAgentSkills}. */
+/** The skills half of {@link loadAgentDefinition}. */
 async function readSkills(
   e: ExecutionEnv,
   root: string,
@@ -315,34 +332,6 @@ async function readPrompts(
     }
   }
   return { prompts: [...byName.values()], diagnostics };
-}
-
-/** The definition's prompt templates ALONE, read the way {@link loadAgentDefinition} reads them. */
-export async function loadAgentPrompts(
-  agentDir: string,
-  options: { cwd?: string; env?: ExecutionEnv } = {},
-): Promise<DefinitionPrompt[]> {
-  const cwd = options.cwd ?? agentDir;
-  const e = options.env ?? new NodeExecutionEnv({ cwd });
-  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
-  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  return (await readPrompts(e, rootResult.value, [])).prompts;
-}
-
-/**
- * The definition's skills ALONE, resolved the same way `loadAgentDefinition` resolves them (same loader, same
- * containment guard, same first-wins collision rule).
- */
-export async function loadAgentSkills(
-  agentDir: string,
-  options: { cwd?: string; env?: ExecutionEnv } = {},
-): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[]; dir: string }> {
-  const cwd = options.cwd ?? agentDir;
-  const e = options.env ?? new NodeExecutionEnv({ cwd });
-  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
-  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}.
-  return { ...(await readSkills(e, rootResult.value)), dir: rootResult.value };
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath. */

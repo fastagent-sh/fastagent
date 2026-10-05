@@ -317,6 +317,20 @@ describe("create: the prompt pi builds from the definition", () => {
     expect(prompt).toMatch(/<deferred_tools>\n1 additional tool\(s\) are registered but not loaded/);
   });
 
+  it("an empty SYSTEM.md is no prompt of the agent's own: reported, pi's default used, replaced tools still refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-empty-system-"));
+    await writeFile(join(dir, "SYSTEM.md"), "  \n");
+    const def = await loadAgentDefinition(dir);
+    expect(def.systemPrompt).toBeUndefined();
+    expect(def.ignored).toEqual([
+      { path: join(dir, "SYSTEM.md"), reason: "empty, so it is not used as the system prompt" },
+    ]);
+    expect(await promptOf(dir)).toContain("operating inside pi");
+    const options = { providers: [makeFaux().faux.provider], model: "faux/faux-1", tools: [lookup] };
+    await expect(createPiAgentFromDefinition(dir, options)).rejects.toThrow(/coding tools were replaced/);
+    await expect(createPiAgentFromDefinition(dir, { ...options, base: "" })).rejects.toThrow(/`base` is empty/);
+  });
+
   it("refuses pi's default over replaced coding tools, at assembly and on the turn SYSTEM.md disappears", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-replaced-tools-"));
     const options = { providers: [makeFaux().faux.provider], model: "faux/faux-1", tools: [lookup] };

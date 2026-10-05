@@ -457,6 +457,11 @@ export async function assemblePiFromDefinition(
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
+  // pi treats an empty prompt as none and builds its default, so a blank `base` would look like a prompt of the
+  // caller's own while being nothing.
+  if (options.base !== undefined && options.base.trim() === "") {
+    throw new Error("`base` is empty: pass the prompt the agent should use, or leave `base` out for pi's default");
+  }
   refuseDefaultPromptOverReplacedTools(tools, options.base !== undefined || definition.systemPrompt !== undefined);
   const { providers } = options;
   const models = options.models ?? agentModels(dir, options, { cwd, env, ...(providers ? { providers } : {}) });
