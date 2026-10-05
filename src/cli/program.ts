@@ -50,13 +50,27 @@ const init: CommandSpec = {
     "self-iterating agent: APPEND_SYSTEM.md (its standing instructions), a writing-great-skills " +
     "example skill, a fetch-url code tool, config, package.json, .gitignore.",
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
-  flags: [{ flags: "--no-install", description: "scaffold everything but skip npm install" }],
-  examples: [{ cmd: "fastagent init my-agent", note: "my-agent/ (created)" }],
+  flags: [
+    {
+      flags: "--context <dir>",
+      description: "a directory the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
+      repeatable: true,
+    },
+    { flags: "--no-install", description: "scaffold everything but skip npm install" },
+  ],
+  examples: [
+    { cmd: "fastagent init my-agent", note: "an agent that only talks" },
+    { cmd: "fastagent init reviewer --context ~/code/app", note: "works on ~/code/app" },
+  ],
   notes:
     "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
-    "It lives in a directory of its own, never inside a project or another agent.",
+    "It lives in a directory of its own, never inside a project or another agent: what it works on is declared " +
+    "as a context. Add one it only knows later with `fastagent context add <dir> --readonly`.",
   run: async (args, f) =>
-    (await import("./commands/init.ts")).runInit(args[0] as string, { install: f.install !== false }),
+    (await import("./commands/init.ts")).runInit(args[0] as string, {
+      install: f.install !== false,
+      contexts: (f.context as string[] | undefined) ?? [],
+    }),
 };
 
 const dev: CommandSpec = {
@@ -410,6 +424,54 @@ const deploy: CommandSpec = {
     }),
 };
 
+const context: CommandSpec = {
+  name: "context",
+  summary: "list, add or remove what the agent works on and knows",
+  description:
+    "A context is a directory the agent works on (or only knows, with --readonly), declared in the literal " +
+    "`contexts` list of fastagent.config.ts. These commands edit only that list, and refuse when it is computed.",
+  subcommands: [
+    {
+      name: "list",
+      summary: "each context, where it is, and whether the agent works on it or only knows it",
+      args: [AGENT_ARG],
+      flags: [JSON_FLAG],
+      examples: [{ cmd: "fastagent context list" }],
+      run: async (args, f) =>
+        (await import("./commands/context.ts")).runContextList(args[0] as string, f.json === true),
+    },
+    {
+      name: "add",
+      summary: "declare a directory as a context",
+      args: [{ name: "<source>", description: "the directory" }, AGENT_ARG],
+      flags: [
+        { flags: "--readonly", description: "the agent knows it and does not write it" },
+        { flags: "--name <name>", description: "its name (default: the directory's)" },
+      ],
+      examples: [
+        { cmd: "fastagent context add ~/code/app", note: "works on" },
+        { cmd: "fastagent context add ~/handbook --readonly", note: "knows" },
+      ],
+      notes:
+        "A directory is declared `{ local, copy: true }`: on this machine it is that directory, and an instance on " +
+        "a host gets its own copy. It may not contain the agent directory, nor sit inside it.",
+      run: async (args, f) =>
+        (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
+          readonly: f.readonly === true,
+          ...(typeof f.name === "string" ? { name: f.name } : {}),
+        }),
+    },
+    {
+      name: "remove",
+      summary: "remove a context from the declaration (the directory itself is untouched)",
+      args: [{ name: "<name>", description: "the context's name" }, AGENT_ARG],
+      examples: [{ cmd: "fastagent context remove app" }],
+      run: async (args) =>
+        (await import("./commands/context.ts")).runContextRemove(args[0] as string, args[1] as string),
+    },
+  ],
+};
+
 const routine: CommandSpec = {
   name: "routine",
   summary: "run and inspect the units of work this definition declares: run now, fire history, what exists",
@@ -583,6 +645,7 @@ export const specs: readonly CommandSpec[] = [
   init,
   models,
   info,
+  context,
   tool,
   invoke,
   routine,

@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,6 +173,25 @@ describe("init: scaffoldAgent", () => {
       await expect(scaffoldAgent(inner)).rejects.toThrow(new RegExp(`is inside the agent ${outer}`));
       expect(await exists(inner)).toBe(false); // side-effect-free refusal
     }
+  });
+
+  it("--context declares what the agent works on, in the literal list; a nested one is refused before any write", async () => {
+    const base = await realpath(await freshDir());
+    const app = join(base, "app");
+    await mkdir(app);
+    const out = await cliInit(["init", "reviewer", "--context", "app", "--no-install"], base);
+    expect(out).toMatch(/created .*reviewer/);
+    expect(out).toContain(`works on app  ${app} (local, copied to a host)`);
+    const config = await readFile(join(base, "reviewer", "fastagent.config.ts"), "utf8");
+    expect(config).toContain(`  contexts: [\n    { local: ${JSON.stringify(app)}, copy: true },\n  ],\n`);
+
+    // An agent inside what it works on: refused with the way out, and nothing created.
+    const nested = await cliInit(["init", join(app, "agent"), "--context", app, "--no-install"], base);
+    expect(nested).toMatch(/context "app" .* contains the agent directory .* move it out/);
+    expect(await exists(join(app, "agent"))).toBe(false);
+    // Run in a project, init says how to have an agent work on it.
+    await writeFile(join(app, "README.md"), "the project\n");
+    expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --context \./);
   });
 
   it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {

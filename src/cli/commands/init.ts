@@ -1,19 +1,35 @@
-/** `fastagent init <dir>`: scaffold a runnable agent and install its dependencies. */
+/** `fastagent init <dir> [--context <dir>]...`: scaffold a runnable agent and install its dependencies. */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { scaffoldAgent } from "../../scaffold/init.ts";
+import { writeContexts } from "../../engines/pi/config.ts";
+import { declarationFor } from "../../contexts/declare.ts";
+import { resolveContexts } from "../../contexts/resolve.ts";
+import { contextLines } from "../contexts-view.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
+  /** `--context` sources, each a directory the agent works on. */
+  contexts: string[];
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
+  // Every context is checked BEFORE anything is created — a nested or missing one refuses with the scaffold unwritten.
+  const declarations = await Promise.resolve()
+    .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd())))
+    .catch(failStartup);
+  const contexts = await Promise.resolve()
+    .then(() => resolveContexts(dir, declarations))
+    .catch(failStartup);
   const { created } = await scaffoldAgent(dir).catch(failStartup);
+  // The same write `fastagent context add` makes: the literal list, imported and compared before it is kept.
+  if (declarations.length > 0) await writeContexts(dir, declarations).catch(failStartup);
   console.error(`[fastagent] created ${dir}`);
+  if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);
   console.error(`  files: ${created.join(", ")}`);
   let installFailed = false;
   if (opts.install) {

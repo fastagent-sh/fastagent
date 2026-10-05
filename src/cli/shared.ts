@@ -30,6 +30,8 @@ import {
   reportToolCollisions,
 } from "../engines/pi/report.ts";
 import { isDeployedWorkspace } from "../paths.ts";
+import type { ResolvedContext } from "../contexts/resolve.ts";
+import { contextLines } from "./contexts-view.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -52,6 +54,7 @@ function reportLine(label: string, value: string): void {
 /** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
+  contexts: readonly ResolvedContext[];
   modelSpec: string;
   models: AgentModels;
   config: { thinkingLevel?: string };
@@ -72,6 +75,7 @@ export async function reportAssembly(
   } = {},
 ): Promise<void> {
   reportLine("agent", a.agentDir);
+  for (const [label, value] of contextLines(a.contexts)) reportLine(label, value);
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.models, a.modelSpec);

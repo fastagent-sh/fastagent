@@ -383,6 +383,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
+  it("refuses an agent that declares contexts, naming them — a host would start without them", async () => {
+    const dir = await agent();
+    const pre = await call(dir, {
+      model: "openai/gpt-4o-mini",
+      contexts: [{ local: "/srv/app" }, { local: "/srv/docs" }],
+    });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.gate).toMatch(/declares contexts \(app, docs\), and deploying an agent with contexts/);
+  });
+
   it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
     const dir = await agent({ "persona.md": "You are terse.\n" });
     const config = { model: "openai-codex/gpt-5.5" };

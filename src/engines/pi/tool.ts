@@ -14,10 +14,16 @@ import type { JsonValue } from "@earendil-works/pi-ai";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration, secretValues } from "../../declared-secrets.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
+import type { ResolvedContext } from "../../contexts/resolve.ts";
 
 export interface ToolContext {
-  /** Working directory for this execution. */
+  /** Working directory for this execution: the agent's own directory. */
   cwd: string;
+  /**
+   * What the agent works on and knows, each with its `location` on this instance — the way a tool reaches a project's
+   * files, never by guessing from `cwd`. Empty when the agent declares none.
+   */
+  contexts: readonly ResolvedContext[];
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
@@ -162,6 +168,7 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
       return wrapResult(
         await options.execute(parsed.data, {
           cwd: store?.cwd ?? process.cwd(),
+          contexts: store?.contexts ?? [],
           signal,
           sessionManager: store?.sessionManager,
           tools: store?.tools,

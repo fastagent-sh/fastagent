@@ -44,6 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
+import type { ResolvedContext } from "../../contexts/resolve.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
@@ -83,6 +84,8 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
+  /** What fastagent-defined tools see as `contexts`. */
+  contexts?: readonly ResolvedContext[];
   /** The definition's own extension entry points, loaded fresh for every bound session. */
   extensionPaths?: string[];
   /** Built-ins omitted by an explicit lower-level tool list. */
@@ -172,6 +175,8 @@ export interface BindPiSessionOptions {
   tools: MountedTool[];
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
+  /** What fastagent-defined tools see as `contexts`. */
+  contexts?: readonly ResolvedContext[];
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
   /** The CALLER's session id — what a tool asking which conversation it is in hears. */
@@ -211,6 +216,7 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     session,
     context: {
       cwd,
+      contexts: options.contexts ?? [],
       sessionManager: agentSessionManager(session, sessionId),
       tools: sessionToolActivation(session),
     },
@@ -570,6 +576,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       thinkingLevel: settings.thinkingLevel,
       tools,
       cwd,
+      contexts: options.contexts ?? [],
       excludedToolNames,
       sessionId,
     });

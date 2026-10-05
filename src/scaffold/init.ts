@@ -67,8 +67,8 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
   }
   if (occupants.length > 0) {
     throw new Error(
-      `"${shown}" is not empty (it holds ${occupants.join(", ")}) — an agent lives in a directory of its own: ` +
-        "`fastagent init <new directory>`",
+      `"${shown}" is not empty (it holds ${occupants.join(", ")}) — an agent lives in a directory of its own; to ` +
+        `have one work on this directory: \`fastagent init <new directory> --context ${displayPath(process.cwd(), dir) ?? "."}\``,
     );
   }
 

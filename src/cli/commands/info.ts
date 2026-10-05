@@ -21,6 +21,8 @@ import { readMachine, withMachine } from "../../engines/pi/machine.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
+import { contextLines } from "../contexts-view.ts";
+import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -32,7 +34,15 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
-  const definition = await loadAgentDefinition(agentDir).catch(failStartup);
+  // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a context is missing.
+  let contexts: ResolvedContext[] = [];
+  let contextsError: string | undefined;
+  try {
+    contexts = resolveContexts(agentDir, config.contexts);
+  } catch (error) {
+    contextsError = (error as Error).message;
+  }
+  const definition = await loadAgentDefinition(agentDir, { contexts }).catch(failStartup);
   // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
   const machineResources = await readMachine(agentDir);
   const skills = withMachine(definition.skills, machineResources.skills);
@@ -112,6 +122,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       JSON.stringify(
         {
           agentDir,
+          contexts,
+          contextsError: contextsError ?? null,
+          contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
@@ -155,6 +168,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
+  for (const [label, value] of contextLines(contexts)) line(label, value);
+  if (contextsError) cont(`⚠ ${contextsError}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);

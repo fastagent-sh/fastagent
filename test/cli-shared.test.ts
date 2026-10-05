@@ -15,6 +15,7 @@ vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 describe("reportAssembly (the startup report dev and start share)", () => {
   const opened = {
     agentDir: "/w/agent",
+    contexts: [{ name: "app", kind: "local", readonly: false, location: "/w/app" }],
     modelSpec: "p/m",
     models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
     config: {},
@@ -54,7 +55,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
   it("prints ONE spine, in order — the thing the two commands each used to write out by hand", async () => {
     // `auth` is reportAuth's line; it reads real credentials, so only its position is pinned here.
     const spine = await lines();
-    expect(spine.slice(0, 3)).toEqual(["agent", "model", "auth"]);
+    expect(spine.slice(0, 4)).toEqual(["agent", "works on", "model", "auth"]);
     expect(spine).toContain("prompt");
     expect(spine).toContain("skills");
     expect(spine).toContain("codingTools");
@@ -64,7 +65,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
 
   it("places each command's extras where that command puts them", async () => {
     const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.ts"]] });
-    expect(dev.indexOf("config")).toBe(1); // after agent, before model
+    expect(dev.indexOf("config")).toBe(2); // after agent and its contexts, before model
     expect(dev.indexOf("config")).toBeLessThan(dev.indexOf("model"));
 
     const start = await lines({

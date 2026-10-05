@@ -15,6 +15,7 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
+import { declareContexts } from "../contexts/declare.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -151,6 +152,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
       `the agent directory "${basename(agentDir)}" cannot be deployed — a deployed agent directory ` +
         `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
         `makes it an agent, never its name)`,
+    );
+  }
+
+  // A deployment ships the definition and nothing else yet, and an instance must never start with a context silently
+  // missing (agent-model.md §3), so an agent that declares one is not deployed.
+  const contexts = declareContexts(config.contexts, agentDir);
+  if (contexts.length > 0) {
+    throw new DeployGate(
+      `this agent declares contexts (${contexts.map((c) => c.name).join(", ")}), and deploying an agent with ` +
+        `contexts is not supported yet — remove them from fastagent.config.ts to deploy it`,
     );
   }
 
