@@ -68,9 +68,9 @@ describe("contexts: the declaration", () => {
     expect(() => declareContexts(raw, AGENT)).toThrow(message);
   });
 
-  it("a command reads a directory as a local context a host copies, absolute; a repository is not yet", () => {
-    expect(declarationFor("app", "/home/me/code")).toEqual({ local: "/home/me/code/app", copy: true });
-    expect(declarationFor("/x", "/", { readonly: true, name: "n" })).toEqual({
+  it("a command reads a directory as a local context, absolute, copied to a host only when asked", () => {
+    expect(declarationFor("app", "/home/me/code")).toEqual({ local: "/home/me/code/app" });
+    expect(declarationFor("/x", "/", { copy: true, readonly: true, name: "n" })).toEqual({
       local: "/x",
       copy: true,
       readonly: true,

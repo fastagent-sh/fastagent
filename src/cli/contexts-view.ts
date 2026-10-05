@@ -3,7 +3,7 @@ import type { ResolvedContext } from "../contexts/resolve.ts";
 
 /** What each kind of context is, in the words the reports use. */
 const CONTEXT_KIND: Record<ResolvedContext["kind"], string> = {
-  local: "local",
+  local: "local, this machine only",
   copy: "local, copied to a host",
   github: "github",
 };

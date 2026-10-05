@@ -28,7 +28,7 @@ export async function runContextList(dirArg: string, json: boolean): Promise<voi
 export async function runContextAdd(
   source: string,
   dirArg: string,
-  opts: { readonly?: boolean; name?: string },
+  opts: { copy?: boolean; readonly?: boolean; name?: string },
 ): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   const declarations = await declared(agentDir);

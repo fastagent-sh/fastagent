@@ -7,20 +7,23 @@ import { writeContexts } from "../../engines/pi/config.ts";
 import { declarationFor } from "../../contexts/declare.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
 import { contextLines } from "../contexts-view.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
   /** `--context` sources, each a directory the agent works on. */
   contexts: string[];
+  /** `--copy`: a host gets its own copy of each of them. */
+  copy: boolean;
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
+  if (opts.copy && opts.contexts.length === 0) failUsage("--copy applies to the --context directories; none was given");
   // Every context is checked BEFORE anything is created — a nested or missing one refuses with the scaffold unwritten.
   const declarations = await Promise.resolve()
-    .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd())))
+    .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd(), { copy: opts.copy })))
     .catch(failStartup);
   const contexts = await Promise.resolve()
     .then(() => resolveContexts(dir, declarations))

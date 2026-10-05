@@ -47,17 +47,18 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 ## `fastagent init`
 
 ```bash
-fastagent init <dir> [--context <dir>]... [--no-install]
+fastagent init <dir> [--context <dir>]... [--copy] [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
 example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
 `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`.
 
-Each `--context <dir>` declares a directory the agent works on, as `{ local: "<absolute path>", copy: true }` in the
-config's `contexts` list (see [contexts](configuration.md#contexts)). Every context is checked before anything is
-written: it must exist, and it may not contain the agent directory or sit inside it. Without `--context` the agent
-has none and works only in its own directory.
+Each `--context <dir>` declares a directory the agent works on, as `{ local: "<absolute path>" }` in the config's
+`contexts` list (see [contexts](configuration.md#contexts)). `--copy` declares each with `copy: true`, so an instance
+on a host gets its own copy; without it the context stays on this machine and deploying refuses the agent. Every
+context is checked before anything is written: it must exist, and it may not contain the agent directory or sit
+inside it. Without `--context` the agent has none and works only in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
 the agent elsewhere and attaches the project: `fastagent init <new directory> --context <project>`. It also refuses a
@@ -90,13 +91,14 @@ A context that cannot be resolved (its directory is missing, say) is reported, n
 
 ```bash
 fastagent context list [agent] [--json]
-fastagent context add <dir> [agent] [--readonly] [--name <name>]
+fastagent context add <dir> [agent] [--readonly] [--copy] [--name <name>]
 fastagent context remove <name> [agent]
 ```
 
-Edits the literal `contexts` list in `fastagent.config.ts`. `add` declares the directory as `{ local, copy: true }`,
-with an absolute path, the way `init --context` does; `--readonly` makes it a context the agent knows rather than
-works on. A context's name defaults to its directory's; `add` asks for `--name` when that name is taken (ignoring
+Edits the literal `contexts` list in `fastagent.config.ts`. `add` declares the directory as `{ local }`, with an
+absolute path, the way `init --context` does; `--readonly` makes it a context the agent knows rather than works on,
+and `--copy` gives an instance on a host its own copy (its contents ship in the image; without it, deploying
+refuses). A context's name defaults to its directory's; `add` asks for `--name` when that name is taken (ignoring
 case) or is not one segment of letters, digits, `-` and `_`. `remove` drops the declaration; the directory itself is
 untouched.
 

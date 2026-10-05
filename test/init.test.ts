@@ -181,9 +181,19 @@ describe("init: scaffoldAgent", () => {
     await mkdir(app);
     const out = await cliInit(["init", "reviewer", "--context", "app", "--no-install"], base);
     expect(out).toMatch(/created .*reviewer/);
-    expect(out).toContain(`works on app  ${app} (local, copied to a host)`);
+    expect(out).toContain(`works on app  ${app} (local, this machine only)`);
     const config = await readFile(join(base, "reviewer", "fastagent.config.ts"), "utf8");
-    expect(config).toContain(`  contexts: [\n    { local: ${JSON.stringify(app)}, copy: true },\n  ],\n`);
+    expect(config).toContain(`  contexts: [\n    { local: ${JSON.stringify(app)} },\n  ],\n`);
+    // A host gets a copy only when asked: that ships the directory's contents in an image.
+    const copied = await cliInit(["init", "copier", "--context", "app", "--copy", "--no-install"], base);
+    expect(copied).toContain(`works on app  ${app} (local, copied to a host)`);
+    expect(await readFile(join(base, "copier", "fastagent.config.ts"), "utf8")).toContain(
+      `    { local: ${JSON.stringify(app)}, copy: true },\n`,
+    );
+    expect(await cliInit(["init", "nothing", "--copy", "--no-install"], base)).toMatch(
+      /--copy applies to the --context/,
+    );
+    expect(await exists(join(base, "nothing"))).toBe(false);
 
     // An agent inside what it works on: refused with the way out, and nothing created.
     const nested = await cliInit(["init", join(app, "agent"), "--context", app, "--no-install"], base);

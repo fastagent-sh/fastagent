@@ -105,9 +105,10 @@ re-read today. A changed declaration is a config change, so it restarts the proc
 Landed in stage 2; [core](core.md) §2, [configuration](../configuration.md#contexts) and the
 [CLI reference](../cli.md#fastagent-context) describe them. Two choices were made there that this plan left open:
 
-- **`context add` takes no `--copy`.** A directory is declared `{ local, copy: true }` by both `init --context` and
-  `context add`, so an agent stays deployable; a local context without `copy` is written by hand. `--ref` and
-  `--local` arrive with GitHub contexts (stage 3), which until then `init`, `context add` and the resolver refuse.
+- **`copy` is asked for.** `init --context` and `context add` declare a directory as `{ local }`, and `--copy` adds
+  `copy: true` (on `init`, for each of its contexts): copying ships the directory's contents off the machine, so it
+  is never a default. `--ref` and `--local` arrive with GitHub contexts (stage 3), which until then `init`,
+  `context add` and the resolver refuse.
 - **The candidate config is `.fastagent.config.next.ts`** beside the real one: a dotfile `dev` does not watch, removed
   whether or not it replaces the config.
 
@@ -191,7 +192,8 @@ passes every day, and one whose fires bunch only on some dates is refused every 
 
 ### 3.10 `init` and the scaffold
 
-Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every directory declared `{ local, copy: true }`.
+Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every directory declared `{ local }` (`--copy`
+for a host's copy).
 Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `github:owner/repo` a remote context.
 
 ## 4. Decisions

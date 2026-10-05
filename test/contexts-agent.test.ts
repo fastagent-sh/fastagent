@@ -149,7 +149,7 @@ describe("one resolution", () => {
     const first = [{ name: "app", kind: "copy", readonly: false, location: app }];
     expect(await readers()).toEqual([first, first, first]);
 
-    const added = await cli(["context", "add", handbook, agentDir, "--readonly"], root);
+    const added = await cli(["context", "add", handbook, agentDir, "--readonly", "--copy"], root);
     expect(added.code, added.stderr).toBe(0);
     expect(added.stderr).toContain(`knows handbook  ${handbook} (local, copied to a host)`);
     const second = [...first, { name: "handbook", kind: "copy", readonly: true, location: handbook }];
@@ -187,6 +187,13 @@ describe("one resolution", () => {
       2,
       expect.stringMatching(/no context named "nope" \(this agent has: app\)/),
     ]);
+    // With a name of its own it is added, and without --copy a host gets none of it.
+    const named = await cli(["context", "add", other, agentDir, "--name", "app2"], root);
+    expect(named.code, named.stderr).toBe(0);
+    expect(named.stderr).toContain(`works on app2  ${other} (local, this machine only)`);
+    expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
+      `    { local: ${JSON.stringify(other)}, name: "app2" },\n`,
+    );
     expect(app).toBeDefined();
   });
 });

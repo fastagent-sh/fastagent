@@ -201,8 +201,8 @@ An agent's directory is its own: its definition, its working directory, and its 
 ```ts
 export default {
   contexts: [
-    { local: "/Users/me/code/app", copy: true },                // works on
-    { local: "/Users/me/handbook", copy: true, readonly: true }, // knows
+    { local: "/Users/me/code/app" },                             // works on, on this machine
+    { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
   ],
 } satisfies FastagentConfig;
 ```
@@ -210,7 +210,7 @@ export default {
 | Key | Meaning |
 |---|---|
 | `local` | The directory, absolute or relative to the agent directory |
-| `copy` | An instance on a host gets its own copy. Without it the context exists only on this machine |
+| `copy` | An instance on a host gets its own copy, so its contents ship in the image. Without it the context exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
 | `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's name |
 

@@ -79,16 +79,16 @@ with `fastagent context add --readonly`.
 | `<source>` | Declared |
 |---|---|
 | A checkout whose remote is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
-| Any other directory | `{ local: "<directory>", copy: true }` |
+| Any other directory | `{ local: "<directory>" }`, with `copy: true` under `--copy` |
 | `github:owner/repo` | `{ github: "owner/repo" }` |
 
 - **Paths are written absolute.** They describe this machine, and an absolute path keeps meaning the same
   directory when the agent directory moves.
 - **A directory below a checkout's root means the whole repository**, since narrowing a context to a
   subdirectory comes later. `init` says so rather than declaring the subdirectory as something else.
-- **`copy: true` keeps today's deployment** for a directory that is not on GitHub: a deploy today seeds the host
-  with the directory once and leaves the host's copy alone afterwards, which is what a writable copied context
-  means.
+- **`copy` is asked for, never assumed.** It ships the directory's contents off this machine in an image, so
+  `init` and `context add` write it only under `--copy`. Without it, deploying refuses the agent and names the two
+  ways out.
 - **A context may not contain the agent, or sit inside it.** `init ~/code/app/agent --context ~/code/app` is
   refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --context ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused

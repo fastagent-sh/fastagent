@@ -56,6 +56,7 @@ const init: CommandSpec = {
       description: "a directory the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
       repeatable: true,
     },
+    { flags: "--copy", description: "with --context: a host gets its own copy of each (else deploying refuses)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
   ],
   examples: [
@@ -70,6 +71,7 @@ const init: CommandSpec = {
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
       contexts: (f.context as string[] | undefined) ?? [],
+      copy: f.copy === true,
     }),
 };
 
@@ -446,6 +448,7 @@ const context: CommandSpec = {
       args: [{ name: "<source>", description: "the directory" }, AGENT_ARG],
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
+        { flags: "--copy", description: "an instance on a host gets its own copy (else deploying refuses)" },
         { flags: "--name <name>", description: "its name (default: the directory's)" },
       ],
       examples: [
@@ -453,10 +456,12 @@ const context: CommandSpec = {
         { cmd: "fastagent context add ~/handbook --readonly", note: "knows" },
       ],
       notes:
-        "A directory is declared `{ local, copy: true }`: on this machine it is that directory, and an instance on " +
-        "a host gets its own copy. It may not contain the agent directory, nor sit inside it.",
+        "A directory is declared `{ local }`: on this machine it is that directory, and deploying refuses the " +
+        "agent. `--copy` declares `copy: true`: a host gets its own copy, so its contents ship in the image. It " +
+        "may not contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
+          copy: f.copy === true,
           readonly: f.readonly === true,
           ...(typeof f.name === "string" ? { name: f.name } : {}),
         }),

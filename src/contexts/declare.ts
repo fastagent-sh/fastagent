@@ -27,19 +27,20 @@ export function isContextName(name: string): boolean {
 
 /**
  * The declaration a command writes for `source`, read the way `init --context` and `fastagent context add` both read
- * it: a directory is a local context an instance on a host gets its own copy of, so the agent stays deployable.
+ * it: a directory on this machine. A host gets a copy only when `copy` asks for one, since that ships the directory's
+ * contents off this machine in an image; without it, deploying refuses the agent and says how to choose.
  */
 export function declarationFor(
   source: string,
   cwd: string,
-  options: { readonly?: boolean; name?: string } = {},
+  options: { copy?: boolean; readonly?: boolean; name?: string } = {},
 ): ContextDeclaration {
   if (source.startsWith("github:")) {
     throw new Error(`github contexts are not supported yet — pass the checkout's directory instead`);
   }
   return {
     local: resolve(cwd, source),
-    copy: true,
+    ...(options.copy ? { copy: true } : {}),
     ...(options.readonly ? { readonly: true } : {}),
     ...(options.name !== undefined ? { name: options.name } : {}),
   };
