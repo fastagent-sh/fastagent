@@ -2,19 +2,26 @@
  * Render assembly warnings to stderr — the one place both the CLI runners and the `chat` runtime show the non-fatal
  * definition/tool findings the loaders return as data.
  */
-import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
+import { relative } from "node:path";
 import { log } from "../../log.ts";
-import type { SkillCollision } from "./definition.ts";
+import type { DefinitionDiagnostic, DefinitionShadow, LoadedDefinition, SkillCollision } from "./definition.ts";
 import type { ToolCollision } from "./tool.ts";
 import type { IndirectTool, ToolReach } from "./create.ts";
 
-type Findings = { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] };
+type Findings = {
+  collisions: SkillCollision[];
+  diagnostics: DefinitionDiagnostic[];
+  shadowed?: DefinitionShadow[];
+  ignored?: LoadedDefinition["ignored"];
+};
 
 /** Stable identity of a definition's non-fatal findings — the dedup key below. */
 function findingsSignature(def: Findings): string {
   const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
   const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
-  return [...collisions, ...diagnostics].sort().join("\n");
+  const shadowed = (def.shadowed ?? []).map((s) => `s:${s.what}:${s.winnerPath}:${s.loserPath}`);
+  const ignored = (def.ignored ?? []).map((i) => `i:${i.path}`);
+  return [...collisions, ...diagnostics, ...shadowed, ...ignored].sort().join("\n");
 }
 
 /** The last reported finding set PER DEFINITION DIR. */
@@ -25,16 +32,28 @@ export function reportFindingsIfChanged(dir: string, def: Findings): void {
   const sig = findingsSignature(def);
   if (lastFindings.get(dir) === sig) return;
   lastFindings.set(dir, sig);
-  reportDefinitionWarnings(def.collisions, def.diagnostics);
+  reportDefinitionWarnings(def);
 }
 
-export function reportDefinitionWarnings(collisions: SkillCollision[], diagnostics: SkillDiagnostic[]): void {
-  for (const c of collisions) {
+export function reportDefinitionWarnings(def: Findings): void {
+  for (const c of def.collisions) {
     log.warn(`[fastagent] skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);
   }
-  for (const d of diagnostics) {
+  for (const s of def.shadowed ?? []) {
+    log.warn(`[fastagent] ${s.what} is in two places — using ${s.winnerPath}, ignoring ${s.loserPath}`);
+  }
+  for (const i of def.ignored ?? []) {
+    log.warn(`[fastagent] ${i.path} is ${i.reason}`);
+  }
+  for (const d of def.diagnostics) {
     log.warn(`[fastagent] ${d.code}: ${d.message} (${d.path})`);
   }
+}
+
+/** What the agent's system prompt is made of, as a report line: pi's default or `SYSTEM.md`, plus an addendum. */
+export function describePrompt(def: Pick<LoadedDefinition, "dir" | "systemPrompt" | "appendSystemPrompt">): string {
+  const base = def.systemPrompt ? relative(def.dir, def.systemPrompt.path) : "pi's default";
+  return def.appendSystemPrompt ? `${base} + ${relative(def.dir, def.appendSystemPrompt.path)}` : base;
 }
 
 const REACH: Record<ToolReach, string> = {

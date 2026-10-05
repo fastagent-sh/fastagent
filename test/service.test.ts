@@ -21,7 +21,7 @@ async function agentDir(
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
-  await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
   for (const [rel, body] of Object.entries(files)) {
     await mkdir(join(dir, rel, ".."), { recursive: true });
     await writeFile(join(dir, rel), body);
@@ -134,7 +134,7 @@ describe("createAgentService", () => {
       join(dir, "fastagent.config.ts"),
       `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
     );
-    await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
     const service = await createAgentService(dir);
     expect(service.controlPrefix).toBe("/control");
     expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(200);

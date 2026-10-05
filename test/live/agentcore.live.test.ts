@@ -61,7 +61,7 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     dirs.push(dir);
     const agentDir = join(dir, "fastagent");
     await mkdir(agentDir);
-    await writeFile(join(agentDir, "persona.md"), "You are terse.\n");
+    await writeFile(join(agentDir, "SYSTEM.md"), "You are terse.\n");
     // A schedule file, so the branch that carries the YAML most likely to be wrong is the one CloudFormation
     // reads: the forwarder Lambda, its Function URL, the two Lambda permissions and the wake/scheduler IAM roles
     // are on every stack, and the schedule adds an `AWS::Scheduler::Schedule`. This fixture emits all of them

@@ -34,7 +34,8 @@ Preserve existing code, context, credentials, and deployment ownership.
 
 | Responsibility | Put it in | Decision rule |
 |---|---|---|
-| Identity, ongoing goal, standing instructions, approval policy | `persona.md` | Describe what the agent is responsible for and when it must ask. |
+| Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
+| An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
 | Project facts and conventions | `AGENTS.md` and existing project documents | Keep project context separate from the agent's identity. FastAgent reads the agent's own `AGENTS.md` and walks workspace ancestors for project context. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
@@ -86,7 +87,7 @@ workspace that cuts the agent off from the project it should work on.
 ```text
 my-agent/                         # workspace; run FastAgent commands here
 └── fastagent/                    # agent directory; install its dependencies here
-    ├── persona.md
+    ├── APPEND_SYSTEM.md
     ├── skills/writing-great-skills/
     ├── tools/fetch-url.ts
     ├── fastagent.config.ts
@@ -160,10 +161,10 @@ checking; successfully executing a `.ts` file proves neither type safety nor inp
 
 ## 4. Add a small, testable capability
 
-This offline example is an agent that prepares review batches. Adapt the freshly scaffolded persona;
+This offline example is an agent that prepares review batches. Adapt the freshly scaffolded instructions;
 preserve an existing agent's responsibilities when applying the example elsewhere.
 
-**`fastagent/persona.md`**
+**`fastagent/APPEND_SYSTEM.md`**
 
 ```markdown
 # Review assistant
@@ -245,7 +246,7 @@ fastagent tool plan-batches '{"items":5,"size":2}'
 fastagent info --json
 ```
 
-The tool prints `{"batches":3}`. Inspection should show the persona, `review-batches` skill, and
+The tool prints `{"batches":3}`. Inspection should show `APPEND_SYSTEM.md` as the prompt, the `review-batches` skill, and
 `plan-batches` tool, with no load failures. Check diagnostics as well as the exit code: `info` loads what it can and
 reports the rest, so a broken file shows up there rather than as a non-zero exit — `dev` / `start` is
 what refuses to run on one.
@@ -283,7 +284,8 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `persona.md`, `AGENTS.md`, and skills are read on the next turn.
+`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are
+read on the next turn.
 With watching enabled, changes under the agent's `tools/`, `channels/`, `routines/`, and `extensions/`
 restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory).

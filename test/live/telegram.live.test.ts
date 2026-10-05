@@ -76,7 +76,7 @@ describe("telegram: registering a webhook against a live tunnel", () => {
     await botApi("deleteWebhook", { drop_pending_updates: true });
 
     const dir = await mkdtemp(join(tmpdir(), "fa-live-telegram-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
 
     const service = await createAgentService(dir);

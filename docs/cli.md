@@ -48,7 +48,7 @@ the current directory.
 fastagent init [dir] [--no-install] [--agent-dir <name>]
 ```
 
-Creates the agent in `./fastagent/` (or `--agent-dir <name>`) inside `dir`: `persona.md`, a
+Creates the agent in `./fastagent/` (or `--agent-dir <name>`) inside `dir`: `APPEND_SYSTEM.md`, a
 `writing-great-skills` example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`,
 `.secrets/.env.example`, `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`. No
 `AGENTS.md` is scaffolded; an existing one in the workspace is read as project context. The directory around the
@@ -69,7 +69,7 @@ fastagent info [dir] [--json] [--model provider/modelId]
 Prints, without serving:
 
 - agent and workspace directories, config path, model and its source,
-- persona and context files (`AGENTS.md`),
+- the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`) and context files (`AGENTS.md`),
 - skills and their diagnostics,
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
@@ -129,7 +129,8 @@ refuses and says where to `cd`.
 fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Serves the agent locally. `persona.md`, `AGENTS.md` and `skills/` are re-read every turn. A supervisor restarts the
+Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are re-read every
+turn. A supervisor restarts the
 worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`.
 
 With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `routine run`,
@@ -144,7 +145,8 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 fastagent chat [dir] [--model provider/modelId]
 ```
 
-Opens the agent in pi's TUI with the definition's `persona.md`, `AGENTS.md`, `skills/`, `tools/` and `extensions/`,
+Opens the agent in pi's TUI with the definition's prompt files, `AGENTS.md`, skills, prompt templates, `tools/` and
+`extensions/`,
 plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
 - Sessions are pi's per-workspace records (`~/.pi/agent/sessions/<encoded workspace>`), separate from served

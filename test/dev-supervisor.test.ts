@@ -65,7 +65,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     const ig = devWatchIgnored(nestedRoot, join(nestedRoot, ".secrets", ".env"));
     expect(ig(nestedRoot)).toBe(false);
     expect(ig(join(nestedRoot, "tools", "foo.ts"))).toBe(false);
-    expect(ig(join(nestedRoot, "persona.md"))).toBe(true); // live-read, no restart
+    expect(ig(join(nestedRoot, "SYSTEM.md"))).toBe(true); // live-read, no restart
     expect(ig(join(nestedRoot, ".secrets", ".env"))).toBe(false);
   });
 });

@@ -11,7 +11,7 @@ import { log } from "../src/log.ts";
 async function agentDir(files: Record<string, string> = {}, config = `{ model: "openai-codex/gpt-5.5" }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
-  await writeFile(join(dir, "persona.md"), "You are a test agent.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
   for (const [rel, body] of Object.entries(files)) {
     await mkdir(join(dir, rel, ".."), { recursive: true });
     await writeFile(join(dir, rel), body);

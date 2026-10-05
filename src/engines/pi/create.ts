@@ -188,98 +188,67 @@ export async function resolveAgentTools(
   };
 }
 
-// Fastagent owns identity and project context; Pi appends skills and cwd for both serving and chat.
+// pi builds the prompt (its default, or SYSTEM.md in its place); FastAgent adds its own named sections after it.
 
-/** The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two deviations. */
-export function piBasePrompt(
-  options: {
-    tools?: MountedTool[];
-    persona?: string;
-    /** The {@link BUILTIN_EXTENSIONS} this machine leaves enabled (`Machine.builtinExtensions`); all by default. */
-    builtinExtensions?: readonly string[];
-  } = {},
-): string {
-  const mounted = options.tools ?? [];
-  const builtinExtensions = options.builtinExtensions ?? BUILTIN_EXTENSIONS;
-  // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so naming them here
-  // would invite calls to tools that don't exist yet.
-  const tools = mounted.filter(isDefaultActiveTool);
+/** The tools pi's default prompt says the agent has ("reading files, executing commands, editing code"). */
+const CODING_IDENTITY_TOOLS = ["read", "bash", "edit", "write"] as const;
+
+/**
+ * Refuse a prompt that would claim tools the agent does not have: pi's default says the agent reads files, runs
+ * commands and edits code, which an embedder that replaced the coding tools made false. A prompt of the agent's own
+ * (`base`, or `SYSTEM.md`) describes it instead. Checked at assembly and on every turn, since `SYSTEM.md` is re-read
+ * per turn and an agent may delete it.
+ */
+function refuseDefaultPromptOverReplacedTools(tools: readonly MountedTool[], hasOwnPrompt: boolean): void {
+  if (hasOwnPrompt) return;
+  const mounted = new Set(tools.map((tool) => tool.name));
+  const missing = CODING_IDENTITY_TOOLS.filter((name) => !mounted.has(name));
+  if (missing.length === 0) return;
+  throw new Error(
+    `the coding tools were replaced (${missing.join(", ")} not mounted), so pi's default prompt, which says the agent ` +
+      `reads files, runs commands and edits code, does not describe this agent: pass \`base\` or write SYSTEM.md`,
+  );
+}
+
+/**
+ * FastAgent's own prompt sections (docs/design/agent-model.md §2): what pi's prompt cannot know. Each is a named
+ * section pi renders after its own, so it holds whoever wrote the rest of the prompt.
+ */
+export function fastagentPromptSections(options: {
+  tools: readonly MountedTool[];
+  /** The {@link BUILTIN_EXTENSIONS} this machine leaves enabled (`Machine.builtinExtensions`). */
+  builtinExtensions: readonly string[];
+}): Record<string, string> {
+  const sections: Record<string, string> = {};
+  const mountedNames = new Set(options.tools.map((tool) => tool.name));
   // Only `deferred` tools are tool_search's to load (the session activates it for them); `codemode` ones are listed
   // in codemode's own description, and an inactive direct tool is reached only through an authored activation.
   // A disabled tool-search leaves them no way in, and naming tool_search would invite calls to a tool that is not there.
-  const deferredCount = mounted.filter(
-    (tool) => tool.exposure === "deferred" && hasWayIn(tool, builtinExtensions),
+  const deferredCount = options.tools.filter(
+    (tool) => tool.exposure === "deferred" && hasWayIn(tool, options.builtinExtensions),
   ).length;
-  const toolsList =
-    tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
-  // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line (core.md §2),
-  // keeping the tools list + guidelines below.
-  const mountedNames = new Set(mounted.map((tool) => tool.name));
-  const fullCodingSurface = (["read", "bash", "edit", "write"] as const).every((name) => mountedNames.has(name));
-  const identity =
-    options.persona?.trim() ||
-    (fullCodingSurface
-      ? "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files."
-      : "You are an AI assistant operating inside pi, an agent harness. Help users using only the tools and context available to you.");
-  const deferredNote =
-    deferredCount > 0
-      ? `\n\n${deferredCount} additional tool(s) are registered but not loaded — use tool_search to find and load them before concluding a capability is missing.`
-      : "";
+  if (deferredCount > 0) {
+    sections.deferred_tools = `${deferredCount} additional tool(s) are registered but not loaded — use tool_search to find and load them before concluding a capability is missing.`;
+  }
   // What takes effect when, and the agent's own path to a new capability, are the same on every host; only how long
   // the storage lives differs, below. The skill it writes lives in the definition directory, which the next
   // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
   // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
   // once per process (machine.ts), so it would not be live.
-  const RUNTIME_CHANGES = ` Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
-    // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model does not
-    // have invites calls to it.
+  const runtimeChanges = ` Markdown definition files are read each turn; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
+    // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model
+    // does not have invites calls to it.
     mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""
   }`;
-  // How long the storage lives is the HOST's answer, not a deployment-wide one: AgentCore's managed
-  // mount is reset by every deploy, so telling that agent to keep work "outside the definition" would
-  // name a location its next deploy erases.
-  const deploymentNote = !isDeployedWorkspace()
-    ? ""
-    : isAgentcoreRuntime()
-      ? `\n\nYour workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database).${RUNTIME_CHANGES}`
-      : `\n\nYour workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it.${RUNTIME_CHANGES}`;
-  return `${identity}
-
-Available tools:
-${toolsList}${deferredNote}
-
-In addition to the tools above, you may have access to other custom tools depending on the project.
-
-Guidelines:
-- Be concise in your responses
-- Show file paths clearly when working with files${deploymentNote}`;
-}
-
-export interface AssembleSystemPromptOptions {
-  /**
-   * Base prompt (①), REQUIRED — no default: a defaulted piBasePrompt() would render "Available tools: (none)" even
-   * when tools are mounted.
-   */
-  base: string;
-  /**
-   * ② project-context files (AGENTS.md et al. from loadProjectContextFiles); each wrapped `<project_instructions
-   * path=…>`.
-   */
-  contextFiles?: Array<{ path: string; content: string }>;
-}
-
-export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
-  let prompt = options.base;
-  const contextFiles = options.contextFiles ?? [];
-  if (contextFiles.length > 0) {
-    // Mirrors pi's system-prompt.js: one <project_context> block, one <project_instructions path=…> per file.
-    prompt += `\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n`;
-    for (const { path, content } of contextFiles) {
-      prompt += `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
-    }
-    prompt += `</project_context>\n`;
+  // How long the storage lives is the HOST's answer, not a deployment-wide one: AgentCore's managed mount is reset by
+  // every deploy, so telling that agent to keep work "outside the definition" would name a location its next deploy
+  // erases.
+  if (isDeployedWorkspace()) {
+    sections.self_change = isAgentcoreRuntime()
+      ? `Your workspace survives restarts, including uncommitted work; /tmp does not. Every deployment of a new version resets this host's storage entirely, so anything that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database).${runtimeChanges}`
+      : `Your workspace survives restarts and deployments, including uncommitted work; /tmp does not. A new deployment replaces your definition directory with the author's release, so keep ongoing project work outside it.${runtimeChanges}`;
   }
-  return prompt;
+  return sections;
 }
 
 // ── §3 the reusable assembly ladder: L1 / L2 ────────────────────────────────
@@ -382,8 +351,8 @@ export interface CreatePiAgentOptions {
   /** Reasoning effort (pi's scale). */
   thinkingLevel?: ThinkingLevel;
   /**
-   * The system prompt itself — no engine base and no wrapping (unlike the directory path, which assembles the engine
-   * base + AGENTS.md as segment ② + persona.md as segment ①).
+   * The system prompt itself — no engine base and no wrapping (unlike the directory path, where pi builds its default
+   * prompt, or SYSTEM.md replaces it, and AGENTS.md, APPEND_SYSTEM.md and FastAgent's sections are added).
    */
   instructions?: string | (() => string);
   /** The tool set to mount: authored tools or pi's cwd-bound coding tools, both AgentTool. */
@@ -419,8 +388,9 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       thinkingLevel: options.thinkingLevel,
       models: models.createRuntime,
       catalog: models.runtime,
+      // No instructions is an empty prompt, not pi's default: this path takes the prompt whole.
       readDefinition: () => ({
-        systemPrompt: typeof instructions === "function" ? instructions() : instructions,
+        systemPrompt: (typeof instructions === "function" ? instructions() : instructions) || " ",
         skills,
       }),
       tools: options.tools,
@@ -438,7 +408,10 @@ export interface CreatePiAgentFromDefinitionOptions {
   model: string;
   /** Reasoning effort (pi's scale). */
   thinkingLevel?: ThinkingLevel;
-  /** Override the engine base prompt (segment ①). */
+  /**
+   * Replaces pi's default prompt, as `SYSTEM.md` does, and outranks it. Required when `tools` replaces the coding
+   * tools and the directory has no `SYSTEM.md`: pi's default would claim tools the agent does not have.
+   */
   base?: string;
   tools?: MountedTool[];
   /**
@@ -473,8 +446,8 @@ export async function assemblePiFromDefinition(
   dir: string,
   options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & { models?: AgentModels },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
-  // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where tools operate
-  // and whose ancestors are walked for ② context.
+  // `dir` = the agent-definition dir; `cwd` (default = dir) is the run root where tools operate and whose ancestors are
+  // walked for project context.
   const cwd = options.cwd ?? dir;
   const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to report
@@ -484,6 +457,12 @@ export async function assemblePiFromDefinition(
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
+  // pi treats an empty prompt as none and builds its default, so a blank `base` would look like a prompt of the
+  // caller's own while being nothing.
+  if (options.base !== undefined && options.base.trim() === "") {
+    throw new Error("`base` is empty: pass the prompt the agent should use, or leave `base` out for pi's default");
+  }
+  refuseDefaultPromptOverReplacedTools(tools, options.base !== undefined || definition.systemPrompt !== undefined);
   const { providers } = options;
   const models = options.models ?? agentModels(dir, options, { cwd, env, ...(providers ? { providers } : {}) });
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
@@ -509,15 +488,15 @@ export async function assemblePiFromDefinition(
     readDefinition: async () => {
       const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
+      const systemPrompt = options.base ?? def.systemPrompt?.content;
+      refuseDefaultPromptOverReplacedTools(tools, systemPrompt !== undefined);
       return {
-        systemPrompt: assembleSystemPrompt({
-          // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity, re-read per turn
-          // like AGENTS.md so edits go live.
-          base: options.base ?? piBasePrompt({ tools, persona: def.persona, builtinExtensions }),
-          // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
-          contextFiles: def.contextFiles,
-        }),
+        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+        ...(def.appendSystemPrompt ? { appendSystemPrompt: def.appendSystemPrompt.content } : {}),
+        contextFiles: def.contextFiles,
+        sections: fastagentPromptSections({ tools, builtinExtensions }),
         skills: def.skills,
+        prompts: def.prompts,
       };
     },
     tools,

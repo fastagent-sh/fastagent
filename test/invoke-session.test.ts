@@ -378,8 +378,7 @@ describe("AgentSession L0: the observation plane", () => {
       modelRuntime,
       // The product's posture, called rather than transcribed (see conformance-session.test.ts).
       resourceLoaderOptions: definitionResourceLoaderOptions({
-        systemPrompt: () => "test",
-        skills: () => [],
+        definition: { systemPrompt: "test", skills: [] },
         machine: await readMachine(cwd),
       }),
     });

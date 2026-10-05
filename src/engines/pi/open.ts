@@ -14,7 +14,7 @@ import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
-import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
+import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
@@ -32,8 +32,8 @@ import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
 
 /**
- * The names a `/` composer completes: this agent's skills — the definition's, plus the ones its machine lends
- * (machine.ts) —, the commands its `extensions/` register, and the machine's prompt templates.
+ * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
+ * machine lends (machine.ts) — and the commands its `extensions/` register.
  *
  * `source` says how a name is INVOKED, which is the one thing a client needs from it: a `skill` is sent as
  * `/skill:<name>`, an `extension` command and a `prompt` as `/<name>` (docs/design/session-control.md §5.1.1).
@@ -48,10 +48,13 @@ export async function agentCommands(
   workspace: string,
   served: { extensionPaths: readonly string[]; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
-  const own = await loadAgentSkills(agentDir, { cwd: workspace });
-  // A skill whose frontmatter broke simply is not in `skills` — it would vanish from the composer with no signal.
+  // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
+  // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
+  // one set from both readers instead of warning again after every menu request.
+  const own = await loadAgentDefinition(agentDir, { cwd: workspace });
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(workspace);
+  const prompts = withMachine(own.prompts, machine.prompts);
   const { extensionPaths } = served;
   const extensionCommands = await servedExtensionCommands({
     cwd: workspace,
@@ -71,7 +74,7 @@ export async function agentCommands(
       ...(command.description ? { description: command.description } : {}),
       source: "extension",
     })),
-    ...machine.prompts
+    ...prompts
       .filter((prompt) => !shadowed.has(prompt.name))
       .map((prompt) => ({
         name: prompt.name,
@@ -312,7 +315,7 @@ export async function createPiAgentFromDir(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
-  /** Absolute agent dir in use — channels/tools/persona come from here. */
+  /** Absolute agent dir in use — channels/tools/prompt come from here. */
   agentDir: string;
   /** Absolute workspace in use — the agent's cwd: ALWAYS the directory that was pointed at. */
   workspace: string;

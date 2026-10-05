@@ -47,12 +47,12 @@ afterAll(async () => {
 });
 
 /**
- * An agent directory as an author would write one: a persona and a config naming the model. The
+ * An agent directory as an author would write one: a system prompt and a config naming the model. The
  * directory IS the agent (no nesting), so the opener resolves it as both agent dir and workspace.
  */
 async function agentDirectory(model: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-live-model-"));
-  await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(model)} };\n`);
   for (const [name, content] of Object.entries(files)) {
     await mkdir(join(dir, name, ".."), { recursive: true });

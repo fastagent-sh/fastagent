@@ -287,5 +287,7 @@ export async function runAddSkill(
       `  warn: this skill ships scripts/ (executable code that runs in your agent) — review it before deploying`,
     );
   }
-  console.error(`  next: mention "${name}" in persona.md so the model knows when to use it; then \`fastagent dev\``);
+  console.error(
+    `  next: mention "${name}" in APPEND_SYSTEM.md so the model knows when to use it; then \`fastagent dev\``,
+  );
 }

@@ -15,7 +15,7 @@ const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 async function agentWorkspace(prefix: string, files: Record<string, string> = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   await mkdir(join(dir, "fastagent", ".secrets"), { recursive: true });
-  await writeFile(join(dir, "fastagent", "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent", "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n"); // THE marker
   await writeFile(join(dir, "fastagent", ".secrets", "auth.json"), "{}\n"); // a real credential to leak
   for (const [name, content] of Object.entries(files)) {

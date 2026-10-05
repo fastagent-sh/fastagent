@@ -138,7 +138,7 @@ export async function checkKeptIgnoreFiles(
     if (excluded(`${basename(agentDir)}/`)) {
       const text =
         `your ${rel} (kept) excludes \`${basename(agentDir)}\` — the build context would ship WITHOUT the ` +
-        `agent entirely (the deployed box has no persona/config and crash-loops). Remove that rule ` +
+        `agent entirely (the deployed box has no prompt/config and crash-loops). Remove that rule ` +
         `before deploying.`;
       report.issue(text);
     }

@@ -23,12 +23,12 @@ cd my-agent
 ```
 
 The agent lands in `fastagent/`; the directory around it is its **workspace**: its working directory, and where
-its `AGENTS.md` is read from. The agent can edit its own definition; `persona.md` and skills are re-read every turn.
+its `AGENTS.md` is read from. The agent can edit its own definition; `APPEND_SYSTEM.md` and skills are re-read every turn.
 
 ```txt
 my-agent/                              # the workspace — the agent's cwd, untouched by init
 └── fastagent/                         # the agent
-    ├── persona.md                     # its identity — how to improve yourself
+    ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
     ├── skills/writing-great-skills/   # the example skill: how to author skills well
     ├── tools/fetch-url.ts             # an example code tool
     ├── fastagent.config.ts
@@ -37,7 +37,7 @@ my-agent/                              # the workspace — the agent's cwd, unto
     └── .gitignore
 ```
 
-`persona.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
+`APPEND_SYSTEM.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
 [mattpocock/skills](https://github.com/mattpocock/skills)) shows how. No `AGENTS.md` is scaffolded; the workspace's
 own is read as project context. Add skills with `fastagent add skill <owner/repo/path>`; delete
 `tools/fetch-url.ts` if you do not want it.
@@ -48,7 +48,7 @@ own is read as project context. Add skills with `fastagent add skill <owner/repo
 fastagent info
 ```
 
-`info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
+`info` is read-only. It prints the model, prompt, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
 **In an existing project**, run `fastagent init .`: the agent goes into `./fastagent/` with no writes elsewhere, and
 the project becomes its workspace. `--agent-dir bot` picks another directory name; a `fastagent.config.ts` is what
@@ -72,7 +72,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` serves the agent on `:8787`. Edits to `persona.md`, `AGENTS.md` and `skills/` apply on the next turn; code
+`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `skills/` apply on the next turn; code
 edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
 
 Send one turn:
@@ -106,7 +106,7 @@ fastagent chat
 Run one agent turn without a server:
 
 ```bash
-fastagent invoke "Summarize persona.md in one sentence"
+fastagent invoke "Summarize APPEND_SYSTEM.md in one sentence"
 ```
 
 Run one tool without a model:
@@ -138,7 +138,7 @@ Test it directly:
 fastagent tool reverse '{"text":"hello"}'
 ```
 
-Mention the tool in `persona.md` so the model knows when to use it. `fastagent dev` reloads on save.
+Mention the tool in `APPEND_SYSTEM.md` so the model knows when to use it. `fastagent dev` reloads on save.
 
 ## 6. Serve without watch
 

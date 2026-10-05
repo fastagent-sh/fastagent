@@ -44,7 +44,7 @@ describe("routines: a cron fire reaches the agent, its session, and its claim", 
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     cleanups.push(() => vi.restoreAllMocks());
     const dir = await mkdtemp(join(tmpdir(), "fa-live-schedule-"));
-    await writeFile(join(dir, "persona.md"), "You are terse. Answer in as few words as possible.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
     await mkdir(join(dir, "routines"), { recursive: true });
     // A plain default export: `defineRoutine` is an identity function, so this is the shape the

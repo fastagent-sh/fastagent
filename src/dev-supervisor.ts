@@ -127,7 +127,7 @@ export async function runDevSupervisor(
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/SYSTEM.md/APPEND_SYSTEM.md/skills/prompts edits go live next turn without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {

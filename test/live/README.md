@@ -32,7 +32,7 @@ host CLI prints against the driver's **parsing** assumptions (`listHasName`, `in
 Railway have one topology whatever the definition says; AgentCore's is a *function* of it
 (a webhook channel or a schedule decides whether webhook relay and EventBridge rules exist; the
 forwarder, its Function URL and the artifact bucket are on every stack, for the wake alarms). Three copied lines of
-persona+config landed on the small side, so both agentcore probes spent a release describing a
+prompt+config landed on the small side, so both agentcore probes spent a release describing a
 deployment neither performed: 98 lines of template validated while the comment claimed 900, and a
 teardown deleting three things where two were created. Reading what the product CAN do is not reading
 what YOUR INPUT makes it do. The cheap check is countable without deploying anything: what teardown

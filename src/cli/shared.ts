@@ -23,7 +23,12 @@ import { formatAuthReport } from "./auth-view.ts";
 import { CODING_TOOL_NAMES, type IndirectTool } from "../engines/pi/create.ts";
 import type { LoadedDefinition } from "../engines/pi/definition.ts";
 import type { ToolCollision } from "../engines/pi/tool.ts";
-import { describeIndirectTools, reportFindingsIfChanged, reportToolCollisions } from "../engines/pi/report.ts";
+import {
+  describeIndirectTools,
+  describePrompt,
+  reportFindingsIfChanged,
+  reportToolCollisions,
+} from "../engines/pi/report.ts";
 import { type ResolvedPlacement, isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
@@ -76,7 +81,7 @@ export async function reportAssembly(
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.models, a.modelSpec);
   reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
-  if (a.definition.persona) reportLine("persona", "persona.md");
+  reportLine("prompt", describePrompt(a.definition));
   // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
   const skills = withMachine(a.definition.skills, (await readMachine(a.workspace)).skills);
   reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");

@@ -8,7 +8,12 @@ import { agentModels } from "../../engines/pi/agent-models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
 import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import { describeIndirectTools, reportFindingsIfChanged, reportToolCollisions } from "../../engines/pi/report.ts";
+import {
+  describeIndirectTools,
+  describePrompt,
+  reportFindingsIfChanged,
+  reportToolCollisions,
+} from "../../engines/pi/report.ts";
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
@@ -31,8 +36,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // agentDir = where the agent lives (definition + config + machinery); workspace = what it works ON (its cwd, whose
   // AGENTS.md ancestors are ② context).
   const definition = await loadAgentDefinition(agentDir, { cwd: workspace }).catch(failStartup);
-  // What this agent HAS: the definition's skills plus the ones its machine lends (machine.ts).
-  const skills = withMachine(definition.skills, (await readMachine(workspace)).skills);
+  // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
+  const machineResources = await readMachine(workspace);
+  const skills = withMachine(definition.skills, machineResources.skills);
+  const prompts = withMachine(definition.prompts, machineResources.prompts);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
   // isolated the same way everywhere (G2).
   const tools = await resolveAgentTools(config, agentDir, workspace)
@@ -118,8 +125,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           thinkingLevel: config.thinkingLevel ?? null,
           codingTools: [...CODING_TOOL_NAMES],
           context: definition.contextFiles.map((f) => f.path),
-          persona: definition.persona !== undefined,
+          systemPrompt: definition.systemPrompt?.path ?? null,
+          appendSystemPrompt: definition.appendSystemPrompt?.path ?? null,
           skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
+          prompts: prompts.map((prompt) => ({ name: prompt.name, description: prompt.description ?? null })),
           tools: tools.names,
           indirectTools: tools.indirect,
           toolError: tools.error ?? null,
@@ -133,6 +142,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           fallbackAuthPath: auth.fallback ?? null,
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
+          shadowed: definition.shadowed,
+          ignored: definition.ignored,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
           declaredSecrets,
@@ -157,8 +168,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   line("codingTools", CODING_TOOL_NAMES.join(", "));
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
-  line("persona", definition.persona ? "persona.md" : "(none)");
+  line("prompt", describePrompt(definition));
   line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
+  line("prompts", prompts.map((prompt) => prompt.name).join(", ") || "(none)");
   line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
   if (tools.indirect.length > 0) line("indirect", describeIndirectTools(tools.indirect));
   line("channels", channels.join(", ") || "(none)");

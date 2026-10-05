@@ -3,7 +3,15 @@
  * durable record, per invoke.
  */
 import { dirname } from "node:path";
-import { BUILTIN_EXTENSIONS, DISCOVERY, type Machine, type MachineSkill, readMachine, withMachine } from "./machine.ts";
+import {
+  BUILTIN_EXTENSIONS,
+  DISCOVERY,
+  type Machine,
+  type MachinePrompt,
+  type MachineSkill,
+  readMachine,
+  withMachine,
+} from "./machine.ts";
 import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
@@ -24,6 +32,13 @@ import {
   createCodemodeExtension,
   createToolSearchExtension,
   createAgentSessionFromServices,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
   getAgentDir,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
@@ -38,10 +53,21 @@ import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./
 import { registerAccountModels } from "./openai-account-models.ts";
 import { asksToEndRun, markEndsRun } from "./turn-kit.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
+import type { DefinitionPrompt } from "./definition.ts";
 
-interface PiSessionDefinition {
+/** What one binding reads from the definition: the prompt pieces, skills and prompt templates pi is handed. */
+export interface PiSessionDefinition {
+  /** Replaces pi's default prompt when set (`SYSTEM.md`, L2's `base`, L1's `instructions`); absent → pi's default. */
   systemPrompt?: string;
+  /** Added after the prompt, whichever it is (`APPEND_SYSTEM.md`). */
+  appendSystemPrompt?: string;
+  /** Project instructions (AGENTS.md); pi renders them as its project context. */
+  contextFiles?: Array<{ path: string; content: string }>;
+  /** FastAgent's own named prompt sections: pi renders them after its own, whoever wrote the rest. */
+  sections?: Record<string, string>;
   skills: Skill[];
+  /** The definition's own prompt templates; the machine's are added behind them. */
+  prompts?: DefinitionPrompt[];
 }
 
 export interface PiAgentSessionFactoryOptions {
@@ -65,11 +91,50 @@ export interface PiAgentSessionFactoryOptions {
 
 type ToolBinding = { session: AgentSession; context: TurnContext };
 
+/**
+ * What pi's own coding tools say about themselves in its default prompt. The coding tools fastagent mounts are pi's
+ * `AgentTool`s, which carry neither field, and they replace pi's definitions of the same name, so without this pi's
+ * tool list would lose them and its rules would lose their guidelines.
+ */
+const PI_TOOL_PROMPTS: ReadonlyMap<string, Pick<ToolDefinition, "promptSnippet" | "promptGuidelines">> = new Map(
+  [
+    createReadToolDefinition,
+    createBashToolDefinition,
+    createEditToolDefinition,
+    createWriteToolDefinition,
+    createGrepToolDefinition,
+    createFindToolDefinition,
+    createLsToolDefinition,
+  ].map((create) => {
+    const definition = create(".");
+    return [
+      definition.name,
+      { promptSnippet: definition.promptSnippet, promptGuidelines: definition.promptGuidelines },
+    ];
+  }),
+);
+
+/**
+ * The line pi's default prompt lists a tool by. pi lists only tools that have one; an authored tool's is the first
+ * line of its description, so `defineTool` needs no field of its own.
+ */
+function promptFields(tool: MountedTool): Pick<ToolDefinition, "promptSnippet" | "promptGuidelines"> {
+  const own = tool as Pick<ToolDefinition, "promptSnippet" | "promptGuidelines">;
+  const pi = PI_TOOL_PROMPTS.get(tool.name);
+  const promptSnippet = own.promptSnippet ?? pi?.promptSnippet ?? tool.description?.split("\n")[0]?.trim();
+  const promptGuidelines = own.promptGuidelines ?? pi?.promptGuidelines;
+  return {
+    ...(promptSnippet ? { promptSnippet } : {}),
+    ...(promptGuidelines ? { promptGuidelines } : {}),
+  };
+}
+
 /** fastagent's tools as pi tool definitions, bound to ONE session. */
 function toolDefinitions(tools: MountedTool[], bound: { current?: ToolBinding }, sessionId: string): ToolDefinition[] {
   return tools.map(
     (tool): ToolDefinition => ({
       ...tool,
+      ...promptFields(tool),
       label: tool.label || tool.name,
       execute: (id, params, signal, onUpdate, ctx) => {
         const binding = bound.current;
@@ -236,16 +301,39 @@ const nativeExtensions: InlineExtension[] = BUILTIN_EXTENSIONS.map((name) => ({
   builtin: true,
 }));
 
+/**
+ * FastAgent's own prompt sections, added on `before_agent_start`: pi renders custom sections after its own, so they
+ * survive a `SYSTEM.md` that replaced pi's default, and they stay out of the slot `APPEND_SYSTEM.md` fills.
+ */
+function fastagentSections(sections: Record<string, string>): InlineExtension {
+  return {
+    name: "fastagent-sections",
+    hidden: true,
+    factory: (pi) => {
+      pi.on("before_agent_start", (event) => {
+        Object.assign(event.systemPromptOptions.sections, sections);
+      });
+    },
+  };
+}
+
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
-  systemPrompt: () => string | undefined;
-  skills: () => Skill[];
+  definition: PiSessionDefinition;
   /** {@link readMachine} for this workspace — resolved by the caller, because this function is synchronous. */
   machine: Machine;
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {
+  const { definition } = source;
   return {
-    extensionFactories: [...nativeExtensions, compactAdmission, recordEndsRun],
+    extensionFactories: [
+      ...nativeExtensions,
+      compactAdmission,
+      recordEndsRun,
+      ...(definition.sections && Object.keys(definition.sections).length > 0
+        ? [fastagentSections(definition.sections)]
+        : []),
+    ],
     // The machine's extensions are its owner's setup, not this agent's.
     noExtensions: true,
     // Explicit paths survive noExtensions, including Pi's built-ins; so they would also survive the machine's own
@@ -254,13 +342,14 @@ export function definitionResourceLoaderOptions(source: {
       ...source.machine.builtinExtensions.map((name) => `builtin:${name}`),
       ...(source.extensionPaths ?? []),
     ],
-    // Not pi's: fastagent already loads the SAME files into segment ② (`loadProjectContextFiles` in
-    // definition.ts). Leaving both on would put every AGENTS.md in the prompt twice.
+    // Not pi's discovery: the definition read them (definition.ts), and pi renders what it is handed.
     noContextFiles: true,
-    // The IDENTITY is the definition's, whatever the machine thinks. Inheriting skills is inheriting capability;
-    // inheriting a system prompt would be the agent becoming someone else's agent.
-    systemPromptOverride: () => source.systemPrompt() || " ",
-    appendSystemPromptOverride: () => [],
+    agentsFilesOverride: () => ({ agentsFiles: definition.contextFiles ?? [] }),
+    // The IDENTITY is the definition's, whatever the machine thinks: pi's `base` here is the machine's SYSTEM.md, and
+    // it is never used. Inheriting skills is inheriting capability; inheriting a system prompt would be the agent
+    // becoming someone else's agent. Undefined leaves pi to build its default.
+    systemPromptOverride: () => definition.systemPrompt,
+    appendSystemPromptOverride: () => (definition.appendSystemPrompt ? [definition.appendSystemPrompt] : []),
     /**
      * THE DEFINITION'S SKILLS, PLUS THE MACHINE'S — an agent inherits the box it runs on (machine.ts), and the
      * definition wins a name collision.
@@ -270,11 +359,14 @@ export function definitionResourceLoaderOptions(source: {
      */
     noSkills: true,
     skillsOverride: () => ({
-      skills: withMachine(toPiSkills(source.skills()) as MachineSkill[], source.machine.skills),
+      skills: withMachine(toPiSkills(definition.skills) as MachineSkill[], source.machine.skills),
       diagnostics: [],
     }),
     noPromptTemplates: true,
-    promptsOverride: () => ({ prompts: [...source.machine.prompts], diagnostics: [] }),
+    promptsOverride: () => ({
+      prompts: withMachine(toPiPrompts(definition.prompts ?? []) as MachinePrompt[], source.machine.prompts),
+      diagnostics: [],
+    }),
   };
 }
 
@@ -398,8 +490,7 @@ export async function definitionServices(options: {
       settingsManager: machine.settingsManager(),
       resourceLoaderOptions: {
         ...definitionResourceLoaderOptions({
-          systemPrompt: () => definition.systemPrompt,
-          skills: () => definition.skills,
+          definition,
           machine,
           extensionPaths,
         }),
@@ -523,6 +614,20 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     });
     return session;
   };
+}
+
+/** The definition's prompt templates as pi's. */
+function toPiPrompts(prompts: DefinitionPrompt[]) {
+  return prompts.map((prompt) => {
+    const baseDir = dirname(prompt.filePath);
+    return {
+      name: prompt.name,
+      description: prompt.description ?? "",
+      content: prompt.content,
+      filePath: prompt.filePath,
+      sourceInfo: { path: prompt.filePath, source: "fastagent", scope: "project", origin: "top-level", baseDir },
+    };
+  });
 }
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */

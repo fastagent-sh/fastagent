@@ -71,7 +71,7 @@ const specOf = new WeakMap<Command, CommandSpec>();
 export function buildProgram(specs: readonly CommandSpec[], options: ProgramOptions = {}): Command {
   const exit: (code: number) => never = options.exit ?? ((code) => process.exit(code));
   const program = new Command("fastagent");
-  program.description("Serve a file-defined agent — persona.md, skills/, tools/, channels/ — as a live service.");
+  program.description("Serve a file-defined agent — SYSTEM.md, skills/, tools/, channels/ — as a live service.");
   // The exit-code policy: commander throws only for parse-level events — help/version displays carry exitCode 0 (→
   // 0), everything else it rejects is a usage error (→ 2).
   program.exitOverride((err) => exit(err.exitCode === 0 ? 0 : 2));

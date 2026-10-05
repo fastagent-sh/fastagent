@@ -14,7 +14,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
   await writeFile(join(host, "AGENTS.md"), "You are terse.\n"); // ② context, lives in the workspace
   const dir = join(host, "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
-  await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
   // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
@@ -397,6 +397,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const clean = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(clean.ok).toBe(true);
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
+  });
+
+  it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
+    const dir = await workspace({ "persona.md": "You are terse.\n" });
+    const config = { model: "openai-codex/gpt-5.5" };
+    const gated = await call(dir, config, { run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/definition does not load.*persona\.md is no longer read/);
+    const warned = await call(dir, config, { run: false });
+    expect(warned.ok).toBe(true);
+    if (warned.ok)
+      expect(warned.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(/definition does not load/),
+      });
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {

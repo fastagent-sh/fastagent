@@ -13,10 +13,10 @@ import { log } from "../src/log.ts";
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
 /** A fresh AGENT dir (`<tmp>/fastagent/`). Passing it to the builder resolves to itself, with the
  *  temp dir as the workspace — the same placement `init` produces, entered from the inside. */
-async function freshAgentDir(prefix: string, options: { persona?: boolean } = {}): Promise<string> {
+async function freshAgentDir(prefix: string, options: { prompt?: boolean } = {}): Promise<string> {
   const dir = join(await mkdtemp(join(tmpdir(), prefix)), "fastagent");
   await mkdir(dir);
-  if (options.persona !== false) await writeFile(join(dir, "persona.md"), "You are terse.\n");
+  if (options.prompt !== false) await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
   return dir;
 }
 
@@ -236,14 +236,14 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("resolves the placement from the workspace: persona/tools from fastagent/, ② context from the workspace", async () => {
+  it("resolves the placement from the workspace: prompt/tools from fastagent/, context from the workspace", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-nested-"));
     try {
       await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workspace
       const root = join(dir, "fastagent");
       await mkdir(join(root, "tools"), { recursive: true });
       await writeFile(join(root, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-      await writeFile(join(root, "persona.md"), "You are PERSONA_MARKER bot.\n"); // ① in the workspace root
+      await writeFile(join(root, "SYSTEM.md"), "You are PERSONA_MARKER bot.\n"); // the prompt, in the agent dir
       await writeFile(
         join(root, "tools", "foo.mjs"),
         `export default { description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) };`,
@@ -252,7 +252,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const sp = rt.session.systemPrompt;
-        expect(sp).toContain("PERSONA_MARKER"); // ① persona from the workspace root
+        expect(sp).toContain("PERSONA_MARKER"); // the prompt, from the workspace root
         expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workspace
         expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from the workspace root
       } finally {
@@ -435,7 +435,7 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
     const originalCwd = process.cwd();
     try {
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, "persona.md"), "You are terse.\n");
+      await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
       await writeFile(
         join(dir, "fastagent.config.ts"),
         `import { defineTool, z } from ${JSON.stringify(piUrl)};
@@ -532,7 +532,7 @@ describe("session builder: the credential hint belongs to the runtime, not to ea
     const workspace = await mkdtemp(join(tmpdir(), "fa-hint-"));
     const dir = join(workspace, "fastagent");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
@@ -559,7 +559,7 @@ describe("session builder: chat offers the model the same tool set serving does"
     // handler) put this at risk: pi mounts read/bash/edit/write of ITS OWN and leaves them inactive,
     // so a version of this that stated the active set explicitly offered the model two of each.
     const dir = await mkdtemp(join(tmpdir(), "fa-active-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
@@ -584,7 +584,7 @@ describe("session builder: a chat turn runs at the definition's reasoning effort
     await writeFile(join(piDir, "settings.json"), JSON.stringify({ defaultThinkingLevel: "high", theme: "light" }));
     vi.stubEnv("PI_CODING_AGENT_DIR", piDir);
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-thinking-"));
-    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     try {
       await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');
       const defaulted = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());

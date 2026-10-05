@@ -40,7 +40,7 @@ The stream ends with exactly one `completed` / `failed`, or is cancelled by the 
 
 | You have | Use | Returns |
 |---|---|---|
-| An agent directory (`persona.md` + `skills/` + `tools/` + config) | `createPiAgentFromDir(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
+| An agent directory (`APPEND_SYSTEM.md` + `skills/` + `tools/` + config) | `createPiAgentFromDir(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
 | A definition directory, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
 | No directory — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
 
@@ -69,7 +69,7 @@ const agent = createPiAgent({
 
 Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately installed `zod`: `defineTool` converts schemas with its own copy. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported. Import `createProvider` and a provider's wire-protocol `api` from `@earendil-works/pi-ai` (see §5).
 
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. The directory path instead assembles the pi base (optionally customized by `persona.md`), `AGENTS.md` project context, skills, and environment context. See [core design §2](design/core.md).
+`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine identity prepended. The directory path instead has pi build its default prompt (or uses `SYSTEM.md` in its place), then adds `APPEND_SYSTEM.md`, `AGENTS.md` project context, skills, and environment context. See [core design §2](design/core.md).
 
 ## 2. Consume the stream (three ways)
 
@@ -191,7 +191,7 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `env` | `process.cwd()` at L1; local `NodeExecutionEnv` at L2 | supplies cwd at L1; reads persona/skills at L2; not a sandbox |
+| `env` | `process.cwd()` at L1; local `NodeExecutionEnv` at L2 | supplies cwd at L1; reads the prompt files and skills at L2; not a sandbox |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 

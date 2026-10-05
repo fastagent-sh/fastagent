@@ -65,7 +65,7 @@ it("retries interrupted installs, opens the workspace's runtime and preserves to
     await mkdir(join(agent, "node_modules/.bin"));
     await writeFile(join(agent, "package.json"), '{"type":"module"}');
     await writeFile(join(agent, "fastagent.config.ts"), 'export default { model: "local/test" };');
-    await writeFile(join(agent, "persona.md"), "Use the context tool.");
+    await writeFile(join(agent, "SYSTEM.md"), "Use the context tool.");
     await writeFile(
       join(agent, "models.json"),
       JSON.stringify({

@@ -30,7 +30,7 @@ export function isPlaneMarker(entry: { type?: string; customType?: string }): bo
  * by "a message".
  *
  * The line it draws is the ENGINE's prompt state. Since pi 0.86 pi writes `system` messages into the same log the
- * conversation lives in, carrying the assembled prompt (persona, project context, skill and tool descriptions)
+ * conversation lives in, carrying the assembled prompt (system prompt, project context, skill and tool descriptions)
  * plus one more per prompt or tool-set change. They are bookkeeping, not something anyone said, and every reader
  * of the journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut
  * inheritance above every exchange and handed a new thread an empty history, with no diagnostic.

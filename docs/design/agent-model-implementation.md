@@ -117,42 +117,16 @@ them itself (§3.4), and those above it stay as machine environment.
 
 ### 3.3 Prompt (`create.ts`, `agent-session-factory.ts`)
 
-`piBasePrompt` and `assembleSystemPrompt` go. `definitionResourceLoaderOptions` changes:
-
-| Option | Today | New |
-|---|---|---|
-| `systemPromptOverride` | FastAgent's whole prompt | `SYSTEM.md`, else `.pi/SYSTEM.md`, else `undefined` so pi builds its default. pi's own `base` argument (the machine's file) is ignored |
-| `appendSystemPromptOverride` | `[]` | `[APPEND_SYSTEM.md]`, else `[.pi/APPEND_SYSTEM.md]`, else `[]`; never the machine's |
-| `noContextFiles` / `agentsFilesOverride` | FastAgent renders `<project_context>` itself | `agentsFilesOverride` returns each context's root `AGENTS.md`; pi renders it |
-
-FastAgent's own sections (contexts, changing itself, tools not loaded yet) are added by an inline extension on
-`before_agent_start`, which writes named entries into `systemPromptOptions.sections`. pi renders custom sections
-after its own regardless of `SYSTEM.md`, which is exactly the guarantee the model asks for. The "changing itself"
-section carries what `RUNTIME_CHANGES` and the per-host note say today, rewritten for the new rules (§3.8, §3.9).
-
-Authored tools get `promptSnippet` set to the first line of their description where `tool.ts` builds the pi tool, so
-pi's default tool list includes them. `assemblePiFromDefinition` refuses when `options.tools` lacks any of `read`,
-`bash`, `edit`, `write` and neither `options.base` nor a `SYSTEM.md` supplies a prompt; `base`, when given, is
-passed as the system prompt override. Because `SYSTEM.md` is re-read every turn and an agent may delete it,
-`readDefinition` checks the same rule each turn, and a turn that would run on pi's coding identity with the coding
-tools replaced fails with that reason instead.
+Landed in stage 1; [core](core.md) §2 describes it. What remains is stage 2's: `agentsFilesOverride` returns each
+context's root `AGENTS.md` instead of the workspace walk, and FastAgent's sections gain the contexts section. The
+"changing itself" section is rewritten for the new rules in stage 5 (§3.8, §3.9).
 
 ### 3.4 Definition loading (`definition.ts`)
 
-`LoadedDefinition` loses `persona` and `contextFiles` and gains `systemPrompt?`, `appendSystemPrompt?`, `prompts`
-and the context-derived parts:
-
-- **Refusals:** a `persona.md` (naming `SYSTEM.md` and `APPEND_SYSTEM.md`); a harness skill whose name holds `/`.
-- **Reports:** a `.pi/extensions/` that exists (not loaded); the same name in two definition locations (`SYSTEM.md`
-  and `.pi/SYSTEM.md`, `skills/` and `.pi/skills/` and `.agents/skills/`, `prompts/` and `.pi/prompts/`), with
-  the winner. The existing `SkillCollision` reporting carries the skill case.
-- **Skills:** pi's `loadSkills` over `skills/`, `.pi/skills/`, `.agents/skills/` in that order (first wins), then
-  each context's `.pi/skills/` and `.agents/skills/`, renamed `<context>/<skill>` after loading, then the machine's
-  through `withMachine`, which keeps winning silently for the definition. A machine skill with `/` is left out and
-  reported.
-- **Prompt templates:** pi's template loader over `prompts/` then `.pi/prompts/`, then the machine's.
-  `promptsOverride` and `agentCommands` (`open.ts`) read the same merged list, so the `/` menu and the dispatch
-  agree.
+Landed in stage 1 for the agent directory ([where the definition's files are
+read](../configuration.md#where-the-definitions-files-are-read)), with `LoadedDefinition` keeping `contextFiles` until stage 2. What remains is stage 2's: `contextFiles`
+goes, and each context's `.pi/skills/` and `.agents/skills/` load after the definition's, renamed
+`<context>/<skill>` after loading.
 
 ### 3.5 Authored tools (`tool.ts`, `tool-context.ts`)
 
@@ -270,7 +244,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 
 | Stage | Scope | Done when |
 |---|---|---|
-| 1. Prompt and resources | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
+| 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |

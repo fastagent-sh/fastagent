@@ -49,7 +49,7 @@ const init: CommandSpec = {
     "Scaffold a runnable agent and run npm install. The agent ALWAYS goes into a subdirectory of dir " +
     "(default .): ./fastagent/, or --agent-dir <name> — the rest of the directory gets zero writes, and " +
     "it is the WORKSPACE the agent works ON when you point fastagent there. Content is a " +
-    "self-iterating agent: persona.md (its identity), a writing-great-skills " +
+    "self-iterating agent: APPEND_SYSTEM.md (its standing instructions), a writing-great-skills " +
     "example skill, a fetch-url code tool, config, package.json, .gitignore. An existing AGENTS.md is " +
     "kept as project context.",
   args: [DIR_ARG],
@@ -79,7 +79,8 @@ const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
   description:
-    "Assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/skills " +
+    "Assemble the agent in dir (default .) and serve a local HTTP channel. SYSTEM.md/APPEND_SYSTEM.md/" +
+    "AGENTS.md/skills/prompts " +
     "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
     "fastagent.config.ts, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
     "work product never trigger a restart.",
@@ -127,7 +128,7 @@ const info: CommandSpec = {
   name: "info",
   summary: "print what the directory assembles into, without serving",
   description:
-    "Print what dir (default .) ASSEMBLES into — model, persona, context files (AGENTS.md), skills, " +
+    "Print what dir (default .) ASSEMBLES into — model, prompt, context files (AGENTS.md), skills, " +
     "tools (+ collisions), channels, schedules, sessions, load diagnostics — WITHOUT serving. " +
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",

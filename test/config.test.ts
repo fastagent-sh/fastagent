@@ -338,7 +338,7 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   const host = await mkdtemp(join(tmpdir(), "fa-ws-"));
   const agent = join(host, "fastagent");
   await mkdir(agent);
-  await writeFile(join(agent, "persona.md"), "You are terse.\n");
+  await writeFile(join(agent, "SYSTEM.md"), "You are terse.\n");
   await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n"); // THE marker
   return { host, agent };
 }

@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `persona.md` is recommended for identity (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `APPEND_SYSTEM.md` holds its standing instructions and `SYSTEM.md` an identity of its own (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
 
 ## Recommended path
 
@@ -52,7 +52,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 
 ## Core concepts
 
-- **The agent is a folder in your project.** Runtime behavior comes from the agent directory (`fastagent/`, whose parent is the workspace): optional `persona.md` (identity), `skills/`, `tools/`, `channels/`, `routines/`, `AGENTS.md` (project context), and markdown context.
+- **The agent is a folder in your project.** Runtime behavior comes from the agent directory (`fastagent/`, whose parent is the workspace): optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, `AGENTS.md` (project context), and markdown context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
