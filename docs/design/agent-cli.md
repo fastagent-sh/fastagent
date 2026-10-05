@@ -74,9 +74,11 @@ fastagent init <dir> [--workdir <source>] [--context <source>]... [--copy]
 
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per
 `--context`. `--workdir <source>` adds one more, declared as its working directory (`workdir: true`): the agent
-works there and what it creates lands there, apart from its definition ([agent model](agent-model.md) §4). Without
-`--workdir` the working directory is the agent's own directory; without any context the agent only talks. A context
-it only knows is added afterwards with `fastagent context add --readonly`.
+works there and what it creates lands there, apart from its definition ([agent model](agent-model.md) §4). A
+`--workdir` directory that does not exist yet is created, and the output says so, since giving an agent a folder of
+its own is what the flag is mostly for; a `--context` directory must exist. Without `--workdir` the working directory
+is the agent's own directory; without any context the agent only talks. A context it only knows is added afterwards
+with `fastagent context add --readonly`.
 
 | `<source>` | Declared |
 |---|---|
@@ -106,7 +108,7 @@ Example output:
 
 ```text
 created  ~/agents/reviewer
-works in reviewer  ~/Documents/reviewer (local); the working directory
+works in reviewer  ~/Documents/reviewer (local, created); the working directory
 works on app       ~/code/app (github acme/app); a host clones it
 ```
 
@@ -123,8 +125,9 @@ fastagent context remove <name> [agent]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it a context the agent
-  knows rather than works on. `--workdir` makes it the working directory; `add` refuses it when another context
-  already is one (remove that one first) and when it is combined with `--readonly`.
+  knows rather than works on. `--workdir` makes it the working directory, creating the directory when it does not
+  exist yet; `add` refuses it when another context already is one (remove that one first) and when it is combined
+  with `--readonly`.
 - `add` refuses a context that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `list` groups them the way an author thinks: where the agent works, what it works on, what it knows.
@@ -148,7 +151,7 @@ What is said rather than handled quietly:
 | Situation | Output |
 |---|---|
 | A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/contexts/app`, with the reason |
-| A local context's path does not exist | Refused, naming the path and the declaration |
+| A local context's path does not exist | Refused, naming the path and the declaration (only `init --workdir` and `context add --workdir` create one) |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | Two contexts are declared `workdir`, or a `workdir` context is `readonly` | Refused, naming them |
