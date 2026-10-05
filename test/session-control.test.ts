@@ -192,6 +192,83 @@ describe("session control: observation plane", () => {
     }
   });
 
+  it("a run stopped during a tool records its last answer as aborted, as it settled, in the record it reopens from", async () => {
+    let started = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const waitTool: AgentTool = {
+      name: "wait",
+      label: "Wait",
+      description: "Waits until stopped",
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal) {
+        started();
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("Command aborted");
+      },
+    };
+    const cwd = await mkdtemp(join(tmpdir(), "fa-abort-tool-"));
+    const dir = join(cwd, "sessions");
+    const { agent, control } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage([{ type: "text", text: "Running it." }, fauxToolCall("wait", {}, { id: "c1" })], {
+          stopReason: "toolUse",
+        }),
+      ],
+      { tools: [waitTool], boundary: false, cwd, sessions: piSessionRecordStore({ dir, cwd }) },
+    );
+    const watched = watchUntilSettled(control, "aTool");
+    const invoked = drain(agent.invoke({ session: "aTool" }, { text: "go" }));
+    await running;
+    expect(await control.sessions.get("aTool").abort()).toMatchObject({ ok: true });
+    expect((await invoked).at(-1)).toMatchObject({ type: "failed", code: ABORTED_CODE });
+    const live = await watched;
+    expect(live.at(-1)?.data).toMatchObject({ status: "aborted" });
+    expect(live.filter((e) => e.type === "message_finished").at(-1)?.data).toMatchObject({
+      outcome: { status: "aborted" },
+    });
+
+    // Read back by a store that never saw the run: the record itself says the answer was stopped.
+    const reopened = await fauxControlledAgent([], {
+      boundary: false,
+      cwd,
+      sessions: piSessionRecordStore({ dir, cwd }),
+    });
+    const entries = (await reopened.control.sessions.get("aTool").entries()).entries;
+    // The stopped call itself did fail to complete.
+    expect(entries.find((e) => e.kind === "tool")?.data).toMatchObject({ toolCallId: "c1", isError: true });
+    expect(entries.at(-1)).toMatchObject({ kind: "assistant", data: { outcome: { status: "aborted" } } });
+  });
+
+  it("a failure recorded before the stop stays failed: a provider error whose retry is stopped during its backoff", async () => {
+    // Fails before saying anything, so pi schedules a retry (a 2s backoff); the second response is never asked for.
+    const { agent, control } = await makeObserved([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("never"),
+    ]);
+    const seen: SessionEvent[] = [];
+    const watched = (async () => {
+      for await (const ev of control.sessions.get("aBackoff").events()) {
+        seen.push(ev);
+        if (ev.type === "retry_scheduled") await control.sessions.get("aBackoff").abort();
+        if (ev.type === "run_settled") break;
+      }
+    })();
+    await drain(agent.invoke({ session: "aBackoff" }, { text: "go" }));
+    await watched;
+    expect(seen.map((e) => e.type)).toContain("retry_scheduled");
+    expect(seen.at(-1)?.data).toMatchObject({ status: "aborted" }); // the RUN was stopped
+    // The answer failed on its own, before the stop: live and read back alike.
+    expect(seen.filter((e) => e.type === "message_finished").map((e) => e.data)).toEqual([
+      { outcome: { status: "failed", error: { message: "boom 500" } } },
+    ]);
+    const answers = (await control.sessions.get("aBackoff").entries()).entries.filter((e) => e.kind === "assistant");
+    expect(answers.map((e) => e.data)).toEqual([
+      { text: "", outcome: { status: "failed", error: { message: "boom 500" } } },
+    ]);
+  });
+
   it("an answer's thinking reads back as the live thinking deltas added up", async () => {
     const cases = [
       {

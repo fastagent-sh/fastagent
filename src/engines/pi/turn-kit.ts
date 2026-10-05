@@ -111,6 +111,23 @@ export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefi
 }
 
 /**
+ * An answer that failed while its run's abort was in effect, as what it was: aborted. Undefined when that is not the
+ * case (no abort, or not a failure). pi's own reading is `signal.aborted ? "aborted" : "error"` (`handleRunFailure`,
+ * the providers), but its request-setup path (`lazyStream`: auth, request preparation) writes "error" whatever the
+ * signal (pi 0.99.2). A run stopped during a tool lands there: the loop asks the model once more, and the setup throws
+ * the abort. Recorded this way, the answer's {@link answerOutcome} is the `aborted` the run settled with, live and read
+ * back. A failure recorded BEFORE the abort (a provider error whose retry was then stopped) stays as recorded.
+ */
+export function abortedAnswer(
+  message: AssistantMessage,
+  runSignal: AbortSignal | undefined,
+): AssistantMessage | undefined {
+  return message.stopReason === "error" && runSignal?.aborted === true
+    ? { ...message, stopReason: "aborted" }
+    : undefined;
+}
+
+/**
  * Whether a thinking block is PUBLISHED: readable reasoning. A redacted one holds a provider's opaque payload and a
  * placeholder (pi writes "[Reasoning redacted]" for it), not reasoning anyone can read, so it is neither streamed nor
  * read back. The ONE rule: the live `message_delta { channel: "thinking" }` ({@link streamsThinkingDelta}) and the
