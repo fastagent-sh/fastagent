@@ -75,7 +75,7 @@ ${min}
 ${alternative}
 [mounts]
   source = "data"
-  destination = "/data"            # workspace, state and credentials survive stop/suspend/redeploy
+  destination = "/data"            # state and credentials survive stop/suspend/redeploy
   initial_size = "1gb"             # the volume is created by the FIRST deploy — it is pinned to one host, and only
                                    # deploy tells the scheduler which machine (size + image) must fit there too
 
@@ -95,8 +95,7 @@ export function isGeneratedFlyToml(content: string): boolean {
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const { appName, port, channels } = input;
-  // Artifacts sit under the agent prefix, so they never touch the workspace's own deploy files.
-  const flyTomlPath = `${input.agentPrefix}fly.toml`;
+  const flyTomlPath = "fly.toml";
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -107,7 +106,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
 
   const secrets = input.secrets ?? [];
 
-  const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile ${input.agentPrefix}Dockerfile --app ${appName}`;
+  const deployCmd = `fly deploy . --config ${flyTomlPath} --dockerfile Dockerfile --app ${appName}`;
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
@@ -116,7 +115,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
     `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
     `fly apps create ${appName}`,
-    `# The volume (workspace, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
+    `# The volume (definition, state, credentials — kept across stop/suspend/redeploy) is created by the deploy`,
     `# below, in primary_region and sized by [mounts].initial_size. Creating it yourself first pins it to a host`,
     `# picked without the machine, which can fail the deploy with "insufficient resources … existing volume".`,
     ``,
@@ -138,26 +137,24 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   }
   runbook.push(
     ``,
-    `# The build context is the WORKSPACE ROOT (the whole directory is baked as the agent's cwd).`,
-    `# The config/Dockerfile live under ${input.agentPrefix} so they never collide with the workspace's own.`,
+    `# The build context is the agent directory, baked as the definition.`,
     `# Before a new definition release, run \`fastagent deploy fly\` to refresh the release manifest.`,
-    `# Run this from the workspace root:`,
+    `# Run this from the agent directory:`,
     deployCmd,
   );
   runbook.push(
     ``,
-    `# The volume keeps /data/base (including uncommitted work), .state and .secrets across restarts and deploys.`,
-    `# Each generated release replaces only /data/base/${input.agentPrefix}; other workspace files are initialized once.`,
+    `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
     input.shipsGit
-      ? `# Git is available for optional collaboration. Verify uploaded history with \`git status\`; clone if the host stripped it.`
-      : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
+      ? `# Git is installed because the definition ships its .git.`
+      : `# To give the agent git, add deploy: { apt: ["git"] }.`,
   );
 
   // The credential is created on the box, never carried: the box is then the only holder of its grant.
   if (input.boxLogin) {
     runbook.push(
       ``,
-      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from this workspace):`,
+      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
       `${deploymentLoginCommand("fly", input.boxLogin)}`,
     );
   }

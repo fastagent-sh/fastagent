@@ -2,7 +2,7 @@
 
 /**
  * Format the auth status for a provider, from `AgentModels.authStatus`'s answer. `deployed`: this process is a
- * deployed box, which logs in from the owner's workspace (`fastagent login --deployment`), never by a login run on it
+ * deployed box, which logs in from the owner's agent directory (`fastagent login --deployment`), never by a login run on it
  * by hand.
  */
 export function formatAuthReport(status: {
@@ -18,7 +18,7 @@ export function formatAuthReport(status: {
   const { provider, path, source, error, stored, shadowed, deployed = false } = status;
   const because = error === undefined ? "" : ` (${error})`;
   const login = (name: string) =>
-    deployed ? `\`${name} --deployment\` from the workspace this was deployed from` : `\`${name}\``;
+    deployed ? `\`${name} --deployment\` from the agent directory this was deployed from` : `\`${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;
     if (shadowed === undefined) return { line };

@@ -39,31 +39,30 @@ describe("definition: isUnderDir (the leak-guard predicate — does the state ro
 });
 
 describe("definition: loadAgentDefinition", () => {
-  it("loads instructions from AGENTS.md and skills from SKILL.md frontmatter", async () => {
+  it("loads the appended prompt from APPEND_SYSTEM.md and skills from SKILL.md frontmatter", async () => {
     const def = await loadAgentDefinition(fixtureDir);
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Haiku Bot");
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("5-7-5");
-    expect(def.dir).toBe(fixtureDir); // AGENTS.md path is derivable: join(dir, "AGENTS.md")
+    expect(def.appendSystemPrompt?.content).toContain("Haiku Bot");
+    expect(def.appendSystemPrompt?.content).toContain("5-7-5");
+    expect(def.dir).toBe(fixtureDir);
     expect(def.skills).toHaveLength(1);
     expect(def.skills[0]!.name).toBe("season-words");
     expect(def.skills[0]!.description).toContain("kigo");
     expect(def.diagnostics).toHaveLength(0);
   });
 
-  it("missing AGENTS.md / skills returns undefined instructions and empty skills without throwing", async () => {
+  it("an empty directory is an empty definition, not an error", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-empty-definition-"));
     const def = await loadAgentDefinition(dir);
-    expect(def.contextFiles).toEqual([]);
+    expect(def.systemPrompt).toBeUndefined();
     expect(def.skills).toEqual([]);
+    expect(def.prompts).toEqual([]);
   });
 
   it("reads SYSTEM.md and APPEND_SYSTEM.md, root spelling over .pi/, and reports the shadowed one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-system-"));
-    await writeFile(join(dir, "AGENTS.md"), "# Repo spec\nProject rules here.\n");
     let def = await loadAgentDefinition(dir);
     expect(def.systemPrompt).toBeUndefined(); // pi builds its default
     expect(def.appendSystemPrompt).toBeUndefined();
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md stays context
 
     await mkdir(join(dir, ".pi"), { recursive: true });
     await writeFile(join(dir, ".pi", "SYSTEM.md"), "pi's spelling\n");
@@ -156,27 +155,6 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.skills).toEqual([]); // the malformed skill is skipped, not loaded
     expect(JSON.stringify(def.diagnostics)).toMatch(/description/); // and surfaced, not silently dropped
   });
-
-  it("agentDir ≠ cwd: the prompt from agentDir, context walked from cwd (the host repo's AGENTS.md) + agentDir's own", async () => {
-    const root = await mkdtemp(join(tmpdir(), "fa-repo-"));
-    await writeFile(join(root, "AGENTS.md"), "# Host repo spec\n"); // the repo's context, at cwd
-    const agentDir = join(root, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "SYSTEM.md"), "You are the Repo Bot.\n"); // the prompt, in agentDir
-    await writeFile(join(agentDir, "AGENTS.md"), "# Agent own note\n"); // agentDir's own context too
-
-    const def = await loadAgentDefinition(agentDir, { cwd: root });
-    expect(def.systemPrompt?.content).toContain("Repo Bot"); // from agentDir
-    expect(def.dir).toBe(agentDir);
-    const paths = def.contextFiles.map((f) => f.path);
-    expect(paths).toContain(join(agentDir, "AGENTS.md")); // agentDir's own
-    expect(paths).toContain(join(root, "AGENTS.md")); // walked up from cwd (the host repo)
-    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
-  });
-
-  // Note: AGENTS.md read errors no longer throw — ② context is sourced via pi's loadProjectContextFiles,
-  // which warns and continues on an unreadable file (a deliberate deviation from fastagent's fail-visibly,
-  // deferred with the ExecutionEnv/sandbox work; core.md §5). SYSTEM.md (below) still fails visibly.
 
   it("SYSTEM.md read errors other than not_found throw instead of silently falling back to pi's default", async () => {
     class DeniedEnv extends NodeExecutionEnv {
@@ -274,17 +252,14 @@ describe("create: the prompt pi builds from the definition", () => {
     expect(prompt).toContain("Pi documentation");
   });
 
-  it("SYSTEM.md replaces pi's default, APPEND_SYSTEM.md follows it, AGENTS.md stays project context", async () => {
+  it("SYSTEM.md replaces pi's default and APPEND_SYSTEM.md follows it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-system-prompt-"));
     await writeFile(join(dir, "SYSTEM.md"), "You are the Repo Bot.");
     await writeFile(join(dir, "APPEND_SYSTEM.md"), "Always cite the file you read.");
-    await writeFile(join(dir, "AGENTS.md"), "PROJECT CONTEXT LINE");
     const prompt = await promptOf(dir);
     expect(prompt.startsWith("You are the Repo Bot.")).toBe(true);
     expect(prompt).not.toContain("operating inside pi");
     expect(prompt).toContain("<addendum>\nAlways cite the file you read.\n</addendum>");
-    expect(prompt).toContain("PROJECT CONTEXT LINE");
-    expect(prompt.indexOf("<addendum>")).toBeLessThan(prompt.indexOf("<project_context>"));
   });
 
   it("never takes the machine's SYSTEM.md or APPEND_SYSTEM.md: a prompt from a machine would make the agent its owner's", async () => {
@@ -390,7 +365,6 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt?.match(/<available_skills>/g)).toHaveLength(1);
     expect(seenSystemPrompt?.match(/<cwd>/g)).toHaveLength(1);
-    expect(seenSystemPrompt?.match(/<project_context>/g)).toHaveLength(1);
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
     // Every directory agent gets pi's complete coding set. Custom tools stay an explicit `tools:`
@@ -550,21 +524,20 @@ describe("create: toolset (real pi tools, fidelity)", () => {
     );
   });
 
-  it("pi's read tool is rooted at the workspace it was built for", async () => {
-    // The root is fixed at CONSTRUCTION now, not handed in per turn: these are pi-coding-agent's
-    // tools, which take a cwd. Every caller builds them for the workspace the agent works on, so a
-    // relative path resolves against that workspace and nothing else.
+  it("pi's read tool is rooted at the directory it was built for", async () => {
+    // The root is fixed at CONSTRUCTION, not handed in per turn: these are pi-coding-agent's tools, which take a cwd.
+    // Every caller builds them for the agent directory, so a relative path resolves against it and nothing else.
     const read = piAllCodingTools(fixtureDir).find((t) => t.name === "read")!;
-    const r = await read.execute("t1", { path: "AGENTS.md" });
+    const r = await read.execute("t1", { path: "APPEND_SYSTEM.md" });
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
   });
 });
 
 describe("create L2: the directory is LIVE (definition re-read per invoke)", () => {
-  it("an AGENTS.md/skill edit between two invokes reaches the next turn's prompt and skill resources — no restart", async () => {
+  it("an APPEND_SYSTEM.md/skill edit between two invokes reaches the next turn's prompt and skill resources — no restart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-live-"));
-    await writeFile(join(dir, "AGENTS.md"), "You are DRAFT-PERSONA.\n");
+    await writeFile(join(dir, "APPEND_SYSTEM.md"), "Sign as DRAFT-PERSONA.\n");
     const seen: (string | undefined)[] = [];
     const { faux } = makeFaux();
     faux.setResponses([
@@ -580,8 +553,8 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
 
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    // The edit an agent might make to its own workspace mid-conversation: new persona + a new skill.
-    await writeFile(join(dir, "AGENTS.md"), "You are FINAL-PERSONA.\n");
+    // The edit an agent might make to itself mid-conversation: new standing instructions + a new skill.
+    await writeFile(join(dir, "APPEND_SYSTEM.md"), "Sign as FINAL-PERSONA.\n");
     await mkdir(join(dir, "skills", "late-skill"), { recursive: true });
     await writeFile(
       join(dir, "skills", "late-skill", "SKILL.md"),
@@ -729,23 +702,21 @@ describe("create L2: an explicit tools list states its own coding capabilities",
   });
 });
 
-describe("create L2: the workspace roots the tools, the env reads the definition", () => {
-  it("keeps `cwd` and a custom `env` apart, through the assembled agent", async () => {
-    // Two directories doing two jobs. `cwd` is the workspace: where read/bash/edit/write land AND
-    // whose ancestors carry ② project context. `env` is the IO the loader uses. Reading either root
-    // off the other silently points half the agent at the wrong directory, and only a caller passing
-    // both would ever notice — so this drives the real agent instead of re-calling the helpers.
-    const workspace = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
-    await writeFile(join(workspace, "AGENTS.md"), "# Workspace context\n\nThe marker is FROM-WORKSPACE.\n");
-    await writeFile(join(workspace, "marker.txt"), "READ-FROM-WORKSPACE\n");
-    await writeFile(join(definitionDir, "SYSTEM.md"), "You are terse.\n");
+describe("create L2: the agent directory is the working directory", () => {
+  it("roots the tools there, tells the model so, and does not load its own AGENTS.md", async () => {
+    // The agent directory's AGENTS.md is for whoever changes the agent, not a turn's context; a project's AGENTS.md
+    // arrives through a declared context. Driven through the real agent: a tool rooted elsewhere, or a prompt naming
+    // another directory, is invisible to anything but a turn.
+    const parent = await mkdtemp(join(tmpdir(), "fa-parent-"));
+    const definitionDir = join(parent, "agent");
+    await mkdir(definitionDir);
+    await writeFile(join(parent, "AGENTS.md"), "The marker is FROM-PARENT.\n");
+    await writeFile(join(definitionDir, "AGENTS.md"), "The marker is FROM-OWN-AGENTS.\n");
     await writeFile(join(definitionDir, "marker.txt"), "READ-FROM-DEFINITION-DIR\n");
 
     const { faux } = makeFaux();
     let systemPrompt = "";
-    // First turn: call `read` on a bare relative path. Whichever root the tool was built for is the
-    // one that resolves it, and each directory holds a different file at that name.
+    // First turn: call `read` on a bare relative path, which resolves against the root the tool was built for.
     faux.setResponses([
       (context) => {
         systemPrompt = sentPrompt(context);
@@ -756,28 +727,17 @@ describe("create L2: the workspace roots the tools, the env reads the definition
       },
       fauxAssistantMessage("done"),
     ]);
-    const { agent, definition } = await createPiAgentFromDefinition(definitionDir, {
+    const { agent } = await createPiAgentFromDefinition(definitionDir, {
       model: "faux/faux-1",
       providers: [faux.provider],
-      cwd: workspace,
-      env: new NodeExecutionEnv({ cwd: definitionDir }),
     });
-    // The BOOT snapshot (what callers report diagnostics from) walked the workspace.
-    expect(JSON.stringify(definition.contextFiles)).toContain("FROM-WORKSPACE");
-
     const events = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
-    // THE tool actually ran, against the workspace root it was built for.
-    const toolText = JSON.stringify(events);
-    expect(toolText).toContain("READ-FROM-WORKSPACE");
-    expect(toolText).not.toContain("READ-FROM-DEFINITION-DIR");
-
-    // ...and so did the LIVE re-read that actually reaches the model.
-    expect(systemPrompt).toContain("FROM-WORKSPACE");
-    // And the model is told the SAME root its tools resolve against — naming the loader's directory
-    // as the working directory would be a lie the model has no way to detect.
-    expect(systemPrompt).toContain(workspace);
-    expect(systemPrompt).not.toContain(definitionDir);
+    expect(JSON.stringify(events)).toContain("READ-FROM-DEFINITION-DIR");
+    expect(systemPrompt).toContain(`<cwd>\n${definitionDir}\n</cwd>`);
+    expect(systemPrompt).not.toContain("FROM-OWN-AGENTS");
+    expect(systemPrompt).not.toContain("FROM-PARENT");
+    expect(systemPrompt).not.toContain("<project_context>");
   });
 });
 

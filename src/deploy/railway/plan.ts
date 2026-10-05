@@ -41,10 +41,7 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. */
 const MOUNT = "/data";
 
-/** The `RAILWAY_DOCKERFILE_PATH` value for an agent under `prefix`. */
-export const dockerfilePathVar = (prefix: string): string => `/${prefix}Dockerfile`;
-
-/** The name this tool gives BOTH the project and the service, derived from the workspace directory. */
+/** The name this tool gives BOTH the project and the service, derived from the agent directory's name. */
 export function toRailwayName(basename: string): string {
   return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }
@@ -61,14 +58,16 @@ export function isGeneratedRailwayJson(content: string): boolean {
   }
 }
 
-/** railway.json — build/deploy only (Railway's config-as-code scope). */
-function railwayJson(prefix: string): string {
+/**
+ * railway.json — build/deploy only (Railway's config-as-code scope). It sits at the root of `railway up`'s upload
+ * context, the agent directory, where Railway reads it, and so does the Dockerfile it names.
+ */
+function railwayJson(): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
       [GENERATED_RAILWAY_KEY]: GENERATED_RAILWAY_VALUE,
-      // dockerfilePath is relative to the workspace root (`railway up`'s upload context).
-      build: { builder: "DOCKERFILE", dockerfilePath: `${prefix}Dockerfile` },
+      build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -79,13 +78,8 @@ function railwayJson(prefix: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  // railway.json is namespaced under the agent dir too (the workspace may carry its own railway.toml/json for the
-  // product).
-  const configPath = `${input.agentPrefix}railway.json`;
-  const artifacts: Artifact[] = [
-    { path: configPath, content: railwayJson(input.agentPrefix) },
-    ...containerArtifacts(input),
-  ];
+  const configPath = "railway.json";
+  const artifacts: Artifact[] = [{ path: configPath, content: railwayJson() }, ...containerArtifacts(input)];
 
   const secrets = input.secrets ?? [];
 
@@ -96,7 +90,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
-    `# another project/service/volume, splitting the persistent workspace.`,
+    `# another project/service/volume, splitting the agent's state.`,
     ``,
     `# Create + link a project (writes .railway link state in this dir; the project — not a committed`,
     `# file — is Railway's source of truth for identity, variables, and the volume).`,
@@ -111,9 +105,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `railway volume add --mount-path ${MOUNT}`,
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
-    `# RAILWAY_DOCKERFILE_PATH points the build at the agent's Dockerfile — a service variable,`,
-    `# Railway's documented route to a non-root Dockerfile (no dashboard step needed for the build).`,
-    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets RAILWAY_DOCKERFILE_PATH=${dockerfilePathVar(input.agentPrefix)}`,
+    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets`,
   ];
 
   if (secrets.length > 0) {
@@ -126,33 +118,25 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   runbook.push(
     ``,
-    `# OPTIONAL — the build already uses the agent's Dockerfile via RAILWAY_DOCKERFILE_PATH (set above),`,
-    `# and Railway's default restart policy equals what ${configPath} declares (ON_FAILURE).`,
-    `# Pointing the service at ${configPath} (Service → Settings → Config-as-code — dashboard-only) adds`,
-    `# the /health healthcheck gate: a boot-crashing deploy is marked FAILED instead of going live dead.`,
-    `# (Zero-downtime switching doesn't apply either way — the ${MOUNT} volume allows one active deployment.)`,
-  );
-  runbook.push(
-    ``,
     `# Before a new definition release, run \`fastagent deploy railway\` to refresh the release manifest.`,
-    `# Upload this workspace and build on Railway (no local Docker needed):`,
+    `# Upload the agent directory and build on Railway (no local Docker needed). Railway reads`,
+    `# ${configPath} at its root: the Dockerfile, and the /health check that marks a boot-crashing deploy FAILED.`,
     `railway up`,
   );
   // The credential is created on the box, never carried: the box is then the only holder of its grant.
   if (input.boxLogin) {
     runbook.push(
       ``,
-      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from this workspace):`,
+      `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
       `${deploymentLoginCommand("railway", input.boxLogin)}`,
     );
   }
   runbook.push(
     ``,
-    `# The volume keeps /data/base (including uncommitted work), .state and .secrets across restarts and deploys.`,
-    `# Each generated release replaces only /data/base/${input.agentPrefix}; other workspace files are initialized once.`,
+    `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
     input.shipsGit
-      ? `# Railway uploads may strip .git. Clone inside the persistent workspace when collaboration needs history.`
-      : `# To use Git for collaboration, add deploy: { apt: ["git"] }. Storage durability does not require Git.`,
+      ? `# Railway uploads may strip .git, so the deployed definition may have no history.`
+      : `# To give the agent git, add deploy: { apt: ["git"] }.`,
   );
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev).

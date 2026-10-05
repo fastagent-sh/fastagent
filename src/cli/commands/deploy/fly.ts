@@ -10,7 +10,7 @@ import {
 } from "../../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../../deploy/fly/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { type ResolvedPlacement, readTextIfExists } from "../../../paths.ts";
+import { readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
@@ -22,12 +22,12 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
   artifact: "fly.toml",
-  async shell({ agentDir, workspace }) {
+  async shell(agentDir) {
     const flyToml = await readTextIfExists(join(agentDir, "fly.toml"));
-    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(workspace)), workspace);
+    return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(agentDir)), agentDir);
   },
   async deploy(ctx) {
-    const { opts, agentDir, workspace, channels, pre, write } = ctx;
+    const { opts, agentDir, channels, pre, write } = ctx;
     const { hasCron, modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
     // Two consistent modes.
     const flyTomlPath = join(agentDir, "fly.toml");
@@ -35,7 +35,7 @@ export const flyHost: HostDeploy = {
     // Every decision below turns on ONE question — will `writeArtifacts` keep this file?
     const flyTomlKept = flyToml !== undefined && (!opts.force || !isGeneratedFlyToml(flyToml));
     const keptApp = flyTomlKept ? parseFlyAppName(flyToml as string) : undefined;
-    const appName = keptApp ?? toFlyAppName(basename(workspace));
+    const appName = keptApp ?? toFlyAppName(basename(agentDir));
     if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
     if (flyToml !== undefined && !flyTomlKept) {
       console.error(
@@ -71,8 +71,6 @@ export const flyHost: HostDeploy = {
     if (opts.run) {
       return runDeployFly({
         agentDir,
-        workspace,
-        agentPrefix: container.agentPrefix,
         appName,
         modelAuth,
         boxLogin,
@@ -88,24 +86,21 @@ export const flyHost: HostDeploy = {
 };
 
 /** `deploy fly --run`: drive flyctl to completion (idempotent, resumable). */
-async function runDeployFly(
-  params: ResolvedPlacement & {
-    /** Where the agent's files sit relative to the build context, e.g. `"fastagent/"`. */
-    agentPrefix: string;
-    appName: string;
-    modelAuth: string | undefined;
-    /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
-    boxLogin: string | undefined;
-    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-    input: boolean;
-    channels: readonly DeclaredChannel[];
-    declaredSecrets: readonly DeclaredSecret[];
-    values: ReadonlyMap<string, string>;
-    valueFile: string;
-  },
-): Promise<void> {
-  const { agentDir, workspace, agentPrefix, appName, channels } = params;
-  const fly = spawnRunner("fly", workspace);
+async function runDeployFly(params: {
+  agentDir: string;
+  appName: string;
+  modelAuth: string | undefined;
+  /** The provider the box logs in to itself once it is up (the pre-flight's `boxLogin`). */
+  boxLogin: string | undefined;
+  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+  input: boolean;
+  channels: readonly DeclaredChannel[];
+  declaredSecrets: readonly DeclaredSecret[];
+  values: ReadonlyMap<string, string>;
+  valueFile: string;
+}): Promise<void> {
+  const { agentDir, appName, channels } = params;
+  const fly = spawnRunner("fly", agentDir);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
@@ -124,9 +119,9 @@ async function runDeployFly(
       missingSecrets,
       valueFile: params.valueFile,
       channels,
-      flyConfig: `${agentPrefix}fly.toml`,
-      dockerfile: `${agentPrefix}Dockerfile`,
-      ...boxLoginStep("fly", params, () => flyShell(appName, workspace)),
+      flyConfig: "fly.toml",
+      dockerfile: "Dockerfile",
+      ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
@@ -137,12 +132,12 @@ async function runDeployFly(
 }
 
 /** `fly ssh console` into the app's machine, woken first: a suspended machine has no shell to open. */
-function flyShell(app: string, workspace: string): BoxShell {
+function flyShell(app: string, agentDir: string): BoxShell {
   return {
     ...processShell(
       "fly",
       (command) => ["ssh", "console", "--app", app, "--quiet", "--command", `sh -c '${command}'`],
-      workspace,
+      agentDir,
     ),
     // `fly ssh` fails with "no started VMs" while the machine is suspended, and a request is what resumes it. The
     // answer is not the point: a machine that stays down makes the shell fail right after, with Fly's own reason.

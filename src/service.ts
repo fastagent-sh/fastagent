@@ -298,7 +298,6 @@ export interface AgentService {
   /** The literal routes `handler` was composed from — for a startup line naming what is served. */
   routes: Routes;
   agentDir: string;
-  workspace: string;
   /**
    * What actually mounted, for a startup line: channel files serving routes, and long connections.
    */
@@ -345,10 +344,8 @@ export interface MountAgentServiceOptions {
 /** What the assembly needs from an opened agent directory — the whole of it. */
 export interface MountableAgent {
   agent: Agent;
-  /** The definition dir: where channels/, tools/ and routines/ are read from. */
+  /** The definition dir: where channels/, tools/ and routines/ are read from, and the agent's working directory. */
   agentDir: string;
-  /** The agent's cwd. */
-  workspace: string;
   /** Where durable state lives (channel state, sessions, routine fires). */
   stateRoot: string;
   /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
@@ -369,7 +366,7 @@ export async function mountAgentService(
   opened: MountableAgent,
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, workspace, stateRoot, sessionControl } = opened;
+  const { agentDir, stateRoot, sessionControl } = opened;
   // Wrapped BEFORE anything consumes it: routes, the control plane and routines must all drive the same agent, so
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
@@ -518,7 +515,6 @@ export async function mountAgentService(
           agent,
           routes: { ...routed.unverified, ...withControl.routes },
           agentDir,
-          workspace,
           channels: {
             routes: routed.routeChannels,
             longConnections: names,

@@ -389,7 +389,7 @@ export async function assertChannelReady(dir: string): Promise<void> {
       throw new Error(
         `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
           `Add a package.json declaring @fastagent-sh/fastagent there (\`init\` scaffolds one), ` +
-          `or run \`fastagent init\` in the workspace for a fresh agent`,
+          `or create a fresh agent with \`fastagent init <dir>\``,
       );
     }
     throw e;

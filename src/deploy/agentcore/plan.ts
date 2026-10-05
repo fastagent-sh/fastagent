@@ -125,10 +125,10 @@ export function isGeneratedAgentcoreTemplate(content: string): boolean {
   return content.startsWith(GENERATED_TEMPLATE_MARKER);
 }
 
-/** Deployment base name from the workspace basename — the ONE mapping used to find its stack later. */
-export function agentcoreName(workspaceBasename: string): string {
+/** Deployment base name from the agent directory's name — the ONE mapping used to find its stack later. */
+export function agentcoreName(agentDirName: string): string {
   return (
-    workspaceBasename
+    agentDirName
       .toLowerCase()
       .replace(/[^a-z0-9-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "agent"
@@ -584,7 +584,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const { name, channels } = input;
   const stack = agentcoreStackName(name);
   const repo = agentcoreRepoName(name);
-  const prefix = input.agentPrefix;
 
   // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings.
   const translated: { fact: ScheduleFact; expression: string }[] = [];
@@ -612,8 +611,8 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
 
   const topology = agentcoreTopology(input);
   const artifacts: Artifact[] = [
-    { path: `${prefix}${TEMPLATE_FILE}`, content: template(input, translated, topology) },
-    { path: `${prefix}${FORWARDER_FILE}`, content: forwarderSource() },
+    { path: TEMPLATE_FILE, content: template(input, translated, topology) },
+    { path: FORWARDER_FILE, content: forwarderSource() },
     ...containerArtifacts(input),
   ];
 
@@ -622,7 +621,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const image = `<account-id>.dkr.ecr.<region>.amazonaws.com/${repo}:<tag>`;
   const bucketHint = deploymentBucketName(name, "<account-id>");
   const runbook: string[] = [
-    `# Deploy "${name}" to AWS Bedrock AgentCore. ${prefix}${TEMPLATE_FILE} / Dockerfile(.dockerignore) are generated above.`,
+    `# Deploy "${name}" to AWS Bedrock AgentCore. ${TEMPLATE_FILE} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
     ``,
@@ -636,13 +635,13 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ``,
     `# 1b. Package the forwarder and upload it. Name the object by its CONTENT (a hash/date):`,
     `#     CloudFormation rolls the function only when the ForwarderS3Key VALUE changes.`,
-    `(cd ${prefix}lambda && zip -q forwarder.zip index.js)`,
-    `aws s3 cp ${prefix}lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
+    `(cd lambda && zip -q forwarder.zip index.js)`,
+    `aws s3 cp lambda/forwarder.zip s3://${bucketHint}/forwarder/<hash>.zip`,
     ``,
     `# 2. Build (linux/arm64) + push. Use a UNIQUE tag per deploy (a git sha / date): CloudFormation only`,
     `#    rolls the runtime when the ImageUri VALUE changes — re-pushing the same tag deploys nothing.`,
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
-    `docker buildx build --platform linux/arm64 -f ${prefix}Dockerfile -t ${image} --push .`,
+    `docker buildx build --platform linux/arm64 -f Dockerfile -t ${image} --push .`,
     ``,
     `# 3. Deploy the stack (runtime + ingress + schedules in one template).`,
   ];
@@ -656,7 +655,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const wakeSecretHint = " FastagentWakeSecret=<any random string>";
   runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
   runbook.push(
-    `aws cloudformation deploy --stack-name ${stack} --template-file ${prefix}${TEMPLATE_FILE} \\`,
+    `aws cloudformation deploy --stack-name ${stack} --template-file ${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
     `  --parameter-overrides ImageUri=${image} ForwarderBucket=${bucketHint} ForwarderS3Key=forwarder/<hash>.zip${
       secrets.length > 0 ? " FastagentEnv=<base64 JSON>" : ""
@@ -684,7 +683,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     runbook.push(
       ``,
       `# Model auth: after EVERY deploy and after 14 idle days (each storage reset wipes the last login),`,
-      `# log the runtime in to ${input.boxLogin} from this workspace — before pointing any webhook at it:`,
+      `# log the runtime in to ${input.boxLogin} from the agent directory — before pointing any webhook at it:`,
       `${deploymentLoginCommand("agentcore", input.boxLogin)}`,
     );
   }
@@ -741,7 +740,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# A provider API key in the value file travels with every deploy; a login on the runtime survives neither reset.`,
     `# Cross-deploy memory needs EFS or S3 Files, which are VPC-only (a NAT gateway for model/channel`,
     `# egress, ~$33/mo standing): use \`deploy fly\` or \`deploy railway\` for a real volume instead.`,
-    `# Keep one runtime writer per workspace; use the fixed runtime session id printed above for every entry point.`,
+    `# Keep one runtime writer per agent; use the fixed runtime session id printed above for every entry point.`,
   );
 
   return { artifacts, runbook, untranslatableSchedules: untranslatable, topology };

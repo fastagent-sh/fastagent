@@ -50,7 +50,7 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   runtime: "node",
   hasLockfile: false,
   version: "0.15.0",
-  agentPrefix: "fastagent/",
+  agent: "my-agent",
   ...over,
 });
 

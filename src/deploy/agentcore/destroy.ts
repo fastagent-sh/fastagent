@@ -143,7 +143,7 @@ export async function destroyAgentcoreDeployment(
   );
   if ("unreadable" in listed) return gate(`could not list wake alarms under ${prefix}: ${listed.unreadable}`);
   // THE FULL SHAPE, not just the prefix. The forwarder mints every alarm as prefix + sha256(wakeId)[:16]
-  // (plan.ts / forwarder.js), and a prefix alone is ambiguous between sibling agents: a workspace literally
+  // (plan.ts / forwarder.js), and a prefix alone is ambiguous between sibling agents: an agent directory literally
   // named `<name>-wk-abc` produces `fa-<name>-wk-abc-wk-<hash>`, which starts with THIS deployment's prefix.
   // Deleting it would take a live deployment's pending wake-ups, and a wake-up is not re-created.
   const isMintedAlarm = (alarm: string) =>

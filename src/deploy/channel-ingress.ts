@@ -107,8 +107,8 @@ export async function pointChannelsAt(input: {
 }
 
 /**
- * How long a just-deployed public URL gets to answer `/health`: the FIRST boot seeds the whole workspace onto the
- * volume before it binds a port, so this budget covers a copy on slow host storage, not a listen.
+ * How long a just-deployed public URL gets to answer `/health`: the boot publishes the definition onto the volume
+ * before it binds a port, so this budget covers a copy on slow host storage, not a listen.
  */
 const PUBLIC_HEALTH_TIMEOUT_MS = 180_000;
 
@@ -125,7 +125,7 @@ export type PublicHealthProbe = (healthUrl: string) => Promise<boolean>;
  * failed" — a diagnosis that hides the actual cause.
  *
  * Asked ONLY when this deployment actually has a webhook to point, or a login on the box follows (the box must
- * have prepared its workspace and installed the CLI the login runs). A definition with neither (schedules only, the
+ * have prepared its storage and installed the CLI the login runs). A definition with neither (schedules only, the
  * built-in `POST /invoke`, or long-connection channels) needs no inbound reachability at all, and demanding it would
  * invent a failure for a deploy run from a network that cannot reach the platform's edge.
  */

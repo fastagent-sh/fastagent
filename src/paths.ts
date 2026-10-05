@@ -1,14 +1,12 @@
 /**
- * PLACEMENT: which directory holds the agent, and which directory the agent works ON — plus the machinery paths that
- * follow from it.
+ * ADDRESSING: which directory is the agent — the one holding `fastagent.config.ts`, named by the caller — plus the
+ * machinery paths that follow from it. Nothing about what the agent works on is derived from where it sits; that is
+ * its declared contexts (src/contexts/).
  */
-import { type Dirent, type Stats, readdirSync, statSync } from "node:fs";
+import { type Stats, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-
-/** The directory name `init` gives an agent (`<workspace>/fastagent/`) unless `--agent-dir` names another. */
-export const DEFAULT_AGENT_DIRNAME = "fastagent";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** The user-global machinery home, `~/.fastagent`: the machine's credentials, models.json and model catalog. */
 export function globalHome(): string {
@@ -38,41 +36,10 @@ export const AGENT_MODELS_FILE = "models.json";
 /** The agent's model catalog: pi.dev's models newer than pi's bundled catalog, fetched by `models --refresh`. */
 export const AGENT_MODEL_CATALOG_FILE = "models-store.json";
 
-export interface ResolvedPlacement {
-  /**
-   * The AGENT directory — where the definition (SYSTEM.md/skills/tools/channels/routines), the config, and the
-   * machinery dirs (`.secrets/`, `.state/`) live.
-   */
-  agentDir: string;
-  /**
-   * The WORKSPACE — what the agent works ON: its cwd, and the start of the ② context walk. Always the agent
-   * directory's parent, whichever of the two the command was pointed at.
-   */
-  workspace: string;
-}
-
-/**
- * The definition paths an agent LOADS content from — the surface a second agent must not be scaffolded inside
- * ({@link agentDefinitionOwner}), because the outer agent would read it as its own skills/tools.
- */
-const LOADED_SURFACE = [
-  "SYSTEM.md",
-  "APPEND_SYSTEM.md",
-  "skills",
-  "prompts",
-  "tools",
-  "channels",
-  "routines",
-  // pi's and the standard spellings the definition also reads: `.pi/skills`, `.pi/prompts`, `.agents/skills`.
-  ".pi",
-  ".agents",
-] as const;
-
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
- * directory the caller cannot enter (EACCES) reported as no-agent-here ends in `run \`fastagent init\` to
- * scaffold one` — over a definition that exists. So ENOENT/ENOTDIR are absence, and every other errno travels
- * with its path, as {@link agentChildren} already did for the scan itself.
+ * directory the caller cannot enter (EACCES) reported as no-agent-here ends in `run \`fastagent init\`` — over a
+ * definition that exists. So ENOENT/ENOTDIR are absence, and every other errno travels with its path.
  */
 function statOrAbsent(p: string): Stats | undefined {
   try {
@@ -84,86 +51,13 @@ function statOrAbsent(p: string): Stats | undefined {
   }
 }
 
-function isDir(p: string): boolean {
-  return statOrAbsent(p)?.isDirectory() === true;
-}
-
 /** THE marker: a directory that declares itself an agent with a {@link AGENT_CONFIG_FILE}. */
 function hasConfig(p: string): boolean {
-  return isDir(p) && statOrAbsent(join(p, AGENT_CONFIG_FILE)) !== undefined;
-}
-
-/**
- * DIRECTLY inside `dir`: the agent directories, and the ones the answer is missing for.
- *
- * A NAMED directory and a SCANNED one are different questions. `hasConfig` throws for the first, because the
- * caller pointed at it. Here it cannot: every machine has directories this process may not enter, and one of
- * them sitting next to the agent must not fail a command that found the agent — `workspaceHint` scans the
- * PARENT for a hint, which on a CI runner means scanning `/tmp` and its `snap-private-tmp`. So an unreadable
- * candidate is carried, not thrown, and {@link resolvePlacement} spends it where it is the answer: a caller
- * that must produce an agent and found none says "I could not look at these", never `fastagent init`.
- */
-function agentChildren(dir: string): { agents: string[]; unreadable: string[] } {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return { agents: [], unreadable: [] };
-    throw e;
-  }
-  const agents: string[] = [];
-  const unreadable: string[] = [];
-  for (const entry of entries.filter((e) => !e.isFile())) {
-    const child = join(dir, entry.name);
-    try {
-      if (hasConfig(child)) agents.push(child);
-    } catch (e) {
-      // PERMISSION ONLY. "Someone else's 0700 directory sits next to mine" is the normal case this carrying
-      // exists for, and it is the one an operator can act on. EIO, ELOOP, a non-errno throw: those are real
-      // failures with different fixes, and a scan has no business turning them into a line of prose.
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "EACCES" && code !== "EPERM") throw e;
-      unreadable.push(entry.name);
-    }
-  }
-  return { agents: agents.sort(), unreadable: unreadable.sort() };
-}
-
-/**
- * The agents `dir` resolves over: ITSELF when it holds a config, else the ones directly inside it — never both,
- * because aiming at an agent can only mean that agent.
- */
-export function agentsAt(dir: string): string[] {
-  return scanAgents(resolve(dir)).agents;
-}
-
-/** {@link agentsAt} plus what the scan could not look at — one readdir answering both questions. */
-function scanAgents(base: string): { agents: string[]; unreadable: string[] } {
-  return hasConfig(base) ? { agents: [base], unreadable: [] } : agentChildren(base);
-}
-
-/** WHICH agent is meant, when a directory holds several. */
-function selectAgent(agents: string[], env: NodeJS.ProcessEnv): string | undefined {
-  const wanted = env.FASTAGENT_AGENT;
-  if (wanted) return agents.find((a) => basename(a) === wanted);
-  const [only, ...rest] = agents;
-  return rest.length === 0 ? only : agents.find((a) => basename(a) === DEFAULT_AGENT_DIRNAME);
-}
-
-/** Resolve `dir` into its placement, or undefined when nothing selects one agent. */
-function findPlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement | undefined {
-  const agentDir = selectAgent(agentsAt(resolve(dir)), env);
-  return agentDir === undefined ? undefined : { agentDir, workspace: dirname(agentDir) };
-}
-
-/** The agent dir for `dir`, or undefined when there is none — {@link findPlacement} without the pair or the throw. */
-export function findAgentDir(dir: string): string | undefined {
-  return findPlacement(dir)?.agentDir;
+  return statOrAbsent(p)?.isDirectory() === true && statOrAbsent(join(p, AGENT_CONFIG_FILE)) !== undefined;
 }
 
 /** The agent `dir` sits INSIDE (the nearest proper ancestor that IS an agent dir), or undefined. */
-function enclosingAgentDir(dir: string): string | undefined {
+export function enclosingAgentDir(dir: string): string | undefined {
   let candidate = dirname(resolve(dir));
   for (let prev = ""; candidate !== prev; prev = candidate, candidate = dirname(candidate)) {
     if (hasConfig(candidate)) return candidate;
@@ -172,86 +66,31 @@ function enclosingAgentDir(dir: string): string | undefined {
 }
 
 /**
- * The agent whose DEFINITION contains `dir` — scaffolding there would make the new agent part of the outer one's
- * loaded surface rather than an agent of its own.
+ * The agent directory `dir` names, for a command that also works without one (`login`, `models`): `dir` itself when it
+ * holds the config, undefined when it is no agent and inside none. Inside an agent is refused, naming its root —
+ * answering for the enclosing agent would act on a directory the caller did not name, and answering "no agent" would
+ * send a login to the machine's store.
  */
-export function agentDefinitionOwner(dir: string): string | undefined {
+export function findAgentDir(dir: string): string | undefined {
   const base = resolve(dir);
-  const agent = enclosingAgentDir(base);
-  if (!agent) return undefined;
-  const [head] = relative(agent, base).split(sep);
-  return head && (LOADED_SURFACE as readonly string[]).includes(head) ? agent : undefined;
-}
-
-/** Why `dir` is not an agent, when it has its OWN way out — or undefined when it is simply not near one. */
-export function placementDeadEnd(dir: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const base = resolve(dir);
+  if (hasConfig(base)) return base;
   const enclosing = enclosingAgentDir(base);
   if (enclosing) {
-    return `${base} is inside the agent ${enclosing} but is not its root — \`cd\` there (or to its workspace) and re-run`;
-  }
-  const agents = agentsAt(base).map((a) => basename(a));
-  const listed = `${base} holds ${agents.length} agent${agents.length === 1 ? "" : "s"} (${agents.join(", ")})`;
-  // Asserting a name that is not here is a different mistake from asserting none, and it is worth its own message at
-  // ANY count.
-  if (env.FASTAGENT_AGENT && agents.length > 0) {
-    return (
-      `${listed}, and FASTAGENT_AGENT asserts "${env.FASTAGENT_AGENT}", which is not one of them — set it ` +
-      `to one of those, unset it, or scope it to the repository that needs it (an .envrc)`
-    );
-  }
-  if (agents.length > 1) {
-    return (
-      `${listed} and none of them is named "${DEFAULT_AGENT_DIRNAME}" (the default) — pick one with ` +
-      `FASTAGENT_AGENT=<name>, or point fastagent at the one you want`
-    );
+    throw new Error(`${base} is inside the agent ${enclosing} — run from ${enclosing}, or pass it as the agent`);
   }
   return undefined;
 }
 
-/**
- * Resolve a directory into its placement — the ONE owner of the rule ({@link findPlacement}).
- *
- * WHERE AN UNREADABLE CANDIDATE IS SPENT, and only here: this caller MUST produce an agent, so a directory it
- * could not look into is the difference between "there is none" and "there might be". `placementDeadEnd` is
- * asked a weaker question — is this place a dead end with its own way out — by callers like `login`, for which
- * a neighbour it may not enter is environment noise, not a reason to exit instead of logging in globally. It
- * also comes AFTER that call: with two agents to choose between, a permission problem in a third directory is
- * not the message that gets the caller moving.
- */
-export function resolvePlacement(dir: string, env: NodeJS.ProcessEnv = process.env): ResolvedPlacement {
-  const placement = findPlacement(dir, env);
-  if (!placement) {
-    const base = resolve(dir);
-    throw new Error(placementDeadEnd(base, env) ?? `${base} is not a fastagent agent${noAgentHere(base)}`);
+/** The agent directory `dir` names ({@link findAgentDir}), refusing when there is none. */
+export function resolveAgentDir(dir: string): string {
+  const agentDir = findAgentDir(dir);
+  if (agentDir === undefined) {
+    throw new Error(
+      `${resolve(dir)} is not a fastagent agent — it holds no ${AGENT_CONFIG_FILE}; pass the agent's directory, ` +
+        "or create one with `fastagent init <dir>`",
+    );
   }
-  return placement;
-}
-
-/** At most this many names before the rest become a count — `/tmp` on a shared machine has plenty. */
-const LISTED_UNREADABLE = 3;
-
-/**
- * The rest of the "not an agent" refusal: the way out, plus what could not be looked at.
- *
- * BOTH, never one or the other. `fastagent init` is the only line that tells the caller what to do, and a
- * directory it cannot enter is exactly why that advice can be wrong (#571: scaffolding over a definition that
- * is there but invisible). Substituting the second for the first sends anyone running in `/tmp`, or on a
- * shared machine, to fix permissions on directories that were never theirs and hold no agent.
- */
-function noAgentHere(base: string): string {
-  const { unreadable } = scanAgents(base);
-  const noConfig = ` — no fastagent.config.ts here, and no readable directory holding one directly inside`;
-  const scaffold = "run `fastagent init` to scaffold one";
-  if (unreadable.length === 0) return `${noConfig}; ${scaffold}`;
-  const shown = unreadable.slice(0, LISTED_UNREADABLE).join(", ");
-  const rest = unreadable.length - LISTED_UNREADABLE;
-  // The unknown FIRST, because it is the one thing that can make the advice wrong.
-  return (
-    `${noConfig}. ${unreadable.length} director${unreadable.length === 1 ? "y" : "ies"} here could not be ` +
-    `read (permission), so an agent may be inside one: ${shown}${rest > 0 ? `, +${rest} more` : ""}. Check ` +
-    `those first; ${scaffold} only if none of them holds an agent`
-  );
+  return agentDir;
 }
 
 /** How to WRITE a path for someone standing in `cwd`. */

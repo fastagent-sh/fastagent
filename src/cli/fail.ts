@@ -1,4 +1,4 @@
-import { type ResolvedPlacement, resolvePlacement } from "../paths.ts";
+import { findAgentDir, resolveAgentDir } from "../paths.ts";
 import { gateSecrets } from "../secrets-gate.ts";
 
 /** stderr renders color: a color TTY, with Node's `hasColors()` carrying the NO_COLOR/TERM=dumb veto. */
@@ -36,10 +36,19 @@ export function gateSecretsOrExit(input: Parameters<typeof gateSecrets>[0]): voi
   }
 }
 
-/** THE placement entry point for commands: resolve `dir`, or exit 1 with the one-line refusal. */
-export function placementOrExit(dir: string): ResolvedPlacement {
+/** THE addressing entry point for commands: the agent directory `dir` names, or exit 1 with the one-line refusal. */
+export function agentDirOrExit(dir: string): string {
   try {
-    return resolvePlacement(dir);
+    return resolveAgentDir(dir);
+  } catch (error) {
+    failStartup(error);
+  }
+}
+
+/** {@link findAgentDir} for a command that also works without an agent: undefined when there is none, exit 1 inside one. */
+export function optionalAgentDirOrExit(dir: string): string | undefined {
+  try {
+    return findAgentDir(dir);
   } catch (error) {
     failStartup(error);
   }

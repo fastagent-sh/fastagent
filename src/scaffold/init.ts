@@ -1,15 +1,7 @@
 /** Init: scaffold a runnable fastagent agent, offline. */
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
-import {
-  AGENT_CONFIG_FILE,
-  DEFAULT_AGENT_DIRNAME,
-  SECRETS_DIRNAME,
-  agentDefinitionOwner,
-  agentsAt,
-  displayPath,
-  exists,
-} from "../paths.ts";
+import { dirname, join, sep } from "node:path";
+import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 
@@ -18,137 +10,73 @@ interface ScaffoldFile {
   content: string;
 }
 
-/** The agent directory name for a raw `--agent-dir` value: the default when unset, and `./bot` read as `bot`. */
-export function agentDirName(raw: string | undefined): string {
-  if (raw === undefined) return DEFAULT_AGENT_DIRNAME;
-  const trimmed = raw.replace(/^\.[/\\]/, "");
-  return trimmed === "" ? raw : trimmed;
-}
-
-/**
- * Why `name` cannot be an agent directory name, or undefined when it can.
- *
- * `"."` is refused along with every path: the definition always lands in a SUBDIRECTORY, and the directory around it
- * is the workspace. The subdirectory also carries its own `package.json`, so a `fastagent.config.ts` never loads under
- * the host repo's module settings.
- */
-export function agentDirNameError(name: string): string | undefined {
-  if (name !== "" && name !== "." && name !== ".." && name === basename(name)) return undefined;
-  return (
-    `must be a single directory name — the definition lives in a subdirectory, and the directory around it is ` +
-    `the workspace the agent works on (a path, or ".", would put it elsewhere)`
-  );
-}
-
-export interface ScaffoldOptions {
-  /** The agent directory's name inside `dir` — default {@link DEFAULT_AGENT_DIRNAME}. */
-  agentDir?: string;
-}
-
 export interface ScaffoldResult {
+  /** The agent directory: `dir` itself. */
   dir: string;
-  /** The agent dir relative to `dir`: the {@link ScaffoldOptions.agentDir} that was used. */
-  agentDir: string;
   /** Files written by this run (relative to `dir`). */
   created: string[];
 }
 
-/** Scaffold a runnable agent into `<dir>/<agentDir>/` (both created if missing). */
-export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
-  const root = agentDirName(options.agentDir);
-  const invalid = agentDirNameError(root);
-  if (invalid) throw new Error(`agentDir "${root}" ${invalid}`);
+/** Entries a directory may hold and still count as empty. */
+const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
+
+/**
+ * Scaffold a runnable agent INTO `dir`, which must be new or empty. An agent is a directory of its own: what it works
+ * on is declared, never the directory around it.
+ */
+export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
   const skill = (name: string) => ({
-    rel: join(root, "skills", "writing-great-skills", name),
+    rel: join("skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),
   });
   const files: ScaffoldFile[] = [
     // Standing instructions, added to pi's default prompt (SYSTEM.md would replace it).
-    { rel: join(root, "APPEND_SYSTEM.md"), content: baseTemplate("APPEND_SYSTEM.md") },
+    { rel: "APPEND_SYSTEM.md", content: baseTemplate("APPEND_SYSTEM.md") },
     // The example skill: how to author skills well — the core of self-iteration.
     skill("SKILL.md"),
     skill("GLOSSARY.md"),
     skill("LICENSE"),
-    { rel: join(root, AGENT_CONFIG_FILE), content: baseTemplate(AGENT_CONFIG_FILE) },
+    { rel: AGENT_CONFIG_FILE, content: baseTemplate(AGENT_CONFIG_FILE) },
     // Two ignore files, scaffolded ONCE and owned by the author from then on — no command rewrites, reads or verifies
     // them.
-    { rel: join(root, ".gitignore"), content: baseTemplate("gitignore") },
-    { rel: join(root, SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
-    { rel: join(root, SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
-    { rel: join(root, "tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
-    // The agent's own manifest, named after the directory it serves. Its `type: module` is why the definition gets a
-    // subdirectory of its own: a config file under a host repo's CommonJS manifest does not load.
-    {
-      rel: join(root, "package.json"),
-      content: packageJson(`${toPackageName(dir)}-agent`, await fastagentVersion()),
-    },
+    { rel: ".gitignore", content: baseTemplate("gitignore") },
+    { rel: join(SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
+    { rel: join(SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
+    { rel: join("tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
+    // The agent's own manifest, named after its directory.
+    { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
   ];
 
-  // Inside another agent's DEFINITION (its `skills/`, `tools/`, `channels/` or `routines/`): the outer agent would
-  // load the new one as its own content.
-  const owner = agentDefinitionOwner(dir);
+  const shown = displayPath(process.cwd(), dir) ?? dir;
+  // Inside another agent: that agent's directory is its own definition and working directory, so the new one would be
+  // read as part of it.
+  const owner = enclosingAgentDir(dir);
   if (owner) {
     throw new Error(
-      `"${dir}" is inside the definition of the agent at ${owner} — an agent scaffolded here would be ` +
-        `part of THAT agent's surface, not one of its own. Init outside it.`,
+      `"${shown}" is inside the agent ${owner} — an agent is a directory of its own; create it outside that one`,
     );
   }
-
-  // Preflight scaffold parent dirs FIRST: a pre-existing non-directory there would make mkdir fail mid-loop AFTER the
-  // first write, leaving a half-scaffold.
-  const parents = new Set<string>();
-  for (const file of files) {
-    let p = dirname(file.rel);
-    while (p !== "." && p !== "") {
-      parents.add(p);
-      p = dirname(p);
-    }
-  }
-  for (const rel of parents) {
-    const st = await lstat(join(dir, rel)).catch(() => undefined);
-    if (st && !st.isDirectory()) {
-      throw new Error(
-        `cannot scaffold: "${rel}" exists and is not a directory (a regular file or symlink) — remove it, or init elsewhere`,
-      );
-    }
-  }
-
-  // Refuse an occupied agent dir.
-  const occupants = (
-    await readdir(join(dir, root)).catch((e: NodeJS.ErrnoException) => {
-      if (e.code === "ENOENT") return [] as string[];
-      throw e;
-    })
-  ).filter((f) => ![".DS_Store", ".gitkeep", ".keep"].includes(f));
-  // Could `dir` still SELECT the agent this run creates?
-  const existing = agentsAt(dir).filter((a) => a !== resolve(dir, root));
-  const shadowed = existing.filter((a) => a === resolve(dir)); // an agent AT `dir` hides the new one inside it
-  if (shadowed.length > 0) {
-    throw new Error(
-      `"${dir}" already resolves to ${shadowed.map((a) => displayPath(process.cwd(), a) ?? a).join(", ")} — ` +
-        `an agent scaffolded in ./${root}/ would be hidden by it and never served ` +
-        `from "${dir}" (an agent AT a directory wins over any inside it). Use that agent, move it away, ` +
-        `or init in a different directory.`,
-    );
-  }
-
-  // ONE coordinate system for both refusals — `displayPath` is the shared policy (relative inside the cwd, absolute
-  // when it climbs out).
-  const target = displayPath(process.cwd(), join(dir, root)) ?? join(dir, root);
+  const st = await lstat(dir).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return undefined;
+    throw e;
+  });
+  if (st && !st.isDirectory()) throw new Error(`"${shown}" exists and is not a directory`);
+  const occupants = st ? (await readdir(dir)).filter((name) => !IGNORABLE.includes(name)) : [];
   if (occupants.includes(AGENT_CONFIG_FILE)) {
-    throw new Error(`"${target}" already has ${AGENT_CONFIG_FILE} — already a fastagent agent`);
+    throw new Error(`"${shown}" already has ${AGENT_CONFIG_FILE} — already a fastagent agent`);
   }
   if (occupants.length > 0) {
     throw new Error(
-      `"${target}" already holds ${occupants.join(", ")} — move it away first, or run ` +
-        `\`fastagent init\` in a different directory`,
+      `"${shown}" is not empty (it holds ${occupants.join(", ")}) — an agent lives in a directory of its own: ` +
+        "`fastagent init <new directory>`",
     );
   }
 
-  // Which directories were OURS to create?
-  const preexisting = new Set<string>();
-  for (const rel of parents) if (await exists(join(dir, rel))) preexisting.add(rel);
-  const agentDirExisted = await exists(join(dir, root));
+  const parents = new Set<string>();
+  for (const file of files) {
+    for (let p = dirname(file.rel); p !== "." && p !== ""; p = dirname(p)) parents.add(p);
+  }
+  const dirExisted = st !== undefined;
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
   // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made for them.
@@ -164,10 +92,10 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     // Best-effort rollback of a partial scaffold.
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
     for (const rel of [...parents].sort((a, b) => b.split(sep).length - a.split(sep).length)) {
-      if (rel !== root && !preexisting.has(rel)) await rmdir(join(dir, rel)).catch(() => {});
+      await rmdir(join(dir, rel)).catch(() => {});
     }
-    if (!agentDirExisted) await rmdir(join(dir, root)).catch(() => {});
+    if (!dirExisted) await rmdir(dir).catch(() => {});
     throw error;
   }
-  return { dir, agentDir: root, created };
+  return { dir, created };
 }

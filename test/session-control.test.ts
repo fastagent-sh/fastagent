@@ -486,7 +486,7 @@ describe("session control: observation plane", () => {
         join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
-      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const opened = await createPiAgentFromDir(join(dir, "fastagent"), { sessionControl: true });
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // Broken AFTER boot — which is the case the read exists for: a finding already present at
       // startup was reported by the caller's boot report, and re-printing it is the spam the memo
@@ -518,7 +518,7 @@ describe("session control: observation plane", () => {
         join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
-      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const opened = await createPiAgentFromDir(join(dir, "fastagent"), { sessionControl: true });
       expect(opened.sessionControl).toBeDefined();
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
       // The control is live over this workspace's (jsonl) store: read-only observation works
@@ -534,14 +534,14 @@ describe("session control: observation plane", () => {
       expect(await control.sessions.get("ghost").entries()).toEqual({ entries: [] });
       expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
       // Not requested, not serving → not built.
-      const plain = await createPiAgentFromDir(dir, {});
+      const plain = await createPiAgentFromDir(join(dir, "fastagent"), {});
       expect(plain.sessionControl).toBeUndefined();
       expect(plain.publishControl).toBe(false);
 
       // A SERVE gets the hub whether or not `/control/*` is published: `/stop` in a chat reaches the running turn
       // through it, and telling an author to open a remote management surface to stop a turn is the trade this
       // split removes. Its boundary stays unwired, so a write is refused the same way it would be over HTTP.
-      const serving = await createPiAgentFromDir(dir, { serving: true });
+      const serving = await createPiAgentFromDir(join(dir, "fastagent"), { serving: true });
       const hub = serving.sessionControl as NonNullable<typeof serving.sessionControl>;
       expect(hub).toBeDefined();
       expect(serving.publishControl).toBe(false);
@@ -568,7 +568,7 @@ describe("session control: observation plane", () => {
         join(dir, "fastagent", "fastagent.config.ts"),
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
-      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const opened = await createPiAgentFromDir(join(dir, "fastagent"), { sessionControl: true });
       const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
 
       const skills = async () => (await control.commands()).filter((command) => command.source === "skill");
@@ -3208,7 +3208,7 @@ describe("session control: boundary mutations", () => {
         `export default { model: "openai-codex/gpt-5.5" };\n`,
       );
       const seen: string[] = [];
-      const opened = await createPiAgentFromDir(dir, {
+      const opened = await createPiAgentFromDir(join(dir, "fastagent"), {
         sessionControl: true,
         observer: (_s: string, event: { type: string }) => {
           seen.push(event.type);

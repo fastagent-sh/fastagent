@@ -187,7 +187,7 @@ describe("every host's runbook reads the same answer", () => {
   const fly = (channels: ReturnType<typeof webhook>) =>
     planFlyDeploy({
       releaseId: "release-one",
-      agentPrefix: "fastagent/",
+      agent: "bot",
       appName: "bot",
       port: 8787,
       hasPackageJson: true,
@@ -201,7 +201,7 @@ describe("every host's runbook reads the same answer", () => {
   const railway = (channels: ReturnType<typeof webhook>) =>
     planRailwayDeploy({
       releaseId: "release-one",
-      agentPrefix: "fastagent/",
+      agent: "bot",
       serviceName: "bot",
       hasPackageJson: true,
       runtime: "node",
@@ -221,7 +221,7 @@ describe("every host's runbook reads the same answer", () => {
       runtime: "node",
       hasLockfile: true,
       version: "9.9.9",
-      agentPrefix: "fastagent/",
+      agent: "bot",
     }).runbook.join("\n");
 
   it("fly: a long-connection telegram gets no setWebhook step", () => {

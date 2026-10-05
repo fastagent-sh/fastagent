@@ -320,7 +320,7 @@ function fastagentSections(sections: Record<string, string>): InlineExtension {
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
 export function definitionResourceLoaderOptions(source: {
   definition: PiSessionDefinition;
-  /** {@link readMachine} for this workspace — resolved by the caller, because this function is synchronous. */
+  /** {@link readMachine} for this agent directory — resolved by the caller, because this function is synchronous. */
   machine: Machine;
   extensionPaths?: readonly string[];
 }): DefinitionLoaderOptions {

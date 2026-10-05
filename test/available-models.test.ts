@@ -17,10 +17,10 @@ import {
   refreshModelCatalogOver,
 } from "../src/engines/pi/open.ts";
 
-/** A workspace whose agent sits one level inside, with no model set and two custom endpoints. */
-async function workspace(auth: string): Promise<{ dir: string; authPath: string }> {
-  const dir = await mkdtemp(join(tmpdir(), "fa-available-"));
-  const agent = join(dir, "agent");
+/** An agent with no model set and two custom endpoints; its credentials file sits outside it. Returns the agent. */
+async function agent(auth: string): Promise<{ dir: string; authPath: string }> {
+  const host = await mkdtemp(join(tmpdir(), "fa-available-"));
+  const agent = join(host, "agent");
   await mkdir(agent);
   await writeFile(join(agent, "fastagent.config.ts"), "export default {};");
   await writeFile(
@@ -44,9 +44,9 @@ async function workspace(auth: string): Promise<{ dir: string; authPath: string 
       },
     }),
   );
-  const authPath = join(dir, "auth.json");
+  const authPath = join(host, "auth.json");
   await writeFile(authPath, auth);
-  return { dir, authPath };
+  return { dir: agent, authPath };
 }
 
 afterEach(() => {
@@ -60,7 +60,7 @@ describe("availableModelsFromDir", () => {
     for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
       vi.stubEnv(name, undefined);
     const expiredOAuth = { anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } };
-    const { dir, authPath } = await workspace(JSON.stringify(expiredOAuth));
+    const { dir, authPath } = await agent(JSON.stringify(expiredOAuth));
     const fetch = vi.spyOn(globalThis, "fetch");
 
     const models = await availableModelsFromDir(dir, { authPath });
@@ -82,7 +82,7 @@ describe("availableModelsFromDir", () => {
   it("a listed spec is one the opener runs with", async () => {
     for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
       vi.stubEnv(name, undefined);
-    const { dir, authPath } = await workspace("{}");
+    const { dir, authPath } = await agent("{}");
     const specs = (await availableModelsFromDir(dir, { authPath })).map((model) => model.spec);
     expect(specs.some((s) => s.startsWith("anthropic/"))).toBe(false); // no stored login, no env key: not listed
     const [spec] = specs.filter((s) => s.startsWith("local/"));
@@ -93,7 +93,7 @@ describe("availableModelsFromDir", () => {
   });
 
   it("a corrupt credentials file reaches a throwing warn instead of reading as nothing configured", async () => {
-    const { dir, authPath } = await workspace("{ not json");
+    const { dir, authPath } = await agent("{ not json");
     await expect(
       availableModelsFromDir(dir, {
         authPath,
@@ -126,8 +126,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
   it("an agent's refresh lands in its own models-store.json: its list, its runs, and its deploy — no other agent's", async () => {
     // pi fetches a provider's catalog only with a usable credential for it.
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
-    const a = await workspace("{}");
-    const b = await workspace("{}");
+    const a = await agent("{}");
+    const b = await agent("{}");
     const specs = async () => (await availableModelsFromDir(a.dir, { authPath: a.authPath })).map((m) => m.spec);
     expect(await specs()).not.toContain(`anthropic/${NEW}`);
 
@@ -138,12 +138,12 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       catalog.close();
     }
 
-    expect(existsSync(join(a.dir, "agent", "models-store.json"))).toBe(true);
+    expect(existsSync(join(a.dir, "models-store.json"))).toBe(true);
     expect(await specs()).toContain(`anthropic/${NEW}`);
     const opened = await createPiAgentFromDir(a.dir, { model: `anthropic/${NEW}`, authPath: a.authPath });
     expect(opened.modelSpec).toBe(`anthropic/${NEW}`); // listed, so it runs
     const deployed = await createPiModelRuntime({
-      agentDir: join(a.dir, "agent"),
+      agentDir: a.dir,
       credentials: new InMemoryCredentialStore(),
       machineLayer: false,
     });
@@ -154,7 +154,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
 
   it("a machine refresh (-g) reaches every agent here and `fastagent models`, and no deploy", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
-    const b = await workspace("{}");
+    const b = await agent("{}");
     const catalog = await catalogServer();
     try {
       await refreshMachineModelCatalogOver({}, catalog.url);
@@ -162,7 +162,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
       expect(ofB).toContain(`anthropic/${NEW}`);
       expect((await machineModelRuntime()).getModel("anthropic", NEW)).toBeDefined();
       const deployed = await createPiModelRuntime({
-        agentDir: join(b.dir, "agent"),
+        agentDir: b.dir,
         credentials: new InMemoryCredentialStore(),
         machineLayer: false,
       });
@@ -191,7 +191,7 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
 
   it("a refresh that fails names the provider and why, instead of leaving the list silently stale", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
-    const { dir, authPath } = await workspace("{}");
+    const { dir, authPath } = await agent("{}");
     const catalog = await catalogServer(403);
     try {
       await expect(refreshModelCatalogOver(dir, { authPath }, catalog.url)).rejects.toThrow(/anthropic: .*403/);
@@ -201,8 +201,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
   });
 
   it("a refused refresh writes nothing: no models-store.json appears for PI_OFFLINE or a missing credential", async () => {
-    const { dir, authPath } = await workspace("{}");
-    const file = join(dir, "agent", "models-store.json");
+    const { dir, authPath } = await agent("{}");
+    const file = join(dir, "models-store.json");
     vi.stubEnv("PI_OFFLINE", "1");
     await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(/PI_OFFLINE/);
     expect(existsSync(file)).toBe(false);
@@ -217,8 +217,8 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
 
   it("a corrupt catalog fails the refresh once, by its own message, before any provider is asked", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test"); // a usable credential: the refresh would go ahead
-    const { dir, authPath } = await workspace("{}");
-    const file = join(dir, "agent", "models-store.json");
+    const { dir, authPath } = await agent("{}");
+    const file = join(dir, "models-store.json");
     await writeFile(file, '{ "anthropic": ');
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     await expect(refreshModelCatalogOver(dir, { authPath }, "http://127.0.0.1:9")).rejects.toThrow(

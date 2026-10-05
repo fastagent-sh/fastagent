@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import { planRailwayDeploy, toRailwayName } from "../src/deploy/railway/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
-const json = (p: ReturnType<typeof planRailwayDeploy>) =>
-  p.artifacts.find((a) => a.path === "fastagent/railway.json")!.content;
+const json = (p: ReturnType<typeof planRailwayDeploy>) => p.artifacts.find((a) => a.path === "railway.json")!.content;
 const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n");
 
-/** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
+/** Defaults for the fields a test doesn't care about (a code agent with a lockfile). */
 const base = {
   releaseId: "release-one",
-  agentPrefix: "fastagent/",
+  agent: "reviewer",
   serviceName: "bot",
   hasPackageJson: true,
   runtime: "node",
@@ -37,35 +36,26 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
+  it("railway.json and the Dockerfile sit at the root of the upload, where Railway reads both", () => {
     const p = planRailwayDeploy({ ...base, channels: [] });
-    expect(p.artifacts.map((a) => a.path).sort()).toEqual([
-      ".dockerignore",
-      "fastagent/Dockerfile",
-      "fastagent/Dockerfile.dockerignore",
-      "fastagent/fastagent.release.json",
-      "fastagent/railway.json",
-    ]);
-    const cfg = JSON.parse(p.artifacts.find((a) => a.path === "fastagent/railway.json")?.content ?? "{}");
-    expect(cfg.build.dockerfilePath).toBe("fastagent/Dockerfile"); // relative to the workspace upload context
-    // The BUILD entry is a scriptable service variable (pointing Railway at the namespaced config file
-    // is dashboard-only) — set in the same variables step as the machinery knobs, before the first up.
-    expect(runbook(p)).toMatch(
-      /railway variables set FASTAGENT_STATE_DIR=\/data\/\.state FASTAGENT_SECRETS_DIR=\/data\/\.secrets RAILWAY_DOCKERFILE_PATH=\/fastagent\/Dockerfile/,
+    const cfg = JSON.parse(json(p));
+    expect(cfg.build.dockerfilePath).toBe("Dockerfile"); // relative to the upload context, the agent directory
+    // Nothing to point Railway at by hand any more: no service variable, no dashboard step.
+    expect(runbook(p)).toContain(
+      "railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets\n",
     );
-    // The dashboard config-as-code pointer is stated as OPTIONAL (adds the /health gate only).
-    expect(runbook(p)).toMatch(/OPTIONAL[\s\S]*Config-as-code/);
-    expect(runbook(p)).toContain("including uncommitted work");
+    expect(runbook(p)).not.toMatch(/RAILWAY_DOCKERFILE_PATH|Config-as-code/);
+    expect(runbook(p)).toContain("each release replaces /data/definition");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
-      "fastagent/railway.json",
-      "fastagent/fastagent.release.json",
-      "fastagent/Dockerfile",
+      "railway.json",
+      "fastagent.release.json",
+      "Dockerfile",
       ".dockerignore",
-      "fastagent/Dockerfile.dockerignore",
+      "Dockerfile.dockerignore",
     ]);
     // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
     // creep back in silently; machinery/secret excludes are the hard contract instead.

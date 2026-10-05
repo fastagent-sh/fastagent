@@ -7,7 +7,6 @@ import { setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
-import type { ResolvedPlacement } from "../../paths.ts";
 import { failStartup } from "../fail.ts";
 import { assertTunnelBindable, cliMountOptions, serveService, withRunOverrides } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
@@ -35,24 +34,24 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
-  const placement = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
+  const agentDir = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
-    await serveOnce(placement, opts);
+    await serveOnce(agentDir, opts);
     return;
   }
   parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
   // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a tunnel exist.
   assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false);
-  await runDevSupervisor(placement, { tunnel: opts.tunnel ?? false });
+  await runDevSupervisor(agentDir, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
-async function serveOnce(placement: ResolvedPlacement, opts: DevOptions): Promise<void> {
+async function serveOnce(agentDir: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const tunnel = opts.tunnel ?? false;
   assertTunnelBindable(host, tunnel);
-  const a = await createPiAgentFromDir(placement.agentDir, {
+  const a = await createPiAgentFromDir(agentDir, {
     model: opts.model,
     serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);

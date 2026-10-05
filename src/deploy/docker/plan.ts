@@ -25,14 +25,14 @@ export interface DockerPlanInput extends ContainerInput {
    * carries.
    */
   secrets?: readonly DeploymentSecret[];
-  /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), workspace-relative. */
+  /** The value file as the pre-flight resolved it (it follows `FASTAGENT_SECRETS_DIR`), agent-dir-relative. */
   valueFile: string;
 }
 
 export interface DockerPlan {
   /** fastagent.compose.yml + the shared Dockerfile/ignore artifacts. */
   artifacts: Artifact[];
-  /** Compose file path relative to the workspace root (under the agent prefix). */
+  /** Compose file path relative to the agent directory. */
   composePath: string;
   /** Ordered local build/run/operate instructions. */
   runbook: string[];
@@ -72,10 +72,7 @@ function composeInterpolation(name: string): string {
 }
 
 function composeYaml(input: DockerPlanInput): string {
-  // Compose sits beside the Dockerfile, under the agent prefix; the build context is always the WORKSPACE, so it
-  // climbs back out of the one-level prefix deploy requires.
-  const context = "..";
-  const dockerfile = `${input.agentPrefix}Dockerfile`;
+  // Compose sits beside the Dockerfile, in the agent directory, which is the build context.
   const tunnelService = input.tunnel
     ? `
   # Cloudflare Quick Tunnel: ephemeral URL, generated only with \`deploy docker --tunnel\`.
@@ -111,8 +108,8 @@ name: ${input.projectName}
 services:
   agent:
     build:
-      context: ${context}
-      dockerfile: ${dockerfile}
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "127.0.0.1:${input.port}:${input.port}"
     # The deployed environment's own declaration, read by the container itself. \`env_file\`, not per-name
@@ -149,7 +146,7 @@ volumes:
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
-  const composePath = `${input.agentPrefix}${DOCKER_COMPOSE_FILE}`;
+  const composePath = DOCKER_COMPOSE_FILE;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   // One spelling for every command: the generated file names the value file itself (`env_file`), so no command
   // needs a flag to reach the deployed environment's declaration.
@@ -171,15 +168,14 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     );
   }
   runbook.push(
-    `# Run from the WORKSPACE ROOT (the directory containing ${input.agentPrefix}).`,
-    `# The build bakes the whole directory as the agent's workspace; only the agent's own`,
-    `# dependencies (${input.agentPrefix}package.json) are installed.`,
+    `# Run from the agent directory. The build bakes it as the definition and installs its`,
+    `# package.json dependencies.`,
   );
 
   runbook.push(
     ``,
     `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
-    `# The Compose volume at ${MOUNT} retains the workspace, state and credentials.`,
+    `# The Compose volume at ${MOUNT} retains the deployed definition, state and credentials.`,
     `${compose} up -d --build`,
     `curl --fail http://127.0.0.1:${input.port}/health`,
     ...(input.boxLogin
@@ -193,7 +189,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `${compose} logs -f agent`,
     `${compose} ps`,
     `${compose} down        # stops containers; keeps the state volume`,
-    `# ${compose} down -v   # DESTRUCTIVE: deletes workspace, credentials and all agent state`,
+    `# ${compose} down -v   # DESTRUCTIVE: deletes credentials and all agent state`,
   );
 
   if (input.tunnel) {

@@ -21,7 +21,7 @@ import { deployAgentcoreRun, pickStackOutputs } from "../../../deploy/agentcore/
 import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
-import { SECRET_FILE_MODE, type ResolvedPlacement, exists } from "../../../paths.ts";
+import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
 import { loadRoutines } from "../../../schedule/discover.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
@@ -37,10 +37,10 @@ function shellArg(value: string): string {
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
   artifact: TEMPLATE_FILE,
-  async shell({ workspace }) {
-    const name = agentcoreName(basename(workspace));
+  async shell(agentDir) {
+    const name = agentcoreName(basename(agentDir));
     const stack = agentcoreStackName(name);
-    const aws = awsRunner(workspace);
+    const aws = awsRunner(agentDir);
     const read = await awsCli(aws).read(
       ["cloudformation", "describe-stacks", "--stack-name", stack, "--query", "Stacks[0].Outputs", "--output", "json"],
       awsJson(pickStackOutputs),
@@ -52,7 +52,7 @@ export const agentcoreHost: HostDeploy = {
     return agentcoreShell(runtimeArn, ingressSessionId(name), aws);
   },
   async deploy(ctx) {
-    const { opts, agentDir, workspace, config, channels, longConnectionChannels, pre, write } = ctx;
+    const { opts, agentDir, config, channels, longConnectionChannels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
     if (boxLogin) {
       console.error(
@@ -92,7 +92,7 @@ export const agentcoreHost: HostDeploy = {
         ),
       );
     }
-    const acName = agentcoreName(basename(workspace));
+    const acName = agentcoreName(basename(agentDir));
     // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
     // (`fastagent-<name>-forwarder` ≤ 64 chars).
     if (acName.length > 40) {
@@ -126,7 +126,7 @@ export const agentcoreHost: HostDeploy = {
     }
     // The template IS the topology (EventBridge rules, wake wiring, secrets).
     const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));
-    const templateHome = join(workspace, templateArtifact?.path ?? TEMPLATE_FILE);
+    const templateHome = join(agentDir, templateArtifact?.path ?? TEMPLATE_FILE);
     if (!opts.force && templateArtifact && (await exists(templateHome))) {
       const existing = await readFile(templateHome, "utf8");
       if (isGeneratedAgentcoreTemplate(existing) && existing !== templateArtifact.content) {
@@ -143,13 +143,11 @@ export const agentcoreHost: HostDeploy = {
     }
     await write(plan.artifacts, {
       force: !!opts.force,
-      alwaysWrite: [`${container.agentPrefix}${FORWARDER_FILE}`],
+      alwaysWrite: [FORWARDER_FILE],
     });
     if (opts.run) {
       return runDeployAgentcore({
         agentDir,
-        workspace,
-        agentPrefix: container.agentPrefix,
         name: acName,
         modelAuth,
         boxLogin,
@@ -167,23 +165,21 @@ export const agentcoreHost: HostDeploy = {
 };
 
 /** `deploy agentcore --run`: drive aws + docker to completion. */
-async function runDeployAgentcore(
-  params: ResolvedPlacement & {
-    agentPrefix: string;
-    name: string;
-    modelAuth: string | undefined;
-    /** The provider the runtime logs in to itself once it is verified (the pre-flight's `boxLogin`). */
-    boxLogin: string | undefined;
-    /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
-    input: boolean;
-    channels: readonly DeclaredChannel[];
-    declaredSecrets: readonly DeclaredSecret[];
-    values: ReadonlyMap<string, string>;
-    valueFile: string;
-    topology: AgentcoreTopology;
-  },
-): Promise<void> {
-  const { agentDir, workspace, agentPrefix, name, channels, topology } = params;
+async function runDeployAgentcore(params: {
+  agentDir: string;
+  name: string;
+  modelAuth: string | undefined;
+  /** The provider the runtime logs in to itself once it is verified (the pre-flight's `boxLogin`). */
+  boxLogin: string | undefined;
+  /** A person can answer the login: `--run` continues into it rather than stopping at "not logged in". */
+  input: boolean;
+  channels: readonly DeclaredChannel[];
+  declaredSecrets: readonly DeclaredSecret[];
+  values: ReadonlyMap<string, string>;
+  valueFile: string;
+  topology: AgentcoreTopology;
+}): Promise<void> {
+  const { agentDir, name, channels, topology } = params;
   // Decided before the first side effect: the deploy resets the runtime's storage and the login with it, so with nobody
   // to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving, with the webhooks
   // a previous deploy registered still pointing at it.
@@ -212,8 +208,8 @@ async function runDeployAgentcore(
     const outcome = await deployAgentcoreRun(
       {
         name,
-        templatePath: `${agentPrefix}${TEMPLATE_FILE}`,
-        dockerfilePath: `${agentPrefix}Dockerfile`,
+        templatePath: TEMPLATE_FILE,
+        dockerfilePath: "Dockerfile",
         tag: new Date()
           .toISOString()
           .replace(/[-:.TZ]/g, "")
@@ -225,11 +221,11 @@ async function runDeployAgentcore(
         channels,
         topology,
         ...boxLoginStep("agentcore", params, (runtimeArn: string) =>
-          agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(workspace)),
+          agentcoreShell(runtimeArn, ingressSessionId(name), awsRunner(agentDir)),
         ),
       },
-      awsRunner(workspace),
-      spawnRunner("docker", workspace),
+      awsRunner(agentDir),
+      spawnRunner("docker", agentDir),
       (m) => console.error(`[fastagent] ${m}`),
       async (content) => {
         const path = join(paramsDir, "params.json");
@@ -246,7 +242,7 @@ async function runDeployAgentcore(
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);
     if (outcome.url) console.error(`[fastagent] webhook ingress → ${outcome.url}`);
-    const logsDir = shellArg(workspace);
+    const logsDir = shellArg(agentDir);
     console.error(`[fastagent] runtime logs → fastagent logs agentcore ${logsDir} --follow`);
     console.error(`[fastagent] forwarder logs → fastagent logs agentcore ${logsDir} --source forwarder --follow`);
     // `--run` never prints the runbook, and this is the ONE step in it that nothing else will remind anyone of: a

@@ -18,7 +18,6 @@ export function isEnvKey(source: string | undefined): source is string {
  */
 const DEPLOY_OWNED = new Set([
   "PORT",
-  "FASTAGENT_AGENT",
   "FASTAGENT_MODEL",
   "FASTAGENT_STATE_DIR",
   "FASTAGENT_SECRETS_DIR",

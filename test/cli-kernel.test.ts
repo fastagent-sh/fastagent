@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,8 +77,7 @@ describe("cli kernel: spec conformance", () => {
     const carried: [string[], string][] = [
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
-      [["init"], "never its NAME, so --agent-dir"],
-      [["init"], "ALWAYS goes into a subdirectory"],
+      [["init"], "must be new or empty"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["routine", "run"], "does NOT advance its fire state"],
       [["routine", "history"], "did last night's run silently fail"],
@@ -291,11 +290,11 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** A workspace with an (empty) agent dir in it, as `init` produces the placement. */
+/** An agent directory. */
 async function agentWorkspace(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
-  await mkdir(join(dir, "fastagent"));
-  await writeFile(join(dir, "fastagent", "SYSTEM.md"), "You are terse.\n");
-  await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n"); // THE marker
+  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
+  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
   return dir;
 }
 
@@ -357,18 +356,9 @@ describe("cli end to end: the thin entry", () => {
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
 
-  it("an --agent-dir value that is not one directory name is a usage error (exit 2), not a runtime fault", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
-    for (const bad of [join("nested", "bot"), "."]) {
-      const out = await run(["init", dir, "--no-install", "--agent-dir", bad]);
-      expect(out.code).toBe(2);
-      expect(out.stderr).toMatch(/must be a single directory name/);
-    }
-  });
-
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {
     const dir = await agentWorkspace("fa-kernel-tool-");
-    // "read" is a pi default tool — present in any workspace, so the failure is the JSON, not the name.
+    // "read" is a pi default tool — present in any agent, so the failure is the JSON, not the name.
     const bad = await run(["tool", "read", "{not json", dir]);
     expect(bad.code).toBe(2);
     expect(bad.stderr).toMatch(/invalid JSON args/);

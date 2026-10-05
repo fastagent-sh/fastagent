@@ -3,18 +3,18 @@
  * ownership rule.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { registerFeishuWebhook } from "../../../channels/feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts";
 import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars } from "../../../deploy/channel-ingress.ts";
-import { isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
+import { IMAGE_DEFINITION_DIR, isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
 import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { FastagentConfig } from "../../../engines/pi/config.ts";
-import { type ResolvedPlacement, exists, resolveStateRoot } from "../../../paths.ts";
+import { exists, resolveStateRoot } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox } from "../../box-login.ts";
 import type { DeployHost } from "../../../deploy/hosts.ts";
@@ -29,19 +29,18 @@ export interface DeployOptions {
 }
 
 /**
- * What the dispatcher resolved before handing off: the placement, the flags, the config and the host-neutral
+ * What the dispatcher resolved before handing off: the agent directory, the flags, the config and the host-neutral
  * pre-flight, plus the channel lists every host asks about.
  */
 interface DeployContext {
   opts: DeployOptions;
   agentDir: string;
-  workspace: string;
   config: FastagentConfig;
   pre: Extract<DeployPreflight, { ok: true }>;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
   longConnectionChannels: readonly DeclaredChannel[];
-  /** Write this host's planned artifacts into the workspace under the ownership rule. */
+  /** Write this host's planned artifacts into the agent directory under the ownership rule. */
   write(
     artifacts: { path: string; content: string }[],
     options: { force: boolean; alwaysWrite?: string[] },
@@ -52,10 +51,10 @@ interface DeployContext {
 export interface HostDeploy {
   /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
-  /** The file in the agent dir whose presence says this workspace deploys to the host. */
+  /** The file in the agent dir whose presence says this agent deploys to the host. */
   artifact: string;
-  /** The shell into this workspace's running box (`fastagent login --deployment`). */
-  shell(placement: ResolvedPlacement): Promise<BoxShell>;
+  /** The shell into this agent's running box (`fastagent login --deployment`). */
+  shell(agentDir: string): Promise<BoxShell>;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
    * (`--run`) or print the runbook.
@@ -80,18 +79,16 @@ export function registrarsFor(agentDir: string): Registrars {
  */
 export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
-  params: ResolvedPlacement & { boxLogin: string | undefined; input: boolean },
+  params: { agentDir: string; boxLogin: string | undefined; input: boolean },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
-  const placement = { agentDir: params.agentDir, workspace: params.workspace };
   return {
     boxLogin: {
       command: deploymentLoginCommand(host, provider),
-      run: (...args) =>
-        loginOnBox({ host, shell: shell(...args), placement, provider, ifMissing: true, input: params.input }),
+      run: (...args) => loginOnBox({ host, shell: shell(...args), provider, ifMissing: true, input: params.input }),
     },
   };
 }
@@ -121,7 +118,7 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (a.path.endsWith(`/${RELEASE_FILE}`) || options.alwaysWrite?.includes(a.path)) {
+    if (basename(a.path) === RELEASE_FILE || options.alwaysWrite?.includes(a.path)) {
       write(a.path, abs, a.content);
       continue;
     }
@@ -136,7 +133,7 @@ export async function planArtifacts(
           (a.path.endsWith(".dockerignore")
             ? `; see the preflight warnings for what it must exclude`
             : a.path.endsWith("Dockerfile")
-              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start /app\``
+              ? `; deploy still assumes it listens on $PORT and runs \`fastagent start ${IMAGE_DEFINITION_DIR}\``
               : ``),
       );
       continue;
@@ -161,7 +158,7 @@ export async function planArtifacts(
 export async function applyArtifactPlan(plan: ArtifactPlan): Promise<void> {
   for (const step of plan.steps) {
     if (step.content !== undefined) {
-      await mkdir(dirname(step.abs), { recursive: true }); // artifacts live under fastagent/
+      await mkdir(dirname(step.abs), { recursive: true });
       await writeFile(step.abs, step.content);
     }
     console.error(step.message);

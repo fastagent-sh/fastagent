@@ -172,14 +172,14 @@ describe("loadTools (filesystem discovery)", () => {
     await mkdir(join(cwd, "tools"), { recursive: true });
     await writeFile(join(cwd, "tools", "hostonly.mjs"), tool); // the host repo's tool at cwd — must NOT be scanned
 
-    const { toolNames } = await resolveAgentTools({}, agentDir, process.cwd());
+    const { toolNames } = await resolveAgentTools({}, agentDir);
     expect(toolNames).toContain("foo"); // discovered from agentDir
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
   it("always mounts every coding tool", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-all-"));
-    const resolved = await resolveAgentTools({}, agentDir, process.cwd());
+    const resolved = await resolveAgentTools({}, agentDir);
     expect(resolved.tools.map((tool) => tool.name)).toEqual([...CODING_TOOL_NAMES]);
     expect(resolved.toolNames).toEqual([]); // no authored tools
   });
@@ -198,7 +198,7 @@ describe("loadTools (filesystem discovery)", () => {
       execute: () => "mine",
     });
 
-    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir, process.cwd());
+    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir);
     expect(resolved.tools.filter((tool) => tool.name === "read")).toHaveLength(1);
     expect(resolved.tools.find((tool) => tool.name === "read")?.description).not.toMatch(/Configured|Discovered/);
     expect(resolved.toolNames).not.toContain("read");
@@ -232,7 +232,7 @@ describe("loadTools (filesystem discovery)", () => {
         defineTool({ ...options, description: options.name, input: z.object({}), execute: () => "ok" }),
       ),
     ];
-    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDir, process.cwd());
+    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDir);
     expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(surface.map((tool) => tool.name)));
     expect(toolNames).toEqual(["direct", "modelOnly"]);
     expect(indirectTools).toEqual([
@@ -265,12 +265,11 @@ describe("loadTools (filesystem discovery)", () => {
     expect(prompt).toContain("1 additional tool(s)");
   });
 
-  it("a built-in the machine's settings disable leaves its tools unreachable, and every signal says so", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "fa-tools-no-search-"));
-    await mkdir(join(workspace, ".pi"));
-    await writeFile(join(workspace, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:tool-search"] }));
-    const agentDir = join(workspace, "fastagent");
-    await mkdir(agentDir);
+  it("a built-in pi's settings disable leaves its tools unreachable, and every signal says so", async () => {
+    // The agent directory is pi's project scope, so its own `.pi/settings.json` is where an author disables one.
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-search-"));
+    await mkdir(join(agentDir, ".pi"));
+    await writeFile(join(agentDir, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:tool-search"] }));
     const lookup = defineTool({
       name: "lookup",
       description: "Look up a business record.",
@@ -280,7 +279,7 @@ describe("loadTools (filesystem discovery)", () => {
     });
     const scripted = { ...lookup, name: "scripted", exposure: "codemode" as const };
 
-    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDir, workspace);
+    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDir);
     expect(indirectTools).toEqual([
       { name: "lookup", reach: "unreachable" },
       { name: "scripted", reach: "codemode" },
@@ -295,7 +294,6 @@ describe("loadTools (filesystem discovery)", () => {
       await createPiAgentFromDefinition(agentDir, {
         providers: [faux.provider],
         model: "faux/faux-1",
-        cwd: workspace,
         tools: [lookup, scripted],
         base: "You look up business records.",
       });

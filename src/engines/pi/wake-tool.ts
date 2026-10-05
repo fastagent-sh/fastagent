@@ -17,7 +17,7 @@ export function parseDelayMs(input: string | number): number | undefined {
 
 export function withWakeTool(tools: MountedTool[], stateRoot: string, enabled: boolean): MountedTool[] {
   if (!enabled) return tools;
-  // wake/unwake are a PAIR over one store: if the workspace defines EITHER name, mount NEITHER built-in.
+  // wake/unwake are a PAIR over one store: if the definition defines EITHER name, mount NEITHER built-in.
   if (tools.some((t) => t.name === "wake" || t.name === "unwake")) return tools;
   return [...tools, makeWakeTool(stateRoot), makeUnwakeTool(stateRoot)];
 }

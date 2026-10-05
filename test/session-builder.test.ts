@@ -11,8 +11,7 @@ import { log } from "../src/log.ts";
 // discovery. buildAgentSessionRuntime is split out precisely so that injection is inspectable without a
 // TTY. In-memory sessions keep the test from writing to the machine's pi session store. A raw
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
-/** A fresh AGENT dir (`<tmp>/fastagent/`). Passing it to the builder resolves to itself, with the
- *  temp dir as the workspace — the same placement `init` produces, entered from the inside. */
+/** A fresh AGENT dir (`<tmp>/fastagent/`), which is also the session's working directory. */
 async function freshAgentDir(prefix: string, options: { prompt?: boolean } = {}): Promise<string> {
   const dir = join(await mkdtemp(join(tmpdir(), prefix)), "fastagent");
   await mkdir(dir);
@@ -145,7 +144,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
   it("injects the definition's prompt + skills, the config model, custom tools, definition-only", async () => {
     const dir = await freshAgentDir("fa-chat-");
     try {
-      await writeFile(join(dir, "AGENTS.md"), "# Test Agent\nMAGIC_CHAT_MARKER_91. Be terse.\n");
+      await writeFile(join(dir, "APPEND_SYSTEM.md"), "MAGIC_CHAT_MARKER_91. Be terse.\n");
       await writeFile(
         join(dir, "fastagent.config.ts"),
         `export default {
@@ -201,7 +200,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
           "read",
           "write",
         ]);
-        // The injected system prompt is fastagent's: the definition's AGENTS.md and skill are in it.
+        // The injected system prompt is fastagent's: the definition's APPEND_SYSTEM.md and skill are in it.
         // pi 0.86 materializes the prompt into the transcript at the first request; the SESSION reader is the one
         // that shows it before then (`state.systemPrompt` replays messages, which are still empty here).
         const sp = rt.session.systemPrompt;
@@ -217,7 +216,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
 
         // Chat is a coherent startup snapshot per cwd: same-cwd rebuilds (/new, fork) must not
         // half-refresh only the fs-read pieces while config/tools stay stale in Node's import cache.
-        await writeFile(join(dir, "AGENTS.md"), "# Changed Agent\nSHOULD_NOT_HOT_RELOAD_IN_CHAT.\n");
+        await writeFile(join(dir, "APPEND_SYSTEM.md"), "SHOULD_NOT_HOT_RELOAD_IN_CHAT.\n");
 
         // P1 regression guard: the TUI rebuilds the session on /new (and /resume, fork) via the same
         // factory. The custom tool must come back — registering through customTools (not patching
@@ -236,33 +235,6 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("resolves the placement from the workspace: prompt/tools from fastagent/, context from the workspace", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-nested-"));
-    try {
-      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workspace
-      const root = join(dir, "fastagent");
-      await mkdir(join(root, "tools"), { recursive: true });
-      await writeFile(join(root, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-      await writeFile(join(root, "SYSTEM.md"), "You are PERSONA_MARKER bot.\n"); // the prompt, in the agent dir
-      await writeFile(
-        join(root, "tools", "foo.mjs"),
-        `export default { description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) };`,
-      );
-
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
-      try {
-        const sp = rt.session.systemPrompt;
-        expect(sp).toContain("PERSONA_MARKER"); // the prompt, from the workspace root
-        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workspace
-        expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from the workspace root
-      } finally {
-        rt.session.dispose?.();
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it("suppresses pi's machine-global APPEND_SYSTEM.md so chat matches what dev/start serve", async () => {
     // getAgentDir() honors PI_CODING_AGENT_DIR; point it at a temp agent dir holding an append
     // prompt. dev/start never read that file, so chat must not either, or fidelity breaks.
@@ -270,7 +242,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     const agentDir = await mkdtemp(join(tmpdir(), "fa-agentdir-"));
     const prev = process.env.PI_CODING_AGENT_DIR;
     try {
-      await writeFile(join(dir, "AGENTS.md"), "# Agent\nDEFN_ONLY_MARKER.\n");
+      await writeFile(join(dir, "APPEND_SYSTEM.md"), "DEFN_ONLY_MARKER.\n");
       await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       await writeFile(join(agentDir, "APPEND_SYSTEM.md"), "GLOBAL_APPEND_LEAK_MARKER must not reach chat.\n");
       process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -341,39 +313,34 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("rejects cross-workspace session switches because chat env is workspace-scoped", async () => {
+  it("rejects a session switch to another agent's directory: chat sessions belong to one agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-chat-scope-"));
-    const dir = join(root, "agent-a", "fastagent");
-    const other = join(root, "agent-b", "fastagent");
+    const dir = join(root, "agent-a");
+    const other = join(root, "agent-b");
     const sessionsDir = join(root, "sessions");
     try {
-      await mkdir(dir, { recursive: true });
-      await mkdir(other, { recursive: true });
-      await writeFile(join(dir, "AGENTS.md"), "# Agent A\n");
-      await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-      await writeFile(join(other, "AGENTS.md"), "# Agent B\n");
-      await writeFile(join(other, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      for (const agent of [dir, other]) {
+        await mkdir(agent, { recursive: true });
+        await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      }
       const imported = join(root, "other-session.jsonl");
       await writeFile(
         imported,
-        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: join(root, "agent-b") })}\n`,
+        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: other })}\n`,
       );
 
-      const workspace = join(root, "agent-a");
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, sessionsDir));
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
         let invalidated = false;
         rt.setBeforeSessionInvalidate(() => {
           invalidated = true;
         });
-        // A session that EXPLICITLY records another workspace is rejected before pi tears the live
+        // A session that EXPLICITLY records another directory is rejected before pi tears the live
         // session down — independent of process.cwd().
-        await expect(rt.importFromJsonl(imported, join(root, "agent-b"))).rejects.toThrow(
-          /fastagent sessions are workspace-scoped/,
-        );
+        await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent sessions belong to one agent/);
         expect(invalidated).toBe(false);
-        // The workspace (the agent dir's parent, as serving uses), canonical (symlink-free).
-        expect(rt.cwd).toBe(realpathSync(workspace));
+        // The agent directory, as serving uses, canonical (symlink-free).
+        expect(rt.cwd).toBe(realpathSync(dir));
       } finally {
         rt.session.dispose?.();
       }
@@ -382,17 +349,16 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("keeps cwd-less legacy sessions in the chat workspace across import and fork", async () => {
-    // The chat process runs chdir'd into the workspace (runChat); these cases depend on that
+  it("keeps cwd-less legacy sessions in the agent directory across import and fork", async () => {
+    // The chat process runs chdir'd into the agent directory (runChat); these cases depend on that
     // invariant, so emulate it here. Without it, a cwd-less session would fall back to pi's
-    // process.cwd() and trip the cross-workspace teardown path on import AND on /fork.
+    // process.cwd() and trip the cross-agent teardown path on import AND on /fork.
     const root = await mkdtemp(join(tmpdir(), "fa-chat-legacy-"));
-    const dir = join(root, "agent", "fastagent");
+    const dir = join(root, "agent");
     const sessionsDir = join(root, "sessions");
     const originalCwd = process.cwd();
     try {
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, "AGENTS.md"), "# Agent\n");
       await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       // A legacy session: a header with NO cwd, plus one user message entry to fork at.
       const legacy = join(root, "legacy-session.jsonl");
@@ -402,16 +368,15 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
           `${JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "hi" } })}\n`,
       );
 
-      const workspace = join(root, "agent");
-      process.chdir(workspace);
-      const realDir = realpathSync(workspace); // pi binds the realpath via process.cwd()
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, sessionsDir));
+      process.chdir(dir);
+      const realDir = realpathSync(dir); // pi binds the realpath via process.cwd()
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
-        // Import the cwd-less session: no foreign cwd, so it runs in the chat workspace.
+        // Import the cwd-less session: no foreign cwd, so it runs in the agent directory.
         await expect(rt.importFromJsonl(legacy)).resolves.toMatchObject({ cancelled: false });
         expect(rt.cwd).toBe(realDir);
         // Fork at an entry: pi reopens the current (cwd-less) session file without a cwd override.
-        // The chdir invariant keeps that resolving to the chat workspace instead of process.cwd().
+        // The chdir invariant keeps that resolving to the agent directory instead of process.cwd().
         await expect(rt.fork("m1", { position: "at" })).resolves.toMatchObject({ cancelled: false });
         expect(rt.cwd).toBe(realDir);
       } finally {
@@ -424,12 +389,11 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
   });
 });
 
-describe("session builder: a tool sees one spelling of the workspace", () => {
-  it("binds the turn context to the canonical workspace when a resumed session records a symlinked one", async () => {
-    // Different parents expose lexical ../ resolution through the symlink rather than the workspace.
+describe("session builder: a tool sees one spelling of the agent directory", () => {
+  it("binds the turn context to the canonical directory when a resumed session records a symlinked one", async () => {
+    // Different parents expose lexical ../ resolution through the symlink rather than the agent directory.
     const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-symlink-")));
-    const workspace = join(root, "project", "ws");
-    const dir = join(workspace, "fastagent");
+    const dir = join(root, "project", "ws");
     const observedKey = "__fastagent_chat_tool_cwd_test__";
     const piUrl = new URL("../src/pi.ts", import.meta.url).href;
     const originalCwd = process.cwd();
@@ -443,7 +407,7 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
            model: "openai-codex/gpt-5.5",
            tools: [defineTool({
              name: "inspect_cwd",
-             description: "Report the workspace this turn runs in.",
+             description: "Report the directory this turn runs in.",
              input: z.object({}),
              execute: async (_input, ctx) => {
                globalThis[${JSON.stringify(observedKey)}] = ctx.cwd;
@@ -454,7 +418,7 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
       );
       const linked = join(root, "link", "ws");
       await mkdir(join(root, "link"));
-      symlinkSync(workspace, linked);
+      symlinkSync(dir, linked);
       await writeFile(join(root, "project", "parent.txt"), "canonical parent");
       await writeFile(join(root, "link", "parent.txt"), "linked parent");
       const recorded = join(root, "linked-session.jsonl");
@@ -463,8 +427,8 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
         `${JSON.stringify({ type: "session", version: 3, id: "linked", timestamp: new Date().toISOString(), cwd: linked })}\n`,
       );
 
-      process.chdir(workspace);
-      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(workspace, join(root, "sessions")));
+      process.chdir(dir);
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, join(root, "sessions")));
       try {
         const readParent = () =>
           rt.session.agent.state.tools
@@ -476,7 +440,7 @@ describe("session builder: a tool sees one spelling of the workspace", () => {
         const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_cwd");
         expect(tool).toBeDefined();
         await tool!.execute("inspect-cwd-1", {});
-        expect((globalThis as Record<string, unknown>)[observedKey]).toBe(workspace);
+        expect((globalThis as Record<string, unknown>)[observedKey]).toBe(dir);
         expect((await readParent()).content).toEqual(before.content);
 
         await rt.session.agent.state.tools
@@ -529,8 +493,7 @@ describe("session builder: the credential hint belongs to the runtime, not to ea
     // Model resolution moved into createRuntime (extensions must load before a model they register
     // can resolve), which put this warning on a per-session path. Credentials do not change between
     // /new and /resume, so repeating it is nagging about a setting the user did not touch.
-    const workspace = await mkdtemp(join(tmpdir(), "fa-hint-"));
-    const dir = join(workspace, "fastagent");
+    const dir = join(await mkdtemp(join(tmpdir(), "fa-hint-")), "fastagent");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.ts"), 'export default { model: "openai-codex/gpt-5.5" };\n');

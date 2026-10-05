@@ -29,22 +29,19 @@ import {
   reportFindingsIfChanged,
   reportToolCollisions,
 } from "../engines/pi/report.ts";
-import { type ResolvedPlacement, isDeployedWorkspace } from "../paths.ts";
+import { isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
-import { failStartup, failUsage, placementOrExit } from "./fail.ts";
+import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
 
 /** How every command that runs the model enters its agent directory, in the one order that works. */
-export async function enterAgentCommand(
-  dirArg: string,
-  opts: { model?: string; input?: boolean },
-): Promise<ResolvedPlacement> {
-  const placement = placementOrExit(resolve(dirArg));
-  enterAgentEnv(placement.agentDir);
-  await resolveFirstRunModel(placement, opts);
-  return placement;
+export async function enterAgentCommand(dirArg: string, opts: { model?: string; input?: boolean }): Promise<string> {
+  const agentDir = agentDirOrExit(resolve(dirArg));
+  enterAgentEnv(agentDir);
+  await resolveFirstRunModel(agentDir, opts);
+  return agentDir;
 }
 
 /** The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). */
@@ -55,7 +52,6 @@ function reportLine(label: string, value: string): void {
 /** What the startup report reads off an opened directory. */
 export interface ReportableAssembly {
   agentDir: string;
-  workspace: string;
   modelSpec: string;
   models: AgentModels;
   config: { thinkingLevel?: string };
@@ -69,21 +65,19 @@ export interface ReportableAssembly {
 export async function reportAssembly(
   a: ReportableAssembly,
   extras: {
-    /** Printed between `workspace:` and `model:` (`dev` names the config file here). */
+    /** Printed between `agent:` and `model:` (`dev` names the config file here). */
     beforeModel?: [label: string, value: string][];
     /** Printed after the tool lines, before findings (`start` names state + sessions here). */
     afterTools?: [label: string, value: string][];
   } = {},
 ): Promise<void> {
   reportLine("agent", a.agentDir);
-  reportLine("workspace", a.workspace);
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
   await reportAuth(a.models, a.modelSpec);
-  reportLine("context", a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   reportLine("prompt", describePrompt(a.definition));
   // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
-  const skills = withMachine(a.definition.skills, (await readMachine(a.workspace)).skills);
+  const skills = withMachine(a.definition.skills, (await readMachine(a.agentDir)).skills);
   reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
@@ -143,7 +137,7 @@ export async function reportAuth(models: AgentModels, modelSpec: string): Promis
  * First-run model resolution for every assembly command (dev/start/invoke/fire/chat/deploy): ONE funnel, no dead ends.
  */
 async function resolveFirstRunModel(
-  { agentDir, workspace }: ResolvedPlacement,
+  agentDir: string,
   options: { model?: string; input?: boolean } = {},
 ): Promise<void> {
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
@@ -151,7 +145,7 @@ async function resolveFirstRunModel(
   if (options.input === false) return; // --no-input: never prompt (clig) — the opener raises the clear error
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const environment = agentModels(agentDir, {}, { cwd: workspace });
+  const environment = agentModels(agentDir);
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
   const models = await environment.runtime().catch(failStartup);

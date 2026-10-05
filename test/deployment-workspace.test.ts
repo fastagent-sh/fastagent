@@ -19,17 +19,15 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 const release = (id: string): DeploymentRelease => ({ version: 1, id, agent: "fastagent" });
+/** The image's baked definition (`source`) and the host's storage (`root`). */
 async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), "fa-deployed-workspace-"));
+  const dir = await mkdtemp(join(tmpdir(), "fa-deployed-storage-"));
   dirs.push(dir);
-  const source = join(dir, "image"),
+  const source = join(dir, "image", "definition"),
     root = join(dir, "data");
-  await mkdir(join(source, "fastagent/skills"), { recursive: true });
-  await mkdir(join(source, ".git"));
-  await writeFile(join(source, ".git/HEAD"), "initial history");
-  await writeFile(join(source, "project.txt"), "initial code");
-  await writeFile(join(source, "fastagent/SYSTEM.md"), "release one");
-  await writeFile(join(source, "fastagent/skills/old.md"), "old skill");
+  await mkdir(join(source, "skills"), { recursive: true });
+  await writeFile(join(source, "SYSTEM.md"), "release one");
+  await writeFile(join(source, "skills/old.md"), "old skill");
   return { dir, source, root };
 }
 
@@ -80,7 +78,7 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
         (async () => {
           unexpectedLease = await leaseDeployment(metadata, 1);
         })(),
-      ).rejects.toThrow("could not acquire workspace lease");
+      ).rejects.toThrow("could not acquire deployment lease");
       expect(await openFiles()).not.toContain(join(metadata, "lock"));
     } finally {
       await unexpectedLease?.();
@@ -106,30 +104,28 @@ describe.runIf(process.platform === "linux")("deployment lease", () => {
   });
 });
 
-describe("deployed workspace lifecycle", () => {
-  it("preserves all live files on restart and replaces only the definition on a new release", async () => {
+describe("deployed storage lifecycle", () => {
+  it("keeps the definition across a restart, replaces it whole on a new release, and never touches state", async () => {
     const { source, root } = await fixture();
-    const base = await applyDeploymentRelease(source, root, release("one"));
-    await writeFile(join(base, "project.txt"), "uncommitted change");
-    await writeFile(join(base, "untracked.txt"), "unfinished work");
-    await writeFile(join(base, ".git/HEAD"), "new history");
-    await writeFile(join(base, "fastagent/SYSTEM.md"), "self improvement");
-    await symlink("project.txt", join(base, "project-link"));
+    const definition = await applyDeploymentRelease(source, root, release("one"));
+    expect(definition).toBe(join(root, "definition"));
+    // What the agent wrote into itself lasts until the next release, not past it.
+    await writeFile(join(definition, "SYSTEM.md"), "self improvement");
+    await writeFile(join(definition, "scratch.txt"), "written by a turn");
+    await symlink("SYSTEM.md", join(definition, "system-link"));
     for (const dir of [".state", ".secrets"]) await mkdir(join(root, dir));
     await writeFile(join(root, ".state/session.json"), "conversation");
     await writeFile(join(root, ".secrets/auth.json"), "rotated credential");
-    await applyDeploymentRelease(source, root, release("one"));
-    expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8")).toBe("self improvement");
-    await writeFile(join(source, "project.txt"), "builder change");
-    await writeFile(join(source, "fastagent/SYSTEM.md"), "release two");
-    await rm(join(source, "fastagent/skills/old.md"));
+    await applyDeploymentRelease(source, root, release("one")); // a restart of the same release
+    expect(await readFile(join(definition, "SYSTEM.md"), "utf8")).toBe("self improvement");
+    expect(await readFile(join(definition, "system-link"), "utf8")).toBe("self improvement");
+
+    await writeFile(join(source, "SYSTEM.md"), "release two");
+    await rm(join(source, "skills/old.md"));
     await applyDeploymentRelease(source, root, release("two"));
-    expect(await readFile(join(base, "project.txt"), "utf8")).toBe("uncommitted change");
-    expect(await readFile(join(base, "project-link"), "utf8")).toBe("uncommitted change");
-    expect(await readFile(join(base, "untracked.txt"), "utf8")).toBe("unfinished work");
-    expect(await readFile(join(base, ".git/HEAD"), "utf8")).toBe("new history");
-    expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8")).toBe("release two");
-    expect(await readdir(join(base, "fastagent/skills"))).toEqual([]);
+    expect(await readFile(join(definition, "SYSTEM.md"), "utf8")).toBe("release two");
+    expect(await readdir(join(definition, "skills"))).toEqual([]);
+    expect(await readdir(definition)).not.toContain("scratch.txt");
     expect(await readFile(join(root, ".state/session.json"), "utf8")).toBe("conversation");
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe("rotated credential");
   });
@@ -137,25 +133,36 @@ describe("deployed workspace lifecycle", () => {
   it("recovers an interrupted definition update, whichever step it stopped at", async () => {
     for (const point of ["before-switch", "after-old-move", "after-new-move"]) {
       const { source, root } = await fixture();
-      const base = await applyDeploymentRelease(source, root, release("one"));
+      const definition = await applyDeploymentRelease(source, root, release("one"));
       const meta = join(root, ".deployment");
       await mkdir(join(meta, "staged"));
       await writeFile(join(meta, "staged/SYSTEM.md"), "complete new definition");
-      await writeFile(join(meta, "pending.json"), JSON.stringify({ release: release("two"), initial: false }));
-      if (point !== "before-switch") await rename(join(base, "fastagent"), join(meta, "previous"));
-      if (point === "after-new-move") await rename(join(meta, "staged"), join(base, "fastagent"));
+      await writeFile(join(meta, "pending.json"), JSON.stringify(release("two")));
+      if (point !== "before-switch") await rename(definition, join(meta, "previous"));
+      if (point === "after-new-move") await rename(join(meta, "staged"), definition);
       await applyDeploymentRelease(source, root, release("two"));
-      expect(await readFile(join(base, "fastagent/SYSTEM.md"), "utf8"), point).toBe("complete new definition");
+      expect(await readFile(join(definition, "SYSTEM.md"), "utf8"), point).toBe("complete new definition");
       expect(await readdir(meta), point).toEqual(["applied.json"]);
     }
   });
 
-  it("refuses an existing workspace without ownership metadata", async () => {
-    const { source, root } = await fixture();
-    await mkdir(join(root, "base"), { recursive: true });
-    await writeFile(join(root, "base/precious"), "keep");
-    await expect(applyDeploymentRelease(source, root, release("one"))).rejects.toThrow("unowned workspace");
-    expect(await readFile(join(root, "base/precious"), "utf8")).toBe("keep");
+  it("refuses a definition it does not own, and storage an earlier FastAgent laid out", async () => {
+    const unowned = await fixture();
+    await mkdir(join(unowned.root, "definition"), { recursive: true });
+    await writeFile(join(unowned.root, "definition/precious"), "keep");
+    await expect(applyDeploymentRelease(unowned.source, unowned.root, release("one"))).rejects.toThrow(
+      "unowned definition",
+    );
+    expect(await readFile(join(unowned.root, "definition/precious"), "utf8")).toBe("keep");
+
+    // An earlier layout kept the agent's whole workspace in base/; this one would leave it behind unread.
+    const former = await fixture();
+    await mkdir(join(former.root, "base"), { recursive: true });
+    await writeFile(join(former.root, "base/work.txt"), "keep");
+    await expect(applyDeploymentRelease(former.source, former.root, release("one"))).rejects.toThrow(
+      /base holds a workspace from an earlier FastAgent/,
+    );
+    expect(await readFile(join(former.root, "base/work.txt"), "utf8")).toBe("keep");
   });
 
   it("refuses corrupt metadata and changing the selected agent", async () => {
@@ -166,7 +173,7 @@ describe("deployed workspace lifecycle", () => {
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
     await expect(applyDeploymentRelease(source, root, release("two"))).rejects.toThrow();
-    // The manifest names a directory the container joins onto the workspace root.
+    // The manifest's agent name is one path segment.
     expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
   });
 });

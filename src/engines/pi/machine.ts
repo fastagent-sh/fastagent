@@ -3,8 +3,9 @@
  * by pi's own Agent Skills discovery, installed pi packages included — and pi's engine settings.
  *
  * An agent inherits its machine the way it already inherits the `PATH`: `bash` runs whatever is installed, and a
- * skill in `~/.pi/agent/skills` is available the same way. Deploying ships the project scope — the workspace — and
- * nothing here is compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
+ * skill in `~/.pi/agent/skills` is available the same way. pi's project scope is the agent directory, so what pi reads
+ * from a project is the definition's and ships with it; nothing else here is compared against a deployment, the same
+ * way nobody is told their local `ffmpeg` is not in the image.
  *
  * READ ONCE per process, like the environment it is. The definition is what stays live (`dev` re-reads it per turn,
  * because it is what an author edits); a skill installed after boot arrives on the next start.
@@ -16,7 +17,10 @@ import {
   SettingsManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { log } from "../../log.ts";
+import { isUnderDir } from "../../paths.ts";
+import { PI_PROJECT_RESOURCE_DIRS, canonicalPath } from "./definition.ts";
 
 type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
 /** pi's own shapes, taken from its loader rather than re-declared. */
@@ -45,30 +49,30 @@ export interface Machine {
   prompts: MachinePrompt[];
   /**
    * The {@link BUILTIN_EXTENSIONS} left enabled, by Pi's own rule: `"extensions": ["-builtin:codemode"]` in the user
-   * settings disables one, and the workspace's `.pi/settings.json` overrides that either way.
+   * settings disables one, and the agent directory's `.pi/settings.json` overrides that either way.
    */
   builtinExtensions: string[];
   /** pi's engine settings (retry, compaction, cache warming, …) as read at boot — a fresh manager per caller. */
   settingsManager(): SettingsManager;
 }
 
-/** Keyed by the two places it reads: the workspace (project scope) and pi's own directory (user scope). */
+/** Keyed by the two places it reads: the agent directory (pi's project scope) and pi's own directory (user scope). */
 const reads = new Map<string, Promise<Machine>>();
 
 /** This process's one read of the machine, shared by the run plane and `commands()` so the two cannot disagree. */
-export function readMachine(workspace: string): Promise<Machine> {
+export function readMachine(agentDir: string): Promise<Machine> {
   // pi's own answer for where its user-level resources live — asked, not spelled, since `PI_CODING_AGENT_DIR` moves it.
-  const agentDir = getAgentDir();
-  const key = `${workspace}\u0000${agentDir}`;
+  const piDir = getAgentDir();
+  const key = `${agentDir}\u0000${piDir}`;
   const cached = reads.get(key);
   if (cached) return cached;
-  const reading = read(workspace, agentDir);
+  const reading = read(agentDir, piDir);
   reads.set(key, reading);
   return reading;
 }
 
-async function read(workspace: string, agentDir: string): Promise<Machine> {
-  const files = SettingsManager.create(workspace, agentDir);
+async function read(agentDir: string, piDir: string): Promise<Machine> {
+  const files = SettingsManager.create(agentDir, piDir);
   // pi reads an unparseable or locked settings file as `{}` and keeps the error for whoever asks. Nobody did, so a
   // trailing comma in `~/.pi/agent/settings.json` — or pi's own TUI holding the lock at that moment — left this whole
   // process on pi's defaults, silently: the read happens once.
@@ -82,8 +86,8 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
   // here, telling pi to skip what is absent, and hands the loader a packageless copy of the settings so its own
   // resolve has nothing to do.
   const manager = new DefaultPackageManager({
-    cwd: workspace,
-    agentDir,
+    cwd: agentDir,
+    agentDir: piDir,
     settingsManager: files,
     builtinExtensions: [...BUILTIN_EXTENSIONS],
   });
@@ -98,19 +102,25 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
     project: withoutPackages(files.getProjectSettings()),
   };
   const loader = new DefaultResourceLoader({
-    cwd: workspace,
-    agentDir,
+    cwd: agentDir,
+    agentDir: piDir,
     settingsManager: scopedSettings(settings),
     additionalSkillPaths: fromPackages(packages.skills),
     additionalPromptTemplatePaths: fromPackages(packages.prompts),
     // The machine's extensions are its owner's setup, not this agent's (agent-session-factory.ts loads only the
-    // definition's own); context files are fastagent's own (segment ②).
+    // definition's own); context files come from the agent's contexts.
     noExtensions: true,
     noContextFiles: true,
   });
   await loader.reload();
   const { skills, diagnostics: skillDiagnostics } = loader.getSkills();
   const { prompts, diagnostics: promptDiagnostics } = loader.getPrompts();
+  // pi's project scope is the agent directory, so its loader also finds the definition's own `.pi/skills`,
+  // `.agents/skills` and `.pi/prompts`. Those are the definition's (definition.ts reads them, with its own precedence
+  // and reports); the machine keeps what lies outside them: `.agents/skills` above the agent directory, packages, and
+  // pi's user scope.
+  const definitionOwns = (kind: keyof typeof PI_PROJECT_RESOURCE_DIRS, path: string): boolean =>
+    PI_PROJECT_RESOURCE_DIRS[kind].some((dir) => isUnderDir(canonicalPath(path), canonicalPath(join(agentDir, dir))));
   // Said once — this is the process's only read. A `SKILL.md` with no description, or a prompt template whose
   // frontmatter does not parse, is otherwise simply absent.
   for (const [kind, diagnostics] of [
@@ -118,6 +128,7 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
     ["prompt template", promptDiagnostics],
   ] as const) {
     for (const diagnostic of diagnostics) {
+      if (diagnostic.path && definitionOwns(kind === "skill" ? "skills" : "prompts", diagnostic.path)) continue;
       log.warn(
         `[fastagent] ${kind} ${diagnostic.type}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
       );
@@ -126,6 +137,7 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
   // A `/` in a skill's name names the context it comes from (definition.ts), and pi only warns about one. The
   // machine's own skill spelled that way is left out rather than let collide with a context's.
   const lent = skills.filter((skill) => {
+    if (definitionOwns("skills", skill.filePath)) return false;
     if (!skill.name.includes("/")) return true;
     log.warn(
       `[fastagent] machine skill "${skill.name}" (${skill.filePath}) is not loaded: a skill's name may not contain "/", ` +
@@ -136,7 +148,12 @@ async function read(workspace: string, agentDir: string): Promise<Machine> {
   const builtinExtensions = packages.extensions
     .filter((resource) => resource.enabled && resource.metadata.source === "builtin")
     .map((resource) => resource.path.slice("builtin:".length));
-  return { skills: lent, prompts, builtinExtensions, settingsManager: () => scopedSettings(settings) };
+  return {
+    skills: lent,
+    prompts: prompts.filter((prompt) => !definitionOwns("prompts", prompt.filePath)),
+    builtinExtensions,
+    settingsManager: () => scopedSettings(settings),
+  };
 }
 
 /** A package's enabled resources; the loader discovers the top-level ones itself. */

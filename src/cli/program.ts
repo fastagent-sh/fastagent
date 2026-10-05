@@ -7,9 +7,9 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
-const DIR_ARG = {
-  name: "[dir]",
-  description: "workspace directory (the agent is here, or in a directory inside it)",
+const AGENT_ARG = {
+  name: "[agent]",
+  description: "the agent directory, the one holding fastagent.config.ts",
   default: ".",
 };
 const MODEL: FlagSpec = {
@@ -44,47 +44,31 @@ const TUNNEL: FlagSpec = {
 
 const init: CommandSpec = {
   name: "init",
-  summary: "scaffold a runnable agent and install its dependencies",
+  summary: "create an agent in a directory of its own and install its dependencies",
   description:
-    "Scaffold a runnable agent and run npm install. The agent ALWAYS goes into a subdirectory of dir " +
-    "(default .): ./fastagent/, or --agent-dir <name> — the rest of the directory gets zero writes, and " +
-    "it is the WORKSPACE the agent works ON when you point fastagent there. Content is a " +
+    "Create an agent in dir, which must be new or empty, then run npm install there. Content is a " +
     "self-iterating agent: APPEND_SYSTEM.md (its standing instructions), a writing-great-skills " +
-    "example skill, a fetch-url code tool, config, package.json, .gitignore. An existing AGENTS.md is " +
-    "kept as project context.",
-  args: [DIR_ARG],
-  flags: [
-    { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--agent-dir <name>", description: "name the agent directory (default fastagent)" },
-  ],
-  examples: [
-    { cmd: "fastagent init", note: "the agent lands in ./fastagent/" },
-    { cmd: "fastagent init my-project", note: "my-project/fastagent/ (created)" },
-    { cmd: "fastagent init . --agent-dir bot", note: "./bot/ — any name works" },
-  ],
+    "example skill, a fetch-url code tool, config, package.json, .gitignore.",
+  args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
+  flags: [{ flags: "--no-install", description: "scaffold everything but skip npm install" }],
+  examples: [{ cmd: "fastagent init my-agent", note: "my-agent/ (created)" }],
   notes:
-    "An agent is a directory holding a fastagent.config.ts — never its NAME, so --agent-dir can call it " +
-    "anything (the name decides only which agent answers when a workspace holds several: see " +
-    "FASTAGENT_AGENT). What the agent works ON (its cwd, where its AGENTS.md context is read from) is " +
-    "the agent directory's parent — the project you ran init in — whether you point fastagent at the " +
-    "project or at the agent directory. A directory resolves to ONE agent, at it or one level inside.",
+    "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
+    "It lives in a directory of its own, never inside a project or another agent.",
   run: async (args, f) =>
-    (await import("./commands/init.ts")).runInit(args[0] as string, {
-      install: f.install !== false,
-      agentDir: typeof f.agentDir === "string" ? f.agentDir : undefined,
-    }),
+    (await import("./commands/init.ts")).runInit(args[0] as string, { install: f.install !== false }),
 };
 
 const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
   description:
-    "Assemble the agent in dir (default .) and serve a local HTTP channel. SYSTEM.md/APPEND_SYSTEM.md/" +
-    "AGENTS.md/skills/prompts " +
+    "Assemble the agent (default .) and serve a local HTTP channel. SYSTEM.md/APPEND_SYSTEM.md/" +
+    "skills/prompts " +
     "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
     "fastagent.config.ts, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
     "work product never trigger a restart.",
-  args: [DIR_ARG],
+  args: [AGENT_ARG],
   flags: [
     PORT,
     BIND,
@@ -117,7 +101,7 @@ const chat: CommandSpec = {
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
     "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
     "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
-  args: [DIR_ARG],
+  args: [AGENT_ARG],
   flags: [MODEL],
   examples: [{ cmd: "fastagent chat" }],
   run: async (args, f) =>
@@ -128,11 +112,11 @@ const info: CommandSpec = {
   name: "info",
   summary: "print what the directory assembles into, without serving",
   description:
-    "Print what dir (default .) ASSEMBLES into — model, prompt, context files (AGENTS.md), skills, " +
+    "Print what the agent (default .) ASSEMBLES into — model, prompt, skills, " +
     "tools (+ collisions), channels, schedules, sessions, load diagnostics — WITHOUT serving. " +
     "Read-only (never creates sessions / writes .gitignore); an unset model is reported, not fatal. " +
     "Run it first when something looks off.",
-  args: [DIR_ARG],
+  args: [AGENT_ARG],
   flags: [JSON_FLAG, MODEL],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
@@ -151,7 +135,7 @@ const tool: CommandSpec = {
   args: [
     { name: "<name>", description: "the tool name as served (see `fastagent info`)" },
     { name: "[json-args]", description: "the tool's arguments as a JSON object", default: "{}" },
-    DIR_ARG,
+    AGENT_ARG,
   ],
   examples: [{ cmd: `fastagent tool add '{"a":2,"b":3}'` }],
   notes:
@@ -168,7 +152,7 @@ const invoke: CommandSpec = {
     "Run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams to " +
     "stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent counterpart of " +
     "`tool`, for CI smoke and quick checks. Same model resolution as dev.",
-  args: [{ name: "<message>", description: "the user message for the turn" }, DIR_ARG],
+  args: [{ name: "<message>", description: "the user message for the turn" }, AGENT_ARG],
   flags: [MODEL, NO_INPUT],
   examples: [{ cmd: `fastagent invoke "summarize today's inbox"` }],
   run: async (args, f) =>
@@ -214,10 +198,10 @@ const start: CommandSpec = {
   name: "start",
   summary: "run the agent in production posture (same assembly as dev, no watching)",
   description:
-    "Run the agent in dir (default .) in production posture — the SAME assembly as dev (your directory " +
+    "Run the agent (default .) in production posture — the SAME assembly as dev (your directory " +
     "is the agent), just no file-watching. No build step: start reads the definition directly; " +
     "model/http come from fastagent.config.ts (frozen by git).",
-  args: [DIR_ARG],
+  args: [AGENT_ARG],
   flags: [PORT, BIND, MODEL, TUNNEL, NO_INVOKE, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
@@ -279,7 +263,7 @@ const channelSub = (
   name: kind,
   summary,
   description,
-  args: [DIR_ARG],
+  args: [AGENT_ARG],
   flags:
     kind === "feishu" || kind === "lark"
       ? [INGRESS, GROUP_BEHAVIOR]
@@ -348,7 +332,7 @@ const add: CommandSpec = {
             "a git ref (owner/repo/path, github default), a local path (./x, /abs), or a bare name " +
             "from your global skill dirs (~/.agents/skills, ~/.pi/agent/skills)",
         },
-        DIR_ARG,
+        AGENT_ARG,
       ],
       flags: [
         { flags: "--update", description: "overwrite an existing skill (re-fetch from source); review with git diff" },
@@ -378,7 +362,7 @@ const deploy: CommandSpec = {
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
-  args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, DIR_ARG],
+  args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
     {
       flags: "--run",
@@ -436,7 +420,7 @@ const routine: CommandSpec = {
       description:
         "Run ONE routine's turn immediately (authoring loop, like invoke) — runs routines/<name>.ts now, " +
         "whether or not it declares a cron. Reply→stdout; does NOT advance its fire state.",
-      args: [{ name: "<name>", description: "the routine name (routines/<name>.ts)" }, DIR_ARG],
+      args: [{ name: "<name>", description: "the routine name (routines/<name>.ts)" }, AGENT_ARG],
       flags: [MODEL, NO_INPUT],
       examples: [{ cmd: "fastagent routine run daily-digest" }],
       run: async (args, f) =>
@@ -452,7 +436,7 @@ const routine: CommandSpec = {
         "Print a routine's recent fires: when each fired, completed/failed/skipped/interrupted, and how long it " +
         'took — the answer to "did last night\'s run silently fail?". What the run SAID is in its session, a ' +
         "JSON-lines journal under the state root's sessions/ — which this command points at. Read-only.",
-      args: [{ name: "<name>", description: "the routine name" }, DIR_ARG],
+      args: [{ name: "<name>", description: "the routine name" }, AGENT_ARG],
       flags: [{ flags: "--json", description: "the full records" }],
       examples: [{ cmd: "fastagent routine history daily-digest" }],
       run: async (args, flags) =>
@@ -470,7 +454,7 @@ const routine: CommandSpec = {
         '"on demand" for each that does not — those are reached by name (POST /run, `routine run`). The agent\'s ' +
         "own pending wake-ups are listed too, prefixed `wake`: a different owner (the STATE, not the " +
         "definition), and only the agent cancels them (the `unwake` tool). Read-only.",
-      args: [DIR_ARG],
+      args: [AGENT_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent routine list" }],
       run: async (args, flags) =>
@@ -481,16 +465,16 @@ const routine: CommandSpec = {
 
 const destroy: CommandSpec = {
   name: "destroy",
-  summary: "delete every AWS resource `deploy agentcore` created for a workspace",
+  summary: "delete every AWS resource `deploy agentcore` created for an agent",
   description:
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
     "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
     "template mentions them, and a wake alarm is minted at runtime by the container — a schedule that " +
     "keeps retrying into a deleted Lambda. " +
-    "Derives the same names from dir that deploy did. Without --run it deletes nothing and reports what " +
+    "Derives the same names from the agent directory that deploy did. Without --run it deletes nothing and reports what " +
     "is out there.",
-  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],
+  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
   flags: [{ flags: "--run", description: "actually delete. Without it, this is a read-only inventory" }],
   // The other hosts need no command of their own, and saying which one to use belongs where it can be READ:
   // `<host>` has `choices`, so a `destroy fly` never reaches the command body.
@@ -517,10 +501,10 @@ const logs: CommandSpec = {
   name: "logs",
   summary: "find and tail a deployed host's application logs",
   description:
-    "Find the CloudWatch log group for the AgentCore stack derived from dir, then run aws logs tail. " +
+    "Find the CloudWatch log group for the AgentCore stack derived from the agent directory, then run aws logs tail. " +
     "The default Runtime source shows the agent process's own stdout/stderr; the forwarder source shows " +
     "the Lambda ingress transport logs.",
-  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],
+  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
   flags: [
     { flags: "--source <source>", description: "agentcore log source: runtime (default) or forwarder" },
     { flags: "--since <duration>", description: "history window accepted by AWS CLI (for example 30m or 2h)" },
@@ -531,7 +515,7 @@ const logs: CommandSpec = {
     { cmd: "fastagent logs agentcore --source forwarder --follow", note: "Lambda ingress" },
   ],
   notes:
-    "Read-only. Run it against the same workspace passed to deploy so it derives the same CloudFormation " +
+    "Read-only. Run it against the same agent directory passed to deploy so it derives the same CloudFormation " +
     "stack name. It never changes FASTAGENT_LOG_LEVEL: AgentCore keeps start's production default, and " +
     "setting that environment knob to debug exposes the existing detailed turn trace when needed.",
   run: async (args, f) =>

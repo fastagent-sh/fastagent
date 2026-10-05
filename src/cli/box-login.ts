@@ -5,19 +5,16 @@
  * copied from this machine.
  */
 import { type Server, createServer } from "node:http";
-import { basename } from "node:path";
 import { type BoxShell, deploymentLoginCommand } from "../deploy/box-shell.ts";
 import { boxLoginCommand } from "../deploy/container.ts";
 import type { DeployHost } from "../deploy/hosts.ts";
 import type { LoginIO } from "../engines/pi/login.ts";
-import type { ResolvedPlacement } from "../paths.ts";
 import { relayLogin } from "./login-relay.ts";
 import { terminalLoginIO } from "./shared.ts";
 
 export interface BoxLoginRequest {
   host: DeployHost;
   shell: BoxShell;
-  placement: ResolvedPlacement;
   /** Skip the provider menu. */
   provider?: string;
   /** Keep a credential the box already holds for `provider` (a redeploy), instead of replacing it. */
@@ -31,7 +28,7 @@ export interface BoxLoginRequest {
  * provider (logged in now, or kept), else with the one line saying why not and what to run.
  */
 export async function loginOnBox(request: BoxLoginRequest): Promise<string | undefined> {
-  const { host, shell, placement, provider } = request;
+  const { host, shell, provider } = request;
   const retry = deploymentLoginCommand(host, provider);
   const args = [
     ...(provider ? [provider] : []),
@@ -40,7 +37,7 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   ];
   let command: string;
   try {
-    command = boxLoginCommand(basename(placement.agentDir), args, shell.storage);
+    command = boxLoginCommand(args, shell.storage);
   } catch (error) {
     return (error as Error).message;
   }

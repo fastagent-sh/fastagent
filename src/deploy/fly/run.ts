@@ -17,16 +17,13 @@ export interface FlyRunPlan {
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
-  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
   /** Every declared channel and its ingress — the driver asks which of them have a webhook. */
   channels: readonly DeclaredChannel[];
-  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace root). */
+  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the agent directory). */
   flyConfig: string;
-  /**
-   * Dockerfile path passed explicitly (`fastagent/Dockerfile`, with the workspace as context — flyctl would otherwise
-   * resolve it relative to the config's own directory).
-   */
+  /** Dockerfile path passed explicitly, relative to the run cwd (the build context). */
   dockerfile: string;
   /**
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at

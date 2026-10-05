@@ -1,5 +1,5 @@
 /**
- * `fastagent deploy <host> [dir]`: generate host artifacts from the resolved definition and print an ordered deploy
+ * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
  * runbook.
  */
 import type { DeployHost } from "../../deploy/hosts.ts";
@@ -74,14 +74,13 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
   // The picker's write-back lands the model in fastagent.config.ts.
-  const placement = await enterAgentCommand(dirArg, opts);
-  // ONE deploy semantic: bake the WORKSPACE (WYSIWYG).
-  const { agentDir, workspace } = placement;
+  // ONE deploy semantic: bake the agent directory (WYSIWYG).
+  const agentDir = await enterAgentCommand(dirArg, opts);
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The host-neutral pre-flight (the model and its source, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts.
   const pre = await preflightDeploy({
-    placement,
+    agentDir,
     config,
     run: !!opts.run,
     force: !!opts.force,
@@ -98,7 +97,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   await target.deploy({
     opts,
     agentDir,
-    workspace,
     config,
     pre,
     channels,
@@ -112,7 +110,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // same way. `--force` regenerates ours; a file we did not generate is never touched by either, and the marker
     // line is how an operator takes a path back on purpose.
     write: async (artifacts, options) => {
-      const plan = await planArtifacts(workspace, artifacts, { ...options, isOurs: target.isOurs });
+      const plan = await planArtifacts(agentDir, artifacts, { ...options, isOurs: target.isOurs });
       if (opts.run && plan.stale.length > 0) {
         failStartup(
           new Error(

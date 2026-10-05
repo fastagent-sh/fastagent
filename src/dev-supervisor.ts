@@ -9,7 +9,6 @@ import {
   AGENT_CONFIG_FILE,
   AGENT_MODEL_CATALOG_FILE,
   AGENT_MODELS_FILE,
-  type ResolvedPlacement,
   resolveStateRoot,
   isUnderDir,
 } from "./paths.ts";
@@ -50,11 +49,8 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(
-  placement: ResolvedPlacement,
-  options: { tunnel?: boolean } = {},
-): Promise<void> {
-  // The placement arrives RESOLVED from the command (which already routed its refusal through failStartup).
+export async function runDevSupervisor(agentDir: string, options: { tunnel?: boolean } = {}): Promise<void> {
+  // The agent directory arrives RESOLVED from the command (which already routed its refusal through failStartup).
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
@@ -79,9 +75,9 @@ export async function runDevSupervisor(
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(placement.agentDir, t.url, declaredChannels(m.routeChannels ?? []), {
+            void announceWebhooks(agentDir, t.url, declaredChannels(m.routeChannels ?? []), {
               openUrl: openExternalUrl,
-              stateRoot: resolveStateRoot(placement.agentDir),
+              stateRoot: resolveStateRoot(agentDir),
             });
           }
         });
@@ -95,7 +91,7 @@ export async function runDevSupervisor(
         spawnWorker(); // restart requested: the old worker has exited, so the port is free
       } else if (!everServed) {
         // Failed BEFORE ever serving — a non-editable startup failure (bad flag, EADDRINUSE, broken initial
-        // workspace) that saving cannot fix.
+        // definition) that saving cannot fix.
         process.exit(code ?? 1);
       } else {
         // A worker that HAD been serving stopped (broken edit or crash). Fixable; wait for the next save.
@@ -115,9 +111,9 @@ export async function runDevSupervisor(
   };
 
   // chokidar gives reliable cross-platform recursion + structural ignore that native fs.watch cannot.
-  const watcher = watchTree(placement.agentDir, {
+  const watcher = watchTree(agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir)),
+    ignored: devWatchIgnored(agentDir, dotEnvPath(agentDir)),
   });
   watcher.on("all", () => {
     clearTimeout(timer);
@@ -130,9 +126,9 @@ export async function runDevSupervisor(
     `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/SYSTEM.md/APPEND_SYSTEM.md/skills/prompts edits go live next turn without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
-  if (!isUnderDir(dotEnvPath(placement.agentDir), placement.agentDir)) {
+  if (!isUnderDir(dotEnvPath(agentDir), agentDir)) {
     log.warn(
-      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(placement.agentDir)}) — it is NOT watched; restart dev after editing it`,
+      `[fastagent] .env lives outside the agent dir (FASTAGENT_SECRETS_DIR → ${dotEnvPath(agentDir)}) — it is NOT watched; restart dev after editing it`,
     );
   }
 

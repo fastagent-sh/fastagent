@@ -50,7 +50,7 @@ export async function readOutput<T>(
 }
 
 /**
- * Production {@link CliRunner}: spawn `bin` in `cwd` (the workspace, so a build/upload context is the agent). stderr
+ * Production {@link CliRunner}: spawn `bin` in `cwd` (the agent directory, which is the build/upload context). stderr
  * is always inherited to the terminal.
  */
 export function spawnRunner(bin: string, cwd: string): CliRunner {

@@ -11,7 +11,7 @@ import type { CliRunner } from "../runner.ts";
 import { missingValuesGate } from "../secrets.ts";
 
 export interface DockerRunPlan {
-  /** Compose file relative to the runner cwd (the workspace root). */
+  /** Compose file relative to the runner cwd (the agent directory). */
   composeFile: string;
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
@@ -22,7 +22,7 @@ export interface DockerRunPlan {
   secrets: Record<string, string>;
   /** Declared names the value file supplies no value for — the run gates on these before any side effect. */
   missingSecrets: string[];
-  /** That value file, workspace-relative, so the gate names the file this deploy actually read. */
+  /** That value file, agent-dir-relative, so the gate names the file this deploy actually read. */
   valueFile: string;
   /** Register the deployment's webhooks against the tunnel URL, reporting what each registrar answered. */
   announce: DockerAnnounce;
@@ -71,8 +71,8 @@ export function localUrlFromComposePort(stdout: string): string | undefined {
 }
 
 /**
- * The FIRST boot seeds the whole workspace onto the volume (the image's `node_modules` included) before it binds a
- * port, so this budget covers a copy on a slow Docker Desktop disk, not a listen.
+ * The boot publishes the definition onto the volume (the image's `node_modules` included) before it binds a port,
+ * so this budget covers a copy on a slow Docker Desktop disk, not a listen.
  */
 const defaultHealthProbe: DockerHealthProbe = (healthUrl, stillStarting) =>
   waitForHealth(healthUrl, 180_000, 500, stillStarting);
@@ -225,7 +225,7 @@ export async function deployDockerRun(
     return ps.code !== 0 || ps.stdout.split(/\s+/).includes("agent");
   };
   if (!url && plan.boxLogin) {
-    // The login runs in the prepared workspace, with the CLI the first boot installs: it needs the box READY, and
+    // The login runs in the deployed definition, with the CLI the first boot installs: it needs the box READY, and
     // with no published port the only place to ask `/health` is inside the container.
     log("agent is running (no host-published port found); waiting for /health inside the container before login…");
     if (!(await containerHealthy(docker, compose, plan.port, stillStarting))) {

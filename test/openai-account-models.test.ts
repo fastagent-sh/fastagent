@@ -36,11 +36,13 @@ function oauth(extra: Partial<OAuthCredential> = {}): OAuthCredential {
   };
 }
 
-async function workspace(credentials: Record<string, unknown>): Promise<{ dir: string; authPath: string }> {
-  const dir = await mkdtemp(join(tmpdir(), "fa-openai-account-"));
-  await mkdir(join(dir, "agent"));
-  await writeFile(join(dir, "agent", "fastagent.config.ts"), "export default {};");
-  const authPath = join(dir, "auth.json");
+/** An agent with its credentials file outside it. Returns the agent directory. */
+async function agent(credentials: Record<string, unknown>): Promise<{ dir: string; authPath: string }> {
+  const host = await mkdtemp(join(tmpdir(), "fa-openai-account-"));
+  const dir = join(host, "agent");
+  await mkdir(dir);
+  await writeFile(join(dir, "fastagent.config.ts"), "export default {};");
+  const authPath = join(host, "auth.json");
   await writeFile(authPath, JSON.stringify(credentials));
   return { dir, authPath };
 }
@@ -77,17 +79,17 @@ afterEach(() => {
 describe("what a ChatGPT sign-in lists", () => {
   it("lists the account's catalog, and an API key keeps pi's built-in list", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
-    const signedIn = await workspace({ openai: oauth({ accountModels: ["gpt-5.5", "gpt-6-astra"] }) });
+    const signedIn = await agent({ openai: oauth({ accountModels: ["gpt-5.5", "gpt-6-astra"] }) });
     expect(await openaiSpecs(signedIn.dir, signedIn.authPath)).toEqual(["openai/gpt-5.5", "openai/gpt-6-astra"]);
 
-    const keyed = await workspace({ openai: { type: "api_key", key: "sk-test" } });
+    const keyed = await agent({ openai: { type: "api_key", key: "sk-test" } });
     expect((await openaiSpecs(keyed.dir, keyed.authPath)).length).toBeGreaterThan(2);
   });
 
   it("a sign-in with no catalog lists nothing for openai and logs why, without failing a throwing warn", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
-    const { dir, authPath } = await workspace({ openai: oauth() });
+    const { dir, authPath } = await agent({ openai: oauth() });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // The documented sink for a broken credentials file: it must not hear this normal, recoverable state.
     const specs = (
@@ -109,13 +111,13 @@ describe("what a ChatGPT sign-in lists", () => {
     // The agent's runtime (turns, the agent catalog refresh), the machine's (`models --refresh -g`), and the bare
     // registry login is built on: a registry that refreshed without the wrapper would drop the catalog.
     const registries: Record<string, (dir: string, authPath: string) => Promise<Models>> = {
-      agent: (dir, authPath) => agentModels(join(dir, "agent"), { authPath }).runtime(),
+      agent: (dir, authPath) => agentModels(dir, { authPath }).runtime(),
       machine: (_dir, authPath) => machineModelRuntime({ credentials: fastagentCredentialStore(authPath) }),
       bare: async (_dir, authPath) => piModelsOver(fastagentCredentialStore(authPath)),
     };
     for (const [name, open] of Object.entries(registries)) {
       fetch.mockClear();
-      const { dir, authPath } = await workspace({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
+      const { dir, authPath } = await agent({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
       const models = await open(dir, authPath);
       expect((await models.getAuth("openai"))?.auth.apiKey, name).toBe("at-new");
       const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
@@ -128,9 +130,9 @@ describe("what a ChatGPT sign-in lists", () => {
 
   it("a refresh whose catalog read fails still stores the rotated token, with the previous catalog", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
-    const { dir, authPath } = await workspace({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
+    const { dir, authPath } = await agent({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
     stubOpenAI(503);
-    const models = await agentModels(join(dir, "agent"), { authPath }).runtime();
+    const models = await agentModels(dir, { authPath }).runtime();
     expect((await models.getAuth("openai"))?.auth.apiKey).toBe("at-new");
 
     // The old refresh token is spent: losing the new one would sign the account out.
@@ -140,14 +142,14 @@ describe("what a ChatGPT sign-in lists", () => {
 
   it("an extension that re-registers openai keeps the catalog: listed, and carried over a refresh", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
-    const { dir, authPath } = await workspace({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
-    await mkdir(join(dir, "agent", "extensions"));
+    const { dir, authPath } = await agent({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
+    await mkdir(join(dir, "extensions"));
     await writeFile(
-      join(dir, "agent", "extensions", "gateway.ts"),
+      join(dir, "extensions", "gateway.ts"),
       `export default (pi) => { pi.registerProvider("openai", { headers: { "x-gateway": "1" } }); };`,
     );
     const fetch = stubOpenAI();
-    const models = await agentModels(join(dir, "agent"), { authPath }).runtime();
+    const models = await agentModels(dir, { authPath }).runtime();
     expect((await models.getAuth("openai"))?.auth.apiKey).toBe("at-new");
     const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
     expect(stored).toMatchObject({ refresh: "rt-new", accountModels: ["gpt-5.5", "gpt-6-astra"] });
@@ -157,9 +159,9 @@ describe("what a ChatGPT sign-in lists", () => {
   });
 
   it("the agent's models.json overrides on openai still apply over the wrapped provider", async () => {
-    const { dir, authPath } = await workspace({ openai: oauth({ accountModels: ["gpt-5.5"] }) });
+    const { dir, authPath } = await agent({ openai: oauth({ accountModels: ["gpt-5.5"] }) });
     await writeFile(
-      join(dir, "agent", "models.json"),
+      join(dir, "models.json"),
       JSON.stringify({
         providers: { openai: { modelOverrides: { "gpt-5.5": { name: "Renamed", contextWindow: 1000 } } } },
       }),
