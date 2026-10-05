@@ -241,6 +241,34 @@ describe("session control: observation plane", () => {
     expect(entries.at(-1)).toMatchObject({ kind: "assistant", data: { outcome: { status: "aborted" } } });
   });
 
+  it("a failure recorded before the stop stays failed: a provider error whose retry is stopped during its backoff", async () => {
+    // Fails before saying anything, so pi schedules a retry (a 2s backoff); the second response is never asked for.
+    const { agent, control } = await makeObserved([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("never"),
+    ]);
+    const seen: SessionEvent[] = [];
+    const watched = (async () => {
+      for await (const ev of control.sessions.get("aBackoff").events()) {
+        seen.push(ev);
+        if (ev.type === "retry_scheduled") await control.sessions.get("aBackoff").abort();
+        if (ev.type === "run_settled") break;
+      }
+    })();
+    await drain(agent.invoke({ session: "aBackoff" }, { text: "go" }));
+    await watched;
+    expect(seen.map((e) => e.type)).toContain("retry_scheduled");
+    expect(seen.at(-1)?.data).toMatchObject({ status: "aborted" }); // the RUN was stopped
+    // The answer failed on its own, before the stop: live and read back alike.
+    expect(seen.filter((e) => e.type === "message_finished").map((e) => e.data)).toEqual([
+      { outcome: { status: "failed", error: { message: "boom 500" } } },
+    ]);
+    const answers = (await control.sessions.get("aBackoff").entries()).entries.filter((e) => e.kind === "assistant");
+    expect(answers.map((e) => e.data)).toEqual([
+      { text: "", outcome: { status: "failed", error: { message: "boom 500" } } },
+    ]);
+  });
+
   it("an answer's thinking reads back as the live thinking deltas added up", async () => {
     const cases = [
       {
