@@ -231,7 +231,7 @@ function createPiAgentFromDir(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its contexts, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` defaults to `<state root>/sessions`; a relative one is relative to the agent directory, and the result reports it absolute.
+The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its contexts, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` and `authPath` are read like every path override: a leading `~` is the home directory and a relative path is relative to the process's working directory. `sessionsDir` defaults to `<state root>/sessions`, and the result reports the one in use as an absolute path.
 
 ### Contexts
 
