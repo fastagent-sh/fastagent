@@ -76,7 +76,8 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
     get cwd() {
       return state.cwd;
     },
-    execute: (params: unknown) => turnContext.run({ cwd: state.cwd }, () => state.tool.execute("call-1", params)),
+    execute: (params: unknown) =>
+      turnContext.run({ dirs: { agentDir: state.cwd, cwd: state.cwd } }, () => state.tool.execute("call-1", params)),
     credentials: () => {
       vi.stubEnv(`${prefix}_APP_ID`, "cli_env");
       vi.stubEnv(`${prefix}_APP_SECRET`, "env-secret");

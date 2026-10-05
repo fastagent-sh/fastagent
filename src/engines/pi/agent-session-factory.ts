@@ -2,7 +2,8 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   BUILTIN_EXTENSIONS,
   DISCOVERY,
@@ -44,7 +45,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
-import type { ResolvedContext } from "../../contexts/resolve.ts";
+import type { AgentDirs, ResolvedContext } from "../../contexts/resolve.ts";
+import { isUnderDir } from "../../paths.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
@@ -85,8 +87,8 @@ export interface PiAgentSessionFactoryOptions {
   tools?: MountedTool[];
   /** Read once per binding; prompt and skills come from the same definition read. */
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
-  /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
-  cwd: string;
+  /** The agent directory and the working directory, pi's one cwd. */
+  dirs: AgentDirs;
   /** What fastagent-defined tools see as `contexts`. */
   contexts?: readonly ResolvedContext[];
   /** The definition's own extension entry points, loaded fresh for every bound session. */
@@ -95,7 +97,7 @@ export interface PiAgentSessionFactoryOptions {
   excludedToolNames?: readonly string[];
 }
 
-type ToolBinding = { session: AgentSession; context: TurnContext };
+type ToolBinding = { session: AgentSession; context: TurnContext & { dirs: AgentDirs } };
 
 /**
  * What pi's own coding tools say about themselves in its default prompt. The coding tools fastagent mounts are pi's
@@ -159,7 +161,7 @@ function toolDefinitions(tools: MountedTool[], bound: { current?: ToolBinding },
         // Pi's thinking getter uses a shared runtime; a restored cwd may be a symlink spelling.
         const scoped = Object.create(ctx, {
           sessionManager: { value: sessionManager },
-          cwd: { value: context.cwd },
+          cwd: { value: context.dirs.cwd },
           thinkingLevel: { get: () => session.thinkingLevel },
         });
         return turnContext.run(context, () => tool.execute(id, params, signal, onUpdate, scoped));
@@ -176,8 +178,8 @@ export interface BindPiSessionOptions {
   model: AnyModel;
   thinkingLevel: ThinkingLevel | undefined;
   tools: MountedTool[];
-  /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
-  cwd: string;
+  /** The agent directory and the working directory: what fastagent-defined tools see as `agentDir` and `cwd`. */
+  dirs: AgentDirs;
   /** What fastagent-defined tools see as `contexts`. */
   contexts?: readonly ResolvedContext[];
   /** Built-ins omitted by an explicit lower-level tool list. */
@@ -199,7 +201,7 @@ function discoveryToolNames(tools: readonly MountedTool[]): string[] {
  * Bind ONE pi session to a record: authored tools replace same-name built-ins; Pi owns exposure and discovery.
  */
 export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
-  const { services, sessionManager, model, thinkingLevel, tools, cwd } = options;
+  const { services, sessionManager, model, thinkingLevel, tools, dirs } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const history = sessionManager.buildSessionContext().messages;
   const bound: { current?: ToolBinding } = {};
@@ -218,7 +220,7 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
   bound.current = {
     session,
     context: {
-      cwd,
+      dirs,
       contexts: options.contexts ?? [],
       sessionManager: agentSessionManager(session, sessionId),
       tools: sessionToolActivation(session),
@@ -298,6 +300,27 @@ function servingCommandActions(session: AgentSession): ExtensionCommandContextAc
 
 /** What pi is allowed to discover, minus the parts each assembly fills in itself. */
 type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
+
+/**
+ * The agent's themes, wherever it works. pi reads a project's from `<cwd>/.pi/themes`, which for an agent with a
+ * `workdir` context is that context's, so the agent directory's take their place (the machine's stay). Only `chat`'s
+ * TUI shows a theme; everything else pi would discover there is turned off or overridden above.
+ */
+function ownThemes({
+  agentDir,
+  cwd,
+}: AgentDirs): Pick<DefinitionLoaderOptions, "additionalThemePaths" | "themesOverride"> {
+  if (cwd === agentDir) return {};
+  const working = join(cwd, ".pi", "themes");
+  const own = join(agentDir, ".pi", "themes");
+  return {
+    additionalThemePaths: existsSync(own) ? [own] : [],
+    themesOverride: ({ themes, diagnostics }) => ({
+      themes: themes.filter((theme) => theme.sourcePath === undefined || !isUnderDir(theme.sourcePath, working)),
+      diagnostics,
+    }),
+  };
+}
 
 const nativeFactories: Record<(typeof BUILTIN_EXTENSIONS)[number], ExtensionFactory> = {
   codemode: createCodemodeExtension(),
@@ -500,18 +523,24 @@ export function startCompaction(
   return { admission: Promise.race([admitted, settledFirst]), done };
 }
 
-/** A fresh loader and Pi's native model registration, over a session-local runtime. */
+/**
+ * A fresh loader and Pi's native model registration, over a session-local runtime. EVERY extension load goes through
+ * here (a session, the model catalog, the `/` menu), all on `dirs.cwd`: pi caches loaded extensions per process for
+ * one cwd and imports every module again when a load names another, so a menu built on a second cwd would re-run
+ * `extensions/` beside every turn.
+ */
 export async function definitionServices(options: {
-  cwd: string;
+  dirs: AgentDirs;
   modelRuntime: ModelRuntime;
   definition: PiSessionDefinition;
   extensionPaths: readonly string[];
 }): Promise<AgentSessionServices> {
-  const { cwd, modelRuntime, definition, extensionPaths } = options;
-  const machine = await readMachine(cwd);
+  const { dirs, modelRuntime, definition, extensionPaths } = options;
+  // The agent's, wherever it works: pi's project scope is the agent directory (machine.ts).
+  const machine = await readMachine(dirs.agentDir);
   const services = await withModelRegistration(modelRuntime, () =>
     createAgentSessionServices({
-      cwd,
+      cwd: dirs.cwd,
       agentDir: getAgentDir(),
       modelRuntime,
       settingsManager: machine.settingsManager(),
@@ -521,6 +550,7 @@ export async function definitionServices(options: {
           machine,
           extensionPaths,
         }),
+        ...ownThemes(dirs),
         extensionsOverride: admissionFirst,
       },
     }).then((services) => {
@@ -540,7 +570,7 @@ export async function definitionServices(options: {
  * instances are never bound (any action they call throws).
  */
 export async function servedExtensionCommands(options: {
-  cwd: string;
+  dirs: AgentDirs;
   modelRuntime: ModelRuntime;
   extensionPaths: readonly string[];
 }): Promise<ResolvedCommand[]> {
@@ -549,8 +579,8 @@ export async function servedExtensionCommands(options: {
   const runner = new ExtensionRunner(
     extensions,
     runtime,
-    options.cwd,
-    SessionManager.inMemory(options.cwd),
+    options.dirs.cwd,
+    SessionManager.inMemory(options.dirs.cwd),
     new ModelRegistry(options.modelRuntime),
   );
   return runner.getRegisteredCommands();
@@ -566,7 +596,7 @@ export async function servedExtensionCommands(options: {
  * what `dev` does on one.
  */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
-  const { sessions, thinkingLevel, cwd } = options;
+  const { sessions, thinkingLevel, dirs } = options;
   const extensionPaths = options.extensionPaths ?? [];
   const excludedToolNames = options.excludedToolNames ?? [];
   const tools = options.tools ?? [];
@@ -588,7 +618,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
     const { modelRuntime } = await options.engine();
-    const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
+    const services = await definitionServices({ dirs, modelRuntime, definition, extensionPaths });
     const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : undefined;
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.
@@ -614,7 +644,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
       tools,
-      cwd,
+      dirs,
       contexts: options.contexts ?? [],
       excludedToolNames,
       sessionId,

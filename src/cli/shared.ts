@@ -31,7 +31,7 @@ import {
   reportToolCollisions,
 } from "../engines/pi/report.ts";
 import { isDeployedWorkspace } from "../paths.ts";
-import type { ResolvedContext } from "../contexts/resolve.ts";
+import { type ResolvedContext, agentDirs, resolveContexts } from "../contexts/resolve.ts";
 import { contextLines } from "./contexts-view.ts";
 import { log } from "../log.ts";
 import { enterAgentEnv } from "../env.ts";
@@ -186,7 +186,10 @@ async function resolveFirstRunModel(
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
 
-  const environment = agentModels(agentDir);
+  const contexts = await Promise.resolve()
+    .then(() => resolveContexts(agentDir, config.contexts))
+    .catch(failStartup);
+  const environment = agentModels(agentDirs(agentDir, contexts));
   // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a self-hosted endpoint
   // is pickable on first run instead of being invisible until hand-set.
   const models = await environment.runtime().catch(failStartup);

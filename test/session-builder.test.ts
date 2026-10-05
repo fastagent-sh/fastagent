@@ -313,21 +313,30 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     }
   });
 
-  it("rejects a session switch to another agent's directory: chat sessions belong to one agent", async () => {
-    const root = await mkdtemp(join(tmpdir(), "fa-chat-scope-"));
+  it("a record belongs to the directory that stores it: another agent's is refused, an earlier one continues here", async () => {
+    const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-scope-")));
     const dir = join(root, "agent-a");
     const other = join(root, "agent-b");
     const sessionsDir = join(root, "sessions");
+    const header = (id: string, cwd: string) =>
+      `${JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd })}\n` +
+      `${JSON.stringify({ type: "message", id: `${id}-m`, parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "hi" } })}\n`;
     try {
       for (const agent of [dir, other]) {
         await mkdir(agent, { recursive: true });
         await writeFile(join(agent, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       }
-      const imported = join(root, "other-session.jsonl");
-      await writeFile(
-        imported,
-        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: other })}\n`,
-      );
+      await mkdir(sessionsDir);
+      // Another agent's record, stored in ITS session directory.
+      const foreign = join(root, "other-sessions", "foreign.jsonl");
+      await mkdir(dirname(foreign));
+      await writeFile(foreign, header("foreign", other));
+      // This agent's record, made while it worked somewhere else.
+      const earlier = join(sessionsDir, "earlier.jsonl");
+      await writeFile(earlier, header("earlier", join(root, "old-workdir")));
+      // An outside file to import, whose header names another directory.
+      const outside = join(root, "outside.jsonl");
+      await writeFile(outside, header("outside", other));
 
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
@@ -335,12 +344,26 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         rt.setBeforeSessionInvalidate(() => {
           invalidated = true;
         });
-        // A session that EXPLICITLY records another directory is rejected before pi tears the live
-        // session down — independent of process.cwd().
-        await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent sessions belong to one agent/);
+        // Refused before pi tears the live session down.
+        await expect(rt.switchSession(foreign)).rejects.toThrow(
+          /fastagent sessions belong to one agent: .* is not stored/,
+        );
         expect(invalidated).toBe(false);
-        // The agent directory, as serving uses, canonical (symlink-free).
-        expect(rt.cwd).toBe(realpathSync(dir));
+
+        await expect(rt.switchSession(earlier)).resolves.toMatchObject({ cancelled: false });
+        expect(rt.cwd).toBe(dir);
+        expect(rt.session.sessionManager.getCwd()).toBe(dir);
+        // Forking it would reopen the file in the cwd its header records: refused first, the session left as it was.
+        invalidated = false;
+        await expect(rt.fork("earlier-m", { position: "at" })).rejects.toThrow(
+          /recorded while the agent worked in .*old-workdir/,
+        );
+        expect(invalidated).toBe(false);
+
+        // pi copies an import into the session directory, so it is this agent's, and it continues here.
+        await expect(rt.importFromJsonl(outside)).resolves.toMatchObject({ cancelled: false });
+        expect(rt.cwd).toBe(dir);
+        expect(dirname(rt.session.sessionFile ?? "")).toBe(sessionsDir);
       } finally {
         rt.session.dispose?.();
       }
@@ -615,6 +638,74 @@ describe("session builder: chat never installs a pi package, and still saves its
     } finally {
       warn.mockRestore();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session builder: an agent with a `workdir` context", () => {
+  it("runs in the working directory, keeps its records and settings in its own directory, apart from another agent's", async () => {
+    const root = realpathSync(await mkdtemp(join(tmpdir(), "fa-chat-workdir-")));
+    const work = join(root, "work");
+    const observedKey = "__fastagent_chat_workdir_test__";
+    const piUrl = new URL("../src/pi.ts", import.meta.url).href;
+    try {
+      // pi's own dark theme under another name: a theme pi accepts.
+      const dark = new URL(
+        "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/dark.json",
+        import.meta.url,
+      );
+      const theme = async (name: string) => JSON.stringify({ ...JSON.parse(await readFile(dark, "utf8")), name });
+      await mkdir(join(work, ".pi", "themes"), { recursive: true });
+      await writeFile(join(work, ".pi", "settings.json"), JSON.stringify({ theme: "from-workdir" }));
+      await writeFile(join(work, ".pi", "themes", "work-theme.json"), await theme("work-theme"));
+      const agents = [join(root, "a"), join(root, "b")];
+      for (const agent of agents) {
+        await mkdir(join(agent, ".pi", "themes"), { recursive: true });
+        await writeFile(join(agent, ".pi", "settings.json"), JSON.stringify({ theme: "from-agent" }));
+        await writeFile(join(agent, ".pi", "themes", "own-theme.json"), await theme("own-theme"));
+        await writeFile(
+          join(agent, "fastagent.config.ts"),
+          `import { defineTool, z } from ${JSON.stringify(piUrl)};
+           export default {
+             model: "openai-codex/gpt-5.5",
+             contexts: [{ local: "../work", workdir: true }],
+             tools: [defineTool({
+               name: "where",
+               description: "Report the directories.",
+               input: z.object({}),
+               execute: async (_input, ctx) => {
+                 globalThis[${JSON.stringify(observedKey)}] = { cwd: ctx.cwd, agentDir: ctx.agentDir };
+                 return "ok";
+               },
+             })],
+           };\n`,
+        );
+      }
+      const runtimes = await Promise.all(agents.map((agent) => buildAgentSessionRuntime(agent)));
+      try {
+        const [a, b] = runtimes as [Awaited<ReturnType<typeof buildAgentSessionRuntime>>, (typeof runtimes)[number]];
+        expect(a.cwd).toBe(work);
+        expect(a.session.sessionManager.getCwd()).toBe(work);
+        // Each agent's records are in pi's session directory for the AGENT directory, so two agents working in one
+        // directory never list each other's; /new keeps that directory and the working directory.
+        expect(a.session.sessionManager.getSessionDir()).toBe(SessionManager.create(agents[0]!).getSessionDir());
+        expect(b.session.sessionManager.getSessionDir()).not.toBe(a.session.sessionManager.getSessionDir());
+        await a.newSession();
+        expect(a.session.sessionManager.getSessionDir()).toBe(SessionManager.create(agents[0]!).getSessionDir());
+        expect(a.session.sessionManager.getCwd()).toBe(work);
+        // The settings file `/settings` writes is the agent's, not the working directory's, and so are its themes.
+        expect(a.session.settingsManager.getTheme()).toBe("from-agent");
+        const themes = a.services.resourceLoader.getThemes().themes.map((t) => t.name);
+        expect(themes).toContain("own-theme");
+        expect(themes).not.toContain("work-theme");
+        await a.session.agent.state.tools.find((tool) => tool.name === "where")!.execute("where-1", {});
+        expect((globalThis as Record<string, unknown>)[observedKey]).toEqual({ cwd: work, agentDir: agents[0] });
+      } finally {
+        for (const rt of runtimes) await rt.dispose?.();
+      }
+    } finally {
+      delete (globalThis as Record<string, unknown>)[observedKey];
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

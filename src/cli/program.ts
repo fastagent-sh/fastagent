@@ -52,25 +52,36 @@ const init: CommandSpec = {
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
     {
+      flags: "--workdir <dir>",
+      description:
+        "the directory the agent works in, declared as a context with `workdir: true` (created when missing)",
+    },
+    {
       flags: "--context <dir>",
       description: "a directory the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
       repeatable: true,
     },
-    { flags: "--copy", description: "with --context: a host gets its own copy of each (else deploying refuses)" },
+    {
+      flags: "--copy",
+      description: "with --context/--workdir: a host gets its own copy of each (else deploying refuses)",
+    },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
   ],
   examples: [
     { cmd: "fastagent init my-agent", note: "an agent that only talks" },
     { cmd: "fastagent init reviewer --context ~/code/app", note: "works on ~/code/app" },
+    { cmd: "fastagent init researcher --workdir ~/notes", note: "works in ~/notes" },
   ],
   notes:
-    "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
-    "It lives in a directory of its own, never inside a project or another agent: what it works on is declared " +
-    "as a context. Add one it only knows later with `fastagent context add <dir> --readonly`.",
+    "An agent is a directory holding a fastagent.config.ts. It lives in a directory of its own, never inside a " +
+    "project or another agent: what it works on is declared as a context. It works in its own directory unless " +
+    "--workdir names another, where what it creates lands, apart from its definition. Add a context it only knows " +
+    "later with `fastagent context add <dir> --readonly`.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
       contexts: (f.context as string[] | undefined) ?? [],
+      ...(typeof f.workdir === "string" ? { workdir: f.workdir } : {}),
       copy: f.copy === true,
     }),
 };
@@ -448,12 +459,14 @@ const context: CommandSpec = {
       args: [{ name: "<source>", description: "the directory" }, AGENT_ARG],
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
+        { flags: "--workdir", description: "the agent works in it (`workdir: true`); made when missing" },
         { flags: "--copy", description: "an instance on a host gets its own copy (else deploying refuses)" },
         { flags: "--name <name>", description: "its name (default: the directory's)" },
       ],
       examples: [
         { cmd: "fastagent context add ~/code/app", note: "works on" },
         { cmd: "fastagent context add ~/handbook --readonly", note: "knows" },
+        { cmd: "fastagent context add ~/research --workdir", note: "works in" },
       ],
       notes:
         "A directory is declared `{ local }`: on this machine it is that directory, and deploying refuses the " +
@@ -463,6 +476,7 @@ const context: CommandSpec = {
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
           copy: f.copy === true,
           readonly: f.readonly === true,
+          workdir: f.workdir === true,
           ...(typeof f.name === "string" ? { name: f.name } : {}),
         }),
     },

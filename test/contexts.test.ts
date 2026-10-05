@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { declarationFor, declareContexts } from "../src/contexts/declare.ts";
-import { resolveContexts } from "../src/contexts/resolve.ts";
+import { agentDirs, resolveContexts } from "../src/contexts/resolve.ts";
 import { rewriteContexts } from "../src/contexts/config-text.ts";
 import { writeContexts } from "../src/engines/pi/config.ts";
 
@@ -22,20 +22,23 @@ describe("contexts: the declaration", () => {
           { local: "/home/me/code/app" },
           { local: "../notes", copy: true, readonly: true },
           { github: "acme/handbook", ref: "main", local: "/home/me/src/handbook", name: "rules" },
+          { local: "/home/me/work", workdir: true },
         ],
         AGENT,
       ),
     ).toEqual([
-      { name: "app", readonly: false, kind: "local", path: "/home/me/code/app" },
-      { name: "notes", readonly: true, kind: "copy", path: "/home/me/agents/notes" },
+      { name: "app", readonly: false, workdir: false, kind: "local", path: "/home/me/code/app" },
+      { name: "notes", readonly: true, workdir: false, kind: "copy", path: "/home/me/agents/notes" },
       {
         name: "rules",
         readonly: false,
+        workdir: false,
         kind: "github",
         repo: "acme/handbook",
         ref: "main",
         checkout: "/home/me/src/handbook",
       },
+      { name: "work", readonly: false, workdir: true, kind: "local", path: "/home/me/work" },
     ]);
     expect(declareContexts(undefined, AGENT)).toEqual([]);
   });
@@ -49,6 +52,19 @@ describe("contexts: the declaration", () => {
     ["ref on a directory", [{ local: "/x", ref: "main" }], /"ref" applies to a github context/],
     ["a repository not owner/repo", [{ github: "acme" }], /"github" must be "owner\/repo"/],
     ["a non-boolean flag", [{ local: "/x", readonly: "yes" }], /"readonly" must be a boolean/],
+    [
+      "two working directories",
+      [
+        { local: "/a", workdir: true },
+        { local: "/b", workdir: true },
+      ],
+      /"a" and "b" are both declared `workdir` — an agent has one working directory/,
+    ],
+    [
+      "a working directory it may only read",
+      [{ local: "/a", workdir: true, readonly: true }],
+      /contexts\[0\]: a `workdir` context is written to, so it cannot be `readonly`/,
+    ],
     ["a name that is a path", [{ local: "/x", name: "a/b" }], /"name" must be one path segment/],
     ["a default name that is not one", [{ local: "/my notes" }], /default name "my notes" .* give it a "name"/],
     [
@@ -76,6 +92,7 @@ describe("contexts: the declaration", () => {
       readonly: true,
       name: "n",
     });
+    expect(declarationFor("/x", "/", { workdir: true })).toEqual({ local: "/x", workdir: true });
     expect(() => declarationFor("github:acme/app", "/")).toThrow(/github contexts are not supported yet/);
   });
 });
@@ -91,22 +108,48 @@ describe("contexts: resolved for this instance", () => {
 
   it("a local context is its directory, on this machine", async () => {
     const { root, agentDir } = await layout();
-    expect(resolveContexts(agentDir, [{ local: "../app", copy: true, readonly: true }], "local")).toEqual([
-      { name: "app", kind: "copy", readonly: true, location: join(root, "app") },
+    expect(resolveContexts(agentDir, [{ local: "../app", copy: true, readonly: true }], { place: "local" })).toEqual([
+      { name: "app", kind: "copy", readonly: true, workdir: false, location: join(root, "app") },
     ]);
+  });
+
+  it("the working directory is the context declared so, else the agent directory, from the one resolution", async () => {
+    const { root, agentDir } = await layout();
+    const contexts = resolveContexts(agentDir, [{ local: "../app" }, { local: "../app", name: "w", workdir: true }], {
+      place: "local",
+    });
+    expect(agentDirs(agentDir, contexts)).toEqual({ agentDir, cwd: join(root, "app") });
+    expect(agentDirs(agentDir, contexts.slice(0, 1))).toEqual({ agentDir, cwd: agentDir });
+  });
+
+  it("checks a directory a command is about to make as the path it will have, and refuses any other missing one", async () => {
+    const { root, agentDir } = await layout();
+    const fresh = join(root, "fresh", "work");
+    expect(resolveContexts(agentDir, [{ local: fresh, workdir: true }], { place: "local", toCreate: fresh })).toEqual([
+      { name: "work", kind: "local", readonly: false, workdir: true, location: fresh },
+    ]);
+    expect(() => resolveContexts(agentDir, [{ local: "../missing" }], { place: "local", toCreate: fresh })).toThrow(
+      /missing does not exist/,
+    );
+    // Its nesting is still asked of its real path: through a symlinked ancestor it would be inside the agent.
+    await symlink(agentDir, join(root, "inside"));
+    const nested = join(root, "inside", "work");
+    expect(() => resolveContexts(agentDir, [{ local: nested }], { place: "local", toCreate: nested })).toThrow(
+      /is inside the agent directory/,
+    );
   });
 
   it("refuses what is not there to work on, a repository, and a host, naming the context", async () => {
     const { root, agentDir } = await layout();
     await writeFile(join(root, "file"), "");
-    expect(() => resolveContexts(agentDir, [{ local: "../missing" }], "local")).toThrow(
+    expect(() => resolveContexts(agentDir, [{ local: "../missing" }], { place: "local" })).toThrow(
       /context "missing": .*missing does not exist/,
     );
-    expect(() => resolveContexts(agentDir, [{ local: "../file" }], "local")).toThrow(/is not a directory/);
-    expect(() => resolveContexts(agentDir, [{ github: "acme/app" }], "local")).toThrow(
+    expect(() => resolveContexts(agentDir, [{ local: "../file" }], { place: "local" })).toThrow(/is not a directory/);
+    expect(() => resolveContexts(agentDir, [{ github: "acme/app" }], { place: "local" })).toThrow(
       /context "app": github contexts are not supported yet/,
     );
-    expect(() => resolveContexts(agentDir, [{ local: "../app" }], "host")).toThrow(
+    expect(() => resolveContexts(agentDir, [{ local: "../app" }], { place: "host" })).toThrow(
       /context "app": a deployment does not carry contexts yet/,
     );
   });
@@ -117,7 +160,9 @@ describe("contexts: resolved for this instance", () => {
     const link = `${root}-link`;
     await symlink(root, link);
     expect(() => declareContexts([{ local: link }], agentDir)).not.toThrow();
-    expect(() => resolveContexts(agentDir, [{ local: link }], "local")).toThrow(/contains the agent directory/);
+    expect(() => resolveContexts(agentDir, [{ local: link }], { place: "local" })).toThrow(
+      /contains the agent directory/,
+    );
   });
 
   it("asks it of an agent directory that does not exist yet, through a symlinked ancestor", async () => {
@@ -127,7 +172,7 @@ describe("contexts: resolved for this instance", () => {
     await mkdir(join(root, "real"));
     await symlink(join(root, "real"), join(root, "link"));
     expect(() =>
-      resolveContexts(join(root, "link", "agent", "deeper"), [{ local: join(root, "real") }], "local"),
+      resolveContexts(join(root, "link", "agent", "deeper"), [{ local: join(root, "real") }], { place: "local" }),
     ).toThrow(/context "real" .* contains the agent directory/);
   });
 });
@@ -144,10 +189,11 @@ describe("contexts: the literal list in fastagent.config.ts", () => {
       rewriteContexts(src, [
         { local: "/a", copy: true },
         { readonly: true, local: "/b", name: "b" },
+        { workdir: true, local: "/c" },
       ]),
     ).toBe(
       config(
-        `  // what it works on\n  contexts: [\n    { local: "/a", copy: true },\n    { local: "/b", readonly: true, name: "b" },\n  ],\n  model: "p/m",\n`,
+        `  // what it works on\n  contexts: [\n    { local: "/a", copy: true },\n    { local: "/b", readonly: true, name: "b" },\n    { local: "/c", workdir: true },\n  ],\n  model: "p/m",\n`,
       ),
     );
     expect(rewriteContexts(config(`  contexts: [{ local: "/a" }],\n`), [])).toBe(config(`  contexts: [],\n`));

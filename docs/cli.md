@@ -18,7 +18,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 
 | Command | Purpose |
 |---|---|
-| `init <dir>` | Create an agent in a directory of its own; `--context` declares what it works on. |
+| `init <dir>` | Create an agent in a directory of its own; `--context` declares what it works on, `--workdir` where it works. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
 | `context list\|add\|remove` | List, add or remove what the agent works on and knows. |
 | `models [search]` | List model specs. |
@@ -47,7 +47,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 ## `fastagent init`
 
 ```bash
-fastagent init <dir> [--context <dir>]... [--copy] [--no-install]
+fastagent init <dir> [--workdir <dir>] [--context <dir>]... [--copy] [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
@@ -55,10 +55,13 @@ example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`
 `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`.
 
 Each `--context <dir>` declares a directory the agent works on, as `{ local: "<absolute path>" }` in the config's
-`contexts` list (see [contexts](configuration.md#contexts)). `--copy` declares each with `copy: true`, so an instance
-on a host gets its own copy; without it the context stays on this machine and deploying refuses the agent. Every
-context is checked before anything is written: it must exist, and it may not contain the agent directory or sit
-inside it. Without `--context` the agent has none and works only in its own directory.
+`contexts` list (see [contexts](configuration.md#contexts)). `--workdir <dir>` declares one more, with
+`workdir: true`: the agent works there, and what it creates lands there, apart from its definition. `--copy` declares
+each of them with `copy: true`, so an instance on a host gets its own copy; without it the context stays on this
+machine and deploying refuses the agent. Every context is checked before anything is written: it must exist, and it
+may not contain the agent directory or sit inside it. The `--workdir` directory alone may be missing: it is made
+with the scaffold, the output says so, and a failed `init` removes it again. Without `--context` the agent has none;
+without `--workdir` it works in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
 the agent elsewhere and attaches the project: `fastagent init <new directory> --context <project>`. It also refuses a
@@ -74,7 +77,7 @@ fastagent info [agent] [--json] [--model provider/modelId]
 
 Prints, without serving:
 
-- the agent directory, its contexts (`works on` / `knows`, each with its location), config path, model and its
+- the agent directory, its contexts (`works in` / `works on` / `knows`, each with its location), config path, model and its
   source,
 - the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
 - skills (each context's named `<context>/<skill>`) and their diagnostics,
@@ -91,13 +94,14 @@ A context that cannot be resolved (its directory is missing, say) is reported, n
 
 ```bash
 fastagent context list [agent] [--json]
-fastagent context add <dir> [agent] [--readonly] [--copy] [--name <name>]
+fastagent context add <dir> [agent] [--readonly] [--workdir] [--copy] [--name <name>]
 fastagent context remove <name> [agent]
 ```
 
 Edits the literal `contexts` list in `fastagent.config.ts`. `add` declares the directory as `{ local }`, with an
 absolute path, the way `init --context` does; `--readonly` makes it a context the agent knows rather than works on,
-and `--copy` gives an instance on a host its own copy (its contents ship in the image; without it, deploying
+`--workdir` makes it the agent's working directory (made when it does not exist yet; refused while another context
+is), and `--copy` gives an instance on a host its own copy (its contents ship in the image; without it, deploying
 refuses). A context's name defaults to its directory's; `add` asks for `--name` when that name is taken (ignoring
 case) or is not one segment of letters, digits, `-` and `_`. `remove` drops the declaration; the directory itself is
 untouched.

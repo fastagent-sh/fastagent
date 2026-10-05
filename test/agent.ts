@@ -50,7 +50,7 @@ export function fauxAgent(
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       ...(options.tools ? { tools: options.tools } : {}),
       readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
-      cwd,
+      dirs: { agentDir: cwd, cwd },
     }),
   });
   return { agent, faux, sessions };
@@ -112,7 +112,7 @@ export async function fauxControlledAgent(
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
     ...(options.extensionPaths ? { extensionPaths: options.extensionPaths } : {}),
     readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
-    cwd,
+    dirs: { agentDir: cwd, cwd },
   });
   const { control, observer } = createPiSessionControl({
     sessions,

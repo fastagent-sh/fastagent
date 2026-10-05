@@ -59,7 +59,7 @@ describe("session inheritance", () => {
         engine: async () => ({ modelRuntime }),
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ skills: [] }),
-        cwd,
+        dirs: { agentDir: cwd, cwd },
       }),
     });
 

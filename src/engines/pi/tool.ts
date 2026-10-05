@@ -17,8 +17,16 @@ import { type ReadonlySessionManager, type ToolActivation, turnContext } from ".
 import type { ResolvedContext } from "../../contexts/resolve.ts";
 
 export interface ToolContext {
-  /** Working directory for this execution: the agent's own directory. */
+  /**
+   * The agent's working directory: where the coding tools and `bash` run, so a relative path here means what it means
+   * to them. The context declared `workdir`, else the agent directory.
+   */
   cwd: string;
+  /**
+   * The agent directory: its definition and its instance state (`<agentDir>/.state`). The same as `cwd` unless a
+   * context is declared `workdir`.
+   */
+  agentDir: string;
   /**
    * What the agent works on and knows, each with its `location` on this instance — the way a tool reaches a project's
    * files, never by guessing from `cwd`. Empty when the agent declares none.
@@ -165,9 +173,12 @@ export function defineTool<I extends z.ZodType, const S extends readonly string[
         };
       }
       const store = turnContext.getStore();
+      // Outside any turn (a test calling `execute` directly) both directories are the process's.
+      const dirs = store?.dirs ?? { agentDir: process.cwd(), cwd: process.cwd() };
       return wrapResult(
         await options.execute(parsed.data, {
-          cwd: store?.cwd ?? process.cwd(),
+          cwd: dirs.cwd,
+          agentDir: dirs.agentDir,
           contexts: store?.contexts ?? [],
           signal,
           sessionManager: store?.sessionManager,

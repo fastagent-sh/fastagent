@@ -51,8 +51,11 @@ const agent: Agent = {
   },
 };
 
-const send = (cwd: string) =>
-  turnContext.run({ cwd }, () => sender.execute("call", { channelId: "C1", text: "scheduled update" }));
+/** A served turn's tool call; `cwd` is where the agent works, the agent directory unless a context is its `workdir`. */
+const send = (agentDir: string, cwd = agentDir) =>
+  turnContext.run({ dirs: { agentDir, cwd } }, () =>
+    sender.execute("call", { channelId: "C1", text: "scheduled update" }),
+  );
 
 describe("Slack proactive delivery rides the channel's transport", () => {
   it("sends with the mounted channel's token and API base — the environment is not consulted", async () => {
@@ -65,7 +68,12 @@ describe("Slack proactive delivery rides the channel's transport", () => {
       agent,
     });
 
-    await expect(send(dir)).resolves.toMatchObject({ details: "sent message to Slack channel C1 (ts 1.0)" });
+    // Found by the agent directory, where the channel registered it, wherever the agent works.
+    const workdir = mkdtempSync(join(tmpdir(), "fa-slack-send-work-"));
+    roots.push(workdir);
+    await expect(send(dir, workdir)).resolves.toMatchObject({
+      details: "sent message to Slack channel C1 (ts 1.0)",
+    });
     expect(calls.at(-1)).toEqual({
       url: "https://slack.test/api/chat.postMessage",
       authorization: "Bearer xoxb-channel",

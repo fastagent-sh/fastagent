@@ -1,6 +1,7 @@
 // The credential layering every rung reads through: the agent's own file, then the user-global one per provider
 // — unless a path was named (FASTAGENT_AUTH_PATH, FASTAGENT_SECRETS_DIR, or the `authPath` option), which is an
 // instruction and gets no second layer.
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,7 +88,7 @@ describe("the global file yields to a provider the project authenticates itself"
   });
 
   async function anthropicKey(dir: string): Promise<string | undefined> {
-    const runtime = await agentModels(dir, {}, { machineLayer: false }).runtime();
+    const runtime = await agentModels(agentDirs(dir, []), {}, { machineLayer: false }).runtime();
     const model = runtime.getModels("anthropic")[0];
     if (!model) throw new Error("pi has no anthropic model");
     return (await runtime.getAuth(model))?.auth.apiKey;

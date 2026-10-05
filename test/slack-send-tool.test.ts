@@ -22,7 +22,7 @@ async function execute(params: unknown): Promise<{ details: unknown }> {
   const cwd = await mkdtemp(join(tmpdir(), "fa-slack-send-"));
   await writeFile(join(cwd, "fastagent.config.ts"), "");
   vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
-  return turnContext.run({ cwd }, () => tool.execute("call-1", params));
+  return turnContext.run({ dirs: { agentDir: cwd, cwd } }, () => tool.execute("call-1", params));
 }
 
 describe("scaffold slack-send", () => {

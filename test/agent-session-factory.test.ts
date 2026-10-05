@@ -58,7 +58,7 @@ async function agentWith(
       },
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       readDefinition: () => ({ skills: [] }),
-      cwd,
+      dirs: { agentDir: cwd, cwd },
       ...options,
     }),
   });
@@ -108,7 +108,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           return { ...fauxAssistantMessage("low answer"), providerThinkingLevel: "low" };
         },
       ],
-      { cwd, sessions },
+      { dirs: { agentDir: cwd, cwd }, sessions },
     );
     await collect(first.invoke({ session: "room" }, { text: "first" }));
     await collect(first.invoke({ session: "room" }, { text: "second" }));
@@ -122,7 +122,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
           return fauxAssistantMessage("continued");
         },
       ],
-      { cwd, sessions: piSessionRecordStore({ dir: join(cwd, "sessions"), cwd }) },
+      { dirs: { agentDir: cwd, cwd }, sessions: piSessionRecordStore({ dir: join(cwd, "sessions"), cwd }) },
     );
     expect((await collect(reopened.invoke({ session: "fork" }, { text: "next" }))).text).toBe("continued");
   });

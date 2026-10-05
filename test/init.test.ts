@@ -225,7 +225,7 @@ describe("init: scaffoldAgent", () => {
       `    { local: ${JSON.stringify(app)}, copy: true },\n`,
     );
     expect(await cliInit(["init", "nothing", "--copy", "--no-install"], base)).toMatch(
-      /--copy applies to the --context/,
+      /--copy applies to the --context and --workdir directories; none was given/,
     );
     expect(await exists(join(base, "nothing"))).toBe(false);
 
@@ -244,6 +244,29 @@ describe("init: scaffoldAgent", () => {
     // Run in a project, init says how to have an agent work on it.
     await writeFile(join(app, "README.md"), "the project\n");
     expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --context \./);
+  });
+
+  it("--workdir makes a missing working directory with the scaffold, and a failed init removes it again", async () => {
+    const base = await realpath(await freshDir());
+    const notes = join(base, "notes");
+    const out = await cliInit(["init", "researcher", "--workdir", "notes", "--copy", "--no-install"], base);
+    expect(out).toContain(`created ${notes}, its working directory`);
+    expect(out).toContain(`works in notes  ${notes} (local, copied to a host)`);
+    expect(await exists(notes)).toBe(true);
+    expect(await readFile(join(base, "researcher", "fastagent.config.ts"), "utf8")).toContain(
+      `    { local: ${JSON.stringify(notes)}, copy: true, workdir: true },\n`,
+    );
+    // A --context must exist; only the working directory is made.
+    expect(await cliInit(["init", "other", "--context", "missing", "--no-install"], base)).toMatch(
+      /context "missing": .* does not exist/,
+    );
+    expect(await exists(join(base, "other"))).toBe(false);
+    // The scaffold refuses a directory that is not empty, after the working directory was made: it goes too.
+    await mkdir(join(base, "taken"));
+    await writeFile(join(base, "taken", "README.md"), "mine\n");
+    const refused = await cliInit(["init", "taken", "--workdir", join("fresh", "work"), "--no-install"], base);
+    expect(refused).toMatch(/not empty/);
+    expect(await exists(join(base, "fresh"))).toBe(false);
   });
 
   it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {

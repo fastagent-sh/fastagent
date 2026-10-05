@@ -204,8 +204,11 @@ one it is the agent directory, as now.
 
 - **Declaration.** `declare.ts` reads `workdir` (a boolean), refuses a second one and one combined with `readonly`,
   and `ResolvedContext` gains `workdir: boolean`. `resolveContexts` stays the one answer: the working directory is
-  the `location` of the context marked so, else the agent directory, computed once beside it (a `workingDirectory`
-  helper in `resolve.ts`) so no reader derives it a second way.
+  the `location` of the context marked so, else the agent directory, computed once beside it (`agentDirs` in
+  `resolve.ts`) so no reader derives it a second way. A caller that has not opened the agent asks
+  `resolveAgentDirs(agentDir)` (the config read and resolved, as the opener does). The keys a declaration may carry
+  are one list (`CONTEXT_KEYS`), read by the reader and kept by the writer, so `fastagent context add` cannot drop
+  `workdir` from what it writes.
 - **One value carries both directories.** Every reader below needs the same pair, and a reader that picked its own
   cwd is how a split goes wrong, so the pair travels as one value, `AgentDirs { agentDir, cwd }`, built once by the
   helper above and passed whole; no function takes the two separately. (`agentDir` is fastagent's agent directory;
@@ -227,10 +230,10 @@ one it is the agent directory, as now.
 - **A record belongs to whoever stores it, never to its header.** Several agents may declare one working directory
   (a context can be the data of several agents), so a record's `cwd` cannot say whose it is. Where it lives does:
   - Serving already works this way: records live in the agent's own `<state root>/sessions`, located by that
-    directory, never filtered by cwd (`piSessionRecordStore`). The store's one `cwd` does two jobs today, so it
-    splits: the cwd its records' headers carry (the working directory), and the base a relative `dir` resolves
-    against (the agent directory, as now). Otherwise an embedder's relative `sessionsDir` would land in the user's
-    working folder, and declaring a `workdir` would lose the agent's earlier records.
+    directory, never filtered by cwd (`piSessionRecordStore`). Its `cwd` is what its records' headers carry, the
+    working directory. The opener resolves an embedder's relative `sessionsDir` against the agent directory before
+    it reaches the store, so the records never land in the user's working folder, and declaring a `workdir` does not
+    lose the agent's earlier records.
   - `chat` gets the same rule: `SessionManager.create(<working directory>, <session directory>)`, where the session
     directory is the one pi gives the agent directory, where `chat`'s records are today (what
     `SessionManager.create(agentDir).getSessionDir()` answers; pi does not export the function behind it). pi keeps a session's directory at `/new` and fork (`getSessionDir()`), and `/resume` lists that directory
@@ -244,16 +247,18 @@ one it is the agent directory, as now.
     agent's by the same rule. A record made before the working directory changed therefore stays reachable: `/resume`
     lists it under All (or under the current folder, when the agent directory is the working directory again and pi's
     default session directory lists every record) and resumes it here.
+  - Limitation, accepted: pi forks at an entry by opening the record's file again without a cwd, so a fork of such a
+    record would run in the cwd its header records, and pi has closed the current session before the new one is
+    built. `chat` refuses that fork first, naming both directories; continuing the record works. pi's own
+    `cwdOverride` resume has the same gap.
 - **What is the agent's is handed to pi from the agent directory, never derived from pi's cwd.** pi would read its
   project scope from the cwd, so each piece is passed explicitly:
-  - the machine read: `definitionServices` takes one `cwd` today and hands it to both `readMachine` and
-    `createAgentSessionServices`, so it gains an `agentDir` and `readMachine` takes only that. Otherwise a session
-    would read the machine a second time keyed to the working directory: the working directory's
-    `.pi/settings.json` (its `packages`, its built-in toggles, its engine settings) as project settings, the
-    `.agents/skills` above it as the machine's, and built-in extensions that disagree with the ones
-    `assemblePiFromDefinition` read for the prompt. The `cwd` that `PiAgentSessionFactoryOptions` and
-    `BindPiSessionOptions` carry ("what fastagent-defined tools see") is the working directory; the session factory
-    and `chat`'s runtime pass the agent directory beside it;
+  - the machine read: `definitionServices` takes the `AgentDirs` and gives `readMachine` only the agent directory, and
+    `createAgentSessionServices` only the working directory. Otherwise a session would read the machine a second
+    time keyed to the working directory: the working directory's `.pi/settings.json` (its `packages`, its built-in
+    toggles, its engine settings) as project settings, the `.agents/skills` above it as the machine's, and built-in
+    extensions that disagree with the ones `assemblePiFromDefinition` read for the prompt.
+    `PiAgentSessionFactoryOptions` and `BindPiSessionOptions` carry the `AgentDirs` in place of their old `cwd`;
   - the settings: `machine.settingsManager()` for serving, and in `chat` a file-backed manager on the agent
     directory, so `/settings` writes `<agent dir>/.pi/settings.json`, never `SettingsManager.create(<cwd>)`;
   - every resource the loader would discover in the project: prompt files, skills, prompt templates, `AGENTS.md`,
@@ -341,7 +346,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN`; the deploy half of §3.11 | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets; a deployed agent with a `workdir` context is told how long its work there lasts |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
-| Working directory (#716) | §3.11 except its deploy half, which stage 4 builds; independent of stages 3 and 5 | An agent with a `workdir` context works there locally, in a served turn, in `chat` and in `fastagent tool`, changes itself in its definition, keeps its `chat` records apart from another agent's on the same directory, and every reader names the same working directory |
+| Working directory (#716, landed) | §3.11 except its deploy half, which stage 4 builds; independent of stages 3 and 5 | An agent with a `workdir` context works there locally, in a served turn, in `chat` and in `fastagent tool`, changes itself in its definition, keeps its `chat` records apart from another agent's on the same directory, and every reader names the same working directory |
 
 ## 6. Tests worth naming
 

@@ -49,7 +49,7 @@ describe("channel setup guidance", () => {
     await scaffoldCompanionTools(dir, "slack");
     const source = await readFile(join(dir, "channels", "slack.ts"), "utf8");
     expect(source).toContain('rendering: "native"');
-    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
+    expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.agentDir)");
   });
 
   it("a kind with no long-connection template says so, instead of an ENOENT for a path nobody named", async () => {

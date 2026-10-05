@@ -10,6 +10,7 @@ import type { Credential, CredentialStore, Models, Provider } from "@earendil-wo
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { definitionServices } from "./agent-session-factory.ts";
 import { loadExtensionPaths } from "./definition.ts";
+import type { AgentDirs } from "../../contexts/resolve.ts";
 import {
   type AuthLayers,
   type CredentialSourceOptions,
@@ -84,27 +85,30 @@ export interface AgentModelsOptions {
 }
 
 /**
- * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: pi's built-ins
- * over the named or global credentials file). A supplied `credentialStore` is used as given; otherwise the files:
- * the directory's own layers ({@link resolveAuthLayers}), or the named file or the global one.
+ * The model environment of the agent in `dirs.agentDir` (or, without one, of a caller with no directory: pi's
+ * built-ins over the named or global credentials file). A supplied `credentialStore` is used as given; otherwise the
+ * files: the directory's own layers ({@link resolveAuthLayers}), or the named file or the global one. The working
+ * directory is where the catalog loads the definition's extensions to learn their models: the one every other load in
+ * the process uses ({@link definitionServices}).
  */
 export function agentModels(
-  agentDir: string | undefined,
+  dirs: AgentDirs | undefined,
   source?: { authPath?: string; credentialStore?: undefined } & FastagentAuthOptions,
   options?: AgentModelsOptions,
 ): AgentModels & { auth: AuthLayers };
 export function agentModels(
-  agentDir: string | undefined,
+  dirs: AgentDirs | undefined,
   source?: CredentialSourceOptions & FastagentAuthOptions,
   options?: AgentModelsOptions,
 ): AgentModels;
 export function agentModels(
-  agentDir: string | undefined,
+  dirs: AgentDirs | undefined,
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   options: AgentModelsOptions = {},
 ): AgentModels {
   assertOneCredentialSource(source);
   const { providers, machineLayer } = options;
+  const agentDir = dirs?.agentDir;
   const files = source.credentialStore
     ? undefined
     : agentDir
@@ -137,9 +141,9 @@ export function agentModels(
   let registry: Promise<ModelRuntime> | undefined;
   const runtime = (): Promise<ModelRuntime> => {
     registry ??= createRuntime().then(async (models) => {
-      if (agentDir) {
+      if (dirs) {
         await definitionServices({
-          cwd: agentDir,
+          dirs,
           modelRuntime: models,
           definition: { skills: [] },
           extensionPaths: await extensionPaths(),

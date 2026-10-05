@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { log } from "../src/log.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -88,7 +89,7 @@ describe("declared secrets: where they are declared", () => {
       secrets: ["GH_TOKEN"],
       execute: () => "ok",
     });
-    const resolved = await resolveAgentTools({ tools: [configured] }, dir);
+    const resolved = await resolveAgentTools({ tools: [configured] }, agentDirs(dir, []));
     // BY TOOL, so a caller running one of them (`fastagent tool`) can ask for just that one.
     expect([...resolved.toolSecrets]).toEqual([
       ["x-post", [{ name: "X_API_KEY", source: "tools/x-post.mjs" }]],
@@ -200,7 +201,7 @@ describe("declared secrets: only what actually runs", () => {
       "tools/read.mjs": `export default { name: "read", description: "r", parameters: {},
          secrets: ["FA_TEST_SHADOWED"], execute: async () => ({ content: [] }) };\n`,
     });
-    const resolved = await resolveAgentTools({}, dir);
+    const resolved = await resolveAgentTools({}, agentDirs(dir, []));
     expect(resolved.toolCollisions.map((c) => c.name)).toContain("read");
     expect(allSecrets(resolved.toolSecrets)).toEqual([]);
   });
@@ -217,7 +218,7 @@ describe("declared secrets: only what actually runs", () => {
       secrets: ["FA_TEST_CONFIG_SHADOWED"],
       execute: () => "ok",
     });
-    const resolved = await resolveAgentTools({ tools: [shadowed] }, dir);
+    const resolved = await resolveAgentTools({ tools: [shadowed] }, agentDirs(dir, []));
     expect(resolved.toolCollisions).toContainEqual({ name: "read", source: "config.tools" });
     expect(allSecrets(resolved.toolSecrets)).toEqual([]);
   });

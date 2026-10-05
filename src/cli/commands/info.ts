@@ -22,7 +22,7 @@ import { nextRun } from "../../schedule/cron.ts";
 import { loadRoutines } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contextLines } from "../contexts-view.ts";
-import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
+import { type ResolvedContext, agentDirs, resolveContexts } from "../../contexts/resolve.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -42,6 +42,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     contextsError = (error as Error).message;
   }
+  // What it could resolve: with the declaration refused above, the agent's own directory.
+  const dirs = agentDirs(agentDir, contexts);
   const definition = await loadAgentDefinition(agentDir, { contexts }).catch(failStartup);
   // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
   const machineResources = await readMachine(agentDir);
@@ -49,7 +51,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const prompts = withMachine(definition.prompts, machineResources.prompts);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a tool), is
   // isolated the same way everywhere (G2).
-  const tools = await resolveAgentTools(config, agentDir)
+  const tools = await resolveAgentTools(config, dirs)
     .then((r) => ({
       names: r.toolNames,
       indirect: r.indirectTools,
@@ -95,7 +97,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDir(agentDir);
   // Both layers: "what is this agent's state" is the question `info` answers, and a credential it runs on can live in
   // a file the agent dir does not contain.
-  const models = agentModels(agentDir);
+  const models = agentModels(dirs);
   const { auth } = models;
 
   // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the agent's own

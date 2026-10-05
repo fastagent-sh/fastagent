@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +18,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
     agentDir: "/w/agent",
     contexts: [{ name: "app", kind: "local", readonly: false, location: "/w/app" }],
     modelSpec: "p/m",
-    models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
+    models: agentModels(agentDirs("/w/agent", []), { authPath: "/w/agent/.secrets/auth.json" }),
     config: {},
     definition: {
       dir: "/w/agent",
@@ -153,7 +154,7 @@ describe("reportAuth (which layer the line names)", () => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(agentModels(agentDir), "p/m");
+      await reportAuth(agentModels(agentDirs(agentDir, [])), "p/m");
     } finally {
       spy.mockRestore();
     }

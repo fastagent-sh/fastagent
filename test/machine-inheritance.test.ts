@@ -8,6 +8,7 @@
  * These tests stub HOME on purpose: `test/setup.ts` gives every file an EMPTY one, so anything here is the
  * machine's contribution and nothing else.
  */
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -109,7 +110,7 @@ it("`commands()` lists every skill the agent has and the machine's prompts, by h
   await machine({ skills: { metar: "Machine skill." }, prompts: { review: "Review this: " } });
   const dir = await definition({ digest: "Definition skill." });
 
-  expect(await agentCommands(dir, [], noExtensions)).toEqual([
+  expect(await agentCommands(agentDirs(dir, []), [], noExtensions)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
     { name: "metar", description: "Machine skill.", source: "skill" },
     expect.objectContaining({ name: "review", source: "prompt" }),
@@ -135,7 +136,7 @@ it("`commands()` lists extension commands as pi dispatches them, and drops a tem
   const modelRuntime = () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 
   const extensionPaths = await loadExtensionPaths(dir);
-  expect(await agentCommands(dir, [], { extensionPaths, modelRuntime })).toEqual([
+  expect(await agentCommands(agentDirs(dir, []), [], { extensionPaths, modelRuntime })).toEqual([
     { name: "go:1", description: "d-go", source: "extension" },
     { name: "tag", description: "d-tag", source: "extension" },
     { name: "go:2", description: "d-go", source: "extension" },
@@ -148,7 +149,7 @@ it("`commands()` lists extension commands as pi dispatches them, and drops a tem
 it("an empty machine contributes nothing — the definition is the whole answer", async () => {
   // `test/setup.ts`'s empty HOME is this case, and it is the one a fresh container is in.
   const dir = await definition({ digest: "Definition skill." });
-  expect(await agentCommands(dir, [], noExtensions)).toEqual([
+  expect(await agentCommands(agentDirs(dir, []), [], noExtensions)).toEqual([
     { name: "digest", description: "Definition skill.", source: "skill" },
   ]);
 });
@@ -164,7 +165,7 @@ it("a machine prompt template whose frontmatter does not parse is said, not sile
 
   let names: string[] = [];
   const warned = await warnings(async () => {
-    names = (await agentCommands(dir, [], noExtensions)).map((command) => command.name);
+    names = (await agentCommands(agentDirs(dir, []), [], noExtensions)).map((command) => command.name);
   });
 
   expect(names).toContain("review");
@@ -223,7 +224,7 @@ it("a broken SKILL.md on the machine says so, once — not once per `GET /contro
 
   let names: string[] = [];
   const warned = await warnings(async () => {
-    for (let i = 0; i < 3; i++) names = (await agentCommands(dir, [], noExtensions)).map((c) => c.name);
+    for (let i = 0; i < 3; i++) names = (await agentCommands(agentDirs(dir, []), [], noExtensions)).map((c) => c.name);
   });
 
   expect(names).not.toContain("broken");
@@ -237,12 +238,12 @@ it("the machine is read ONCE, and the listing and a turn read the same one", asy
   // is live: that is what `dev` is built on.
   const agent = await machine({ skills: { early: "Present at boot." } });
   const dir = await definition();
-  expect((await agentCommands(dir, [], noExtensions)).map((c) => c.name)).toEqual(["early"]);
+  expect((await agentCommands(agentDirs(dir, []), [], noExtensions)).map((c) => c.name)).toEqual(["early"]);
 
   await skill(join(agent, "skills", "late"), "late", "Installed after boot.");
 
   expect(
-    (await agentCommands(dir, [], noExtensions)).map((c) => c.name),
+    (await agentCommands(agentDirs(dir, []), [], noExtensions)).map((c) => c.name),
     "offered a name no turn would expand",
   ).toEqual(["early"]);
   expect(await promptSentBy(dir)).not.toContain("Installed after boot.");
@@ -291,7 +292,7 @@ it("pi's engine settings are inherited, the project file deep-merged over the ma
     engine: async () => ({ modelRuntime }),
     modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
-    cwd: dir,
+    dirs: { agentDir: dir, cwd: dir },
   })("s");
 
   expect(session.settingsManager.getRetryEnabled()).toBe(false); // the project file
@@ -343,7 +344,7 @@ it("a definition's prompt template expands in a served turn, wins the machine's 
   expect(asked).toContain("DEFINITION review of the plan");
   expect(asked).not.toContain("MACHINE");
 
-  expect((await agentCommands(dir, [], noExtensions)).filter((c) => c.source === "prompt")).toEqual([
+  expect((await agentCommands(agentDirs(dir, []), [], noExtensions)).filter((c) => c.source === "prompt")).toEqual([
     { name: "review", description: "The definition's review.", source: "prompt" },
     expect.objectContaining({ name: "ship", source: "prompt" }),
   ]);
@@ -360,7 +361,7 @@ it("a machine skill named with a slash is left out and said: the slash names a c
 
   let names: string[] = [];
   const warned = await warnings(async () => {
-    names = (await agentCommands(dir, [], noExtensions)).map((c) => c.name);
+    names = (await agentCommands(agentDirs(dir, []), [], noExtensions)).map((c) => c.name);
   });
   expect(names).toEqual(["metar"]);
   expect(warned).toMatch(/machine skill "app\/deploy" .* is not loaded: a skill's name may not contain "\/"/);
@@ -373,7 +374,7 @@ it("`commands()` and a turn report the definition's findings once between them, 
 
   const warned = await warnings(async () => {
     for (let i = 0; i < 3; i++) {
-      await agentCommands(dir, [], noExtensions);
+      await agentCommands(agentDirs(dir, []), [], noExtensions);
       await promptSentBy(dir);
     }
   });
@@ -401,7 +402,7 @@ it("pi's project scope is the agent directory: its own .pi/ and .agents/ resourc
 
   let names: string[] = [];
   const warned = await warnings(async () => {
-    names = (await agentCommands(dir, [], noExtensions)).map((c) => c.name);
+    names = (await agentCommands(agentDirs(dir, []), [], noExtensions)).map((c) => c.name);
   });
   expect(names).toEqual(["above", "own"]);
   // Said once, by the definition's own report — never a second time as the machine's.

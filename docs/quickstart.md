@@ -22,7 +22,8 @@ fastagent init my-agent
 cd my-agent
 ```
 
-`my-agent/` is the agent: its definition, and its working directory. The agent can edit its own definition;
+`my-agent/` is the agent: its definition, and its working directory unless you declare another
+([contexts](configuration.md#contexts)). The agent can edit its own definition;
 `APPEND_SYSTEM.md` and skills are re-read every turn.
 
 ```txt

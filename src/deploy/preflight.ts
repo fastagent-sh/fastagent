@@ -16,6 +16,7 @@ import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
 import { declareContexts } from "../contexts/declare.ts";
+import { type AgentDirs, agentDirs } from "../contexts/resolve.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -164,6 +165,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `contexts is not supported yet — remove them from fastagent.config.ts to deploy it`,
     );
   }
+  // Past that gate the agent has no contexts, so it works in its own directory.
+  const dirs = agentDirs(agentDir, []);
 
   // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
   // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
@@ -291,7 +294,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // A model only the definition's extensions declare (a virtual model, or a provider one registers) is authenticated
   // by that code on the box, per request: a virtual model's credential is whichever physical model it routes to.
   // Asked of the catalog the box builds, extensions included, so deploy judges the model the box will run.
-  const fromExtension = modelSpec ? await extensionDeclared(agentDir, modelSpec, deployed) : false;
+  const fromExtension = modelSpec ? await extensionDeclared(dirs, modelSpec, deployed) : false;
   if (fromExtension && modelSpec) {
     report.note(
       `${modelSpec} is declared by the definition's extensions, which resolve its credentials on the box — deploy ` +
@@ -394,7 +397,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // EVERYTHING the definition declared it needs, from wherever it was declared. Read through the SAME resolver
   // dev/start mount with, so "which tool declarations count" has one answer (config.tools declare too; a shadowed
   // file's declaration is dropped in both places).
-  const resolvedTools = await resolveAgentTools(config, agentDir);
+  const resolvedTools = await resolveAgentTools(config, dirs);
   // A code input we could not READ is a code input whose declarations we cannot carry — and the box
   // WILL read it (its deps are installed there), so its gate fires after the deploy reported success:
   // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
@@ -456,12 +459,12 @@ async function credentialRoute(
 }
 
 /** Whether `spec` exists only once the definition's extensions have registered their models. */
-async function extensionDeclared(agentDir: string, spec: string, deployed: ModelRuntime): Promise<boolean> {
+async function extensionDeclared(dirs: AgentDirs, spec: string, deployed: ModelRuntime): Promise<boolean> {
   const provider = providerOf(spec);
   const id = spec.slice(provider.length + 1);
   if (deployed.getModel(provider, id)) return false;
   const catalog = await agentModels(
-    agentDir,
+    dirs,
     { credentialStore: new InMemoryCredentialStore() },
     { machineLayer: false },
   ).runtime();

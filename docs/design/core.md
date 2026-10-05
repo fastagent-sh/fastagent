@@ -53,9 +53,10 @@ One agent shape, one marker:
 └── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
 ```
 
-**The agent directory is the agent's working directory**, its coding tools' root, the key its session records
-are kept under, pi's project scope, and deploy's build context. What it works on is not derived from where it sits:
-it is declared as **contexts** ([agent model](agent-model.md) §3):
+**The agent directory is the agent**: the key its session records are kept under, pi's project scope, and deploy's
+build context. It is also its working directory, its coding tools' root and pi's cwd, unless a context is declared
+`workdir` (§3.11 of the [implementation plan](agent-model-implementation.md)). What it works on is not derived from
+where it sits: it is declared as **contexts** ([agent model](agent-model.md) §3):
 
 ```ts
 contexts: [{ local: "/Users/me/code/app", copy: true }, { local: "../handbook", readonly: true }],
@@ -63,10 +64,14 @@ contexts: [{ local: "/Users/me/code/app", copy: true }, { local: "../handbook", 
 
 `src/contexts/` owns them, engine-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
 keys, a name that is not one path segment or collides ignoring case, and a location that contains the agent
-directory or sits inside it. `resolve.ts` answers where each one is for this instance (`ResolvedContext`:
-name, kind, readonly, location), once per process start; the content at those locations is re-read per turn. The
-prompt's `contexts` section, `ctx.contexts`, `info`, `fastagent context list` and the opener all read that one
-resolution. `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
+directory or sits inside it, a second `workdir` and a `readonly` one. `resolve.ts` answers where each one is for
+this instance (`ResolvedContext`: name, kind, readonly, workdir, location), once per process start; the content at
+those locations is re-read per turn. The prompt's `contexts` section, `ctx.contexts`, `info`, `fastagent context
+list` and the opener all read that one resolution. `agentDirs` turns it into `AgentDirs { agentDir, cwd }`, the one
+value every reader of either directory is handed: the session factory and `bindPiSession`, `chat`'s runtime,
+`definitionServices` in all its callers (a session, the model catalog, the `/` menu), the session store, and every
+runner of a tool. pi caches loaded extensions for one cwd per process, so a load on a second cwd would import
+`extensions/` again. `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares
 exactly the intended list. GitHub contexts and deploying an agent with contexts are not built yet: the resolver and
 the deploy preflight refuse them by name.

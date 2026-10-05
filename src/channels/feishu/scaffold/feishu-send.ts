@@ -24,7 +24,7 @@ export default defineTool({
     if ((text === undefined) === (markdown === undefined)) {
       throw new Error("pass exactly one of `text` (plain) or `markdown` (a card)");
     }
-    const api = feishuTransport(ctx.cwd);
+    const api = feishuTransport(ctx.agentDir);
     if (text !== undefined) await api.sendText({ chatId }, text);
     else {
       await api.sendMessage(chatId, "interactive", JSON.stringify({

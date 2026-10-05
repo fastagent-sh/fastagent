@@ -384,6 +384,15 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     expect(overridden.sessionsDir).toBe(ext);
     const defaulted = await createPiAgentFromDir(agent);
     expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
+    // A relative one is the agent's, whatever directory the agent works in or the process runs in.
+    const work = await mkdtemp(join(tmpdir(), "fa-sessions-work-"));
+    await writeFile(
+      join(agent, "fastagent.config.ts"),
+      `export default { model: "openai-codex/gpt-5.5", contexts: [{ local: ${JSON.stringify(work)}, workdir: true }] };`,
+    );
+    const relative = await createPiAgentFromDir(agent, { sessionsDir: "records" });
+    expect(relative.sessionsDir).toBe(join(agent, "records"));
+    expect(existsSync(join(agent, "records"))).toBe(true);
   });
 
   it("authPath defaults to the project-level <agentDir>/.secrets/auth.json; the override wins", async () => {

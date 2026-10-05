@@ -3,16 +3,13 @@
  * from a list. Pure — `fastagent context` imports the result and compares it before anything replaces the real file
  * (docs/design/agent-model-implementation.md §3.6), which is what makes editing a TypeScript module this way safe.
  */
-import type { ContextDeclaration } from "./declare.ts";
+import { CONTEXT_KEYS, type ContextDeclaration } from "./declare.ts";
 
-/** The keys in the order they are written: where it comes from first, then how it is treated. */
-const KEY_ORDER = ["github", "local", "ref", "copy", "readonly", "name"] as const;
-
-/** One declaration with its keys in {@link KEY_ORDER}: the form written and the form compared. */
+/** One declaration with its keys in {@link CONTEXT_KEYS} order: the form written and the form compared. */
 export function canonicalDeclaration(declaration: ContextDeclaration): ContextDeclaration {
   const record = declaration as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const key of KEY_ORDER) if (record[key] !== undefined) out[key] = record[key];
+  for (const key of CONTEXT_KEYS) if (record[key] !== undefined) out[key] = record[key];
   return out as ContextDeclaration;
 }
 

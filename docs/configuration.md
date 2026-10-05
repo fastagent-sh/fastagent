@@ -195,14 +195,16 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
 
 ## Contexts
 
-An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on is declared, never inferred from where the directory sits:
+An agent's directory is its own: its definition, and its local instance's `.state/` and `.secrets/`. It is also
+the agent's working directory unless a context is declared `workdir`. What it works on is declared, never inferred
+from where the directory sits:
 
 ```ts
 export default {
   contexts: [
     { local: "/Users/me/code/app" },                             // works on, on this machine
     { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
+    { local: "/Users/me/research", workdir: true },              // works in: what it creates lands here
   ],
 } satisfies FastagentConfig;
 ```
@@ -212,6 +214,7 @@ export default {
 | `local` | The directory, absolute or relative to the agent directory |
 | `copy` | An instance on a host gets its own copy, so its contents ship in the image. Without it the context exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
+| `workdir` | The agent's working directory: its coding tools and shell run there, so what it creates lands there, apart from its definition. At most one, and never `readonly`. Without one, the working directory is the agent directory |
 | `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's name |
 
 `fastagent init <dir> --context <dir>` and `fastagent context add/remove` edit this list
@@ -228,6 +231,12 @@ What each context gives the agent, re-read every turn:
 - **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
   runs a command in it with `cd <location> && …`.
 - **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
+
+The working directory is a context like any other: its `AGENTS.md` and skills load the same way, and nothing else
+of its `.pi/` applies (settings, prompt files, prompt templates, themes, extensions). The agent's definition, its
+settings, its `chat` conversations and its `.state/` stay in the agent directory, and the prompt tells the agent the
+full path of its definition, so a change to itself does not land where it works. `fastagent init <dir> --workdir
+<dir>` and `fastagent context add <dir> --workdir` make the directory when it does not exist yet.
 
 The locations are resolved when a process starts; editing `contexts` restarts `dev`. A GitHub repository as a
 context, and deploying an agent that has contexts, are not supported yet: `deploy` refuses an agent that declares

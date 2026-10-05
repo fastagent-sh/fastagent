@@ -5,6 +5,7 @@ import { type ContextDeclaration, declarationFor, declareContexts, isContextName
 import { resolveContexts } from "../../contexts/resolve.ts";
 import { contextLines } from "../contexts-view.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
+import { makeWorkingDirectory } from "../workdir.ts";
 
 /** The agent's declarations as written (not resolved: a command rewrites what the author wrote). */
 async function declared(agentDir: string): Promise<ContextDeclaration[]> {
@@ -28,7 +29,7 @@ export async function runContextList(dirArg: string, json: boolean): Promise<voi
 export async function runContextAdd(
   source: string,
   dirArg: string,
-  opts: { copy?: boolean; readonly?: boolean; name?: string },
+  opts: { copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string },
 ): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   const declarations = await declared(agentDir);
@@ -42,7 +43,19 @@ export async function runContextAdd(
   }
   const taken = declareContexts(declarations, agentDir).find((c) => c.name.toLowerCase() === name.toLowerCase());
   if (taken) failUsage(`this agent already has a context named "${taken.name}" — pass --name`);
-  await writeContexts(agentDir, [...declarations, added]).catch(failStartup);
+  const next = [...declarations, added];
+  // Checked before anything is made: a working directory that does not exist yet is checked as the path it will have,
+  // and a refusal (a second working directory, a nested one) leaves nothing behind.
+  const toCreate = opts.workdir ? (added as { local: string }).local : undefined;
+  await Promise.resolve()
+    .then(() => resolveContexts(agentDir, next, toCreate ? { toCreate } : {}))
+    .catch(failStartup);
+  const made = toCreate ? await makeWorkingDirectory(toCreate).catch(failStartup) : undefined;
+  await writeContexts(agentDir, next).catch(async (error: unknown) => {
+    await made?.undo();
+    failStartup(error);
+  });
+  if (made?.created) console.error(`[fastagent] created ${toCreate}`);
   const [context] = resolveContexts(agentDir, [added]);
   for (const [label, value] of contextLines(context ? [context] : [])) console.error(`[fastagent] ${label} ${value}`);
 }

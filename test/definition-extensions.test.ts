@@ -3,6 +3,7 @@
  * refused when they would not survive the trip into a container, and loaded both by `fastagent chat`
  * and by serving — where every bound session gets its own extension instances and no terminal.
  */
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,7 +58,7 @@ describe("definition: one discovery of extensions/ for the catalog and the sessi
     const elsewhere = join(await agentDirWith({}), "elsewhere.ts");
     await writeFile(elsewhere, "export default () => {};\n");
     const { faux } = makeFaux();
-    const models = agentModels(dir, {}, { providers: [faux.provider] });
+    const models = agentModels(agentDirs(dir, []), {}, { providers: [faux.provider] });
     const { assembly } = await assemblePiFromDefinition(dir, {
       model: "faux/faux-1",
       models: { ...models, extensionPaths: async () => [elsewhere] },
@@ -467,7 +468,7 @@ describe("definition: an extension can define the model chat runs on", () => {
     });
     let ready = false;
     const loaded = definitionServices({
-      cwd: dir,
+      dirs: { agentDir: dir, cwd: dir },
       modelRuntime: runtime,
       definition: { skills: [] },
       extensionPaths: [join(dir, "extensions/provider.ts")],

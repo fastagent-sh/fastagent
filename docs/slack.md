@@ -298,7 +298,7 @@ export default defineRoutine({
 });
 ```
 
-The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
+The tool holds no transport of its own. It calls `slackTransport(ctx.agentDir)` from
 `@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
 token, `apiBaseUrl`, Markdown splitting and rate-limit handling the channel replies with. With no
 channel mounted (`fastagent routine run` / `invoke`) the transport is built from `SLACK_BOT_TOKEN` against

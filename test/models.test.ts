@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -317,7 +318,7 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     // Each session builds its own runtime while the control plane keeps the startup catalog: a runtime re-reading the
     // files would let turns run on an edit the control plane validates and reports against the old content.
     const dir = await agentWith(GATEWAY);
-    const models = agentModels(dir, { authPath: join(dir, "auth.json") });
+    const models = agentModels(agentDirs(dir, []), { authPath: join(dir, "auth.json") });
     const startup = await models.runtime();
     await writeFile(join(dir, "models.json"), GATEWAY.replace("vllm.internal", "edited.internal"));
     await writeFile(
@@ -334,13 +335,13 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
       expect(runtime.getModel("anthropic", "catalog-added")).toBeUndefined();
     }
-    const fresh = await agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime();
+    const fresh = await agentModels(agentDirs(dir, []), { authPath: join(dir, "auth.json") }).createRuntime();
     expect(resolveModel(fresh, "mygw/deepseek-v3").baseUrl).toBe("http://edited.internal:8000/v1");
     expect(fresh.getModel("anthropic", "catalog-added")).toBeDefined();
     await writeFile(join(dir, "models.json"), "{ not json");
     await expect(models.createRuntime()).resolves.toBeDefined();
     // A fresh agent reads the edit, and names the agent's own file when it cannot load it.
-    await expect(agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime()).rejects.toThrow(
+    await expect(agentModels(agentDirs(dir, []), { authPath: join(dir, "auth.json") }).createRuntime()).rejects.toThrow(
       join(dir, "models.json"),
     );
   });
@@ -494,7 +495,7 @@ describe("authStatus: the one answer to what authenticates a provider for an age
     const agentDir = await mkdtemp(join(tmpdir(), "fa-auth-status-"));
     const path = join(agentDir, "auth.json");
     await writeFile(path, JSON.stringify(stored));
-    return { models: agentModels(agentDir, { authPath: path }), path };
+    return { models: agentModels(agentDirs(agentDir, []), { authPath: path }), path };
   }
 
   it("a live stored login, or nothing: what the startup report and a box's --if-missing both read", async () => {

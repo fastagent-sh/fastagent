@@ -831,7 +831,7 @@ describe("session control: run modulation", () => {
         engine: async () => ({ modelRuntime: models }),
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ systemPrompt: "test", skills: [] }),
-        cwd: process.cwd(),
+        dirs: { agentDir: process.cwd(), cwd: process.cwd() },
       });
       const session = await factory("binding");
       const binding = Promise.withResolvers<void>();
@@ -1986,7 +1986,7 @@ describe("session control: boundary mutations", () => {
           modelSpec: `${model.provider}/${model.id}`,
           thinkingLevel,
           tools: [],
-          cwd,
+          dirs: { agentDir: cwd, cwd },
           readDefinition: () => ({ systemPrompt: "test", skills: [] }),
         });
         const { control } = createPiSessionControl({

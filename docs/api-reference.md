@@ -220,7 +220,7 @@ function createPiAgentFromDir(
   config: FastagentConfig;
   configPath?: string;
   modelSpec?: string; // the default model; absent when none is set (see below)
-  agentDir: string; // the agent directory: where it lives, and its working directory
+  agentDir: string; // the agent directory: where it lives, and its working directory unless a context is `workdir`
   contexts: ResolvedContext[]; // what it works on and knows, resolved for this instance
   stateRoot: string;
   sessionsDir: string;
@@ -240,20 +240,23 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be th
 function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
 
 type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+  | { local: string; copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string }
+  | { github: string; ref?: string; local?: string; readonly?: boolean; workdir?: boolean; name?: string };
 
 interface ResolvedContext {
   name: string;                         // unique ignoring case, one path segment
   kind: "local" | "copy" | "github";
   readonly: boolean;                    // the agent knows it and does not write it
+  workdir: boolean;                     // the agent's working directory (at most one)
   location: string;                     // its absolute directory on this instance
 }
 ```
 
 The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fastagent context list`. It refuses,
-naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
-directory or sits inside it ([Configuration](configuration.md#contexts)). A `github` context is not supported yet.
+naming the context, a declaration that is malformed, a directory that does not exist, one that contains the agent
+directory or sits inside it, a second `workdir` and a `readonly` one ([Configuration](configuration.md#contexts)). A
+`github` context is not supported yet. Passed to `createPiAgentFromDefinition`, a `workdir` context is where the
+coding tools and pi's session run, and what tools see as `ctx.cwd`.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
@@ -349,7 +352,8 @@ The second `execute` argument is a `ToolContext`:
 
 ```ts
 interface ToolContext {
-  cwd: string; // the agent directory
+  cwd: string; // the working directory: the `workdir` context, else the agent directory
+  agentDir: string; // the agent directory: its definition and `.state/`
   contexts: readonly ResolvedContext[]; // what the agent works on and knows, each with its `location`
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
@@ -373,8 +377,11 @@ interface ReadonlySessionManager {
 }
 ```
 
-`cwd` is the agent's own directory. A tool that works on a project reads its location from `contexts`
-(`ctx.contexts.find((c) => c.name === "app")?.location`), never from `cwd`.
+`cwd` is where the agent works, the directory its coding tools and shell run in, so a relative path means the same to
+a tool and to `bash`. It is the agent directory unless a context is declared `workdir`. `agentDir` is always the
+agent directory: a tool that needs the agent's own files or its instance state reads it, never `cwd`. At L1
+(`createPiAgent`), which has no agent directory, both are its working directory. A tool that works on a project reads
+its location from `contexts` (`ctx.contexts.find((c) => c.name === "app")?.location`).
 
 During serving and `fastagent chat`, `sessionManager` is a read-only view of the current conversation; it is
 undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`

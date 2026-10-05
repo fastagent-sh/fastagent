@@ -30,7 +30,7 @@ export default defineTool({
   }),
   async execute({ channelId, text, path, title, initialComment, threadTs }, ctx) {
     if ((text === undefined) === (path === undefined)) throw new Error("pass exactly one of `text` or `path`");
-    const slack = slackTransport(ctx.cwd);
+    const slack = slackTransport(ctx.agentDir);
     const target = { channelId, threadTs };
     if (text !== undefined) {
       if (title !== undefined || initialComment !== undefined) {

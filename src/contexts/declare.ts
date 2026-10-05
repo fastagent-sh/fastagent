@@ -8,11 +8,11 @@ import { isUnderDir } from "../paths.ts";
 
 /** One entry of `contexts`, as an author writes it. */
 export type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+  | { local: string; copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string }
+  | { github: string; ref?: string; local?: string; readonly?: boolean; workdir?: boolean; name?: string };
 
 /** A declaration read: its name settled and its paths absolute. */
-export type DeclaredContext = { name: string; readonly: boolean } & (
+export type DeclaredContext = { name: string; readonly: boolean; workdir: boolean } & (
   | { kind: "local" | "copy"; path: string }
   | { kind: "github"; repo: string; ref?: string; checkout?: string }
 );
@@ -33,7 +33,7 @@ export function isContextName(name: string): boolean {
 export function declarationFor(
   source: string,
   cwd: string,
-  options: { copy?: boolean; readonly?: boolean; name?: string } = {},
+  options: { copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string } = {},
 ): ContextDeclaration {
   if (source.startsWith("github:")) {
     throw new Error(`github contexts are not supported yet — pass the checkout's directory instead`);
@@ -42,11 +42,16 @@ export function declarationFor(
     local: resolve(cwd, source),
     ...(options.copy ? { copy: true } : {}),
     ...(options.readonly ? { readonly: true } : {}),
+    ...(options.workdir ? { workdir: true } : {}),
     ...(options.name !== undefined ? { name: options.name } : {}),
   };
 }
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const KEYS = ["local", "github", "copy", "readonly", "name", "ref", "path"] as const;
+/**
+ * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
+ * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
+ */
+export const CONTEXT_KEYS = ["github", "local", "ref", "copy", "readonly", "workdir", "name"] as const;
 
 /**
  * Read `contexts` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
@@ -66,27 +71,37 @@ export function declareContexts(raw: unknown, agentDir: string): DeclaredContext
     }
     seen.set(key, context.name);
   }
+  // The working directory is where the agent works: one place, so a second declaration is a contradiction.
+  const workdirs = declared.filter((context) => context.workdir);
+  if (workdirs.length > 1) {
+    throw new Error(
+      `${workdirs.map((c) => `"${c.name}"`).join(" and ")} are both declared \`workdir\` — an agent has one working directory`,
+    );
+  }
   return declared;
 }
 
 function declareOne(entry: unknown, at: string, agentDir: string): DeclaredContext {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${at} must be an object`);
   const e = entry as Record<string, unknown>;
+  if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of Object.keys(e)) {
-    if (!(KEYS as readonly string[]).includes(key)) {
-      throw new Error(`${at}: unknown key "${key}" (valid keys: local, github, copy, readonly, name, ref)`);
+    if (!(CONTEXT_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTEXT_KEYS.join(", ")})`);
     }
   }
-  if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of ["local", "github", "name", "ref"] as const) {
     if (e[key] !== undefined && (typeof e[key] !== "string" || e[key] === "")) {
       throw new Error(`${at}: "${key}" must be a non-empty string`);
     }
   }
-  for (const key of ["copy", "readonly"] as const) {
+  for (const key of ["copy", "readonly", "workdir"] as const) {
     if (e[key] !== undefined && typeof e[key] !== "boolean") throw new Error(`${at}: "${key}" must be a boolean`);
   }
   const readonly = e.readonly === true;
+  const workdir = e.workdir === true;
+  // The agent creates its files in its working directory, so one it may only read is a contradiction.
+  if (workdir && readonly) throw new Error(`${at}: a \`workdir\` context is written to, so it cannot be \`readonly\``);
   const local = e.local === undefined ? undefined : resolve(agentDir, e.local as string);
   let declared: DeclaredContext;
   let defaultName: string;
@@ -97,6 +112,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
     declared = {
       name: "",
       readonly,
+      workdir,
       kind: "github",
       repo,
       ...(e.ref !== undefined ? { ref: e.ref as string } : {}),
@@ -105,7 +121,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
     defaultName = repo.slice(repo.indexOf("/") + 1);
   } else if (local !== undefined) {
     if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a github context`);
-    declared = { name: "", readonly, kind: e.copy === true ? "copy" : "local", path: local };
+    declared = { name: "", readonly, workdir, kind: e.copy === true ? "copy" : "local", path: local };
     defaultName = basename(local);
   } else {
     throw new Error(`${at}: declare where it comes from — "local" (a directory) or "github" ("owner/repo")`);

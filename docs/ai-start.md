@@ -59,13 +59,15 @@ network, and credentials. Constrain the whole process when isolation is required
 ## 2. Create the agent beside what it works on
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
-`.state/` and `.secrets/`, and it is the agent's working directory. What the agent works on (a project, a folder) is
-declared as a **context**; the agent never sits inside it, and a project never sits inside the agent.
+`.state/` and `.secrets/`, and it is the agent's working directory unless a context is declared `workdir`. What the
+agent works on (a project, a folder) is declared as a **context**; the agent never sits inside it, and a project never
+sits inside the agent.
 
 | Situation | Do |
 |---|---|
 | A new agent | `fastagent init my-agent`. Without a context it works only in its own directory. |
 | An agent for an existing project | `fastagent init <agent dir> --context <project>`: the agent lives beside the project, which gets no writes from `init`. |
+| An agent whose work products should stay apart from its definition | `fastagent init <agent dir> --workdir <folder>`: it works in `<folder>` (made when missing), and its definition stays in `<agent dir>`. |
 | An existing application embeds the agent | Keep the definition in its own directory beside the application; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Before running `init`, check whether the owner already
@@ -322,7 +324,7 @@ credentials are spent on the install, and the runtime has exactly `SLACK_BOT_TOK
 without it the CLI reports the manual console action. `fastagent add slack --replace-config` replaces
 only the builder's App Configuration credentials.
 
-`slack-send` delivers through the mounted channel's transport (`slackTransport(ctx.cwd)`); every
+`slack-send` delivers through the mounted channel's transport (`slackTransport(ctx.agentDir)`); every
 `fastagent add slack` rewrites `tools/slack-send.ts`.
 
 ### Replies and proactive delivery are different

@@ -16,9 +16,9 @@ export function registerFeishuApi(stateRoot: string, kind: FeishuCloudKind, api:
   byKind[kind].set(stateRoot, api);
 }
 
-function cloudTransport(cwd: string, kind: FeishuCloudKind): FeishuTransport {
-  // A tool's working directory is its agent's directory, so the agent's state root follows from it.
-  const stateRoot = resolveStateRoot(cwd);
+function cloudTransport(agentDir: string, kind: FeishuCloudKind): FeishuTransport {
+  // The agent's state root, where the mounted channel registered its transport.
+  const stateRoot = resolveStateRoot(agentDir);
   const transports = byKind[kind];
   let api = transports.get(stateRoot);
   if (!api) {
@@ -35,12 +35,12 @@ function cloudTransport(cwd: string, kind: FeishuCloudKind): FeishuTransport {
   return api;
 }
 
-/** Resolve the Feishu transport for a tool's agent directory (`ctx.cwd`). */
-export function feishuTransport(cwd: string): FeishuTransport {
-  return cloudTransport(cwd, "feishu");
+/** Resolve the Feishu transport for a tool's agent directory (`ctx.agentDir`). */
+export function feishuTransport(agentDir: string): FeishuTransport {
+  return cloudTransport(agentDir, "feishu");
 }
 
-/** Resolve the Lark transport for a tool's agent directory (`ctx.cwd`). */
-export function larkTransport(cwd: string): FeishuTransport {
-  return cloudTransport(cwd, "lark");
+/** Resolve the Lark transport for a tool's agent directory (`ctx.agentDir`). */
+export function larkTransport(agentDir: string): FeishuTransport {
+  return cloudTransport(agentDir, "lark");
 }

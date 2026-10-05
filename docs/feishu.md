@@ -362,7 +362,7 @@ The state home lives under `.state/`, which the agent `.gitignore` excludes. Sin
 **Use it for proactive delivery only.** The channel delivers the current turn's reply; calling the tool
 as well posts it twice.
 
-The tools use `feishuTransport(ctx.cwd)` / `larkTransport(ctx.cwd)` from their respective package
+The tools use `feishuTransport(ctx.agentDir)` / `larkTransport(ctx.agentDir)` from their respective package
 subpaths. Within a serving process, they share the mounted channel's credentials, custom gateway,
 token cache, bounded retries, and UTF-8 text splitting. Feishu and Lark remain isolated even in one
 agent. With no channel mounted (`routine run`, `invoke`, `tool`, or an embedded agent), the transport

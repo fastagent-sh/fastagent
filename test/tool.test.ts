@@ -1,4 +1,5 @@
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { fauxAgent } from "./agent.ts";
 import { describe, expect, it, vi } from "vitest";
@@ -71,6 +72,7 @@ describe("defineTool", () => {
     });
     await tool.execute("c", {});
     expect(context?.cwd).toBe(process.cwd());
+    expect(context?.agentDir).toBe(process.cwd());
     expect(context?.sessionManager).toBeUndefined();
     expect(context).not.toHaveProperty("session");
   });
@@ -172,14 +174,14 @@ describe("loadTools (filesystem discovery)", () => {
     await mkdir(join(cwd, "tools"), { recursive: true });
     await writeFile(join(cwd, "tools", "hostonly.mjs"), tool); // the host repo's tool at cwd — must NOT be scanned
 
-    const { toolNames } = await resolveAgentTools({}, agentDir);
+    const { toolNames } = await resolveAgentTools({}, { agentDir, cwd });
     expect(toolNames).toContain("foo"); // discovered from agentDir
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
   it("always mounts every coding tool", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-all-"));
-    const resolved = await resolveAgentTools({}, agentDir);
+    const resolved = await resolveAgentTools({}, agentDirs(agentDir, []));
     expect(resolved.tools.map((tool) => tool.name)).toEqual([...CODING_TOOL_NAMES]);
     expect(resolved.toolNames).toEqual([]); // no authored tools
   });
@@ -198,7 +200,7 @@ describe("loadTools (filesystem discovery)", () => {
       execute: () => "mine",
     });
 
-    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir);
+    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDirs(agentDir, []));
     expect(resolved.tools.filter((tool) => tool.name === "read")).toHaveLength(1);
     expect(resolved.tools.find((tool) => tool.name === "read")?.description).not.toMatch(/Configured|Discovered/);
     expect(resolved.toolNames).not.toContain("read");
@@ -232,7 +234,7 @@ describe("loadTools (filesystem discovery)", () => {
         defineTool({ ...options, description: options.name, input: z.object({}), execute: () => "ok" }),
       ),
     ];
-    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDir);
+    const { tools, toolNames, indirectTools } = await resolveAgentTools({ tools: surface }, agentDirs(agentDir, []));
     expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(surface.map((tool) => tool.name)));
     expect(toolNames).toEqual(["direct", "modelOnly"]);
     expect(indirectTools).toEqual([
@@ -279,7 +281,7 @@ describe("loadTools (filesystem discovery)", () => {
     });
     const scripted = { ...lookup, name: "scripted", exposure: "codemode" as const };
 
-    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDir);
+    const { indirectTools } = await resolveAgentTools({ tools: [lookup, scripted] }, agentDirs(agentDir, []));
     expect(indirectTools).toEqual([
       { name: "lookup", reach: "unreachable" },
       { name: "scripted", reach: "codemode" },

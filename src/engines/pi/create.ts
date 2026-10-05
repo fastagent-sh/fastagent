@@ -2,6 +2,7 @@
  * Agent assembly (configuration-time): the engine assets (tools, prompt) plus the reusable ladder that puts a pi agent
  * together.
  */
+import { resolve } from "node:path";
 import { toUSVString } from "node:util";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -28,14 +29,14 @@ import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
-import type { ResolvedContext } from "../../contexts/resolve.ts";
+import { type AgentDirs, type ResolvedContext, agentDirs } from "../../contexts/resolve.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
 // A directory agent gets every pi coding tool.
 
 /**
- * Every pi coding tool, in canonical order, rooted at the agent directory. pi ships two overlapping groupings
+ * Every pi coding tool, in canonical order, rooted at the working directory. pi ships two overlapping groupings
  * and neither is the whole set.
  */
 export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
@@ -116,7 +117,7 @@ function indirectReach(tool: MountedTool, builtinExtensions: readonly string[]):
  */
 export async function resolveAgentTools(
   config: FastagentConfig,
-  agentDir: string,
+  dirs: AgentDirs,
 ): Promise<{
   tools: MountedTool[];
   toolNames: string[];
@@ -132,9 +133,9 @@ export async function resolveAgentTools(
    *  asserts it (open.ts) — this function must stay reportable. */
   toolSecrets: Map<string, DeclaredSecret[]>;
 }> {
-  // Discovered `tools/` and the coding tools' working directory are both the agent directory.
-  const discovered = await loadTools(agentDir);
-  const configured = piAllCodingTools(agentDir);
+  // `tools/` is the definition's; the coding tools run where the agent works.
+  const discovered = await loadTools(dirs.agentDir);
+  const configured = piAllCodingTools(dirs.cwd);
   const configuredNames = new Set(configured.map((tool) => tool.name));
   const configuredCollisions: ToolCollision[] = [];
   // The config.tools that actually MOUNT — collected here rather than re-derived from `config.tools`
@@ -157,7 +158,7 @@ export async function resolveAgentTools(
   // The discovered tools that were DROPPED (a coding tool or config.tools already owns the name):
   // asking the mounted set instead would read the winner's name as proof the loser is mounted.
   const shadowed = new Set(merged.collisions.map((c) => c.name));
-  const { builtinExtensions } = await readMachine(agentDir);
+  const { builtinExtensions } = await readMachine(dirs.agentDir);
   const defaultNames = new Set<string>(CODING_TOOL_NAMES);
   const toolNames = tools.filter((t) => !defaultNames.has(t.name) && isDefaultActiveTool(t)).map((t) => t.name);
   return {
@@ -217,8 +218,8 @@ export function fastagentPromptSections(options: {
   tools: readonly MountedTool[];
   /** The {@link BUILTIN_EXTENSIONS} this machine leaves enabled (`Machine.builtinExtensions`). */
   builtinExtensions: readonly string[];
-  /** The agent directory and its contexts, for the `contexts` section; absent on L1, which loads no directory. */
-  workingSet?: { agentDir: string; contexts: readonly ResolvedContext[] };
+  /** The agent's directories and contexts, for the `contexts` section; absent on L1, which loads no directory. */
+  workingSet?: { dirs: AgentDirs; contexts: readonly ResolvedContext[] };
 }): Record<string, string> {
   const sections: Record<string, string> = {};
   if (options.workingSet) sections.contexts = contextsSection(options.workingSet);
@@ -262,17 +263,24 @@ const CONTEXT_KIND: Record<ResolvedContext["kind"], string> = {
 };
 
 /**
- * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each context is named
- * with its location, whether it is the agent's to change, and where a change there goes. A result written where it
- * does not last is how knowledge gets lost, so the agent is told which is which.
+ * Where the agent is and what it works on (agent-model.md §4): its working directory, its own directory (itself), and
+ * each context named with its location, whether it is the agent's to change, and where a change there goes. A result
+ * written where it does not last is how knowledge gets lost, so the agent is told which is which.
  */
-function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: readonly ResolvedContext[] }): string {
-  const own =
-    `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
-    `land there unless you put them elsewhere. Its AGENTS.md, if there is one, is for changing yourself: read it ` +
-    `before you do.`;
+function contextsSection({ dirs, contexts }: { dirs: AgentDirs; contexts: readonly ResolvedContext[] }): string {
+  const workdir = contexts.find((c) => c.workdir);
+  // The definition's path is given whole when the agent works elsewhere: a relative path would land in the working
+  // directory (measured in the #716 spike: with it, no self-change landed there).
+  const own = workdir
+    ? `Your working directory is ${dirs.cwd}, the context ${workdir.name}: files you create land there unless you ` +
+      `put them elsewhere. Your own definition is at ${dirs.agentDir}: change yourself there, by its full path. Its ` +
+      `AGENTS.md, if there is one, is for changing yourself: read it before you do.`
+    : `Your working directory, ${dirs.agentDir}, is your own directory: it holds your definition, and files you ` +
+      `create land there unless you put them elsewhere. Its AGENTS.md, if there is one, is for changing yourself: ` +
+      `read it before you do.`;
   if (contexts.length === 0) return `${own} You have no contexts: you work only in your own directory.`;
-  const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${CONTEXT_KIND[c.kind]})`;
+  const line = (c: ResolvedContext) =>
+    `- ${c.name}: ${c.location} (${CONTEXT_KIND[c.kind]}${c.workdir ? "; your working directory" : ""})`;
   const worksOn = contexts.filter((c) => !c.readonly);
   const knows = contexts.filter((c) => c.readonly);
   return [
@@ -281,7 +289,7 @@ function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: r
     ...(knows.length > 0 ? ["You know, and do not write:", ...knows.map(line)] : []),
     `Run a command in a context with \`cd <its location> && …\`; file tools take the location directly.` +
       (worksOn.length > 0
-        ? " A result worth keeping belongs in a context you work on, not in your own directory."
+        ? ` A result worth keeping belongs in a context you work on, not in your ${workdir ? "definition" : "own directory"}.`
         : " You write only in your own directory: the contexts above are for reading."),
   ].join("\n");
 }
@@ -331,19 +339,20 @@ function assemblePi(opts: {
   extensionPaths?: string[];
   env?: ExecutionEnv;
   /**
-   * The working directory: where tools operate, what the model is told its working directory is, and what session
-   * records are keyed to. The agent directory on the directory path.
+   * The agent directory and the working directory: pi's one cwd, where tools operate and what a new record's header
+   * says. On L1, which has no agent directory, both are `env.cwd` (else the process's).
    */
-  cwd?: string;
+  dirs?: AgentDirs;
   /** What authored tools see as `ctx.contexts`. */
   contexts?: readonly ResolvedContext[];
   lease?: Lease;
 }): PiAssembly {
-  const cwd = opts.cwd ?? opts.env?.cwd ?? process.cwd();
+  const cwd = opts.env?.cwd ?? process.cwd();
+  const dirs = opts.dirs ?? { agentDir: cwd, cwd };
   // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the agent runs under
   // — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
-  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
+  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd: dirs.cwd });
   const createModelRuntime = opts.models;
   let registry: Promise<ModelRuntime> | undefined;
   const modelRuntime = () => {
@@ -360,7 +369,7 @@ function assemblePi(opts: {
     return engine;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
-  const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
+  const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], dirs.cwd);
   const sessionFactory = piAgentSessionFactory({
     sessions,
     engine: async () => ({ modelRuntime: await createModelRuntime() }),
@@ -368,7 +377,7 @@ function assemblePi(opts: {
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
     readDefinition: opts.readDefinition,
-    cwd,
+    dirs,
     contexts: opts.contexts ?? [],
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     excludedToolNames,
@@ -419,7 +428,10 @@ export interface CreatePiAgentOptions {
   credentialStore?: CredentialStore;
 
   sessions?: PiSessionRecordStore;
-  /** Supplies the working directory at L1 (default: process.cwd()), which loads no definition. */
+  /**
+   * Supplies the working directory at L1 (default: process.cwd()), which loads no definition: it is also what a tool
+   * sees as `ctx.agentDir`.
+   */
   env?: ExecutionEnv;
   /** Single-writer lease. */
   lease?: Lease;
@@ -498,14 +510,15 @@ export async function assemblePiFromDefinition(
   dir: string,
   options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & { models?: AgentModels },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
-  // The agent directory is the working directory: where tools operate and what session records are keyed to.
-  const cwd = dir;
-  const env = options.env ?? new NodeExecutionEnv({ cwd });
   const contexts = options.contexts ?? [];
+  // The one answer to where the agent works: a `workdir` context, else its own directory.
+  const dirs = agentDirs(resolve(dir), contexts);
+  // What the definition is read through; its paths are absolute, so this is not where the agent works.
+  const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to report
   // (skills/diagnostics/collisions).
   const definition = await loadAgentDefinition(dir, { env, contexts });
-  const tools = options.tools ?? piAllCodingTools(cwd);
+  const tools = options.tools ?? piAllCodingTools(dirs.cwd);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
   reportFindingsIfChanged(definition.dir, definition);
@@ -516,7 +529,7 @@ export async function assemblePiFromDefinition(
   }
   refuseDefaultPromptOverReplacedTools(tools, options.base !== undefined || definition.systemPrompt !== undefined);
   const { providers } = options;
-  const models = options.models ?? agentModels(dir, options, { env, ...(providers ? { providers } : {}) });
+  const models = options.models ?? agentModels(dirs, options, { env, ...(providers ? { providers } : {}) });
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
   await models.runtime();
@@ -546,7 +559,7 @@ export async function assemblePiFromDefinition(
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         ...(def.appendSystemPrompt ? { appendSystemPrompt: def.appendSystemPrompt.content } : {}),
         contextFiles: def.contextFiles,
-        sections: fastagentPromptSections({ tools, builtinExtensions, workingSet: { agentDir: def.dir, contexts } }),
+        sections: fastagentPromptSections({ tools, builtinExtensions, workingSet: { dirs, contexts } }),
         skills: def.skills,
         prompts: def.prompts,
       };
@@ -555,7 +568,7 @@ export async function assemblePiFromDefinition(
     sessions: options.sessions,
     // The catalog's own discovery: the models it registered and the extensions sessions load are one list.
     extensionPaths: [...(await models.extensionPaths())],
-    cwd,
+    dirs,
     contexts,
     env,
     lease: options.lease,

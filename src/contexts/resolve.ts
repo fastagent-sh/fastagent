@@ -16,6 +16,8 @@ export interface ResolvedContext {
   kind: "local" | "copy" | "github";
   /** The agent knows it and does not write it. */
   readonly: boolean;
+  /** The agent's working directory: it works there, and what it creates lands there. At most one. */
+  workdir: boolean;
   /** Its absolute directory on this instance. */
   location: string;
 }
@@ -23,16 +25,38 @@ export interface ResolvedContext {
 /** Where this instance runs: this machine, or a deployed host. */
 export type Place = "local" | "host";
 
-/** Resolve the raw `contexts` declaration of the agent in `agentDir`. Refuses, naming the context, what cannot be. */
+/**
+ * Resolve the raw `contexts` declaration of the agent in `agentDir`. Refuses, naming the context, what cannot be.
+ * `toCreate` names a directory the caller is about to create (`--workdir` on a folder that does not exist yet): it is
+ * checked as the path it will have, instead of refused as missing.
+ */
 export function resolveContexts(
   agentDir: string,
   declaration: unknown,
-  place: Place = isDeployedWorkspace() ? "host" : "local",
+  options: { place?: Place; toCreate?: string } = {},
 ): ResolvedContext[] {
-  return declareContexts(declaration, agentDir).map((context) => resolveOne(agentDir, context, place));
+  const place = options.place ?? (isDeployedWorkspace() ? "host" : "local");
+  return declareContexts(declaration, agentDir).map((context) =>
+    resolveOne(agentDir, context, place, options.toCreate),
+  );
 }
 
-function resolveOne(agentDir: string, context: DeclaredContext, place: Place): ResolvedContext {
+/**
+ * The agent's two directories, carried together so no reader picks a cwd of its own: the agent directory (its
+ * definition and instance state) and the working directory (where it works). docs/design/agent-model-implementation.md
+ * §3.11.
+ */
+export interface AgentDirs {
+  agentDir: string;
+  cwd: string;
+}
+
+/** THE working directory: the context declared `workdir`, else the agent directory. */
+export function agentDirs(agentDir: string, contexts: readonly ResolvedContext[]): AgentDirs {
+  return { agentDir, cwd: contexts.find((context) => context.workdir)?.location ?? agentDir };
+}
+
+function resolveOne(agentDir: string, context: DeclaredContext, place: Place, toCreate?: string): ResolvedContext {
   if (context.kind === "github") {
     throw new Error(
       `context "${context.name}": github contexts are not supported yet — declare the checkout as { local: "<path>" }`,
@@ -43,13 +67,21 @@ function resolveOne(agentDir: string, context: DeclaredContext, place: Place): R
   }
   const { path } = context;
   const stat = statOrMissing(path);
-  if (!stat) throw new Error(`context "${context.name}": ${path} does not exist`);
-  if (!stat.isDirectory()) throw new Error(`context "${context.name}": ${path} is not a directory`);
+  const pending = !stat && path === toCreate;
+  if (!stat && !pending) throw new Error(`context "${context.name}": ${path} does not exist`);
+  if (stat && !stat.isDirectory()) throw new Error(`context "${context.name}": ${path} is not a directory`);
   // The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
-  // paths — including for an agent directory `init` is about to create, which a symlinked ancestor still places.
-  const nested = nestingError(realPathOf(agentDir), realpathSync(path), context.name);
+  // paths — including for a directory a command is about to create (the agent's, or a new working directory), which a
+  // symlinked ancestor still places.
+  const nested = nestingError(realPathOf(agentDir), realPathOf(path), context.name);
   if (nested) throw new Error(nested);
-  return { name: context.name, kind: context.kind, readonly: context.readonly, location: path };
+  return {
+    name: context.name,
+    kind: context.kind,
+    readonly: context.readonly,
+    workdir: context.workdir,
+    location: path,
+  };
 }
 
 /**

@@ -14,9 +14,9 @@ export function registerSlackApi(stateRoot: string, api: SlackApi): void {
   byStateRoot.set(stateRoot, api);
 }
 
-/** The transport of the agent whose directory is `cwd` (a tool's `ctx.cwd`). */
-export function slackTransport(cwd: string): SlackTransport {
-  const stateRoot = resolveStateRoot(cwd);
+/** The transport of the agent whose directory is `agentDir` (a tool's `ctx.agentDir`). */
+export function slackTransport(agentDir: string): SlackTransport {
+  const stateRoot = resolveStateRoot(agentDir);
   let api = byStateRoot.get(stateRoot);
   if (!api) {
     const botToken = process.env.SLACK_BOT_TOKEN;

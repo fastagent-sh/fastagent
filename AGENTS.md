@@ -45,6 +45,7 @@ src/
 │   ├── models-view.ts, auth-view.ts, contexts-view.ts # `models` / auth-report / contexts output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
+│   ├── workdir.ts          # making the `--workdir` directory after every check, and unmaking it on failure
 │   ├── fail.ts             # the process-exiting failure boundary
 │   ├── login-relay.ts      # `login` split across a process boundary: LoginIO as JSON lines, box half + terminal half
 │   ├── box-login.ts        # `login --deployment`: the login runs ON the deployed box, through the host's own shell
@@ -67,7 +68,8 @@ src/
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state)
 ├── contexts/               # what an agent works on and knows — engine-neutral
 │   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
-│   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses
+│   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses, and the
+│   │                       # AgentDirs { agentDir, cwd } it yields (the working directory: a `workdir` context)
 │   └── config-text.ts      # the literal `contexts: [...]` block `fastagent context` rewrites
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel/defineRoutine): the ONE read of

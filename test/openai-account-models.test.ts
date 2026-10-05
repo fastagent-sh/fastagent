@@ -2,6 +2,7 @@
  * A Sign in with ChatGPT on `openai` lists the account's own catalog (`GET /v1/models`), kept on the credential and
  * read again on every token refresh; an API key keeps pi's built-in list.
  */
+import { agentDirs } from "../src/contexts/resolve.ts";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +112,7 @@ describe("what a ChatGPT sign-in lists", () => {
     // The agent's runtime (turns, the agent catalog refresh), the machine's (`models --refresh -g`), and the bare
     // registry login is built on: a registry that refreshed without the wrapper would drop the catalog.
     const registries: Record<string, (dir: string, authPath: string) => Promise<Models>> = {
-      agent: (dir, authPath) => agentModels(dir, { authPath }).runtime(),
+      agent: (dir, authPath) => agentModels(agentDirs(dir, []), { authPath }).runtime(),
       machine: (_dir, authPath) => machineModelRuntime({ credentials: fastagentCredentialStore(authPath) }),
       bare: async (_dir, authPath) => piModelsOver(fastagentCredentialStore(authPath)),
     };
@@ -132,7 +133,7 @@ describe("what a ChatGPT sign-in lists", () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     const { dir, authPath } = await agent({ openai: oauth({ expires: 1, accountModels: ["gpt-5.5"] }) });
     stubOpenAI(503);
-    const models = await agentModels(dir, { authPath }).runtime();
+    const models = await agentModels(agentDirs(dir, []), { authPath }).runtime();
     expect((await models.getAuth("openai"))?.auth.apiKey).toBe("at-new");
 
     // The old refresh token is spent: losing the new one would sign the account out.
@@ -149,7 +150,7 @@ describe("what a ChatGPT sign-in lists", () => {
       `export default (pi) => { pi.registerProvider("openai", { headers: { "x-gateway": "1" } }); };`,
     );
     const fetch = stubOpenAI();
-    const models = await agentModels(dir, { authPath }).runtime();
+    const models = await agentModels(agentDirs(dir, []), { authPath }).runtime();
     expect((await models.getAuth("openai"))?.auth.apiKey).toBe("at-new");
     const stored = JSON.parse(await readFile(authPath, "utf8")).openai;
     expect(stored).toMatchObject({ refresh: "rt-new", accountModels: ["gpt-5.5", "gpt-6-astra"] });

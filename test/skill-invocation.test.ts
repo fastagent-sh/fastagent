@@ -160,7 +160,7 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
         systemPrompt: "test",
         skills: [{ name: "weather", description: "Report weather.", filePath: skillPath, content: "body" }],
       }),
-      cwd: dir,
+      dirs: { agentDir: dir, cwd: dir },
     }),
   });
   await rm(skillPath);

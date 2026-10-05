@@ -2,8 +2,7 @@
  * The shared definition-aware session builder: open a directory's assembled agent as a resident pi
  * `AgentSessionRuntime`, running the SAME agent that `dev`/`start` serve.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
@@ -36,40 +35,38 @@ export async function buildAgentSessionRuntime(
   options: BuildSessionRuntimeOptions = {},
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  async function resolveAssembly() {
-    const front = await resolveAgentAssembly(dir, options);
-    // chat's TUI always starts a conversation, so it needs the default the served agent can do without.
-    const modelSpec = front.modelSpec;
-    if (!modelSpec) throw missingDefaultModel();
-    reportToolCollisions(front.toolCollisions);
-    const { assembly } = await assembleFront(front);
-    // Read ONCE per runtime: a rebuild (/new, fork) keeps the startup snapshot, because config and tools stay in the
-    // import cache and a half-refreshed agent is worse than a stale one. Restart chat to pick up edits.
-    return { modelSpec, assembly, definition: await assembly.readDefinition() };
-  }
-
-  // The agent directory, like serving's: where tools run and what session records are keyed to. Canonical, because
-  // pi's process.cwd() fallback is a realpath and a symlinked agent directory would otherwise mismatch it.
-  const rootCwd = canonicalPath(resolveAgentDir(dir));
-  // pi calls the factory again on /new, /resume, switch, and fork; the assembly is built once.
-  let assembly: ReturnType<typeof resolveAssembly> | undefined;
-  const assemblyFor = (cwd: string) => {
-    const activeCwd = canonicalPath(cwd);
-    if (activeCwd !== rootCwd) {
-      throw agentScopeError(activeCwd);
-    }
-    assembly ??= resolveAssembly();
-    return assembly;
-  };
+  // One spelling of the agent directory, whichever path opened it: it names the agent's session directory below, and a
+  // tool must see one spelling of it.
+  const front = await resolveAgentAssembly(canonicalPath(resolveAgentDir(dir)), options);
+  // chat's TUI always starts a conversation, so it needs the default the served agent can do without.
+  const modelSpec = front.modelSpec;
+  if (!modelSpec) throw missingDefaultModel();
+  reportToolCollisions(front.toolCollisions);
+  const { dirs } = front;
+  // Built once: pi calls the factory again on /new, /resume, switch, and fork, and a rebuild keeps the startup
+  // snapshot, because config and tools stay in the import cache and a half-refreshed agent is worse than a stale one.
+  // Restart chat to pick up edits.
+  const { assembly } = await assembleFront(front);
+  const definition = await assembly.readDefinition();
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const { modelSpec, assembly, definition } = await assemblyFor(cwd);
+    // Every session here runs in the working directory: /new and fork keep the runtime's, and switches and imports
+    // are pinned to it ({@link keepSessionsInAgent}).
+    if (canonicalPath(cwd) !== canonicalPath(dirs.cwd)) {
+      throw new Error(`this chat runs ${dirs.agentDir} in ${dirs.cwd}: it cannot open a session in ${cwd}`);
+    }
     // Per session, NOT memoized with the assembly.
     const modelRuntime = await assembly.createModelRuntime();
-    const loaded = await definitionServices({ cwd, modelRuntime, definition, extensionPaths: assembly.extensionPaths });
-    // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
-    // re-reading the file under its lock and writing only the fields that changed, so `packages` there is untouched.
-    const services = { ...loaded, settingsManager: SettingsManager.create(cwd, loaded.agentDir) };
+    const loaded = await definitionServices({
+      dirs,
+      modelRuntime,
+      definition,
+      extensionPaths: assembly.extensionPaths,
+    });
+    // ...while the SESSION keeps pi's own file-backed settings, on the agent directory wherever it works, so `/settings`
+    // in the TUI saves to `<agent dir>/.pi/settings.json`. pi persists by re-reading the file under its lock and writing
+    // only the fields that changed, so `packages` there is untouched.
+    const services = { ...loaded, settingsManager: SettingsManager.create(dirs.agentDir, loaded.agentDir) };
 
     // AFTER the services, because an extension may be what defines the model.
     const model = resolveModel(modelRuntime, modelSpec);
@@ -84,57 +81,59 @@ export async function buildAgentSessionRuntime(
       thinkingLevel: assembly.thinkingLevel,
       tools: assembly.tools,
       excludedToolNames: assembly.excludedToolNames,
-      // A tool must see one spelling of the agent directory, including when opened through a symlink.
-      cwd: rootCwd,
+      dirs,
       contexts: assembly.contexts,
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };
 
+  // The agent's records live in pi's session directory for the AGENT directory, wherever it works: a record belongs to
+  // the directory that stores it, so two agents sharing a working directory never see each other's.
+  const initial =
+    sessionManager ?? SessionManager.create(dirs.cwd, SessionManager.create(dirs.agentDir).getSessionDir());
   const runtime = await createAgentSessionRuntime(createRuntime, {
-    cwd: rootCwd,
+    cwd: dirs.cwd,
     agentDir: getAgentDir(),
-    sessionManager: sessionManager ?? SessionManager.create(rootCwd),
+    sessionManager: initial,
   });
-  enforceAgentScopedSessionSwitches(runtime, rootCwd);
+  keepSessionsInAgent(runtime, dirs.cwd, initial.getSessionDir());
   return runtime;
 }
 
-function agentScopeError(targetCwd: string): Error {
-  return new Error(`fastagent sessions belong to one agent: cannot switch to ${targetCwd}; open that agent instead`);
-}
-
-function readSessionHeaderCwd(sessionPath: string): string | undefined {
-  const resolvedPath = resolve(sessionPath);
-  if (!existsSync(resolvedPath)) return undefined;
-  for (const line of readFileSync(resolvedPath, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line) as { type?: unknown; cwd?: unknown };
-      if (entry.type === "session") return typeof entry.cwd === "string" ? canonicalPath(entry.cwd) : undefined;
-    } catch {
-      // Ignore malformed lines the same way pi's session loader does; no header cwd → caller pins root.
-    }
-  }
-  return undefined;
-}
-
-/** Keep resume/import inside the runtime's single agent directory, deciding BEFORE delegating to pi. */
-function enforceAgentScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
-  const rejectForeignTarget = (sessionPath: string, cwdOverride: string | undefined): void => {
-    const target = cwdOverride !== undefined ? canonicalPath(cwdOverride) : readSessionHeaderCwd(sessionPath);
-    if (target !== undefined && target !== rootCwd) throw agentScopeError(target);
-  };
-
+/**
+ * A record belongs to the directory that stores it, not to the cwd its header records. One in this agent's session
+ * directory is continued HERE, in the current working directory, whatever its header says (the agent may have worked
+ * elsewhere when it was made; serving continues such a record the same way); one stored anywhere else is another
+ * agent's. An import is copied into the session directory by pi before it is opened, so it is this agent's by the
+ * same rule. Decided BEFORE delegating to pi, which would otherwise rebuild the runtime for the header's cwd.
+ */
+function keepSessionsInAgent(runtime: AgentSessionRuntime, cwd: string, sessionDir: string): void {
   const switchSession = runtime.switchSession.bind(runtime);
-  runtime.switchSession = async (...args: Parameters<AgentSessionRuntime["switchSession"]>) => {
-    rejectForeignTarget(args[0], args[1]?.cwdOverride);
-    return switchSession(...args);
+  runtime.switchSession = async (...[sessionPath, options]: Parameters<AgentSessionRuntime["switchSession"]>) => {
+    if (canonicalPath(dirname(resolve(sessionPath))) !== canonicalPath(sessionDir)) {
+      throw new Error(
+        `fastagent sessions belong to one agent: ${sessionPath} is not stored in this agent's sessions (${sessionDir}); open its agent instead`,
+      );
+    }
+    return switchSession(sessionPath, { ...options, cwdOverride: cwd });
   };
 
   const importFromJsonl = runtime.importFromJsonl.bind(runtime);
-  runtime.importFromJsonl = async (...args: Parameters<AgentSessionRuntime["importFromJsonl"]>) => {
-    rejectForeignTarget(args[0], args[1]);
-    return importFromJsonl(...args);
+  runtime.importFromJsonl = async (...[inputPath]: Parameters<AgentSessionRuntime["importFromJsonl"]>) =>
+    importFromJsonl(inputPath, cwd);
+
+  // pi forks at an entry by opening the record's FILE again, which takes no cwd: the copy would run in the cwd its
+  // header records. For a record made before the working directory changed that is not where the agent works, and pi
+  // has already closed the current session by the time the new one is refused, so it is refused here, first.
+  const fork = runtime.fork.bind(runtime);
+  runtime.fork = async (...args: Parameters<AgentSessionRuntime["fork"]>) => {
+    const recorded = runtime.session.sessionManager.getHeader()?.cwd;
+    if (recorded !== undefined && canonicalPath(recorded) !== canonicalPath(cwd)) {
+      throw new Error(
+        `this conversation was recorded while the agent worked in ${recorded}, and a fork of it would run there; the ` +
+          `agent works in ${cwd} now, so continue it, or start a /new one`,
+      );
+    }
+    return fork(...args);
   };
 }
