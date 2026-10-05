@@ -16,7 +16,9 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPiAgentFromDir } from "../src/index.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
+import { makeFaux, sentPrompt } from "./faux.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
@@ -118,6 +120,28 @@ describe("init: scaffoldAgent", () => {
     expect(a.agentDir).toBe(dir);
     expect(a.definition.appendSystemPrompt?.content).toContain("Standing instructions");
     expect(a.definition.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
+  });
+
+  it("the skill APPEND_SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
+    // Named, not given as a relative path: pi tells the model to resolve a relative path against a skill's own
+    // directory, and a path to a skill the prompt does not list sent models guessing at another package's directory.
+    const dir = join(await freshDir(), "agent");
+    await scaffoldAgent(dir);
+    expect(await readFile(join(dir, "APPEND_SYSTEM.md"), "utf8")).toContain("Read the `writing-great-skills` skill");
+    const { faux } = makeFaux();
+    let prompt = "";
+    faux.setResponses([
+      (context) => {
+        prompt = sentPrompt(context);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(prompt).toContain(
+      `<name>writing-great-skills</name>\n    <description>Reference for writing and editing skills well`,
+    );
+    expect(prompt).toContain(`<location>${join(dir, "skills", "writing-great-skills", "SKILL.md")}</location>`);
   });
 
   it("refuses a directory that is not empty, naming what is there; an empty or new one is fine", async () => {
