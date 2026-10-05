@@ -40,8 +40,7 @@ Relations:
 ### What this layer guarantees
 
 Every instance of an Agent, given the same version of its definition, runs the same program on contexts
-resolved the same way: the same declarations, the same names, the same working directory (its own, or the context
-it declares as one), the same
+resolved the same way: the same declarations, the same names, the same working directory (its own), the same
 `AGENTS.md`, and the same skills from its harness and its contexts. A context an instance fetches itself and only
 knows is brought to its declared version every time the instance is deployed or started; one it works on starts
 from its declared version and is the instance's own from then on (§3). A checkout the user names with `local` is
@@ -215,7 +214,6 @@ Attributes:
 |---|---|---|---|
 | `readonly` | all | The agent knows it and does not write it, for example a company handbook | yes |
 | `name` | all | The context's identity within the agent: how the agent and the commands refer to it, and what an instance keeps its clone or copy under. Defaults to the repository or folder name | yes |
-| `workdir` | all | The agent's working directory: commands start there, and what it creates lands there unless it puts it elsewhere (§4). At most one context | yes |
 | `copy` | local | An instance on a host gets its own copy; when it is made follows from whether the context is writable (below) | yes |
 | `ref` | github | Branch, tag or commit. Defaults to the default branch | yes |
 | `local` | github | A path to use on a machine where it is a checkout of that repository; otherwise the repository is cloned | yes |
@@ -253,9 +251,6 @@ Attributes:
   the instance.
 - **A path in a declaration is absolute or relative to the agent's directory.** Either way it describes this
   machine; the `github` type is what makes a context independent of where anything sits.
-- **At most one context is the working directory.** A second `workdir` is refused when the agent is loaded. The
-  working directory is a writable context (a `readonly` one is refused with it: the agent creates files there),
-  and it reaches a host like any context of its type.
 
 A service for sharing and synchronizing local directories between agents, the way GitHub does for repositories,
 would be another context type. It is not part of this note.
@@ -263,15 +258,14 @@ would be another context type. It is not part of this note.
 ### Example: an agent with a folder of its own
 
 A client such as duang may give a new agent a folder it creates for its work, and let the user attach folders
-they already have. The agent's folder is a context like any other, separate from its definition, and declared as
-its working directory, so the agent works there and what it creates lands where the user can see it:
+they already have. The agent's folder is a context like any other, separate from its definition:
 
 ```ts
 export default {
   contexts: [
-    { local: "/Users/me/Documents/researcher", copy: true, workdir: true }, // works in: its notes and output
-    { local: "/Users/me/Documents/papers", copy: true, readonly: true },    // knows
-    { github: "acme/handbook", readonly: true },                            // knows
+    { local: "/Users/me/Documents/researcher", copy: true },           // works on: its notes and output
+    { local: "/Users/me/Documents/papers", copy: true, readonly: true }, // knows
+    { github: "acme/handbook", readonly: true },                       // knows
   ],
 };
 ```
@@ -283,17 +277,12 @@ directory to a synchronized one, and nothing else in the declaration does.
 
 ## 4. How the agent works
 
-- **The working directory is the context declared as one, else the agent's own directory.** The same rule on a
-  laptop and on a host: the declaration decides, never where a command runs. Without a `workdir` context an agent
-  changing itself writes `skills/…` like any relative path. With one, the definition is elsewhere, and the agent is
-  given its absolute path: measured on three OpenAI models (Anthropic's were not measured), 96 runs, every
-  self-change went to the definition by its full path and every work product to the working directory, whether the
-  prompt only named the definition's path or also explained relative paths.
+- **The working directory is the agent's own directory, everywhere.** One rule on a laptop and on a host, and an
+  agent changing itself writes `skills/…` like any relative path.
 - **The agent is told what it works on and what it knows.** For each context: its name, its location on this
   instance, whether it works on it or only knows it, and whether a change there reaches other instances. It is
-  told where its working directory is, where its own definition is (the two are the same without a `workdir`
-  context), that the definition's `AGENTS.md` is for changing itself, and that a result worth keeping belongs in a
-  context it works on.
+  told that its own directory is itself, where that directory's `AGENTS.md` is for changing it, and that a result
+  worth keeping belongs in a context it works on.
   Writing a finding where it does not travel is how knowledge gets lost, so the agent needs to know which is
   which.
 - **Commands run in a context with `cd`.** A shell command that belongs in a project runs as
@@ -307,19 +296,12 @@ directory to a synchronized one, and nothing else in the declaration does.
 - **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
   change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
   directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's
-  project scope is read from a context, the working directory included: a context contributes its `AGENTS.md` and
-  its skills only. So a working directory's `.pi/settings.json`, `.pi/prompts/`, `.pi/themes/` and
-  `.pi/extensions/` take no effect, and its `.pi/skills/` load the way any context's do, as `<context>/<skill>`,
-  never as skills of the agent's own.
-- **What the agent creates lands in its working directory unless it puts it elsewhere.** Without a `workdir`
-  context that is the agent's own directory, and whether a file is temporary or part of the agent often cannot be
-  decided when it is written: a helper script that proves useful is how a skill begins. The author decides what
-  stays, with the tool every repository uses: version control and ignore files. What is shipped or shared is what
-  the author keeps (§8). An agent whose work should stay apart from its definition, visible to its user, declares
-  a `workdir` context. On a host whose storage survives a deployment that is also what keeps its work across
-  releases, since each release replaces the definition; on one that resets its storage (AgentCore) the working
-  directory is fetched again like any context, and work that must outlast a deployment belongs in an external
-  system.
+  project scope is read from a context: a context contributes its `AGENTS.md` and its skills only. Today that scope
+  is the workspace, the project around the agent.
+- **What the agent creates lands in its own directory unless it puts it elsewhere.** Whether a file is temporary
+  or part of the agent often cannot be decided when it is written: a helper script that proves useful is how a
+  skill begins. The author decides what stays, with the tool every repository uses: version control and ignore
+  files. What is shipped or shared is what the author keeps (§8).
 - **A tool is told where each context is.** An authored tool that works on a context reads its location from its
   context, not by guessing.
 
@@ -416,8 +398,8 @@ Whether an agent may change its own default model is open, pending the definitio
 |---|---|---|
 | Agent | preset | A shared definition is an Agent. Clients express "make my own copy" in their interface, not with a second noun |
 | Instance | deployment, for a running agent | Deployment is how an instance gets onto a host (§8) |
-| works on / knows | primary context | What users see says what the agent may do with a context. The one context declared as the working directory is called that, and is otherwise a context like the rest |
-| working directory | workspace | The working directory is the agent's own directory or the context declared as one, never the directory around the agent; where an instance keeps what it fetches is storage |
+| works on / knows | primary context | What users see says what the agent may do with a context. No context is special |
+| (nothing) | workspace | Not a concept any more: the working directory is the agent's own directory, and where an instance keeps what it fetches is storage |
 | `SYSTEM.md`, `APPEND_SYSTEM.md` | `persona.md` | `persona.md` replaced only the identity line; `SYSTEM.md` replaces pi's whole default and `APPEND_SYSTEM.md` adds to it, so neither is the same. `persona.md` is refused, naming both and when to use each |
 
 A client that calls the running thing an agent (duang) maps it to an instance. Existing documents that call a
@@ -447,7 +429,7 @@ These belong to other layers, the way a program does not do its own package mana
 | Today | In this model |
 |---|---|
 | The workspace is the agent directory's parent, by placement | The agent directory and its contexts are separate directories, linked by the declaration; nesting is refused |
-| The working directory is that parent | The working directory is the agent's own directory, or a context declared as one |
+| The working directory is that parent | The working directory is the agent's own directory |
 | `AGENTS.md` is read from the agent directory, and from the working directory up to the filesystem root | `AGENTS.md` is read from each context's root; never from the agent directory |
 | A deploy seeds the whole workspace once, then replaces the definition | Each context's type decides what a host receives; the definition is shipped |
 | `.secrets/` and `.state/` are part of the agent directory | They stay where they are, as the local instance's state ([CLI](agent-cli.md) §2): never part of the definition, never in a copied Agent |

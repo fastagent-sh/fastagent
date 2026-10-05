@@ -37,15 +37,14 @@ One engine-neutral module owns the declaration and its resolution: `src/contexts
 ```ts
 /** What an author writes in fastagent.config.ts `contexts` (validated by declare.ts). */
 type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; workdir?: boolean; name?: string };
+  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
+  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
 /** What every consumer reads: one entry per declared context, resolved for THIS instance. */
 interface ResolvedContext {
   name: string;               // unique ignoring case, one segment of [A-Za-z0-9_-]
   kind: "local" | "copy" | "github";
   readonly: boolean;          // "knows" vs "works on"
-  workdir: boolean;           // the agent's working directory (§3.11)
   location: string;           // absolute directory on this instance
   origin: string;             // what the author declared, for display ("~/notes", "github acme/app@main")
   travels: boolean;           // a change here reaches other instances (github writable)
@@ -53,7 +52,7 @@ interface ResolvedContext {
 }
 
 interface ResolvedAgent {
-  agentDir: string;           // the definition; also the working directory without a `workdir` context
+  agentDir: string;           // the working directory, everywhere
   config: FastagentConfig;
   contexts: ResolvedContext[];
 }
@@ -197,127 +196,6 @@ Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every direct
 for a host's copy).
 Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `github:owner/repo` a remote context.
 
-### 3.11 Working directory (#716)
-
-A context declared `workdir: true` is the agent's working directory ([agent model](agent-model.md) §4); without
-one it is the agent directory, as now.
-
-- **Declaration.** `declare.ts` reads `workdir` (a boolean), refuses a second one and one combined with `readonly`,
-  and `ResolvedContext` gains `workdir: boolean`. `resolveContexts` stays the one answer: the working directory is
-  the `location` of the context marked so, else the agent directory, computed once beside it (a `workingDirectory`
-  helper in `resolve.ts`) so no reader derives it a second way.
-- **One value carries both directories.** Every reader below needs the same pair, and a reader that picked its own
-  cwd is how a split goes wrong, so the pair travels as one value, `AgentDirs { agentDir, cwd }`, built once by the
-  helper above and passed whole; no function takes the two separately. (`agentDir` is fastagent's agent directory;
-  pi's `createAgentSessionServices({ agentDir })` means `~/.pi/agent`, which keeps its existing name `piDir` in
-  fastagent's code.) The readers that take it: the session factory and `bindPiSession`, `chat`'s runtime,
-  `definitionServices` in all of its callers (a session, the model catalog `agentModels` builds, and the extension
-  commands `agentCommands` lists for `/`), the session store, and every runner of a tool. The callers matter beyond
-  agreement: pi caches loaded extensions per process for one cwd and re-imports every extension module when a load
-  asks for another (`loadExtensionsCached`, measured), so a catalog or a `/` menu built on the agent directory beside
-  turns on the working directory would re-run `extensions/` twice per menu request. Built on one value, a
-  `commands()` and a turn import each extension once. `agentModels` therefore takes the pair, not the agent
-  directory alone. L1 (`createPiAgent`), which has no agent directory, uses its cwd for both, as its machine read is
-  keyed today.
-- **pi has one cwd: the working directory.** pi gives a session a single cwd and uses it for everything a session
-  does there: the services' `cwd` (pi's `<cwd>` prompt line, what an extension sees as its cwd), the session
-  manager's cwd (a new record's header, a user's `!cmd` in `chat`), and what `chat`'s runtime passes on at `/new` and
-  fork. So every one of them is the working directory; none is split off to mean something else. The coding tools
-  (`piAllCodingTools`) and `chat`'s `chdir` follow it.
-- **A record belongs to whoever stores it, never to its header.** Several agents may declare one working directory
-  (a context can be the data of several agents), so a record's `cwd` cannot say whose it is. Where it lives does:
-  - Serving already works this way: records live in the agent's own `<state root>/sessions`, located by that
-    directory, never filtered by cwd (`piSessionRecordStore`). The store's one `cwd` does two jobs today, so it
-    splits: the cwd its records' headers carry (the working directory), and the base a relative `dir` resolves
-    against (the agent directory, as now). Otherwise an embedder's relative `sessionsDir` would land in the user's
-    working folder, and declaring a `workdir` would lose the agent's earlier records.
-  - `chat` gets the same rule: `SessionManager.create(<working directory>, <session directory>)`, where the session
-    directory is the one pi gives the agent directory, where `chat`'s records are today (what
-    `SessionManager.create(agentDir).getSessionDir()` answers; pi does not export the function behind it). pi keeps a session's directory at `/new` and fork (`getSessionDir()`), and `/resume` lists that directory
-    filtered to the current cwd, so two agents sharing a working directory never see each other's records.
-  - `chat`'s guards follow the same rule, and continue a record in the current working directory the way serving
-    already does (pi's `cwdOverride`, the option `InteractiveMode` itself uses to resume a session whose cwd is gone).
-    Switching (`switchSession`) to a record in this agent's session directory is allowed with
-    `cwdOverride: <working directory>`, whatever cwd its header records; a record outside that directory is
-    refused, as another agent's. Importing (`importFromJsonl`) is allowed with the same override: its argument is the
-    source file, and pi copies it into the session directory before opening it, so the imported record is this
-    agent's by the same rule. A record made before the working directory changed therefore stays reachable: `/resume`
-    lists it under All (or under the current folder, when the agent directory is the working directory again and pi's
-    default session directory lists every record) and resumes it here.
-- **What is the agent's is handed to pi from the agent directory, never derived from pi's cwd.** pi would read its
-  project scope from the cwd, so each piece is passed explicitly:
-  - the machine read: `definitionServices` takes one `cwd` today and hands it to both `readMachine` and
-    `createAgentSessionServices`, so it gains an `agentDir` and `readMachine` takes only that. Otherwise a session
-    would read the machine a second time keyed to the working directory: the working directory's
-    `.pi/settings.json` (its `packages`, its built-in toggles, its engine settings) as project settings, the
-    `.agents/skills` above it as the machine's, and built-in extensions that disagree with the ones
-    `assemblePiFromDefinition` read for the prompt. The `cwd` that `PiAgentSessionFactoryOptions` and
-    `BindPiSessionOptions` carry ("what fastagent-defined tools see") is the working directory; the session factory
-    and `chat`'s runtime pass the agent directory beside it;
-  - the settings: `machine.settingsManager()` for serving, and in `chat` a file-backed manager on the agent
-    directory, so `/settings` writes `<agent dir>/.pi/settings.json`, never `SettingsManager.create(<cwd>)`;
-  - every resource the loader would discover in the project: prompt files, skills, prompt templates, `AGENTS.md`,
-    extensions, and themes, the definition's `.pi/themes/` in place of the working directory's (the machine's user
-    themes stay);
-  - the session directory above.
-
-  Everything else that reads the definition already takes the agent directory: `loadAgentDefinition`,
-  `extensions/`, `dev`'s watcher, the deploy build. The working directory is a context like any other, so its
-  `.pi/skills/` and `.agents/skills/` load as `<context>/<skill>`; its `.pi/settings.json`, `.pi/prompts/`,
-  `.pi/themes/` and `.pi/extensions/` take no effect.
-- **`ToolContext`.** `cwd` becomes the working directory, the directory pi's own tools and the shell run in, so an
-  authored tool and `bash` agree on where a relative path goes. It gains `agentDir`, the agent directory: what a tool
-  needs to find the agent's own files or its instance state. Every place that runs a tool sets both from the same
-  resolution: a served or `chat` turn, and `fastagent tool` (`turnContext.run` in `src/cli/commands/tool.ts`). The
-  scaffolded send tools move to `agentDir` (`slackTransport(ctx.agentDir)`, `feishuTransport(ctx.agentDir)`,
-  `larkTransport(ctx.agentDir)`): they key the transport the mounted channel registered on the agent's state root,
-  which `<working directory>/.state` is not. Without a `workdir` context both fields are the agent directory, so
-  nothing changes for an agent that declares none. `agentDir` is a required `string`, like `cwd`: at L1 it is the
-  cwd (above), and a `defineTool` run with no turn context at all falls back to `process.cwd()` for both, as `cwd`
-  does today, so a send tool never handles an absent one.
-- **Extensions.** An extension's `ctx.cwd` is pi's cwd, so it becomes the working directory too. An extension that
-  needs the agent directory derives it from its own location: it is a file of the definition, under
-  `<agent dir>/extensions/`.
-- **Prompt.** The `contexts` section names the working directory and its context, then "Your own definition is at
-  `<agent dir>`: change yourself there, by its full path". The #716 spike measured two wordings on either side of
-  that sentence: one that only gives the definition's path, and one that also explains that a relative path lands
-  in the working directory. Across 96 runs on three OpenAI models (Anthropic's were not measured), neither put a
-  self-change in the working directory or a work product in the definition. The chosen sentence sits between them.
-  Without a `workdir` context the section is as now.
-- **CLI.** `init --workdir <source>` declares one more context with `workdir: true`; `context add --workdir`
-  declares it on an existing agent, refused while another context is the working directory. `--workdir` creates a
-  directory that does not exist yet, and says so: its main use is giving an agent a folder of its own. `--context`
-  still requires one that exists, and so does every command that resolves the declaration afterwards. `info`, the
-  startup report and `context list` print it as `works in`.
-  - **When the directory is made.** `init` keeps its rule that every check runs before anything is created: the
-    contexts are resolved first, the `--workdir` one included, with its existence check skipped only when it is
-    absent and its nesting check asked of the path it will have (`realPathOf`, as for the agent directory). Only
-    then are the working directory and the scaffold created, and `undo` removes both when a later step fails, the
-    working directory only if this run made it. `context add --workdir` does the same: check, make the directory,
-    write the config through `writeContexts`, and remove the directory it made if that write is refused.
-  - **`--copy`** applies to every directory `init` declares, `--workdir` included: an agent's own folder that should
-    follow it to a host (agent model §3, the researcher example) is `init <dir> --workdir <folder> --copy`. Its usage
-    error becomes "`--copy` applies to the `--context` and `--workdir` directories; none was given".
-- **Deploy (stage 4).** Nothing of its own: the working directory reaches a host by its context type, so it is
-  built with stage 4, which first deploys an agent with contexts. On a host whose storage survives a deployment it
-  is what keeps the agent's work across releases, which replace the definition, and the `self_change` section says
-  so when one is declared. On a host whose storage a deployment resets (AgentCore) it is fetched again like every
-  context, so the section keeps its `isAgentcoreRuntime()` branch: work that must outlast a deployment belongs in an
-  external system there, whatever is declared.
-
-Tests: the one-resolution test covers `workdir`, including `ToolContext.cwd` and `agentDir` in a turn and in
-`fastagent tool`; `contexts.test.ts` refuses two and a `readonly` one; a turn's relative write lands in the working
-directory while the definition is read from the agent directory; a working directory's `.pi/settings.json`,
-`.pi/prompts/`, `.pi/themes/` and `.pi/extensions/` take no effect, and its `.pi/skills/` appear only as
-`<context>/<skill>`; one machine read per process, keyed to the agent directory, whatever the working directory; an
-extension module runs once across a turn and a `commands()`; a relative `sessionsDir` resolves against the agent
-directory; two agents declaring one working directory keep their `chat` records apart through `/new`, fork and
-`/resume`, `/import` of an outside file works, a record made in an earlier working directory resumes in the current
-one, and `/settings` writes the agent directory's file; `ToolContext.agentDir` is set at L1 and in `fastagent tool`;
-`init --workdir` whose later step fails leaves neither the scaffold nor the directory it made; a send tool finds the
-channel's transport with a `workdir` declared; `init --workdir` creates a missing directory and `--context` does
-not.
-
 ## 4. Decisions
 
 | Question | Chosen | Not chosen, and why |
@@ -327,7 +205,7 @@ not.
 | How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would lose nothing of theirs but would need ours re-added by hand |
 | How a process restarts onto a new definition | A supervisor checks the load in a child, drains, restarts | In-process reload: built and removed in #600 for twelve limits |
 | How `fastagent context` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
-| Where a working directory apart from the definition comes from | A declared context marked `workdir` | A `--cwd` flag on `dev`/`start`: the agent would behave differently depending on how it was started, and no deployment could reproduce it. A separate `workdir: "<path>"` key: it would need its own rules for reaching a host, repeating the context types |
+| Where an agent's work goes, apart from its definition | A context it works on, by the prompt; its working directory stays its own directory | A context declared `workdir` (#716, built in #719 and closed): it differs from a writable context only in where a file created without a path lands, which the prompt already directs, and it would separate pi's one cwd (project settings, session directory, extension cache, settings file) from the agent directory in every reader |
 
 ## 5. Stages
 
@@ -339,9 +217,8 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
-| 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN`; the deploy half of §3.11 | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets; a deployed agent with a `workdir` context is told how long its work there lasts |
+| 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
-| Working directory (#716) | §3.11 except its deploy half, which stage 4 builds; independent of stages 3 and 5 | An agent with a `workdir` context works there locally, in a served turn, in `chat` and in `fastagent tool`, changes itself in its definition, keeps its `chat` records apart from another agent's on the same directory, and every reader names the same working directory |
 
 ## 6. Tests worth naming
 
@@ -371,13 +248,6 @@ moves to `contexts` (the release notes say so); `CreatePiAgentFromDefinitionOpti
 directory is the working directory) and `contexts` added; `resolveContexts` and its types are exported from `/node`;
 `FASTAGENT_AGENT` and `init --agent-dir` are removed; `[dir]` becomes `[agent]`. duang calls `createPiAgentFromDir`
 and stores an agent's directory, so it needs the same change before the next release.
-
-With the working directory (§3.11): a context declaration gains `workdir`, `ResolvedContext` gains `workdir`, and
-`ToolContext` gains `agentDir` while its `cwd` becomes the working directory, which is still the agent directory
-for an agent that declares none. A tool that reads the agent's own files or instance state through `cwd` moves to
-`agentDir`, as the scaffolded send tools do. An extension's `ctx.cwd` becomes the working directory as well; one that
-reads the definition or instance state through it derives the agent directory from its own file's location. The
-release notes say both.
 
 ## 8. Open
 
