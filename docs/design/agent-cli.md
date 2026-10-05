@@ -43,7 +43,7 @@ On a machine, an agent directory has one instance. `dev`, `start` and a one-off 
 are processes serving the same instance. Its state stays where it is today:
 
 ```text
-~/agents/reviewer/                   the working directory
+~/agents/reviewer/                   the working directory, unless a context is declared as one
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
 └── .state/                          the instance's sessions, channel and schedule state, and the clones it
@@ -69,11 +69,17 @@ A hosted instance keeps its state in the host's storage; how is a deployment que
 ## 3. `init`
 
 ```bash
-fastagent init <dir> [--context <source>]...
+fastagent init <dir> [--workdir <source>] [--context <source>]... [--copy]
 ```
 
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per
-`--context`. Without `--context` the agent has none and only talks. A context it only knows is added afterwards
+`--context`. `--workdir <source>` adds one more, declared as its working directory (`workdir: true`): the agent
+works there and what it creates lands there, apart from its definition ([agent model](agent-model.md) §4). A
+`--workdir` directory that does not exist yet is created, after every check has passed and with the rest of the
+scaffold (a failure removes it again), and the output says so, since giving an agent a folder of its own is what the
+flag is mostly for; a `--context` directory must exist. `--copy` applies to every directory `init` declares,
+`--workdir` included. Without `--workdir` the working directory
+is the agent's own directory; without any context the agent only talks. A context it only knows is added afterwards
 with `fastagent context add --readonly`.
 
 | `<source>` | Declared |
@@ -104,7 +110,8 @@ Example output:
 
 ```text
 created  ~/agents/reviewer
-works on app  ~/code/app (github acme/app); a host clones it
+works in reviewer  ~/Documents/reviewer (local, created); the working directory
+works on app       ~/code/app (github acme/app); a host clones it
 ```
 
 ## 4. Editing contexts: `fastagent context`
@@ -115,15 +122,17 @@ use one command:
 
 ```bash
 fastagent context list [agent] [--json]
-fastagent context add <source> [agent] [--readonly] [--name <n>] [--copy] [--ref <r>] [--local <dir>]
+fastagent context add <source> [agent] [--readonly] [--workdir] [--name <n>] [--copy] [--ref <r>] [--local <dir>]
 fastagent context remove <name> [agent]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it a context the agent
-  knows rather than works on.
+  knows rather than works on. `--workdir` makes it the working directory, creating the directory when it does not
+  exist yet; `add` refuses it when another context already is one (remove that one first) and when it is combined
+  with `--readonly`.
 - `add` refuses a context that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
-- `list` groups them the way an author thinks: what the agent works on, what it knows.
+- `list` groups them the way an author thinks: where the agent works, what it works on, what it knows.
 - The command edits only the literal `contexts` array `init` writes. When an author has replaced it with a
   computed value, the command refuses and says why, rather than guessing.
 
@@ -133,6 +142,7 @@ Startup says what the agent works on and what it knows:
 
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
+works in  reviewer  ~/Documents/reviewer (local), the working directory
 works on  app       ~/code/app (github acme/app, existing checkout)
 knows     handbook  github acme/handbook@main, fetched into .state/contexts/handbook
 instance  ~/agents/reviewer/.state
@@ -143,9 +153,10 @@ What is said rather than handled quietly:
 | Situation | Output |
 |---|---|
 | A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/contexts/app`, with the reason |
-| A local context's path does not exist | Refused, naming the path and the declaration |
+| A local context's path does not exist | Refused, naming the path and the declaration (only `init --workdir` and `context add --workdir` create one) |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
+| Two contexts are declared `workdir`, or a `workdir` context is `readonly` | Refused, naming them |
 | A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A context was renamed | `fetching acme/app afresh as app2`, since what was fetched is kept under the old name |
 | A changed definition does not load when a process restarts itself | That process keeps running the previous one, and the log and the agent's next turn say why |
@@ -193,8 +204,8 @@ Unchanged as commands. What they store goes to the local instance (`.secrets/`),
 | `[dir]` is a workspace or an agent directory, found by a one-level scan | `[agent]` is an agent directory: the current one, or a path |
 | `FASTAGENT_AGENT` and a `fastagent`-named tie-break select among several agents | A path selects one |
 | The Dockerfile pins `ENV FASTAGENT_AGENT` | Nothing to pin |
-| `init [dir]` creates `./fastagent/` inside a project, and the project becomes its workspace | `init <dir>` creates the agent in its own directory; `--context` attaches what it works on |
+| `init [dir]` creates `./fastagent/` inside a project, and the project becomes its workspace | `init <dir>` creates the agent in its own directory; `--context` attaches what it works on, `--workdir` where it works |
 | An agent lives inside its project | A declared context never contains the agent directory, nor sits inside it |
 | Contexts do not exist | `fastagent context list/add/remove`, with `--readonly` for what the agent only knows |
-| Startup reports the workspace | Startup reports what the agent works on and what it knows |
+| Startup reports the workspace | Startup reports where the agent works, what it works on and what it knows |
 | `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, refuses a local context without `copy`, keeps what the instance works on and refreshes what it only knows |
