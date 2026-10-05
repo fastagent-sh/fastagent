@@ -27,18 +27,18 @@ export type Place = "local" | "host";
 
 /**
  * Resolve the raw `contexts` declaration of the agent in `agentDir`. Refuses, naming the context, what cannot be.
- * `toCreate` names a directory the caller is about to create (`--workdir` on a folder that does not exist yet): it is
- * checked as the path it will have, instead of refused as missing.
+ * `mayBeMissing` names the directories that need not exist: one a command is about to make (`--workdir` on a folder
+ * that does not exist yet), or every one, for a caller that needs where they are and never what is in them. Such a
+ * directory is still checked as the path it will have.
  */
 export function resolveContexts(
   agentDir: string,
   declaration: unknown,
-  options: { place?: Place; toCreate?: string } = {},
+  options: { place?: Place; mayBeMissing?: (location: string) => boolean } = {},
 ): ResolvedContext[] {
   const place = options.place ?? (isDeployedWorkspace() ? "host" : "local");
-  return declareContexts(declaration, agentDir).map((context) =>
-    resolveOne(agentDir, context, place, options.toCreate),
-  );
+  const mayBeMissing = options.mayBeMissing ?? (() => false);
+  return declareContexts(declaration, agentDir).map((context) => resolveOne(agentDir, context, place, mayBeMissing));
 }
 
 /**
@@ -56,7 +56,12 @@ export function agentDirs(agentDir: string, contexts: readonly ResolvedContext[]
   return { agentDir, cwd: contexts.find((context) => context.workdir)?.location ?? agentDir };
 }
 
-function resolveOne(agentDir: string, context: DeclaredContext, place: Place, toCreate?: string): ResolvedContext {
+function resolveOne(
+  agentDir: string,
+  context: DeclaredContext,
+  place: Place,
+  mayBeMissing: (location: string) => boolean,
+): ResolvedContext {
   if (context.kind === "github") {
     throw new Error(
       `context "${context.name}": github contexts are not supported yet — declare the checkout as { local: "<path>" }`,
@@ -67,12 +72,11 @@ function resolveOne(agentDir: string, context: DeclaredContext, place: Place, to
   }
   const { path } = context;
   const stat = statOrMissing(path);
-  const pending = !stat && path === toCreate;
-  if (!stat && !pending) throw new Error(`context "${context.name}": ${path} does not exist`);
+  if (!stat && !mayBeMissing(path)) throw new Error(`context "${context.name}": ${path} does not exist`);
   if (stat && !stat.isDirectory()) throw new Error(`context "${context.name}": ${path} is not a directory`);
   // The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
-  // paths — including for a directory a command is about to create (the agent's, or a new working directory), which a
-  // symlinked ancestor still places.
+  // paths — including for a directory that does not exist (yet), the agent's or a context's, which a symlinked
+  // ancestor still places.
   const nested = nestingError(realPathOf(agentDir), realPathOf(path), context.name);
   if (nested) throw new Error(nested);
   return {

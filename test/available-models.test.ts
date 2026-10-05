@@ -79,6 +79,15 @@ describe("availableModelsFromDir", () => {
     expect(specs).toEqual([...specs].sort());
   });
 
+  it("lists models with a context directory missing: what is in a context is not the list's concern", async () => {
+    const { dir, authPath } = await agent("{}");
+    await writeFile(
+      join(dir, "fastagent.config.ts"),
+      `export default { contexts: [{ local: "../gone" }, { local: "../work", workdir: true }] };`,
+    );
+    expect((await availableModelsFromDir(dir, { authPath })).map((model) => model.spec)).toContain("local/llama");
+  });
+
   it("a listed spec is one the opener runs with", async () => {
     for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
       vi.stubEnv(name, undefined);
@@ -150,6 +159,19 @@ describe("refreshModelCatalog: a model newer than the bundled catalog", () => {
     expect(deployed.getModel("anthropic", NEW)).toBeDefined(); // the file ships with the definition
     const ofB = (await availableModelsFromDir(b.dir, { authPath: b.authPath })).map((m) => m.spec);
     expect(ofB).not.toContain(`anthropic/${NEW}`);
+  });
+
+  it("a refresh reads no context: one whose directory is missing does not stop it", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    const { dir, authPath } = await agent("{}");
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { contexts: [{ local: "../gone" }] };`);
+    const catalog = await catalogServer();
+    try {
+      await refreshModelCatalogOver(dir, { authPath }, catalog.url);
+    } finally {
+      catalog.close();
+    }
+    expect(existsSync(join(dir, "models-store.json"))).toBe(true);
   });
 
   it("a machine refresh (-g) reaches every agent here and `fastagent models`, and no deploy", async () => {

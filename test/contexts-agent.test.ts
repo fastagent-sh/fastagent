@@ -15,7 +15,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { collect, createPiAgent, createPiAgentFromDefinition, createPiAgentFromDir, defineTool } from "../src/index.ts";
 import { agentOf, assemblePiFromDefinition, piAllCodingTools, resolveAgentTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { agentCommands } from "../src/engines/pi/open.ts";
+import { agentCommands, resolveAgentDirs } from "../src/engines/pi/open.ts";
 import { agentModels } from "../src/engines/pi/agent-models.ts";
 import { type ResolvedContext, agentDirs, resolveContexts } from "../src/contexts/resolve.ts";
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
@@ -264,6 +264,20 @@ describe("an agent with a working directory", () => {
     expect(menu.map((command) => command.name)).toContain("hello");
     await collect(agent.invoke({ session: "s" }, { text: "again" }));
     expect(imports()).toBe(1);
+  });
+
+  it("a caller that needs only where the agent works gets it without its contexts existing", async () => {
+    // A model list or a login loads the agent's extensions where it works; whether a context is there is for the
+    // commands that run the agent to refuse.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "fa-workdir-dirs-")));
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir);
+    await writeFile(
+      join(agentDir, "fastagent.config.ts"),
+      `export default {\n  contexts: [{ local: "../gone" }, { local: "../work", workdir: true }],\n};\n`,
+    );
+    expect(await resolveAgentDirs(agentDir)).toEqual({ agentDir, cwd: join(root, "work") });
+    await expect(createPiAgentFromDir(agentDir)).rejects.toThrow(/context "gone": .* does not exist/);
   });
 
   it("at L1, which has no agent directory, a tool's agentDir is its cwd", async () => {

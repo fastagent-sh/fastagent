@@ -122,21 +122,30 @@ describe("contexts: resolved for this instance", () => {
     expect(agentDirs(agentDir, contexts.slice(0, 1))).toEqual({ agentDir, cwd: agentDir });
   });
 
-  it("checks a directory a command is about to make as the path it will have, and refuses any other missing one", async () => {
+  it("checks a directory that may be missing as the path it will have, and refuses any other missing one", async () => {
     const { root, agentDir } = await layout();
     const fresh = join(root, "fresh", "work");
-    expect(resolveContexts(agentDir, [{ local: fresh, workdir: true }], { place: "local", toCreate: fresh })).toEqual([
+    const onlyFresh = { place: "local", mayBeMissing: (location: string) => location === fresh } as const;
+    expect(resolveContexts(agentDir, [{ local: fresh, workdir: true }], onlyFresh)).toEqual([
       { name: "work", kind: "local", readonly: false, workdir: true, location: fresh },
     ]);
-    expect(() => resolveContexts(agentDir, [{ local: "../missing" }], { place: "local", toCreate: fresh })).toThrow(
-      /missing does not exist/,
-    );
+    expect(() => resolveContexts(agentDir, [{ local: "../missing" }], onlyFresh)).toThrow(/missing does not exist/);
+    // A declaration is still read whole: two working directories are refused whether or not they exist.
+    const any = { place: "local", mayBeMissing: () => true } as const;
+    expect(() =>
+      resolveContexts(
+        agentDir,
+        [
+          { local: "../a", workdir: true },
+          { local: "../b", workdir: true },
+        ],
+        any,
+      ),
+    ).toThrow(/an agent has one working directory/);
     // Its nesting is still asked of its real path: through a symlinked ancestor it would be inside the agent.
     await symlink(agentDir, join(root, "inside"));
     const nested = join(root, "inside", "work");
-    expect(() => resolveContexts(agentDir, [{ local: nested }], { place: "local", toCreate: nested })).toThrow(
-      /is inside the agent directory/,
-    );
+    expect(() => resolveContexts(agentDir, [{ local: nested }], any)).toThrow(/is inside the agent directory/);
   });
 
   it("refuses what is not there to work on, a repository, and a host, naming the context", async () => {

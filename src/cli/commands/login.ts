@@ -169,6 +169,7 @@ async function stdioLogin(io: LoginIO, provider: string | undefined, opts: Login
   enterAgentEnv(agentDir);
   // The model environment the serving runtime reads (createPiAgentFromDir), so "logged in" means what the server will
   // use.
+  // Where the agent works, to load its extensions as a turn would; a missing context is `start`'s to refuse, not login's.
   const models = agentModels(await resolveAgentDirs(agentDir));
   const { auth } = models;
   if (opts.ifMissing && provider) {

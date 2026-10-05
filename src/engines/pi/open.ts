@@ -22,7 +22,7 @@ import { reportFindingsIfChanged } from "./report.ts";
 import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
 import { createPiModelRuntime, globalCatalogPath, machineModelRuntime, refreshCatalog } from "./models.ts";
-import { type AgentModels, agentModels } from "./agent-models.ts";
+import { type AgentModels, agentCredentials, agentModels } from "./agent-models.ts";
 import { OPENAI_PROVIDER, missingAccountModels } from "./openai-account-models.ts";
 import { log } from "../../log.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
@@ -33,12 +33,14 @@ import type { HttpSurface } from "../../service.ts";
 import { type AgentDirs, type ResolvedContext, agentDirs, resolveContexts } from "../../contexts/resolve.ts";
 
 /**
- * The agent directory's {@link AgentDirs}, for a caller that has not opened the agent: its declaration read and
- * resolved the way the opener does, so a missing context refuses here as it would there.
+ * The agent directory's {@link AgentDirs}, for a caller that has not opened the agent and needs only where it works
+ * (to load its extensions there): its declaration read and resolved the way the opener does, except that a context's
+ * directory need not exist. What is in a context is not this caller's concern; the commands that run the agent refuse
+ * a missing one, and `info` reports it. A declaration that cannot be read is refused here as everywhere.
  */
 export async function resolveAgentDirs(agentDir: string): Promise<AgentDirs> {
   const { config } = await loadConfig(agentDir);
-  return agentDirs(agentDir, resolveContexts(agentDir, config.contexts));
+  return agentDirs(agentDir, resolveContexts(agentDir, config.contexts, { mayBeMissing: () => true }));
 }
 
 /**
@@ -270,7 +272,8 @@ export async function refreshModelCatalogOver(
   catalogBaseUrl?: string,
 ): Promise<void> {
   const agentDir = resolveAgentDir(dir);
-  const { credentials } = agentModels(await resolveAgentDirs(agentDir), options);
+  // Credentials only: a refresh loads no extension, so it needs no working directory, and reads no context.
+  const credentials = agentCredentials(agentDir, options);
   await refreshCatalog(
     join(agentDir, AGENT_MODEL_CATALOG_FILE),
     (catalogFile) =>

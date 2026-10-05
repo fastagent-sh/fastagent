@@ -48,7 +48,7 @@ export async function runContextAdd(
   // and a refusal (a second working directory, a nested one) leaves nothing behind.
   const toCreate = opts.workdir ? (added as { local: string }).local : undefined;
   await Promise.resolve()
-    .then(() => resolveContexts(agentDir, next, toCreate ? { toCreate } : {}))
+    .then(() => resolveContexts(agentDir, next, { mayBeMissing: (location) => location === toCreate }))
     .catch(failStartup);
   const made = toCreate ? await makeWorkingDirectory(toCreate).catch(failStartup) : undefined;
   await writeContexts(agentDir, next).catch(async (error: unknown) => {

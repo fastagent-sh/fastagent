@@ -205,8 +205,11 @@ one it is the agent directory, as now.
 - **Declaration.** `declare.ts` reads `workdir` (a boolean), refuses a second one and one combined with `readonly`,
   and `ResolvedContext` gains `workdir: boolean`. `resolveContexts` stays the one answer: the working directory is
   the `location` of the context marked so, else the agent directory, computed once beside it (`agentDirs` in
-  `resolve.ts`) so no reader derives it a second way. A caller that has not opened the agent asks
-  `resolveAgentDirs(agentDir)` (the config read and resolved, as the opener does). The keys a declaration may carry
+  `resolve.ts`) so no reader derives it a second way. A caller that has not opened the agent and needs only where
+  it works (a model list, `login --stdio`, both loading its extensions) asks `resolveAgentDirs(agentDir)`: the config
+  read and resolved as the opener does, except that a context's directory need not exist. Refusing a missing context
+  is for the commands that run the agent, and `info` reports one; a catalog refresh, which needs only credentials,
+  reads no context at all (`agentCredentials`). The keys a declaration may carry
   are one list (`CONTEXT_KEYS`), read by the reader and kept by the writer, so `fastagent context add` cannot drop
   `workdir` from what it writes.
 - **One value carries both directories.** Every reader below needs the same pair, and a reader that picked its own

@@ -41,7 +41,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     .catch(failStartup);
   const workdir = opts.workdir === undefined ? undefined : resolve(opts.workdir);
   const contexts = await Promise.resolve()
-    .then(() => resolveContexts(dir, declarations, workdir ? { toCreate: workdir } : {}))
+    .then(() => resolveContexts(dir, declarations, { mayBeMissing: (location) => location === workdir }))
     .catch(failStartup);
   const made = workdir ? await makeWorkingDirectory(workdir).catch(failStartup) : undefined;
   const { created, undo } = await scaffoldAgent(dir).catch(async (error: unknown) => {

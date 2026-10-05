@@ -106,25 +106,9 @@ export function agentModels(
   source: CredentialSourceOptions & FastagentAuthOptions = {},
   options: AgentModelsOptions = {},
 ): AgentModels {
-  assertOneCredentialSource(source);
   const { providers, machineLayer } = options;
   const agentDir = dirs?.agentDir;
-  const files = source.credentialStore
-    ? undefined
-    : agentDir
-      ? resolveAuthLayers(agentDir, source.authPath)
-      : { path: source.authPath ?? GLOBAL_AUTH_PATH };
-  // The model files, read once for every runtime this agent builds: a session's and the control plane's.
-  let modelFiles: Promise<ModelFiles> | undefined;
-  const readModelFiles = (): Promise<ModelFiles> =>
-    (modelFiles ??= modelRuntimeFiles({
-      ...(agentDir ? { agentDir } : {}),
-      ...(machineLayer !== undefined ? { machineLayer } : {}),
-    }));
-  const store: FastagentCredentialStore | undefined = files
-    ? agentCredentialStore(files, readModelFiles, { providers, warn: source.warn })
-    : undefined;
-  const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
+  const { files, readModelFiles, store, credentials } = credentialsOf(agentDir, source, options);
   const createRuntime = async (): Promise<ModelRuntime> =>
     createPiModelRuntime({
       credentials,
@@ -185,6 +169,44 @@ export function agentModels(
       };
     },
   };
+}
+
+/**
+ * What the agent in `agentDir` authenticates through: the credential half of {@link agentModels}, for a caller that
+ * builds no registry (a catalog refresh) and so needs no working directory.
+ */
+export function agentCredentials(
+  agentDir: string,
+  source: CredentialSourceOptions & FastagentAuthOptions = {},
+): CredentialStore {
+  return credentialsOf(agentDir, source, {}).credentials;
+}
+
+/** The credential layers, the model files they consult, and the store over them: one reading for both callers. */
+function credentialsOf(
+  agentDir: string | undefined,
+  source: CredentialSourceOptions & FastagentAuthOptions,
+  options: Pick<AgentModelsOptions, "providers" | "machineLayer">,
+) {
+  assertOneCredentialSource(source);
+  const { providers, machineLayer } = options;
+  const files = source.credentialStore
+    ? undefined
+    : agentDir
+      ? resolveAuthLayers(agentDir, source.authPath)
+      : { path: source.authPath ?? GLOBAL_AUTH_PATH };
+  // The model files, read once for every runtime this agent builds: a session's and the control plane's.
+  let modelFiles: Promise<ModelFiles> | undefined;
+  const readModelFiles = (): Promise<ModelFiles> =>
+    (modelFiles ??= modelRuntimeFiles({
+      ...(agentDir ? { agentDir } : {}),
+      ...(machineLayer !== undefined ? { machineLayer } : {}),
+    }));
+  const store: FastagentCredentialStore | undefined = files
+    ? agentCredentialStore(files, readModelFiles, { providers, warn: source.warn })
+    : undefined;
+  const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
+  return { files, readModelFiles, store, credentials };
 }
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions, CredentialSourceOptions {
