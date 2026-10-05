@@ -43,7 +43,7 @@ On a machine, an agent directory has one instance. `dev`, `start` and a one-off 
 are processes serving the same instance. Its state stays where it is today:
 
 ```text
-~/agents/reviewer/                   the working directory
+~/agents/reviewer/                   the working directory, unless a context is declared as one
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
 └── .state/                          the instance's sessions, channel and schedule state, and the clones it
@@ -106,8 +106,8 @@ Example output:
 
 ```text
 created  ~/agents/reviewer
-works in notes  ~/Documents/reviewer (local); the working directory
-works on app    ~/code/app (github acme/app); a host clones it
+works in reviewer  ~/Documents/reviewer (local); the working directory
+works on app       ~/code/app (github acme/app); a host clones it
 ```
 
 ## 4. Editing contexts: `fastagent context`
@@ -137,7 +137,7 @@ Startup says what the agent works on and what it knows:
 
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
-works in  notes     ~/Documents/reviewer (local), the working directory
+works in  reviewer  ~/Documents/reviewer (local), the working directory
 works on  app       ~/code/app (github acme/app, existing checkout)
 knows     handbook  github acme/handbook@main, fetched into .state/contexts/handbook
 instance  ~/agents/reviewer/.state

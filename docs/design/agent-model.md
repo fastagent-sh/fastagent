@@ -286,9 +286,9 @@ directory to a synchronized one, and nothing else in the declaration does.
 - **The working directory is the context declared as one, else the agent's own directory.** The same rule on a
   laptop and on a host: the declaration decides, never where a command runs. Without a `workdir` context an agent
   changing itself writes `skills/…` like any relative path. With one, the definition is elsewhere, and the agent is
-  given its absolute path: measured on three models, 96 runs, every self-change went to the definition by its full
-  path and every work product to the working directory, whether the prompt only named the definition's path or
-  also explained relative paths.
+  given its absolute path: measured on three OpenAI models (Anthropic's were not measured), 96 runs, every
+  self-change went to the definition by its full path and every work product to the working directory, whether the
+  prompt only named the definition's path or also explained relative paths.
 - **The agent is told what it works on and what it knows.** For each context: its name, its location on this
   instance, whether it works on it or only knows it, and whether a change there reaches other instances. It is
   told where its working directory is, where its own definition is (the two are the same without a `workdir`
@@ -314,8 +314,10 @@ directory to a synchronized one, and nothing else in the declaration does.
   decided when it is written: a helper script that proves useful is how a skill begins. The author decides what
   stays, with the tool every repository uses: version control and ignore files. What is shipped or shared is what
   the author keeps (§8). An agent whose work should stay apart from its definition, visible to its user, declares
-  a `workdir` context; on a host that is also what keeps its work across releases, since each release replaces
-  the definition.
+  a `workdir` context. On a host whose storage survives a deployment that is also what keeps its work across
+  releases, since each release replaces the definition; on one that resets its storage (AgentCore) the working
+  directory is fetched again like any context, and work that must outlast a deployment belongs in an external
+  system.
 - **A tool is told where each context is.** An authored tool that works on a context reads its location from its
   context, not by guessing.
 

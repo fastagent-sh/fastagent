@@ -37,14 +37,15 @@ One engine-neutral module owns the declaration and its resolution: `src/contexts
 ```ts
 /** What an author writes in fastagent.config.ts `contexts` (validated by declare.ts). */
 type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+  | { local: string; copy?: boolean; readonly?: boolean; workdir?: boolean; name?: string }
+  | { github: string; ref?: string; local?: string; readonly?: boolean; workdir?: boolean; name?: string };
 
 /** What every consumer reads: one entry per declared context, resolved for THIS instance. */
 interface ResolvedContext {
   name: string;               // unique ignoring case, one segment of [A-Za-z0-9_-]
   kind: "local" | "copy" | "github";
   readonly: boolean;          // "knows" vs "works on"
+  workdir: boolean;           // the agent's working directory (§3.11)
   location: string;           // absolute directory on this instance
   origin: string;             // what the author declared, for display ("~/notes", "github acme/app@main")
   travels: boolean;           // a change here reaches other instances (github writable)
@@ -52,7 +53,7 @@ interface ResolvedContext {
 }
 
 interface ResolvedAgent {
-  agentDir: string;           // the working directory, everywhere
+  agentDir: string;           // the definition; also the working directory without a `workdir` context
   config: FastagentConfig;
   contexts: ResolvedContext[];
 }
@@ -205,26 +206,49 @@ one it is the agent directory, as now.
   and `ResolvedContext` gains `workdir: boolean`. `resolveContexts` stays the one answer: the working directory is
   the `location` of the context marked so, else the agent directory, computed once beside it (a `workingDirectory`
   helper in `resolve.ts`) so no reader derives it a second way.
-- **Two roots, kept apart.** The coding tools (`piAllCodingTools`), `ToolContext.cwd`, the session's `cwd` (pi's
-  `<cwd>` line and its record header) and the `chat` process's `chdir` use the working directory. Everything that
-  reads the definition keeps the agent directory: `loadAgentDefinition`, `readMachine` (pi's project scope),
-  `definitionServices`' resource loader and settings, `extensions/`, the session store's location, `dev`'s watcher
-  and the deploy build. The assembly carries both (`agentDir`, `cwd`), as it did before stage 2 removed the
-  workspace; only the source of `cwd` changes.
+- **Two roots, kept apart.** The working directory goes where a turn *works*: the coding tools
+  (`piAllCodingTools`), `ToolContext.cwd`, and the services' `cwd` (`createAgentSessionServices`), which is pi's
+  `<cwd>` prompt line and what an extension sees as its cwd. The agent directory stays wherever a directory says
+  *whose* something is, or is read as the definition:
+  - **the session record and its identity.** The record header's `cwd`, the session store
+    (`piSessionRecordStore({ cwd })`), `chat`'s `SessionManager.create`, its `chdir`, the cwd pi hands
+    `chat`'s runtime factory, and the check that refuses another agent's record. Several agents may declare one
+    working directory (a context can be the data of several agents), so keying records to it would let them share
+    pi's per-directory session list and `/resume` each other's conversations. `chat`'s factory therefore maps the
+    agent directory it receives to the working directory for the services, never the other way.
+  - **the definition and pi's project scope.** `loadAgentDefinition`, `readMachine`, the settings
+    (`machine.settingsManager()`, never `SettingsManager.create(<working directory>)`), `extensions/`, `dev`'s watcher
+    and the deploy build. The resource loader pi builds from the services' `cwd` would read the working directory's
+    `.pi/`; every resource it would read there is already overridden by the definition's (prompt files, skills,
+    prompt templates, `AGENTS.md`, extensions), and a test proves a `.pi/` in the working directory changes nothing.
+
+  The assembly carries both, as it did before stage 2 removed the workspace: `agentDir` and the working directory.
+- **`ToolContext`.** `cwd` becomes the working directory, the directory pi's own tools and the shell run in, so an
+  authored tool and `bash` agree on where a relative path goes. It gains `agentDir`, the agent directory: what a tool
+  needs to find the agent's own files or its instance state. The scaffolded send tools move to it
+  (`slackTransport(ctx.agentDir)`, `feishuTransport(ctx.agentDir)`, `larkTransport(ctx.agentDir)`): they key the
+  transport the mounted channel registered on the agent's state root, which `<working directory>/.state` is not.
+  Without a `workdir` context both fields are the agent directory, so nothing changes for an agent that declares
+  none.
 - **Prompt.** The `contexts` section names the working directory and its context, then "Your own definition is at
-  `<agent dir>`: change yourself there, by its full path". The #716 spike measured that sentence as enough: 96
-  runs, no self-change in the working directory and no work product in the definition. Without a `workdir`
-  context the section is as now.
+  `<agent dir>`: change yourself there, by its full path". The #716 spike measured two wordings on either side of
+  that sentence: one that only gives the definition's path, and one that also explains that a relative path lands
+  in the working directory. Across 96 runs on three OpenAI models (Anthropic's were not measured), neither put a
+  self-change in the working directory or a work product in the definition. The chosen sentence sits between them.
+  Without a `workdir` context the section is as now.
 - **CLI.** `init --workdir <source>` declares one more context with `workdir: true`; `context add --workdir`
   declares it on an existing agent, refused while another context is the working directory. `info`, the startup
   report and `context list` print it as `works in`.
-- **Deploy.** Nothing of its own: the working directory reaches a host by its context type (stage 4). On a host it
-  is what keeps the agent's work across releases, which replace the definition; the `self_change` section says so
-  when one is declared.
+- **Deploy.** Nothing of its own: the working directory reaches a host by its context type (stage 4). On a host
+  whose storage survives a deployment it is what keeps the agent's work across releases, which replace the
+  definition, and the `self_change` section says so when one is declared. On a host whose storage a deployment
+  resets (AgentCore) it is fetched again like every context, so the section keeps its `isAgentcoreRuntime()` branch:
+  work that must outlast a deployment belongs in an external system there, whatever is declared.
 
 Tests: the one-resolution test covers `workdir`; `contexts.test.ts` refuses two and a `readonly` one; a turn's
 relative write lands in the working directory while the definition is read from the agent directory; a `.pi/` in
-the working directory changes nothing.
+the working directory changes nothing; two agents declaring one working directory keep their `chat` records apart;
+a send tool finds the channel's transport with a `workdir` declared.
 
 ## 4. Decisions
 
@@ -279,6 +303,11 @@ moves to `contexts` (the release notes say so); `CreatePiAgentFromDefinitionOpti
 directory is the working directory) and `contexts` added; `resolveContexts` and its types are exported from `/node`;
 `FASTAGENT_AGENT` and `init --agent-dir` are removed; `[dir]` becomes `[agent]`. duang calls `createPiAgentFromDir`
 and stores an agent's directory, so it needs the same change before the next release.
+
+With the working directory (§3.11): a context declaration gains `workdir`, `ResolvedContext` gains `workdir`, and
+`ToolContext` gains `agentDir` while its `cwd` becomes the working directory, which is still the agent directory
+for an agent that declares none. A tool that reads the agent's own files or instance state through `cwd` moves to
+`agentDir` (the release notes say so), as the scaffolded send tools do.
 
 ## 8. Open
 
