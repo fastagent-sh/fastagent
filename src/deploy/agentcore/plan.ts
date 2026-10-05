@@ -733,7 +733,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     ``,
     `# Redeploy = \`fastagent deploy agentcore\` (a new definition needs a fresh release manifest) + step 1b`,
     `# (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
-    `# STATE: ${MOUNT} is managed SessionStorage. It keeps base/ (including unfinished work), .state/`,
+    `# STATE: ${MOUNT} is managed SessionStorage. It keeps definition/ (with what the agent wrote there), .state/`,
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,
     `# RESETS it on every runtime version update (i.e. every deploy) and after 14 idle days, so a deploy`,
     `# replaces the state along with the image: sessions, channel state and pending wake-ups start blank.`,

@@ -101,6 +101,28 @@ describe("an agent with contexts", () => {
     });
   });
 
+  it("with only contexts it knows, it is told to write in its own directory, not in a context it works on", async () => {
+    const { agentDir, handbook } = await layout();
+    const { faux } = makeFaux();
+    let prompt = "";
+    faux.setResponses([
+      (context) => {
+        prompt = sentPrompt(context);
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const contexts = resolveContexts(agentDir, [{ local: handbook, readonly: true }], "local");
+    const { agent } = await createPiAgentFromDefinition(agentDir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      contexts,
+    });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(prompt).toContain("You write only in your own directory: the contexts above are for reading.");
+    expect(prompt).not.toContain("You work on:");
+    expect(prompt).not.toContain("belongs in a context you work on");
+  });
+
   it("with none, it is told it works only in its own directory", async () => {
     const { agentDir } = await layout();
     const { faux } = makeFaux();

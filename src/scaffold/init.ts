@@ -15,6 +15,8 @@ export interface ScaffoldResult {
   dir: string;
   /** Files written by this run (relative to `dir`). */
   created: string[];
+  /** Remove what this run created, for a caller whose next step failed: the same rollback a failed write runs. */
+  undo(): Promise<void>;
 }
 
 /** Entries a directory may hold and still count as empty. */
@@ -79,7 +81,15 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
   const dirExisted = st !== undefined;
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
-  // ONE rollback scope: any failure removes what THIS run created — files AND the directories it made for them.
+  // ONE rollback: it removes what THIS run created — files AND the directories it made for them — and leaves a
+  // directory the caller handed over empty. Best-effort, because it runs while another failure is being reported.
+  const undo = async (): Promise<void> => {
+    for (const rel of [...created].reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
+    for (const rel of [...parents].sort((a, b) => b.split(sep).length - a.split(sep).length)) {
+      await rmdir(join(dir, rel)).catch(() => {});
+    }
+    if (!dirExisted) await rmdir(dir).catch(() => {});
+  };
   // `wx` so a collision is a failure: the target was checked empty above, so anything here appeared mid-run.
   try {
     for (const file of files) {
@@ -89,13 +99,8 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
       created.push(file.rel);
     }
   } catch (error) {
-    // Best-effort rollback of a partial scaffold.
-    for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
-    for (const rel of [...parents].sort((a, b) => b.split(sep).length - a.split(sep).length)) {
-      await rmdir(join(dir, rel)).catch(() => {});
-    }
-    if (!dirExisted) await rmdir(dir).catch(() => {});
+    await undo();
     throw error;
   }
-  return { dir, created };
+  return { dir, created, undo };
 }

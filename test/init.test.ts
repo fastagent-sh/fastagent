@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromDir } from "../src/index.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
@@ -153,6 +153,16 @@ describe("init: scaffoldAgent", () => {
     expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
   });
 
+  it("undo removes what the scaffold created, and leaves a directory it was handed", async () => {
+    // What `init` runs when declaring the contexts fails after the scaffold: a retry must not find an agent there.
+    const created = join(await freshDir(), "new");
+    await (await scaffoldAgent(created)).undo();
+    expect(await exists(created)).toBe(false);
+    const handed = await freshDir();
+    await (await scaffoldAgent(handed)).undo();
+    expect(await readdir(handed)).toEqual([]);
+  });
+
   it("rolls back a mid-write failure to a clean slate, keeping a directory this run did not create", async () => {
     // Fault injection: a read-only agent dir makes the writes inside it fail after the root exists.
     // Leaving OUR debris would make the next init report the user's directory as occupied; deleting a
@@ -199,6 +209,14 @@ describe("init: scaffoldAgent", () => {
     const nested = await cliInit(["init", join(app, "agent"), "--context", app, "--no-install"], base);
     expect(nested).toMatch(/context "app" .* contains the agent directory .* move it out/);
     expect(await exists(join(app, "agent"))).toBe(false);
+    // A symlinked ancestor does not hide the nesting: refused before the scaffold, not after it.
+    await symlink(base, join(base, "..", `${basename(base)}-link`));
+    const viaLink = await cliInit(
+      ["init", join(`${base}-link`, "app", "agent2"), "--context", app, "--no-install"],
+      base,
+    );
+    expect(viaLink).toMatch(/contains the agent directory/);
+    expect(await exists(join(app, "agent2"))).toBe(false);
     // Run in a project, init says how to have an agent work on it.
     await writeFile(join(app, "README.md"), "the project\n");
     expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --context \./);

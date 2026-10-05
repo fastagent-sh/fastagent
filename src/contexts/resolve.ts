@@ -4,6 +4,7 @@
  * disk; never the network, never a write.
  */
 import { realpathSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { isDeployedWorkspace } from "../paths.ts";
 import { type DeclaredContext, declareContexts, nestingError } from "./declare.ts";
 
@@ -45,18 +46,25 @@ function resolveOne(agentDir: string, context: DeclaredContext, place: Place): R
   if (!stat) throw new Error(`context "${context.name}": ${path} does not exist`);
   if (!stat.isDirectory()) throw new Error(`context "${context.name}": ${path} is not a directory`);
   // The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
-  // paths. An agent directory `init` is about to create has no real path yet, and needs none: nothing links into it.
-  const nested = nestingError(realOrAsIs(agentDir), realpathSync(path), context.name);
+  // paths — including for an agent directory `init` is about to create, which a symlinked ancestor still places.
+  const nested = nestingError(realPathOf(agentDir), realpathSync(path), context.name);
   if (nested) throw new Error(nested);
   return { name: context.name, kind: context.kind, readonly: context.readonly, location: path };
 }
 
-function realOrAsIs(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return path;
-    throw error;
+/**
+ * Where `path` really is, whether or not it exists yet: its nearest existing ancestor resolved, and the segments below
+ * it appended as written. A directory that does not exist yet links nowhere itself, but an ancestor can.
+ */
+function realPathOf(path: string): string {
+  const below: string[] = [];
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      return join(realpathSync(current), ...below.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(current) === current) throw error;
+      below.push(basename(current));
+    }
   }
 }
 

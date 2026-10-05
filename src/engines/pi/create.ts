@@ -279,8 +279,10 @@ function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: r
     own,
     ...(worksOn.length > 0 ? ["You work on:", ...worksOn.map(line)] : []),
     ...(knows.length > 0 ? ["You know, and do not write:", ...knows.map(line)] : []),
-    `Run a command in a context with \`cd <its location> && …\`; file tools take the location directly. A result ` +
-      `worth keeping belongs in a context you work on, not in your own directory.`,
+    `Run a command in a context with \`cd <its location> && …\`; file tools take the location directly.` +
+      (worksOn.length > 0
+        ? " A result worth keeping belongs in a context you work on, not in your own directory."
+        : " You write only in your own directory: the contexts above are for reading."),
   ].join("\n");
 }
 

@@ -119,6 +119,17 @@ describe("contexts: resolved for this instance", () => {
     expect(() => declareContexts([{ local: link }], agentDir)).not.toThrow();
     expect(() => resolveContexts(agentDir, [{ local: link }], "local")).toThrow(/contains the agent directory/);
   });
+
+  it("asks it of an agent directory that does not exist yet, through a symlinked ancestor", async () => {
+    // What `init <link>/agent --context <real>` checks before it creates anything: the agent will really be inside
+    // the context, though neither path says so as written.
+    const { root } = await layout();
+    await mkdir(join(root, "real"));
+    await symlink(join(root, "real"), join(root, "link"));
+    expect(() =>
+      resolveContexts(join(root, "link", "agent", "deeper"), [{ local: join(root, "real") }], "local"),
+    ).toThrow(/context "real" .* contains the agent directory/);
+  });
 });
 
 describe("contexts: the literal list in fastagent.config.ts", () => {

@@ -28,9 +28,16 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const contexts = await Promise.resolve()
     .then(() => resolveContexts(dir, declarations))
     .catch(failStartup);
-  const { created } = await scaffoldAgent(dir).catch(failStartup);
-  // The same write `fastagent context add` makes: the literal list, imported and compared before it is kept.
-  if (declarations.length > 0) await writeContexts(dir, declarations).catch(failStartup);
+  const { created, undo } = await scaffoldAgent(dir).catch(failStartup);
+  // The same write `fastagent context add` makes: the literal list, imported and compared before it is kept. The
+  // contexts were checked above, so a refusal here is one that check could not foresee (the disk changed in between);
+  // the scaffold goes with it, or a retry would find "already an agent" holding no contexts.
+  if (declarations.length > 0) {
+    await writeContexts(dir, declarations).catch(async (error: unknown) => {
+      await undo();
+      failStartup(error);
+    });
+  }
   console.error(`[fastagent] created ${dir}`);
   if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);
   console.error(`  files: ${created.join(", ")}`);
