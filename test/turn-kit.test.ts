@@ -5,9 +5,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import { attachedFilesManifest } from "../src/channels/kit/invoke-turn-kit.ts";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { toSessionEvent } from "../src/engines/pi/invoke-session.ts";
 import {
   agentEventProjection,
+  answerThinking,
   classifyRetryable,
+  streamsThinkingDelta,
   errorToTerminal,
   toPiPromptOptions,
   toTerminal,
@@ -76,6 +81,41 @@ describe("terminals read the engine's own signal", () => {
       retryable: true,
     });
     expect(errorToTerminal(new Error("plain failure"))).toMatchObject({ retryable: false });
+  });
+});
+
+describe("thinking: what is published, live and read back", () => {
+  const message = (content: unknown[]) => ({ role: "assistant", content }) as unknown as AssistantMessage;
+  const readable = { type: "thinking", thinking: "because" };
+  // As pi's Bedrock path streams encrypted reasoning: the block is flagged before its placeholder delta is pushed.
+  const redacted = { type: "thinking", thinking: "[Reasoning redacted]", redacted: true };
+
+  it("streams a delta only into a readable block, and reads back only readable blocks, joined as streamed", () => {
+    const partial = message([readable, redacted]);
+    expect(streamsThinkingDelta({ contentIndex: 0, partial })).toBe(true);
+    expect(streamsThinkingDelta({ contentIndex: 1, partial })).toBe(false);
+    expect(answerThinking(message([readable, { type: "text", text: "so" }, readable, redacted]))).toBe(
+      "becausebecause",
+    );
+    expect(answerThinking(message([redacted, { type: "text", text: "so" }]))).toBeUndefined();
+  });
+
+  it("the observation plane drops a redacted block's placeholder delta and streams a readable one", () => {
+    const partial = message([readable, redacted]);
+    const delta = (contentIndex: number, text: string) =>
+      toSessionEvent(
+        {
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: { type: "thinking_delta", contentIndex, delta: text, partial },
+        } as unknown as AgentSessionEvent,
+        "run",
+      );
+    expect(delta(0, "because")).toMatchObject({
+      type: "message_delta",
+      data: { channel: "thinking", delta: "because" },
+    });
+    expect(delta(1, "[Reasoning redacted]")).toBeNull();
   });
 });
 

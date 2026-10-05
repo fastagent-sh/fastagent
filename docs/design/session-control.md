@@ -447,9 +447,14 @@ where the engine preserves them — `parentId` exists because branches objective
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
-`{ text, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
+`{ text, thinking?, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
 `tool` `{ toolCallId, toolName, isError, text, images?, terminate? }`. Engine-specific kinds may appear beyond the
 guaranteed minimum and MUST be skippable.
+
+`thinking` is the answer's recorded reasoning: exactly the text its live `message_delta { channel: "thinking" }`
+deltas add up to, absent when it has none, so a run reopened after the fact shows the reasoning a watcher saw.
+Redacted reasoning (a provider's opaque payload with no readable text) is in neither. How long the thinking took is
+not recorded.
 
 `outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
 did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a
