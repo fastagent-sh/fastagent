@@ -196,6 +196,36 @@ Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every direct
 for a host's copy).
 Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `github:owner/repo` a remote context.
 
+### 3.11 Working directory (#716)
+
+A context declared `workdir: true` is the agent's working directory ([agent model](agent-model.md) §4); without
+one it is the agent directory, as now.
+
+- **Declaration.** `declare.ts` reads `workdir` (a boolean), refuses a second one and one combined with `readonly`,
+  and `ResolvedContext` gains `workdir: boolean`. `resolveContexts` stays the one answer: the working directory is
+  the `location` of the context marked so, else the agent directory, computed once beside it (a `workingDirectory`
+  helper in `resolve.ts`) so no reader derives it a second way.
+- **Two roots, kept apart.** The coding tools (`piAllCodingTools`), `ToolContext.cwd`, the session's `cwd` (pi's
+  `<cwd>` line and its record header) and the `chat` process's `chdir` use the working directory. Everything that
+  reads the definition keeps the agent directory: `loadAgentDefinition`, `readMachine` (pi's project scope),
+  `definitionServices`' resource loader and settings, `extensions/`, the session store's location, `dev`'s watcher
+  and the deploy build. The assembly carries both (`agentDir`, `cwd`), as it did before stage 2 removed the
+  workspace; only the source of `cwd` changes.
+- **Prompt.** The `contexts` section names the working directory and its context, then "Your own definition is at
+  `<agent dir>`: change yourself there, by its full path". The #716 spike measured that sentence as enough: 96
+  runs, no self-change in the working directory and no work product in the definition. Without a `workdir`
+  context the section is as now.
+- **CLI.** `init --workdir <source>` declares one more context with `workdir: true`; `context add --workdir`
+  declares it on an existing agent, refused while another context is the working directory. `info`, the startup
+  report and `context list` print it as `works in`.
+- **Deploy.** Nothing of its own: the working directory reaches a host by its context type (stage 4). On a host it
+  is what keeps the agent's work across releases, which replace the definition; the `self_change` section says so
+  when one is declared.
+
+Tests: the one-resolution test covers `workdir`; `contexts.test.ts` refuses two and a `readonly` one; a turn's
+relative write lands in the working directory while the definition is read from the agent directory; a `.pi/` in
+the working directory changes nothing.
+
 ## 4. Decisions
 
 | Question | Chosen | Not chosen, and why |
@@ -205,6 +235,7 @@ Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `g
 | How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would lose nothing of theirs but would need ours re-added by hand |
 | How a process restarts onto a new definition | A supervisor checks the load in a child, drains, restarts | In-process reload: built and removed in #600 for twelve limits |
 | How `fastagent context` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
+| Where a working directory apart from the definition comes from | A declared context marked `workdir` | A `--cwd` flag on `dev`/`start`: the agent would behave differently depending on how it was started, and no deployment could reproduce it. A separate `workdir: "<path>"` key: it would need its own rules for reaching a host, repeating the context types |
 
 ## 5. Stages
 
@@ -218,6 +249,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
+| Working directory (#716) | §3.11; independent of stages 3–5, so it lands whenever it is ready | An agent with a `workdir` context works there, changes itself in its definition, and every reader names the same working directory |
 
 ## 6. Tests worth naming
 
