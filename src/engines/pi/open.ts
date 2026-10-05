@@ -6,7 +6,13 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
-import { AGENT_MODEL_CATALOG_FILE, resolveAgentDir, resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
+import {
+  AGENT_MODEL_CATALOG_FILE,
+  resolveAgentDir,
+  resolveOverridePath,
+  resolveSessionsDir,
+  resolveStateRoot,
+} from "../../paths.ts";
 import type { AgentCommand, ModelDescriptor, SessionControl } from "../../session.ts";
 import { describeModels } from "./session-settings.ts";
 import { type IndirectTool, type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
@@ -91,7 +97,8 @@ export interface CreatePiAgentFromDirOptions {
   /**
    * Where conversations are stored, for an EMBEDDER that puts them somewhere the state root does not cover. There is
    * no env or flag spelling of it: sessions are machine state, and the one knob that moves machine state is
-   * `FASTAGENT_STATE_DIR` (see {@link resolveSessionsDir}).
+   * `FASTAGENT_STATE_DIR` (see {@link resolveSessionsDir}). Read like every path override, `authPath` included
+   * ({@link resolveOverridePath}): a leading `~` is the home directory, and a relative path is the process's.
    */
   sessionsDir?: string;
   /** Credentials file override. */
@@ -352,9 +359,10 @@ export async function createPiAgentFromDir(
   // Every serve mounts the built-in `wake` tool: the agent's own follow-up work is a default capability, and a serve
   // is where the poller that honors it runs. A one-shot `invoke` has no poller, so nothing there would fire it.
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving);
-  // An explicit value is used as given (the store resolves a relative one against the agent directory); without one, the
-  // resolution every reader shares (config.ts), so a serve and an `info` never report on different directories.
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(agentDir);
+  // An explicit value is made absolute HERE, once, by the rule every path override follows, so the directory made, the
+  // store's root and the one reported are the same. Without one, the resolution every reader shares (config.ts), so a
+  // serve and an `info` never report on different directories.
+  const sessionsDir = resolveOverridePath(options.sessionsDir) ?? resolveSessionsDir(agentDir);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: agentDir });
   // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.

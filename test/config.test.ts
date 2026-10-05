@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -384,6 +384,21 @@ describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engin
     expect(overridden.sessionsDir).toBe(ext);
     const defaulted = await createPiAgentFromDir(agent);
     expect(defaulted.sessionsDir).toBe(join(agent, ".state", "sessions"));
+    // A relative one is read like `authPath`, against the process's directory: made, used and reported there, as an
+    // absolute path, and never a second time against the agent directory.
+    const caller = await realpath(await mkdtemp(join(tmpdir(), "fa-sessions-caller-")));
+    const original = process.cwd();
+    process.chdir(caller);
+    try {
+      const relative = await createPiAgentFromDir(agent, { sessionsDir: "records" });
+      expect(relative.sessionsDir).toBe(join(caller, "records"));
+      expect(existsSync(join(caller, "records"))).toBe(true);
+      expect(existsSync(join(agent, "records"))).toBe(false);
+      const created = await relative.sessions.openOrCreate("s");
+      expect(created.getSessionDir().startsWith(join(caller, "records"))).toBe(true);
+    } finally {
+      process.chdir(original);
+    }
   });
 
   it("authPath defaults to the project-level <agentDir>/.secrets/auth.json; the override wins", async () => {
