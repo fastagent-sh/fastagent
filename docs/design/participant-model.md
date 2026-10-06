@@ -196,9 +196,9 @@ content. The user already tells us which asks are independent: by opening a thre
 *Non-goal, deliberately deferred:* folding a thread's conclusion back into the room. Two different
 things are lost when a side conversation ends — the room's session does not hold what was decided
 (cheap to fix, invisible to everyone) and the people in the room do not know it (needs a message, so
-it needs consent). If the gap is felt, the memory half is the one to build first, and the shape is the
-context buffer's: record the thread's latest exchange per thread, fold it into the room's next turn,
-commit on `completed`.
+it needs consent). The memory half is now proposed in [place-history.md](place-history.md), and it is
+not a fold: the room reads a thread from the platform when a question needs it, and nothing is copied
+into the room.
 
 ## 8. Thread context: the inheritance ladder
 
