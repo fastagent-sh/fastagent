@@ -83,7 +83,7 @@ export function wakeAlarmPrefix(name: string): string {
  * Where the forwarder puts the recurring schedule for each `schedules/` file. Set at runtime by the container (the
  * set follows edits), so like the wake alarms it is no stack resource, and this prefix is the handle on them.
  */
-export function scheduleRulePrefix(name: string): string {
+export function recurringSchedulePrefix(name: string): string {
   return `fa-${name}-sc-`;
 }
 
@@ -345,7 +345,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
     `              - Effect: Allow # schedules: one recurring schedule per schedules/ file, and delete what is gone`,
     `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule, scheduler:GetSchedule, scheduler:DeleteSchedule]`,
-    `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${scheduleRulePrefix(input.name)}*`,
+    `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${recurringSchedulePrefix(input.name)}*`,
     `              - Effect: Allow # find the recurring schedules to delete (ListSchedules takes no resource)`,
     `                Action: scheduler:ListSchedules`,
     `                Resource: "*"`,
@@ -376,7 +376,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `          WAKE_SECRET: !Ref FastagentWakeSecret`,
     `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
     `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
-    `          SCHEDULE_PREFIX: ${scheduleRulePrefix(input.name)}`,
+    `          SCHEDULE_PREFIX: ${recurringSchedulePrefix(input.name)}`,
     `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
     `          MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES}"`,
     `      # A content-hashed key makes code changes visible to CloudFormation.`,
@@ -550,7 +550,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   runbook.push(
     ``,
     `# Schedules and wake-ups are EventBridge-backed: the container mirrors (via the forwarder, authenticated by`,
-    `#   FastagentWakeSecret) each schedule into a recurring EventBridge schedule (${scheduleRulePrefix(name)}*) and each pending`,
+    `#   FastagentWakeSecret) each schedule into a recurring EventBridge schedule (${recurringSchedulePrefix(name)}*) and each pending`,
     `#   wake-up into a self-deleting one-shot (${wakeAlarmPrefix(name)}*), which wake it even when the compute is reclaimed.`,
     `#   So a schedule written or edited on the runtime takes effect without a deploy. The container sets them only`,
     `#   once an envelope has reached it THROUGH THE FORWARDER, which tells it where the forwarder is; an`,

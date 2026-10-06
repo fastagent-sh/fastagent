@@ -147,12 +147,15 @@ async function syncSchedules(sch, schedules, ctx) {
         continue;
       }
       const now = await sch.send(new GetScheduleCommand({ Name: p.Name }));
+      // Every field this Lambda sets. RoleArn too: the role's name is CloudFormation's, so a stack recreated over a
+      // schedule left behind gives it a new one, and a schedule still naming the old role never fires again.
       const same =
         now.ScheduleExpression === p.ScheduleExpression &&
         now.ScheduleExpressionTimezone === p.ScheduleExpressionTimezone &&
         now.State === p.State &&
         now.Target?.Input === p.Target.Input &&
-        now.Target?.Arn === p.Target.Arn;
+        now.Target?.Arn === p.Target.Arn &&
+        now.Target?.RoleArn === p.Target.RoleArn;
       if (!same) await sch.send(new UpdateScheduleCommand(p));
     } catch (e) {
       failed += 1;

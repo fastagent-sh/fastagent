@@ -881,8 +881,9 @@ desired set to the forwarder's reserved path (shared secret). The forwarder make
 The recurring schedule is why a fault costs an edit, never the schedule: nothing has to happen after a fire for the
 next one, so a sync that fails (retried with backoff, then every 5 minutes while the container lives, then at its
 next start) delays a change and leaves what EventBridge holds firing. One rule follows from EventBridge being this
-host's clock: discovery refuses, on every host, a cron it cannot express (both day fields restricted, `L`/`#`, a
-week-wrapping day range, nicknames), so what runs locally runs here. Because the container sets the schedules, one
+host's clock: discovery refuses, on every host, a cron it cannot express (both day fields restricted, `L`/`#`,
+nicknames), so what runs locally runs here. One difference remains, at a DST change: a local time the spring
+change removes is skipped by EventBridge and run an hour later by croner. Because the container sets the schedules, one
 written on the runtime takes effect without a deploy; the cost is that they are set only once an envelope has
 reached the container through the forwarder (`--run` probes it; the manual runbook prints the probe). They are no
 stack resources, so `destroy` deletes both prefixes itself. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the

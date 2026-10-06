@@ -556,9 +556,10 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   judged on the expression alone, so `0,5 9 * * *` is refused at any hour. At most 20 schedules are armed, the first
   20 by name, counting an old definition kept for a file that broke.
 - **A cron AgentCore can run, on every host.** AgentCore's clock is EventBridge, which cannot express a few cron
-  forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms, a
-  day-of-week range that wraps past Saturday (`5-1`), and nicknames such as `@daily`. Such a file is refused
-  everywhere, so a schedule that runs locally also runs there. A file refused for any reason is logged and not
+  forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms,
+  and nicknames such as `@daily`. Such a file is refused everywhere, so a schedule that runs locally also runs
+  there. One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of
+  the US) is skipped on AgentCore and run an hour later elsewhere. A file refused for any reason is logged and not
   armed; it never stops a serve, and `deploy --run` refuses to ship one.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.

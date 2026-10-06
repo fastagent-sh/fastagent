@@ -26,11 +26,14 @@ describe("schedule/eventbridge-cron", () => {
     expect(expression("0 9 * * 7")).toBe("cron(0 9 ? * 1 *)");
     expect(expression("0 9 * * 1-5")).toBe("cron(0 9 ? * 2-6 *)");
     expect(expression("0 9 * * MON")).toBe("cron(0 9 ? * MON *)"); // names pass through unmapped
-    // Steps are COUNTS, not weekdays: preserved verbatim while values/endpoints remap.
-    expect(expression("0 9 * * */2")).toBe("cron(0 9 ? * */2 *)");
-    expect(expression("0 9 * * 1-5/2")).toBe("cron(0 9 ? * 2-6/2 *)");
-    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)"); // lists remap per element
-    expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * MON,4 *)");
+    // Numbers are expanded to the days they select, then written back: Sunday ends one numbering and starts the
+    // other, so remapping range endpoints is wrong (`0-7` would become `1-1`, Sundays only).
+    expect(expression("0 9 * * */2")).toBe("cron(0 9 ? * 1,3,5,7 *)");
+    expect(expression("0 9 * * 1-5/2")).toBe("cron(0 9 ? * 2,4,6 *)");
+    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)");
+    expect(expression("0 9 * * 0-7")).toBe("cron(0 9 ? * 1-7 *)");
+    expect(expression("0 9 * * 5-7")).toBe("cron(0 9 ? * 1,6-7 *)"); // Fri–Sun: no wrap once expanded
+    expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * 4,MON *)");
     // A `?` field is UNRESTRICTED — croner reads it as daily, so the deployed rule must say daily.
     // Carrying MON/1 across would deploy a schedule the workspace never runs.
     expect(expression("0 9 ? * MON")).toBe("cron(0 9 * * ? *)");
@@ -43,7 +46,7 @@ describe("schedule/eventbridge-cron", () => {
     expect(error("0 9 1 * 1")).toMatch(/BOTH day-of-month and day-of-week/);
     expect(error("0 0 9 * * 1")).toMatch(/5-field/);
     expect(error("0 9 * * 5L")).toMatch(/L\/#/);
-    expect(error("0 9 * * 5-7")).toMatch(/wraps across the week/); // Fri–Sun → 6-1: not a valid range
+    expect(error("0 9 * * MON-7")).toMatch(/mixes a name and a number/);
     expect(error("0 9 * * 1-")).toMatch(/malformed/);
     expect(error("0 9 * * 1/")).toMatch(/malformed/);
   });
@@ -78,7 +81,8 @@ describe("schedule/eventbridge-cron vs the Croner dialect the workspace actually
       string,
     ];
     // `?` = unrestricted; croner reads `*` for that, without the OR quirk (only one can be `?`).
-    const dow = dowRaw === "?" ? "*" : dowRaw;
+    // Back to croner's numbering (1 = Sunday → 0) to ask croner which days EventBridge's field selects.
+    const dow = dowRaw === "?" ? "*" : dowRaw.replace(/\d+/g, (n) => String(Number(n) - 1));
     return firingDays(`${min} ${hour} ${dom === "?" ? "*" : dom} ${mon} ${dow}`, count);
   };
 
@@ -90,6 +94,15 @@ describe("schedule/eventbridge-cron vs the Croner dialect the workspace actually
     "0 9 1 * ?", // …and here too, whatever the 1st suggests
     "0 9 * * ?",
     "0 9 ? * *",
+    // Day-of-week numbers, where the two numberings differ.
+    "0 9 * * 1-5",
+    "0 9 * * 0-7", // every day — remapping its endpoints gave Sundays only
+    "0 9 * * 0-7/2",
+    "0 9 * * 1-7/2",
+    "0 9 * * 5-7",
+    "0 9 * * 6-7",
+    "0 9 * * */3",
+    "0 9 * * 0,7",
   ])("%s fires on the same days locally and on EventBridge", (cron) => {
     expect(cronError(cron, undefined)).toBeUndefined();
     const out = toEventBridgeCron(cron);

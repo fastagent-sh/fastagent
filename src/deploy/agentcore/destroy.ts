@@ -29,7 +29,7 @@ import {
   deploymentBucketName,
   forwarderLogGroup,
   runtimeLogGroupPrefix,
-  scheduleRulePrefix,
+  recurringSchedulePrefix,
   toRuntimeName,
   wakeAlarmPrefix,
 } from "./plan.ts";
@@ -139,7 +139,7 @@ export async function destroyAgentcoreDeployment(
   // here: a schedule nobody deleted keeps firing at a Lambda that is about to stop existing.
   const minted = [
     { what: "wake alarm", prefix: wakeAlarmPrefix(plan.name) },
-    { what: "schedule", prefix: scheduleRulePrefix(plan.name) },
+    { what: "schedule", prefix: recurringSchedulePrefix(plan.name) },
   ];
   // THE FULL SHAPE, not just the prefix. The forwarder mints every name as prefix + sha256(id)[:16]
   // (plan.ts / forwarder.js), and a prefix alone is ambiguous between sibling agents: an agent directory literally

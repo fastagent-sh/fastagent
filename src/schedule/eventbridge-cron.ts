@@ -5,47 +5,58 @@
  * that does not, on every host, so that what runs locally also runs there.
  */
 
-/** Remap ONE day-of-week field from standard cron numbering (0–7, 0/7 = Sunday) to EventBridge's (1–7, 1 = Sunday). */
+/**
+ * Remap ONE day-of-week field from standard cron numbering (0–7, 0 and 7 = Sunday) to EventBridge's (1–7,
+ * 1 = Sunday). Numeric items are EXPANDED to the days they select and written back as a list: endpoint-wise remapping
+ * cannot be right, since Sunday sits at both ends of one numbering and at the start of the other (`0-7` is every day,
+ * and remapping its endpoints gives `1-1`, Sundays only; `5-7` would wrap). Names mean the same day in both dialects
+ * and pass through.
+ */
 function mapDowField(dow: string): { value: string } | { error: string } {
-  const items: string[] = [];
+  const days = new Set<number>();
+  const named: string[] = [];
   for (const item of dow.split(",")) {
     const slash = item.split("/");
     if (slash.length > 2 || slash.some((part) => part === "")) {
       return { error: `malformed day-of-week token "${item}"` };
     }
-    const [body, step] = slash as [string, string?];
-    if (step !== undefined && !/^\d+$/.test(step)) return { error: `malformed day-of-week step "${item}"` };
-    let mapped: string;
-    if (body === "*") {
-      mapped = "*";
-    } else {
-      const endpoints = body.split("-");
-      if (endpoints.length > 2 || endpoints.some((part) => part === "")) {
-        return { error: `malformed day-of-week token "${item}"` };
-      }
-      const remapped = endpoints.map((p) => (/^\d+$/.test(p) ? String((Number(p) % 7) + 1) : p));
-      if (
-        remapped.length === 2 &&
-        remapped.every((p) => /^\d+$/.test(p)) &&
-        Number(remapped[0]) > Number(remapped[1])
-      ) {
-        return {
-          error:
-            `day-of-week range "${body}" wraps across the week under EventBridge numbering (1 = Sunday) — ` +
-            `split it into an explicit list`,
-        };
-      }
-      mapped = remapped.join("-");
+    const [body, stepText] = slash as [string, string?];
+    if (stepText !== undefined && !/^\d+$/.test(stepText)) return { error: `malformed day-of-week step "${item}"` };
+    const endpoints = body === "*" ? ["0", "6"] : body.split("-");
+    if (endpoints.length > 2 || endpoints.some((part) => part === "")) {
+      return { error: `malformed day-of-week token "${item}"` };
     }
-    items.push(step !== undefined ? `${mapped}/${step}` : mapped);
+    if (endpoints.every((part) => !/^\d+$/.test(part))) {
+      named.push(item);
+      continue;
+    }
+    if (!endpoints.every((part) => /^\d+$/.test(part))) {
+      return { error: `day-of-week "${item}" mixes a name and a number` };
+    }
+    const from = Number(endpoints[0]);
+    // A single value with a step (`1/2`) runs to the end of the week, as in croner.
+    const to = endpoints.length === 2 ? Number(endpoints[1]) : stepText !== undefined ? 7 : from;
+    const step = stepText !== undefined ? Number(stepText) : 1;
+    if (from > 7 || to > 7 || from > to || step === 0) return { error: `malformed day-of-week token "${item}"` };
+    for (let day = from; day <= to; day += step) days.add(day % 7);
   }
-  return { value: items.join(",") };
+  const numbers = [...days].map((day) => day + 1).sort((x, y) => x - y);
+  // Consecutive days back into ranges, for a readable expression.
+  const runs: string[] = [];
+  for (let i = 0; i < numbers.length; ) {
+    let j = i;
+    while (j + 1 < numbers.length && numbers[j + 1] === (numbers[j] as number) + 1) j++;
+    runs.push(j > i ? `${numbers[i]}-${numbers[j]}` : `${numbers[i]}`);
+    i = j + 1;
+  }
+  return { value: [...runs, ...named].join(",") };
 }
 
 /**
  * Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it can't be. The two
- * fire on the same instants, in the same zone (EventBridge, like croner, skips a time a DST change removes and fires
- * a repeated one once).
+ * fire on the same instants in the same zone, with one exception at a DST change: a local time the spring change
+ * removes (02:30 in most of the US on that day) is skipped by EventBridge and run an hour later by croner, so such a
+ * schedule runs once more a year on a resident host. A time the autumn change repeats runs once in both.
  */
 export function toEventBridgeCron(cron: string): { expression: string } | { error: string } {
   const fields = cron.trim().split(/\s+/);

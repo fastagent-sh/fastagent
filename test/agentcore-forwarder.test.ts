@@ -480,6 +480,28 @@ describe("agentcore forwarder (executed)", () => {
       ]);
     });
 
+    it("updates a schedule that names a role no longer the stack's — a recreated stack's role has a new name", async () => {
+      const f = loadForwarder({ env });
+      await f.handler(alarmEvent("s3cret", [], [digest]));
+      const created = f.scheduleCalls[0]!.input;
+      const stale = loadForwarder({
+        env,
+        held: {
+          [created.Name as string]: {
+            ...created,
+            Target: { ...(created.Target as Record<string, unknown>), RoleArn: "arn:old-role" },
+          },
+        },
+      });
+      await stale.handler(alarmEvent("s3cret", [], [digest]));
+      expect(stale.scheduleCalls).toEqual([
+        {
+          type: "update",
+          input: expect.objectContaining({ Target: expect.objectContaining({ RoleArn: "arn:role" }) }),
+        },
+      ]);
+    });
+
     it("deletes only names it mints — never a sibling agent's that shares the prefix — and not the wake alarms", async () => {
       const sibling = "fa-x-sc-abc-sc-0123456789abcdef"; // the agent named `x-sc-abc`
       const f = loadForwarder({ env, held: { [sibling]: {}, "fa-x-wk-0123456789abcdef": {} } });
