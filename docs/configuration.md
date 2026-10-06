@@ -201,20 +201,44 @@ An agent's directory is its own: its definition, its working directory, and its 
 ```ts
 export default {
   contexts: [
-    { local: "/Users/me/code/app" },                             // works on, on this machine
+    { local: "/Users/me/notes" },                                // works on, on this machine
     { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
+    { github: "acme/app", local: "/Users/me/code/app" },         // works on: this checkout here
+    { github: "acme/docs", ref: "main", readonly: true },        // knows: a clone, kept up to date
   ],
 } satisfies FastagentConfig;
 ```
 
 | Key | Meaning |
 |---|---|
-| `local` | The directory, absolute or relative to the agent directory |
-| `copy` | An instance on a host gets its own copy, so its contents ship in the image. Without it the context exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
+| `local` | A directory, absolute or relative to the agent directory. With `github`, the checkout of that repository on this machine |
+| `github` | A repository, `owner/repo` |
+| `ref` | With `github`: the branch, tag or full commit to clone. Defaults to the repository's default branch |
+| `copy` | An instance on a host gets its own copy of a directory, so its contents ship in the image. Without it a directory exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
-| `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's name |
+| `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's or the repository's name |
 
-`fastagent init <dir> --context <dir>` and `fastagent context add/remove` edit this list
+A `github` context is one of two things on this machine:
+
+- **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
+  as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
+- **Otherwise, a clone** in `.state/contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
+  `start`, `chat`, `invoke`, `routine run`). At each later start it is brought up to date in place, by git's own
+  rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it is pinned
+  to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an untracked file
+  it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone is on another
+  branch than declared, or when it holds commits no branch or tag does, it is kept as it is and startup warns with
+  the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does not touch stay.
+
+  `info`, `context list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
+  with git's reason. A clone of another repository under the context's name (it was renamed or redeclared) stops
+  the start and is named, never removed: move it away yourself.
+
+git clones with its own configuration on this machine: a private repository needs the credentials your own
+`git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). git never prompts: a
+missing credential fails the start instead of waiting.
+
+`fastagent init <dir> --context <source>` and `fastagent context add/remove` edit this list
 ([CLI](cli.md#fastagent-context)); it can be edited by hand too. Their order means nothing. A context may not
 contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one. Every
 command refuses such a declaration at load, and one whose directory does not exist.
@@ -229,9 +253,8 @@ What each context gives the agent, re-read every turn:
   runs a command in it with `cd <location> && …`.
 - **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
 
-The locations are resolved when a process starts; editing `contexts` restarts `dev`. A GitHub repository as a
-context, and deploying an agent that has contexts, are not supported yet: `deploy` refuses an agent that declares
-one, by name.
+The locations are resolved when a process starts; editing `contexts` restarts `dev`. Deploying an agent that has
+contexts is not supported yet: `deploy` refuses an agent that declares one, by name.
 
 ## The system prompt
 

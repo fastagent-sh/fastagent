@@ -255,11 +255,21 @@ export function fastagentPromptSections(options: {
 }
 
 /** What a context of this kind is, said to the agent: where it is, and whether another instance shares it. */
-const CONTEXT_KIND: Record<ResolvedContext["kind"], string> = {
-  local: "a directory on this machine",
-  copy: "a directory on this machine; a deployed instance has its own copy",
-  github: "a repository",
-};
+function contextKind(c: ResolvedContext): string {
+  if (c.kind !== "github") {
+    return c.kind === "copy"
+      ? "a directory on this machine; a deployed instance has its own copy"
+      : "a directory on this machine";
+  }
+  if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
+  // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
+  // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
+  // where it is: a clone the agent moved elsewhere is left there.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` (declared ${c.ref})` : ""} in your own storage`;
+  return c.readonly
+    ? `${clone}, brought up to date each time you start`
+    : `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
+}
 
 /**
  * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each context is named
@@ -272,7 +282,7 @@ function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: r
     `land there unless you put them elsewhere. Its AGENTS.md, if there is one, is for changing yourself: read it ` +
     `before you do.`;
   if (contexts.length === 0) return `${own} You have no contexts: you work only in your own directory.`;
-  const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${CONTEXT_KIND[c.kind]})`;
+  const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${contextKind(c)})`;
   const worksOn = contexts.filter((c) => !c.readonly);
   const knows = contexts.filter((c) => c.readonly);
   return [

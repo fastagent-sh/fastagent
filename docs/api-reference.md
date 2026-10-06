@@ -238,22 +238,34 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be th
 ```ts
 // From `@fastagent-sh/fastagent/node`.
 function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
+function cloneContext(
+  context: ResolvedContext & { kind: "github" },
+): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
 type ContextDeclaration =
   | { local: string; copy?: boolean; readonly?: boolean; name?: string }
   | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
-interface ResolvedContext {
+type ResolvedContext = {
   name: string;                         // unique ignoring case, one path segment
-  kind: "local" | "copy" | "github";
   readonly: boolean;                    // the agent knows it and does not write it
   location: string;                     // its absolute directory on this instance
-}
+  notices: string[];                    // what to tell the user: a checkout off its ref, a clone not made yet
+} & (
+  | { kind: "local" | "copy" }
+  | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: no checkout of it here
+);
 ```
 
 The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fastagent context list`. It refuses,
 naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
-directory or sits inside it ([Configuration](configuration.md#contexts)). A `github` context is not supported yet.
+directory or sits inside it ([Configuration](configuration.md#contexts)). It reads the disk and git, never the
+network, and writes nothing: a `github` context with no checkout here resolves to its clone's location, which
+`cloneContext` makes, or brings up to date in place by git's rules, which never overwrite the agent's work: what git
+refuses, a fetch that fails, or a clone on another branch than declared keeps it as it is (`kept`, with the
+`reason`). `createPiAgentFromDir` clones before it resolves; a caller that
+resolves for `createPiAgentFromDefinition` calls `cloneContext` for each context with `clone: true`, then resolves
+again.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,

@@ -41,11 +41,9 @@ Relations:
 
 Every instance of an Agent, given the same version of its definition, runs the same program on contexts
 resolved the same way: the same declarations, the same names, the same working directory (its own), the same
-`AGENTS.md`, and the same skills from its harness and its contexts. A context an instance fetches itself and only
-knows is brought to its declared version every time the instance is deployed or started; one it works on starts
-from its declared version and is the instance's own from then on (§3). A checkout the user names with `local` is
-the exception: it is read as the user left it, and a difference from the declared version is reported, not
-corrected. A laptop instance and a hosted one behave the same on the same data.
+`AGENTS.md`, and the same skills from its harness and its contexts. A repository an instance clones is brought to its
+declared version at each start while it holds nothing of the agent's (§3). A checkout the user names with `local` is the exception: it
+is read as the user left it, and a difference from the declared version is reported, not corrected. A laptop instance and a hosted one behave the same on the same data.
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
 templates, `.agents/skills` found above the agent directory, installed pi packages, engine settings, the programs
@@ -206,7 +204,7 @@ it from what they are given, and every command prints it (§4), so an author rar
 |---|---|---|---|---|
 | **local** | `{ local: "/Users/me/notes" }` | That directory, edited in place | Absent: deploying is refused (below) | The directory |
 | **local, copied** | `{ local: "/Users/me/notes", copy: true }` | That directory, edited in place | A copy | Each instance keeps its own |
-| **github** | `{ github: "acme/app" }` | An existing checkout (`local`), or a clone the instance makes | A clone the instance makes | Back to the repository (synchronization, §8) |
+| **github** | `{ github: "acme/app" }` | An existing checkout (`local`), used as it is; otherwise a clone the instance makes | A clone the instance makes | To the repository, when pushed |
 
 Attributes:
 
@@ -223,21 +221,24 @@ Attributes:
 
 - **Read-only is an instruction in the first version.** The agent is told not to write a context it only knows;
   nothing stops a shell from writing it. A read-only `github` context is never pushed back.
-- **What an instance fetches follows from whether the context is writable, for copies and clones alike.**
-  - A context the instance only knows is fetched again, at its declared `ref`, every time the instance is deployed
-    or started: there is nothing local to lose, and it always matches the definition.
-  - A context the instance works on is fetched once, when the instance first needs it, and belongs to the
-    instance afterwards: fetching it again would destroy what the instance wrote. A later deployment leaves it as
-    it is and says so, including when the declared `ref` has changed since: moving the instance's own work to
-    another line, and bringing the repository and the clone up to date with each other, is synchronization (§8).
-  - "Leaves it as it is" holds only where the instance's storage survives a deployment. A host whose storage a
-    deployment resets (AgentCore, [core](core.md) §9) fetches every context again on every deployment, and what the
-    instance wrote and did not push is lost. Its deployment says so before it runs.
-- **A checkout named by `local` is the user's.** FastAgent never switches its branch. When it is not at the
-  declared `ref`, startup says so.
-- **What an instance fetches, it keeps in its own storage, under the context's name.** A clone, or a copy on a
-  host, lives with the instance's runtime state (§5), not in the definition. Renaming a context makes it a new
-  one: the next start or deployment fetches it afresh and says so.
+- **A repository is the user's checkout when this machine has one, else a clone the instance makes and brings up
+  to date in place.**
+  - A checkout named by `local` is the user's: FastAgent never fetches it and never switches its branch. When it
+    is not at the declared `ref`, startup says so.
+  - Without one, the instance clones the repository at its declared `ref` the first time it starts, and at each
+    later start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether the
+    agent works on it or only knows it. git refuses whatever would overwrite the agent's work, and the clone is
+    then kept as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on
+    another branch than declared. Bringing the agent's work and the remote together is git's, the agent's or the
+    user's (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
+- **What a host copies follows from whether the context is writable.** A copy of a context the instance only knows
+  is made again every time the instance is deployed: there is nothing local to lose, and it always matches the
+  definition. A copy of one it works on is made once and belongs to the instance afterwards; a later deployment
+  leaves it as it is and says so. That holds only where the instance's storage survives a deployment: a host whose
+  storage a deployment resets (AgentCore, [core](core.md) §9) copies every context again, and what the instance
+  wrote there is lost. Its deployment says so before it runs.
+- **What an instance clones or copies, it keeps in its own storage, under the context's name.** It lives with the
+  instance's runtime state (§5), not in the definition.
 - **A name is one path segment, unique within the agent regardless of case.** It becomes a directory name, so it
   is letters, digits, `-` and `_`, the spelling a release's agent name already has (`isReleaseAgentName`), and two
   names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either

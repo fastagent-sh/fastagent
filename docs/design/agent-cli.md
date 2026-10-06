@@ -133,8 +133,8 @@ Startup says what the agent works on and what it knows:
 
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
-works on  app       ~/code/app (github acme/app, existing checkout)
-knows     handbook  github acme/handbook@main, fetched into .state/contexts/handbook
+works on  app       ~/code/app (github acme/app, this checkout)
+knows     handbook  ~/agents/reviewer/.state/contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -142,12 +142,11 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context's `local` path is missing, or is not a checkout of that repository | `cloning acme/app into .state/contexts/app`, with the reason |
+| A `github` context has no checkout here | `cloned github acme/app into .state/contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
-| A context was renamed | `fetching acme/app afresh as app2`, since what was fetched is kept under the old name |
 | A changed definition does not load when a process restarts itself | That process keeps running the previous one, and the log and the agent's next turn say why |
 | The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
 | A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
@@ -162,23 +161,25 @@ would be refused without trying one.
 The definition is shipped to the host. Preflight lists what the host gets for each context:
 
 ```text
-works on  app       github acme/app@main          cloned once; the instance's own afterwards
+works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
 works on  notes     local ~/notes                 copied once, when the instance is created
-knows     handbook  github acme/handbook@main     fetched again on every deployment
+knows     handbook  github acme/handbook@main     cloned; kept up to date
 knows     papers    local ~/papers                copied again on every deployment
 works on  draft     local ~/draft                 refused: not available on a host
           → add `copy: true`, or move it to a GitHub repository and declare it as github
 ```
 
-- **A later deploy leaves what the instance works on as it is, and refreshes what it only knows.** A clone or copy
-  of a context the agent works on is the instance's own, so it is kept, and the deploy says so, also when the
-  declared `ref` has changed; bringing it up to date is synchronization ([agent model](agent-model.md) §3, §8). A
-  context it only knows is fetched again at its declared `ref`.
+- **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on
+  this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
+  clone goes with it, and preflight says what of the agent's work is lost.
+- **A later deploy leaves a copy the instance works on as it is, and refreshes one it only knows.** A copy of a
+  context the agent works on is the instance's own, so it is kept, and the deploy says so. A copy of one it only
+  knows is made again.
 - **Kept only where the host's storage survives a deployment.** On AgentCore a deployment resets the storage, so
-  preflight says so for every context the agent works on:
+  preflight says so for every copy the agent works on:
 
   ```text
-  works on  app       github acme/app@main          cloned on every deployment; changes not pushed are lost
+  works on  notes     local ~/notes                 copied on every deployment; changes are lost
   ```
 - **A `github` context's credential is a host secret.** The runbook lists it with the instance's other secrets.
 

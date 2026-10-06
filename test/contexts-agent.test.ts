@@ -168,13 +168,13 @@ describe("one resolution", () => {
       const list = JSON.parse((await cli(["context", "list", "--json"], agentDir)).stdout);
       return [opened.contexts, info.contexts, list];
     };
-    const first = [{ name: "app", kind: "copy", readonly: false, location: app }];
+    const first = [{ name: "app", kind: "copy", readonly: false, location: app, notices: [] }];
     expect(await readers()).toEqual([first, first, first]);
 
     const added = await cli(["context", "add", handbook, agentDir, "--readonly", "--copy"], root);
     expect(added.code, added.stderr).toBe(0);
     expect(added.stderr).toContain(`knows handbook  ${handbook} (local, copied to a host)`);
-    const second = [...first, { name: "handbook", kind: "copy", readonly: true, location: handbook }];
+    const second = [...first, { name: "handbook", kind: "copy", readonly: true, location: handbook, notices: [] }];
     expect(await readers()).toEqual([second, second, second]);
     // The edit is the literal list, absolute, as `init` writes it; the hand-written relative path stays as written.
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
@@ -183,7 +183,7 @@ describe("one resolution", () => {
 
     const removed = await cli(["context", "remove", "APP", agentDir], root);
     expect(removed.code, removed.stderr).toBe(0);
-    const third = [{ name: "handbook", kind: "copy", readonly: true, location: handbook }];
+    const third = [{ name: "handbook", kind: "copy", readonly: true, location: handbook, notices: [] }];
     expect(await readers()).toEqual([third, third, third]);
   });
 

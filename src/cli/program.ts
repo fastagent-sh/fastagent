@@ -52,16 +52,21 @@ const init: CommandSpec = {
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
     {
-      flags: "--context <dir>",
-      description: "a directory the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
+      flags: "--context <source>",
+      description:
+        "a directory or github:owner/repo the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
       repeatable: true,
     },
-    { flags: "--copy", description: "with --context: a host gets its own copy of each (else deploying refuses)" },
+    {
+      flags: "--copy",
+      description: "with --context: a host gets its own copy of each directory (else deploying refuses)",
+    },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
   ],
   examples: [
     { cmd: "fastagent init my-agent", note: "an agent that only talks" },
     { cmd: "fastagent init reviewer --context ~/code/app", note: "works on ~/code/app" },
+    { cmd: "fastagent init triage --context github:acme/app", note: "works on a clone" },
   ],
   notes:
     "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
@@ -444,25 +449,31 @@ const context: CommandSpec = {
     },
     {
       name: "add",
-      summary: "declare a directory as a context",
-      args: [{ name: "<source>", description: "the directory" }, AGENT_ARG],
+      summary: "declare a directory or a GitHub repository as a context",
+      args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
-        { flags: "--copy", description: "an instance on a host gets its own copy (else deploying refuses)" },
-        { flags: "--name <name>", description: "its name (default: the directory's)" },
+        { flags: "--copy", description: "a directory: a host gets its own copy (else deploying refuses)" },
+        { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
+        { flags: "--local <dir>", description: "github:owner/repo: its checkout on this machine" },
+        { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
       ],
       examples: [
         { cmd: "fastagent context add ~/code/app", note: "works on" },
         { cmd: "fastagent context add ~/handbook --readonly", note: "knows" },
+        { cmd: "fastagent context add github:acme/docs --readonly", note: "knows a clone" },
       ],
       notes:
-        "A directory is declared `{ local }`: on this machine it is that directory, and deploying refuses the " +
-        "agent. `--copy` declares `copy: true`: a host gets its own copy, so its contents ship in the image. It " +
-        "may not contain the agent directory, nor sit inside it.",
+        "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
+        "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
+        "place at each start where git can do so without touching the agent's work. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
+        "own copy. A context may not contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
           copy: f.copy === true,
           readonly: f.readonly === true,
+          ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
+          ...(typeof f.local === "string" ? { local: f.local } : {}),
           ...(typeof f.name === "string" ? { name: f.name } : {}),
         }),
     },

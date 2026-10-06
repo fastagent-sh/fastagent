@@ -36,7 +36,7 @@ import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
-import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
+import { type ResolvedContext, cloneContext, resolveContexts } from "../../contexts/resolve.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
@@ -157,6 +157,21 @@ export async function resolveAgentAssembly(
   const agentDir = resolveAgentDir(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
+  // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
+  // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.
+  for (const context of resolveContexts(agentDir, config.contexts)) {
+    if (context.kind !== "github" || !context.clone) continue;
+    const at = `github ${context.repo}${context.ref ? ` at ${context.ref}` : ""}`;
+    const done = await cloneContext(context);
+    if (done.outcome === "kept") {
+      log.warn(
+        `[fastagent] context "${context.name}": the clone in ${context.location} is kept as it is, ${done.reason}`,
+      );
+    } else {
+      const said = { cloned: "cloned", updated: "brought up to date", current: "already up to date" }[done.outcome];
+      log.info(`[fastagent] ${at}: ${said} in ${context.location}`);
+    }
+  }
   const contexts = resolveContexts(agentDir, config.contexts);
   const modelSpec = resolveModelSpec(options.model, config);
   const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
