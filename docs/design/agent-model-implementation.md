@@ -27,76 +27,32 @@ restart, the routine floor).
 
 ## 2. The resolved agent
 
-Stage 2 built this for `local` and `copy` contexts ([core](core.md) §2 describes what exists): `ResolvedContext`
-carries `name`, `kind`, `readonly` and `location`, and `origin`, `travels` and `notices` are added with the stage
-that first needs them (3 and 4). What follows is the whole target.
+Built in stages 2 and 3; [core](core.md) §2 describes it: `src/contexts/` declares (`declare.ts`, pure), resolves
+(`resolve.ts`: the disk and git, never the network, no writes) and clones (`cloneContext`, called by the opener
+only). `ResolvedContext` carries `name`, `readonly`, `location` and `notices`, and for a `github` context its `repo`,
+`ref` and whether it is a clone. A repository is its user's checkout when `local` names one, used as it is;
+otherwise it is cloned afresh, shallow, at `ref`, every time a process that runs the agent starts, built beside the
+last clone and renamed into place under a lock. Read-only commands (`info`, `context list`, `fastagent tool`, the
+restart check of §3.8) resolve without cloning, so they never touch the network, and `info` keeps its contract of
+creating nothing.
 
-One engine-neutral module owns the declaration and its resolution: `src/contexts/` (`declare.ts` pure,
-`resolve.ts` with filesystem and git).
-
-```ts
-/** What an author writes in fastagent.config.ts `contexts` (validated by declare.ts). */
-type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
-
-/** What every consumer reads: one entry per declared context, resolved for THIS instance. */
-interface ResolvedContext {
-  name: string;               // unique ignoring case, one segment of [A-Za-z0-9_-]
-  kind: "local" | "copy" | "github";
-  readonly: boolean;          // "knows" vs "works on"
-  location: string;           // absolute directory on this instance
-  origin: string;             // what the author declared, for display ("~/notes", "github acme/app@main")
-  travels: boolean;           // a change here reaches other instances (github writable)
-  notices: string[];          // said at startup: "checkout is on feat/x, declared main", "cloned afresh as app2"
-}
-
-interface ResolvedAgent {
-  agentDir: string;           // the working directory, everywhere
-  config: FastagentConfig;
-  contexts: ResolvedContext[];
-}
-```
-
-`resolveAgent(dir, place)` is the one function that answers where each context is. `place` is `"local"` or
-`"host"` (the deployed `start`). It is **pure**: it reads the declaration and what is on disk, and neither touches
-the network nor writes. Making a location real is a separate step (below).
+What stage 4 adds is the `host` column; the `local` one is built:
 
 | Declaration | `local` | `host` |
 |---|---|---|
 | `local` | The path; refused if missing or not a directory | Refused (preflight already refused the deploy) |
 | `local` + `copy` | The path | `.state/contexts/<name>`, seeded from the image (§3.7) |
-| `github` with a usable `local` | The checkout; `notices` when HEAD is not at `ref` | A clone in `.state/contexts/<name>` |
-| `github` without one | A clone in `.state/contexts/<name>` | Same |
+| `github` with a usable `local` | The checkout; a notice when it is not at `ref` | A clone in `.state/contexts/<name>`, afresh at each start |
+| `github` without one | A clone in `.state/contexts/<name>`, afresh at each start | Same |
 
-"Usable `local`" means the directory is a git checkout whose `origin` is `github.com/<owner>/<repo>`; anything else
-is a notice and a clone, never a silent substitution. A location that does not exist yet (a clone not made, a copy
-not seeded) resolves with a notice saying so.
+On a host, seeding copies joins cloning in the one step a serving process takes when it starts, so
+`applyDeploymentRelease` copies nothing but the definition. A copy follows writability (agent model §3): one the
+instance only knows is seeded again on every deployment, one it works on once.
 
-**Materializing** (`materializeContexts`, in the same module) makes every location real: it clones, refreshes and
-seeds copies. It is the only writer of `.state/contexts/`, it runs under a cross-process lock in the state root
-(`proper-lockfile`, as `locked-file.ts` uses), and only two callers run it: a serving process when it starts, and
-the deployed `start` before it serves. On a host that makes it the one owner of copies and clones alike;
-`applyDeploymentRelease` no longer copies anything but the definition. Read-only commands (`info`,
-`context list`, `fastagent tool`, the restart check of §3.8) resolve without materializing, so they never touch
-the network or the disk, and `info` keeps its contract of creating nothing.
-
-Its rules follow writability:
-
-- **Read-only**: refreshed to `ref` when the process starts, and only when the remote moved. The new tree is built
-  beside the old one and renamed into place, so a turn in another process reads one version or the other, never a
-  half-reset tree.
-- **Writable**: cloned or seeded once, then left alone, with a notice when the declared `ref` moved.
-- Two processes starting together take the lock in turn; the second finds the clone made and does nothing.
-
-Validation in `declare.ts`, all at load, all refusals naming the declaration: exactly one source key; `copy` only on
-`local`; `ref` only on `github`; `path` refused as not yet supported; names unique ignoring case and spelled like
-`isReleaseAgentName`; no declared location (a `local` path, a `github` `local`) contains the agent directory or sits
-inside it.
-
-**When it runs.** Resolution once per process start, before the assembly; materialization once per serving process
-start, before resolution. Fetching per turn would put network and git on every turn. What is re-read per turn is the content at the resolved locations (`AGENTS.md`, skills), as the definition is
-re-read today. A changed declaration is a config change, so it restarts the process (§3.8).
+**When it runs.** Resolution once per process start, before the assembly; cloning once per start of a process that
+runs the agent, before resolution. Fetching per turn would put network and git on every turn. What is re-read per
+turn is the content at the resolved locations (`AGENTS.md`, skills), as the definition is re-read today. A changed
+declaration is a config change, so it restarts the process (§3.8).
 
 ## 3. Change by area
 
@@ -107,8 +63,7 @@ Landed in stage 2; [core](core.md) §2, [configuration](../configuration.md#cont
 
 - **`copy` is asked for.** `init --context` and `context add` declare a directory as `{ local }`, and `--copy` adds
   `copy: true` (on `init`, for each of its contexts): copying ships the directory's contents off the machine, so it
-  is never a default. `--ref` and `--local` arrive with GitHub contexts (stage 3), which until then `init`,
-  `context add` and the resolver refuse.
+  is never a default. `--ref` and `--local` arrived with GitHub contexts (stage 3), on `context add`.
 - **The candidate config is `.fastagent.config.next.ts`** beside the real one: a dotfile `dev` does not watch, removed
   whether or not it replaces the config.
 
@@ -216,7 +171,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 |---|---|---|
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
-| 3. GitHub contexts | §2 clone and checkout rules, credentials | Clones, read-only refresh, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
+| 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone afresh at each start; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
 
@@ -235,8 +190,8 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 - **One meaning of "loads".** A tool file that throws on import, and a tool that declares a secret with no value,
   each fail `checkServable`, so the supervisor keeps the old worker; with the check swapped for `info`, the test
   watches the restart happen.
-- **Materializing.** Two processes starting on a missing clone produce one clone; `info` on that agent creates
-  nothing.
+- **Cloning.** Processes replacing one clone take turns, so each swap is whole; `info` on an agent with a clone
+  not made yet creates nothing.
 
 ## 7. Public surface that changes
 
@@ -247,7 +202,8 @@ the project to the agent directory with no type change, so an authored tool that
 moves to `contexts` (the release notes say so); `CreatePiAgentFromDefinitionOptions.cwd` is removed (the agent
 directory is the working directory) and `contexts` added; `resolveContexts` and its types are exported from `/node`;
 `FASTAGENT_AGENT` and `init --agent-dir` are removed; `[dir]` becomes `[agent]`. duang calls `createPiAgentFromDir`
-and stores an agent's directory, so it needs the same change before the next release.
+and stores an agent's directory, so it needs the same change before the next release. Stage 3: `ResolvedContext` is
+a union (a `github` one adds `repo`, `ref`, `clone`) and gains `notices`; `cloneContext` is exported from `/node`.
 
 ## 8. Open
 
@@ -256,5 +212,5 @@ and stores an agent's directory, so it needs the same change before the next rel
 - **The cron floor errs strict.** Ignoring the day fields refuses a cron whose fires bunch only on some dates.
   Enforcing the floor when a slot is claimed would allow those, at the cost of a routine that starts and then
   silently skips fires; not worth it before such a cron shows up.
-- **Git as a dependency.** Stage 3 needs `git` on the author's machine, and stage 4 in the image. Both are already
-  the norm for this audience; the refusal names it when it is missing.
+- **Git as a dependency.** Stage 4 needs `git` in the image, as stage 3 needs it on the author's machine, where a
+  missing one is refused by name.

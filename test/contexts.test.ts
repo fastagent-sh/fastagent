@@ -7,7 +7,8 @@ import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { declarationFor, declareContexts } from "../src/contexts/declare.ts";
+import { declareContexts } from "../src/contexts/declare.ts";
+import { declarationFor } from "../src/contexts/source.ts";
 import { resolveContexts } from "../src/contexts/resolve.ts";
 import { rewriteContexts } from "../src/contexts/config-text.ts";
 import { writeContexts } from "../src/engines/pi/config.ts";
@@ -69,14 +70,13 @@ describe("contexts: the declaration", () => {
   });
 
   it("a command reads a directory as a local context, absolute, copied to a host only when asked", () => {
-    expect(declarationFor("app", "/home/me/code")).toEqual({ local: "/home/me/code/app" });
-    expect(declarationFor("/x", "/", { copy: true, readonly: true, name: "n" })).toEqual({
+    expect(declarationFor("app", "/home/me/code").declaration).toEqual({ local: "/home/me/code/app" });
+    expect(declarationFor("/x", "/", { copy: true, readonly: true, name: "n" }).declaration).toEqual({
       local: "/x",
       copy: true,
       readonly: true,
       name: "n",
     });
-    expect(() => declarationFor("github:acme/app", "/")).toThrow(/github contexts are not supported yet/);
   });
 });
 
@@ -92,20 +92,17 @@ describe("contexts: resolved for this instance", () => {
   it("a local context is its directory, on this machine", async () => {
     const { root, agentDir } = await layout();
     expect(resolveContexts(agentDir, [{ local: "../app", copy: true, readonly: true }], "local")).toEqual([
-      { name: "app", kind: "copy", readonly: true, location: join(root, "app") },
+      { name: "app", kind: "copy", readonly: true, location: join(root, "app"), notices: [] },
     ]);
   });
 
-  it("refuses what is not there to work on, a repository, and a host, naming the context", async () => {
+  it("refuses what is not there to work on, and a host, naming the context", async () => {
     const { root, agentDir } = await layout();
     await writeFile(join(root, "file"), "");
     expect(() => resolveContexts(agentDir, [{ local: "../missing" }], "local")).toThrow(
       /context "missing": .*missing does not exist/,
     );
     expect(() => resolveContexts(agentDir, [{ local: "../file" }], "local")).toThrow(/is not a directory/);
-    expect(() => resolveContexts(agentDir, [{ github: "acme/app" }], "local")).toThrow(
-      /context "app": github contexts are not supported yet/,
-    );
     expect(() => resolveContexts(agentDir, [{ local: "../app" }], "host")).toThrow(
       /context "app": a deployment does not carry contexts yet/,
     );

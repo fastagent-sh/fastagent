@@ -15,7 +15,7 @@ vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 describe("reportAssembly (the startup report dev and start share)", () => {
   const opened = {
     agentDir: "/w/agent",
-    contexts: [{ name: "app", kind: "local", readonly: false, location: "/w/app" }],
+    contexts: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
     modelSpec: "p/m",
     models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
     config: {},

@@ -25,28 +25,20 @@ export function isContextName(name: string): boolean {
   return NAME.test(name);
 }
 
-/**
- * The declaration a command writes for `source`, read the way `init --context` and `fastagent context add` both read
- * it: a directory on this machine. A host gets a copy only when `copy` asks for one, since that ships the directory's
- * contents off this machine in an image; without it, deploying refuses the agent and says how to choose.
- */
-export function declarationFor(
-  source: string,
-  cwd: string,
-  options: { copy?: boolean; readonly?: boolean; name?: string } = {},
-): ContextDeclaration {
-  if (source.startsWith("github:")) {
-    throw new Error(`github contexts are not supported yet — pass the checkout's directory instead`);
-  }
-  return {
-    local: resolve(cwd, source),
-    ...(options.copy ? { copy: true } : {}),
-    ...(options.readonly ? { readonly: true } : {}),
-    ...(options.name !== undefined ? { name: options.name } : {}),
-  };
+/** The name a context gets when it is not given one: its repository's, or its directory's. */
+export function defaultContextName(declaration: ContextDeclaration): string {
+  return "github" in declaration
+    ? declaration.github.slice(declaration.github.indexOf("/") + 1)
+    : basename(declaration.local);
 }
+
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const KEYS = ["local", "github", "copy", "readonly", "name", "ref", "path"] as const;
+
+/**
+ * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
+ * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
+ */
+export const CONTEXT_KEYS = ["github", "local", "ref", "copy", "readonly", "name"] as const;
 
 /**
  * Read `contexts` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
@@ -72,12 +64,12 @@ export function declareContexts(raw: unknown, agentDir: string): DeclaredContext
 function declareOne(entry: unknown, at: string, agentDir: string): DeclaredContext {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${at} must be an object`);
   const e = entry as Record<string, unknown>;
+  if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of Object.keys(e)) {
-    if (!(KEYS as readonly string[]).includes(key)) {
-      throw new Error(`${at}: unknown key "${key}" (valid keys: local, github, copy, readonly, name, ref)`);
+    if (!(CONTEXT_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTEXT_KEYS.join(", ")})`);
     }
   }
-  if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of ["local", "github", "name", "ref"] as const) {
     if (e[key] !== undefined && (typeof e[key] !== "string" || e[key] === "")) {
       throw new Error(`${at}: "${key}" must be a non-empty string`);
@@ -102,11 +94,11 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
       ...(e.ref !== undefined ? { ref: e.ref as string } : {}),
       ...(local !== undefined ? { checkout: local } : {}),
     };
-    defaultName = repo.slice(repo.indexOf("/") + 1);
+    defaultName = defaultContextName({ github: repo });
   } else if (local !== undefined) {
     if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a github context`);
     declared = { name: "", readonly, kind: e.copy === true ? "copy" : "local", path: local };
-    defaultName = basename(local);
+    defaultName = defaultContextName({ local });
   } else {
     throw new Error(`${at}: declare where it comes from — "local" (a directory) or "github" ("owner/repo")`);
   }

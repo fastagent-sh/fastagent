@@ -255,11 +255,17 @@ export function fastagentPromptSections(options: {
 }
 
 /** What a context of this kind is, said to the agent: where it is, and whether another instance shares it. */
-const CONTEXT_KIND: Record<ResolvedContext["kind"], string> = {
-  local: "a directory on this machine",
-  copy: "a directory on this machine; a deployed instance has its own copy",
-  github: "a repository",
-};
+function contextKind(c: ResolvedContext): string {
+  if (c.kind !== "github") {
+    return c.kind === "copy"
+      ? "a directory on this machine; a deployed instance has its own copy"
+      : "a directory on this machine";
+  }
+  if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
+  // A clone does not outlast the process: the next start replaces it, so a change the agent wants kept is pushed.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` at ${c.ref}` : ""}, made afresh each time you start`;
+  return c.readonly ? clone : `${clone}: commit and push what should last`;
+}
 
 /**
  * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each context is named
@@ -272,7 +278,7 @@ function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: r
     `land there unless you put them elsewhere. Its AGENTS.md, if there is one, is for changing yourself: read it ` +
     `before you do.`;
   if (contexts.length === 0) return `${own} You have no contexts: you work only in your own directory.`;
-  const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${CONTEXT_KIND[c.kind]})`;
+  const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${contextKind(c)})`;
   const worksOn = contexts.filter((c) => !c.readonly);
   const knows = contexts.filter((c) => c.readonly);
   return [

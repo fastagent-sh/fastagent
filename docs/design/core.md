@@ -50,7 +50,7 @@ One agent shape, one marker:
 │                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
-└── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
+└── .state/                 # the local instance's mutable state: sessions, channel state, schedule state, clones
 ```
 
 **The agent directory is the agent's working directory**, its coding tools' root, the key its session records
@@ -64,12 +64,22 @@ contexts: [{ local: "/Users/me/code/app", copy: true }, { local: "../handbook", 
 `src/contexts/` owns them, engine-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
 keys, a name that is not one path segment or collides ignoring case, and a location that contains the agent
 directory or sits inside it. `resolve.ts` answers where each one is for this instance (`ResolvedContext`:
-name, kind, readonly, location), once per process start; the content at those locations is re-read per turn. The
-prompt's `contexts` section, `ctx.contexts`, `info`, `fastagent context list` and the opener all read that one
-resolution. `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
+name, kind, readonly, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
+process start; the content at those locations is re-read per turn. It reads the disk and git, never the network,
+and writes nothing. The prompt's `contexts` section, `ctx.contexts`, `info`, `fastagent context list` and the opener
+all read that one resolution.
+
+A `github` context whose `local` is the root of a checkout of that repository is that checkout, used as it is: never
+fetched, never moved to its `ref`, only said to be off it. Any other `github` context is a clone in
+`<state root>/contexts/<name>`, made afresh by `cloneContext` each time a process that runs the agent opens it (the
+opener, before it resolves): shallow, at `ref`, built beside the last clone and renamed into place under a lock in
+that directory (`git.ts`), so another process reads one clone or the other. What the agent did in the last clone and
+did not push is gone, and the prompt tells it so. `info`, `context list` and `fastagent tool` resolve without
+cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a directory in a GitHub checkout, any other
+directory); `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares
-exactly the intended list. GitHub contexts and deploying an agent with contexts are not built yet: the resolver and
-the deploy preflight refuse them by name.
+exactly the intended list. Deploying an agent with contexts is not built yet: the deploy preflight refuses it by
+name.
 
 A command names its agent by path (`[agent]`, default `.`): a directory holding `fastagent.config.ts` is the agent;
 inside one, the command refuses naming its root; anything else refuses with `fastagent init`. Nothing is searched

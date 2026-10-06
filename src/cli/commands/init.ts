@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { scaffoldAgent } from "../../scaffold/init.ts";
 import { writeContexts } from "../../engines/pi/config.ts";
-import { declarationFor } from "../../contexts/declare.ts";
+import { declarationFor } from "../../contexts/source.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
 import { contextLines } from "../contexts-view.ts";
 import { failStartup, failUsage } from "../fail.ts";
@@ -22,9 +22,10 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const dir = resolve(dirArg);
   if (opts.copy && opts.contexts.length === 0) failUsage("--copy applies to the --context directories; none was given");
   // Every context is checked BEFORE anything is created — a nested or missing one refuses with the scaffold unwritten.
-  const declarations = await Promise.resolve()
+  const read = await Promise.resolve()
     .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd(), { copy: opts.copy })))
     .catch(failStartup);
+  const declarations = read.map((source) => source.declaration);
   const contexts = await Promise.resolve()
     .then(() => resolveContexts(dir, declarations))
     .catch(failStartup);
@@ -39,6 +40,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     });
   }
   console.error(`[fastagent] created ${dir}`);
+  for (const note of read.flatMap((source) => source.notes)) console.error(`  ${note}`);
   if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);
   console.error(`  files: ${created.join(", ")}`);
   let installFailed = false;

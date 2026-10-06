@@ -310,7 +310,8 @@ describe("the contracts depend on nothing", () => {
     // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
     // drops both. Each layer's package list is that statement, checkable.
     expect([...staticPackageGraph("core.ts")]).toEqual([]);
-    // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free.
+    // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free. A repository
+    // context is cloned under a cross-process lock (contexts/git.ts).
     expect([...staticPackageGraph("node.ts")].sort()).toEqual([
       "@hono/node-server",
       "croner",
@@ -320,6 +321,7 @@ describe("the contracts depend on nothing", () => {
       "effect/Exit",
       "effect/Fiber",
       "effect/Scope",
+      "proper-lockfile",
     ]);
     // ...and neither neutral layer names an engine (the engine-neutrality suite above covers this
     // for core; node now carries the assembly, so it needs the same bar).

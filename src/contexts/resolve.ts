@@ -1,24 +1,42 @@
 /**
  * WHERE each declared context is, for THIS instance: the one answer the prompt, the coding tools, skills, authored
  * tools, `info` and `deploy` all read (docs/design/agent-model-implementation.md §2). Reads the declaration and the
- * disk; never the network, never a write.
+ * disk (git included); never the network, never a write. Making a clone real is `cloneContext`'s, and only a process
+ * that runs the agent asks for it.
  */
-import { realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { isDeployedWorkspace } from "../paths.ts";
+import { isDeployedWorkspace, resolveStateRoot } from "../paths.ts";
 import { type DeclaredContext, declareContexts, nestingError } from "./declare.ts";
+import { checkoutProblem, cloneAfresh, refNotice } from "./git.ts";
 
 /** A declared context, resolved for this instance. */
-export interface ResolvedContext {
+export type ResolvedContext = {
   /** Unique within the agent, ignoring case; one path segment. */
   name: string;
-  /** How it reaches an instance: a directory on this machine, one a host gets a copy of, or a repository. */
-  kind: "local" | "copy" | "github";
   /** The agent knows it and does not write it. */
   readonly: boolean;
   /** Its absolute directory on this instance. */
   location: string;
-}
+  /** What to tell the user about how it resolved: a checkout off its `ref`, a clone not made yet. */
+  notices: string[];
+} & (
+  | {
+      /** How it reaches an instance: a directory on this machine, or one a host gets a copy of. */
+      kind: "local" | "copy";
+    }
+  | {
+      kind: "github";
+      /** `owner/repo`. */
+      repo: string;
+      ref?: string;
+      /**
+       * A clone made afresh each time the agent starts, in the instance's state: there is no checkout of the
+       * repository on this machine to use. False when it is the user's own checkout, which is never synchronized.
+       */
+      clone: boolean;
+    }
+);
 
 /** Where this instance runs: this machine, or a deployed host. */
 export type Place = "local" | "host";
@@ -33,23 +51,55 @@ export function resolveContexts(
 }
 
 function resolveOne(agentDir: string, context: DeclaredContext, place: Place): ResolvedContext {
-  if (context.kind === "github") {
-    throw new Error(
-      `context "${context.name}": github contexts are not supported yet — declare the checkout as { local: "<path>" }`,
-    );
-  }
   if (place === "host") {
     throw new Error(`context "${context.name}": a deployment does not carry contexts yet`);
   }
+  const { name, readonly } = context;
+  if (context.kind === "github") {
+    const { repo, ref, checkout } = context;
+    const github = { kind: "github" as const, repo, ...(ref !== undefined ? { ref } : {}) };
+    // The user's own checkout, used as it is: never fetched, never moved to `ref`, only said to be off it.
+    const problem = checkout === undefined ? undefined : checkoutProblem(checkout, repo);
+    if (checkout !== undefined && problem === undefined) {
+      refuseNesting(agentDir, checkout, name);
+      const offRef = ref === undefined ? undefined : refNotice(checkout, ref);
+      return { name, readonly, location: checkout, notices: offRef ? [offRef] : [], ...github, clone: false };
+    }
+    // No checkout to use, so the instance clones it, under its own state and the context's name.
+    const location = join(resolveStateRoot(agentDir), "contexts", name);
+    const notices = [
+      ...(problem ? [`${checkout} ${problem}, so github ${repo} is cloned instead`] : []),
+      ...(existsSync(location) ? [] : ["not cloned yet: it is cloned afresh each time the agent starts"]),
+    ];
+    return { name, readonly, location, notices, ...github, clone: true };
+  }
   const { path } = context;
   const stat = statOrMissing(path);
-  if (!stat) throw new Error(`context "${context.name}": ${path} does not exist`);
-  if (!stat.isDirectory()) throw new Error(`context "${context.name}": ${path} is not a directory`);
-  // The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
-  // paths — including for an agent directory `init` is about to create, which a symlinked ancestor still places.
-  const nested = nestingError(realPathOf(agentDir), realpathSync(path), context.name);
+  if (!stat) throw new Error(`context "${name}": ${path} does not exist`);
+  if (!stat.isDirectory()) throw new Error(`context "${name}": ${path} is not a directory`);
+  refuseNesting(agentDir, path, name);
+  return { name, readonly, location: path, notices: [], kind: context.kind };
+}
+
+/**
+ * The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
+ * paths — including for an agent directory `init` is about to create, which a symlinked ancestor still places.
+ */
+function refuseNesting(agentDir: string, location: string, name: string): void {
+  const nested = nestingError(realPathOf(agentDir), realpathSync(location), name);
   if (nested) throw new Error(nested);
-  return { name: context.name, kind: context.kind, readonly: context.readonly, location: path };
+}
+
+/**
+ * Make a clone real: cloned afresh at its `ref`, replacing the clone the last start made, so what the agent did there
+ * and did not push is gone (it is told so). Only a process that runs the agent calls this. The user's own checkout is
+ * never cloned over.
+ */
+export async function cloneContext(context: Extract<ResolvedContext, { kind: "github" }>): Promise<void> {
+  if (!context.clone) throw new Error(`context "${context.name}" is the checkout at ${context.location}, not a clone`);
+  await cloneAfresh(context.repo, context.ref, context.location).catch((error: unknown) => {
+    throw new Error(`context "${context.name}": ${(error as Error).message}`);
+  });
 }
 
 /**

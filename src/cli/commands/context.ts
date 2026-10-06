@@ -1,7 +1,8 @@
 /** `fastagent context list|add|remove`: what the agent works on and knows, as fastagent.config.ts declares it. */
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { loadConfig, writeContexts } from "../../engines/pi/config.ts";
-import { type ContextDeclaration, declarationFor, declareContexts, isContextName } from "../../contexts/declare.ts";
+import { type ContextDeclaration, declareContexts, defaultContextName, isContextName } from "../../contexts/declare.ts";
+import { type SourceOptions, declarationFor } from "../../contexts/source.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
 import { contextLines } from "../contexts-view.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
@@ -25,18 +26,15 @@ export async function runContextList(dirArg: string, json: boolean): Promise<voi
   for (const [label, value] of contextLines(contexts)) console.log(`${`${label}:`.padEnd(10)} ${value}`);
 }
 
-export async function runContextAdd(
-  source: string,
-  dirArg: string,
-  opts: { copy?: boolean; readonly?: boolean; name?: string },
-): Promise<void> {
+export async function runContextAdd(source: string, dirArg: string, opts: SourceOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   const declarations = await declared(agentDir);
-  const added = await Promise.resolve()
+  const { declaration: added, notes } = await Promise.resolve()
     .then(() => declarationFor(source, process.cwd(), opts))
     .catch(failStartup);
-  // The default name is the directory's; asked for explicitly when it cannot be one, or is taken.
-  const name = opts.name ?? basename((added as { local: string }).local);
+  for (const note of notes) console.error(`[fastagent] ${note}`);
+  // The default name is the repository's or the directory's; asked for explicitly when it cannot be one, or is taken.
+  const name = opts.name ?? defaultContextName(added);
   if (!isContextName(name)) {
     failUsage(`"${name}" cannot name a context (one path segment of letters, digits, "-" and "_") — pass --name`);
   }

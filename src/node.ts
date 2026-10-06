@@ -10,6 +10,7 @@ export {
   type MountAgentServiceOptions,
 } from "./service.ts";
 
-// What an agent works on and knows: the declaration, and where each context is for this instance.
+// What an agent works on and knows: the declaration, where each context is for this instance, and the clone that makes
+// a repository with no checkout here real.
 export type { ContextDeclaration } from "./contexts/declare.ts";
-export { resolveContexts, type ResolvedContext } from "./contexts/resolve.ts";
+export { cloneContext, resolveContexts, type ResolvedContext } from "./contexts/resolve.ts";

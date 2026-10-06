@@ -68,6 +68,8 @@ src/
 ├── contexts/               # what an agent works on and knows — engine-neutral
 │   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
 │   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses
+│   ├── git.ts              # a GitHub context's git: which repository a checkout is of, its ref, a fresh clone
+│   ├── source.ts           # what a command's <source> declares (github:owner/repo, a checkout, a directory)
 │   └── config-text.ts      # the literal `contexts: [...]` block `fastagent context` rewrites
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel/defineRoutine): the ONE read of
