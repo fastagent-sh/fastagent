@@ -49,6 +49,7 @@ describe("contexts: the declaration", () => {
     ["copy on a repository", [{ github: "a/b", copy: true }], /"copy" applies to a local context/],
     ["ref on a directory", [{ local: "/x", ref: "main" }], /"ref" applies to a github context/],
     ["a repository not owner/repo", [{ github: "acme" }], /"github" must be "owner\/repo"/],
+    ["a ref git would read as an option", [{ github: "a/b", ref: "--upload-pack=x" }], /"ref" must name a branch/],
     ["a non-boolean flag", [{ local: "/x", readonly: "yes" }], /"readonly" must be a boolean/],
     ["a name that is a path", [{ local: "/x", name: "a/b" }], /"name" must be one path segment/],
     ["a default name that is not one", [{ local: "/my notes" }], /default name "my notes" .* give it a "name"/],

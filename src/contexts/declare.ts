@@ -86,6 +86,10 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
     const repo = e.github as string;
     if (!GITHUB_REPO.test(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
     if (e.copy !== undefined) throw new Error(`${at}: "copy" applies to a local context; a github one is cloned`);
+    // git reads a leading "-" as an option, and no branch, tag or commit name has one.
+    if (e.ref !== undefined && (e.ref as string).startsWith("-")) {
+      throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${e.ref}"`);
+    }
     declared = {
       name: "",
       readonly,

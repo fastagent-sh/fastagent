@@ -100,7 +100,8 @@ export function refNotice(dir: string, ref: string): string | undefined {
   const branch = gitAnswer(["symbolic-ref", "--quiet", "--short", "HEAD"], dir);
   if (branch === ref) return undefined;
   const head = gitAnswer(["rev-parse", "HEAD"], dir);
-  if (head !== undefined && head === gitAnswer(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], dir)) {
+  const target = gitAnswer(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], dir);
+  if (head !== undefined && head === target) {
     return undefined;
   }
   const at = branch ?? `a detached ${head?.slice(0, 7) ?? "HEAD"}`;
@@ -127,11 +128,12 @@ export async function cloneAfresh(repo: string, ref: string | undefined, dir: st
       if (ref !== undefined && FULL_COMMIT.test(ref)) {
         await runGit(["init", "-q", next], parent);
         await runGit(["remote", "add", "origin", url], next);
-        await runGit(["fetch", "-q", "--depth", "1", "origin", ref], next);
+        await runGit(["fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref], next);
         await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], next);
       } else {
-        const branch = ref !== undefined ? ["--branch", ref] : [];
-        await runGit(["clone", "-q", "--depth", "1", ...branch, url, next], parent);
+        // One token, and `--` before the operands: a declared value never reaches git as an option of its own.
+        const branch = ref !== undefined ? [`--branch=${ref}`] : [];
+        await runGit(["clone", "-q", "--depth", "1", ...branch, "--", url, next], parent);
       }
     } catch (error) {
       throw new Error(
