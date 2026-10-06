@@ -4,6 +4,8 @@ import { defaultExclude, defineConfig } from "vitest/config";
 // engine import graph (~0.7s+, measured; the pi packages, not TS stripping). They are deliberately few
 // — only genuine process-level contracts (exit codes, stdout/stderr discipline, read-only invariants)
 // live here; command LOGIC is unit-tested against the engine functions, not re-run through a subprocess.
+// They are split by command across test/cli*.test.ts (helpers in test/cli-run.ts): vitest runs files in
+// parallel but the tests inside one file serially, and as one file they were the suite's longest path.
 //
 // Under vitest's file-parallelism a contended machine can still push a cold-start past a tight timeout.
 // The fix is the timeout, not a parallelism cap: a 30s ceiling absorbs a slow cold-start (including a

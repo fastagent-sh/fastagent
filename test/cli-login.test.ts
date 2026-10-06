@@ -1,0 +1,108 @@
+import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { agentWorkspace, run } from "./cli-run.ts";
+
+describe("cli: login and models", () => {
+  it("login OUTSIDE an agent announces the global credential — the scope switch is never silent", async () => {
+    // Every other command refuses a non-agent dir; login has the one legitimate fallback (there is no
+    // project credential to write). It must SAY so: the global file is not what dev/start in a real
+    // agent would read, so a silent switch would strand the credential invisibly.
+    const home = await mkdtemp(join(tmpdir(), "fa-login-global-home-"));
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-global-"));
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.FASTAGENT_AUTH_PATH;
+    const { code, stderr } = await run(["login", "no-such-provider"], cwd, env);
+    expect(code).not.toBe(0);
+    // The marker names itself, at both positions the lookup checks.
+    expect(stderr).toMatch(/no agent here \(no fastagent\.config\.ts\)/);
+    await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
+
+    // …and it is silent when FASTAGENT_AUTH_PATH outranks the fallback: an announcement naming a file the
+    // run does not write would be worse than none.
+    const directed = await run(["login", "no-such-provider"], cwd, {
+      ...env,
+      FASTAGENT_AUTH_PATH: join(cwd, "auth.json"),
+    });
+    expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
+
+    // Standing INSIDE an agent is NOT "outside an agent" — findAgentDir refuses that position with
+    // its own way out, and login must tell the same story as every other command instead of quietly
+    // switching scope.
+    const inside = join(cwd, "agent", "tools");
+    await mkdir(inside, { recursive: true });
+    await writeFile(join(cwd, "agent", "fastagent.config.ts"), "export default {};\n");
+    const nested = await run(["login", "no-such-provider"], inside, env);
+    expect(nested.stderr).toMatch(/is inside the agent .* — run from/);
+    expect(nested.stderr).not.toMatch(/logging in GLOBALLY/);
+  });
+
+  it("models inside an agent's subdirectory refuses, instead of listing or refreshing the machine's catalog", async () => {
+    // Without an agent here the refresh falls back to ~/.fastagent/models-store.json, which no deploy carries — so,
+    // as for login, standing inside an agent must not count as standing outside one.
+    const home = await mkdtemp(join(tmpdir(), "fa-models-home-"));
+    const workspace = await mkdtemp(join(tmpdir(), "fa-models-nested-"));
+    const inside = join(workspace, "agent", "tools");
+    await mkdir(inside, { recursive: true });
+    await writeFile(join(workspace, "agent", "fastagent.config.ts"), "export default {};\n");
+    const { code, stderr } = await run(["models", "--refresh"], inside, { ...process.env, HOME: home });
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/is inside the agent .* — run from/);
+    await expect(stat(join(home, ".fastagent", "models-store.json"))).rejects.toThrow(); // the machine's untouched
+    // Listing too: the machine's list would silently leave out the agent's own catalog and models.json.
+    const listed = await run(["models", "claude"], inside, { ...process.env, HOME: home });
+    expect(listed.code).toBe(1);
+    expect(listed.stderr).toMatch(/is inside the agent .* — run from/);
+  });
+
+  it("FASTAGENT_AUTH_PATH at the user-global credential is the documented sharing path, not a leak", async () => {
+    // `FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json` from inside an agent is how docs/cli.md says to
+    // pin every agent to one account. Warning about it would be advice against our own documentation:
+    // that directory is fastagent's own machinery home and needs no .gitignore.
+    const home = await mkdtemp(join(tmpdir(), "fa-share-home-"));
+    const cwd = await agentWorkspace("fa-share-agent-");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.FASTAGENT_AUTH_PATH;
+    const shared = join(home, ".fastagent", ".secrets", "auth.json");
+    const { stderr } = await run(["login", "no-such-provider"], cwd, { ...env, FASTAGENT_AUTH_PATH: shared });
+    expect(stderr).not.toMatch(/cannot be committed/);
+  });
+
+  it("login fails fast in a non-TTY (a pipe/CI) instead of hanging on the interactive menu", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-tty-"));
+    const { code, stderr } = await run(["login", "openai-codex"], cwd); // run() pipes stdio → not a TTY
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/login is interactive.*run it in a terminal/);
+  });
+
+  it("login from $HOME does NOT self-ignore the HOME-global ~/.fastagent (a dotfiles repo may track it)", async () => {
+    // self-ignore protects agent PROJECT trees, not the user's home. Run from $HOME (cwd == home) so
+    // the credential default IS the global file; the bogus provider fails after the self-ignore
+    // decision, so an absent .gitignore proves the global dir was left alone.
+    // NOT realpath'd on purpose: macOS hands the child a /var→/private/var symlinked $HOME, so this
+    // also exercises that the home check canonicalizes (a raw string compare would leak a .gitignore here).
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.FASTAGENT_AUTH_PATH;
+    const { code } = await run(["login", "no-such-provider"], home, env);
+    expect(code).not.toBe(0);
+    await expect(stat(join(home, ".fastagent", ".gitignore"))).rejects.toThrow(); // home left untouched
+  });
+
+  it("login reads the workspace .secrets/.env (a FASTAGENT_AUTH_PATH set there takes effect)", async () => {
+    // Regression: login used to load .env from ./<provider> (the positional is the provider, not a dir).
+    // Put FASTAGENT_AUTH_PATH in .secrets/.env (the workspace .env home) pointing OUTSIDE the tree — if
+    // it is honored, auth resolves there and the secrets dir is never self-ignored; if the bug returns
+    // (.env ignored), auth falls back in-tree and .secrets/.gitignore appears. Its ABSENCE is the proof.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-env-"));
+    const external = join(await mkdtemp(join(tmpdir(), "fa-ext-")), "auth.json");
+    await mkdir(join(cwd, ".secrets"), { recursive: true });
+    await writeFile(join(cwd, ".secrets", ".env"), `FASTAGENT_AUTH_PATH=${external}\n`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FASTAGENT_AUTH_PATH; // must come only from .env
+    const { code } = await run(["login", "no-such-provider"], cwd, env);
+    expect(code).not.toBe(0);
+    await expect(stat(join(cwd, ".secrets", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
+  });
+});
