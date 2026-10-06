@@ -17,7 +17,7 @@ describe("deploy/container: shared Docker context", () => {
   it("refuses an agent name the release manifest could not carry", () => {
     expect(() => containerArtifacts({ ...input, agent: "../agent" })).toThrow("manifest");
   });
-  it("keeps tracked secrets scaffolds without shipping credentials or state", () => {
+  it("keeps tracked secrets scaffolds without shipping credentials, state or clones", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
     const dockerfileIgnore = artifacts.find((artifact) => artifact.path === "Dockerfile.dockerignore")!.content;
@@ -38,6 +38,7 @@ describe("deploy/container: shared Docker context", () => {
       ".secrets/auth.json",
       ".secrets/nested/token",
       ".state/sessions/session.jsonl",
+      ".contexts/app/README.md",
       ".state/channels/telegram.json",
     ];
 

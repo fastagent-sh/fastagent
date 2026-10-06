@@ -59,7 +59,7 @@ network, and credentials. Constrain the whole process when isolation is required
 ## 2. Create the agent beside what it works on
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
-`.state/` and `.secrets/`, and it is the agent's working directory. What the agent works on (a project, a folder) is
+`.state/`, `.secrets/` and `.contexts/` (its clones of github contexts), and it is the agent's working directory. What the agent works on (a project, a folder) is
 declared as a **context**; the agent never sits inside it, and a project never sits inside the agent.
 
 | Situation | Do |
@@ -450,7 +450,7 @@ so side effects must tolerate repetition.
 
 `fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
 deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),
-and [state configuration](configuration.md#machinery-state-and-secrets).
+and [state configuration](configuration.md#machinery-state-secrets-and-contexts).
 
 ## 10. Report what was actually verified
 

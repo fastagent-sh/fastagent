@@ -50,7 +50,8 @@ One agent shape, one marker:
 │                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
-└── .state/                 # the local instance's mutable state: sessions, channel state, schedule state, clones
+├── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
+└── .contexts/              # the local instance's clones of its github contexts, one per context name
 ```
 
 **The agent directory is the agent's working directory**, its coding tools' root, the key its session records

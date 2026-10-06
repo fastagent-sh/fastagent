@@ -7,6 +7,8 @@ node_modules
 
 # machine state: sessions, channel state, schedule state
 .state
+# the clones of the agent's github contexts (each is its repository's, not this one's)
+.contexts
 .cache
 
 # fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare
