@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { createAgent } from "../../engines/pi/authoring.ts";
 import { declarationFor } from "../../contexts/source.ts";
+import { failEdit } from "./context.ts";
 import { contextLines } from "../contexts-view.ts";
 import { failStartup } from "../fail.ts";
 
@@ -24,7 +25,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const { created, contexts } = await createAgent(dir, {
     contexts: read.map((source) => source.declaration),
     exampleTool: true,
-  }).catch(failStartup);
+  }).catch(failEdit(""));
   console.error(`[fastagent] created ${dir}`);
   for (const note of read.flatMap((source) => source.notes)) console.error(`  ${note}`);
   if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);

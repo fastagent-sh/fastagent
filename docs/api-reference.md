@@ -289,9 +289,10 @@ every refusal is thrown with the message the CLI shows. `createAgent` checks eve
 removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
 `init` adds) the agent imports nothing at run time and runs without `npm install`. `addContext` names the context
 after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.
-Both rewrite only the literal `contexts` list, and return the name they acted on with the contexts after the edit. A
-name that cannot name a context, is taken (ignoring case), or is not the agent's is a `ContextNameError`, which the CLI
-reports with exit code 2.
+Both rewrite only the literal `contexts` list, under the config file's lock, so concurrent edits apply one after the
+other; each returns the name it acted on with the contexts after the edit. A name that cannot name a context, is
+taken (ignoring case, including by another context `createAgent` was given), or is not the agent's is a
+`ContextNameError`, which the CLI reports with exit code 2.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,

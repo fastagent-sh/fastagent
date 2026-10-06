@@ -8,7 +8,7 @@ import { resolveAgentDir } from "../../paths.ts";
 import { type ScaffoldOptions, scaffoldAgent } from "../../scaffold/init.ts";
 import { type ContextDeclaration, declareContexts, defaultContextName, isContextName } from "../../contexts/declare.ts";
 import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
-import { loadConfig, writeContexts } from "./config.ts";
+import { editContexts, loadConfig, writeContexts } from "./config.ts";
 
 /**
  * A refusal about a context's NAME: one that cannot name a context, one the agent already has, one it does not have.
@@ -40,6 +40,7 @@ export interface CreatedAgent {
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
   const agentDir = resolve(dir);
   const declarations = options.contexts ?? [];
+  for (const [i, declaration] of declarations.entries()) contextName(agentDir, declarations.slice(0, i), declaration);
   const contexts = resolveContexts(agentDir, declarations);
   const { created, undo } = await scaffoldAgent(agentDir, { exampleTool: options.exampleTool });
   // The contexts were checked above, so a refusal here is one that check could not foresee (the disk changed in
@@ -56,7 +57,7 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
 /** The agent's contexts, resolved for this instance (what `fastagent context list` shows). */
 export async function listContexts(agentDir: string): Promise<ResolvedContext[]> {
   const dir = resolveAgentDir(agentDir);
-  return resolveContexts(dir, await declared(dir));
+  return resolveContexts(dir, (await loadConfig(dir)).config.contexts);
 }
 
 /** What an edit leaves: the context it added or removed, by name, and the agent's contexts after it. */
@@ -71,33 +72,38 @@ export interface ContextEdit {
  */
 export async function addContext(agentDir: string, declaration: ContextDeclaration): Promise<ContextEdit> {
   const dir = resolveAgentDir(agentDir);
-  const declarations = await declared(dir);
-  const name = declaration.name ?? defaultContextName(declaration);
-  if (!isContextName(name)) {
-    throw new ContextNameError(`"${name}" cannot name a context (one path segment of letters, digits, "-" and "_")`);
-  }
-  const taken = declareContexts(declarations, dir).find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (taken) throw new ContextNameError(`this agent already has a context named "${taken.name}"`);
-  const next = [...declarations, declaration];
-  await writeContexts(dir, next);
-  return { name, contexts: resolveContexts(dir, next) };
+  const { name, contexts } = await editContexts(dir, (declared) => {
+    const next = [...declared, declaration];
+    return { contexts: next, result: { name: contextName(dir, declared, declaration), contexts: next } };
+  });
+  return { name, contexts: resolveContexts(dir, contexts) };
 }
 
 /** Remove the agent's context named `name` (ignoring case); a name it does not have is a {@link ContextNameError}. */
 export async function removeContext(agentDir: string, name: string): Promise<ContextEdit> {
   const dir = resolveAgentDir(agentDir);
-  const declarations = await declared(dir);
-  const names = declareContexts(declarations, dir).map((c) => c.name);
-  const index = names.findIndex((n) => n.toLowerCase() === name.toLowerCase());
-  if (index === -1) {
-    throw new ContextNameError(`no context named "${name}" (this agent has: ${names.join(", ") || "none"})`);
-  }
-  const next = declarations.filter((_, i) => i !== index);
-  await writeContexts(dir, next);
-  return { name: names[index] as string, contexts: resolveContexts(dir, next) };
+  const removed = await editContexts(dir, (declared) => {
+    const names = declareContexts(declared, dir).map((c) => c.name);
+    const index = names.findIndex((n) => n.toLowerCase() === name.toLowerCase());
+    if (index === -1) {
+      throw new ContextNameError(`no context named "${name}" (this agent has: ${names.join(", ") || "none"})`);
+    }
+    const next = declared.filter((_, i) => i !== index);
+    return { contexts: next, result: { name: names[index] as string, contexts: next } };
+  });
+  return { name: removed.name, contexts: resolveContexts(dir, removed.contexts) };
 }
 
-/** The agent's declarations as written (not resolved: an edit rewrites what the author wrote). */
-async function declared(agentDir: string): Promise<ContextDeclaration[]> {
-  return (await loadConfig(agentDir)).config.contexts ?? [];
+/**
+ * The name `declaration` takes beside the `declared` ones: its own, or its repository's or directory's. One that cannot
+ * name a context, or that one of them has (ignoring case), is a {@link ContextNameError}.
+ */
+function contextName(agentDir: string, declared: ContextDeclaration[], declaration: ContextDeclaration): string {
+  const name = declaration.name ?? defaultContextName(declaration);
+  if (!isContextName(name)) {
+    throw new ContextNameError(`"${name}" cannot name a context (one path segment of letters, digits, "-" and "_")`);
+  }
+  const taken = declareContexts(declared, agentDir).find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (taken) throw new ContextNameError(`this agent already has a context named "${taken.name}"`);
+  return name;
 }

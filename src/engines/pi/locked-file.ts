@@ -1,9 +1,9 @@
 /**
- * The one cross-process read-modify-write for a JSON file several processes share: fastagent's credentials file and a
- * model catalog. It takes the lock pi takes for the same files (pi-coding-agent's `FileAuthStorageBackend`), so a
- * fastagent writer and a pi writer queue behind each other, and it REPLACES the file rather than rewriting it in
- * place, which is what lets every reader of these files read without the lock: a reader sees the old file or the new
- * one, never one cut short.
+ * The one cross-process read-modify-write for a file several processes share: fastagent's credentials file and a
+ * model catalog (JSON), and `fastagent.config.ts` when its contexts are edited (the CLI and a desktop client). It takes
+ * the lock pi takes for the same files (pi-coding-agent's `FileAuthStorageBackend`), so a fastagent writer and a pi
+ * writer queue behind each other, and it REPLACES the file rather than rewriting it in place, which is what lets every
+ * reader of these files read without the lock: a reader sees the old file or the new one, never one cut short.
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -38,7 +38,8 @@ function writeTarget(path: string): string {
 export async function withLockedFile<T>(
   path: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
-  options: { signal?: AbortSignal } = {},
+  /** `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for the credential and catalog files. */
+  options: { signal?: AbortSignal; mode?: number } = {},
 ): Promise<T> {
   mkdirSync(dirname(path), { recursive: true });
   if (!existsSync(path)) {
@@ -84,7 +85,7 @@ export async function withLockedFile<T>(
     // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
     // the mode before the content is reachable.
     if (out.next !== undefined) {
-      writeFileAtomic(writeTarget(path), out.next, SECRET_FILE_MODE);
+      writeFileAtomic(writeTarget(path), out.next, options.mode ?? SECRET_FILE_MODE);
     }
     throwIfCompromised();
     result = out.result;

@@ -6,7 +6,7 @@ import { contextLines } from "../contexts-view.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
 /** A name refusal is the caller's to fix by naming another (exit 2); anything else is a startup failure (exit 1). */
-function failEdit(hint: string) {
+export function failEdit(hint: string) {
   return (error: unknown): never => {
     if (error instanceof ContextNameError) failUsage(`${error.message}${hint}`);
     failStartup(error);
