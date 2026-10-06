@@ -125,7 +125,7 @@ store in [participant-model.md](participant-model.md) §8: a cache may shape a p
 | Summon rule (§3: humans heard in a thread) | **unchanged**: it is decided on the ACK path from pushed events, and §3 rejects platform reads there. These reads happen in the turn, after the ACK |
 | Referent anchor (rung 2) and session inheritance (rung 4) | unchanged |
 | Feishu/Slack `context-buffer.ts` and their `buffers.json` | removed |
-| Telegram's buffer | becomes the local `PlaceHistory`, read by cursor; `telegram-send` appends what it sent through a shared `telegramTransport` (the Feishu/Slack send tools already share theirs) |
+| Telegram's buffer | stays: it is the only record a Telegram place has. `telegram-send` records what it sent into it through the shared `telegramTransport` (phase 1). Whether it later becomes a local `PlaceHistory` behind the same fold is decided once the fold exists |
 | #374: the room reading a thread | an agent tool over the same `PlaceHistory`: list this room's threads, read one; bounded, the current room only |
 
 ## 4. Scopes
@@ -146,8 +146,8 @@ app cannot read this chat's history" instead of folding nothing.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| 1. Kit + Telegram | `place-history.ts`; Telegram's buffer becomes the local log; `telegramTransport` records sends | Telegram's suite passes; a schedule's post is in the next turn's discussion |
-| 2. Feishu / Lark | `history.ts` over the measured API; names from members; bot messages labeled; `include_bot:read` requested; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
+| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`, records what the agent sends into that chat's buffer (#754) | a schedule's post is in the chat's next answered turn |
+| 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; `include_bot:read` requested; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
 | 3. Slack | `history.ts`; buffer removed | the same, live |
 | 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
 
