@@ -92,7 +92,7 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **`SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates** are re-read every
+- **`SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own and each context's `AGENTS.md`, skills and prompt templates** are re-read every
   turn.
 - **Code inputs** (`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
   restart the dev worker once the turns running in it finish (at most 10 minutes).

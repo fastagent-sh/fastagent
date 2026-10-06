@@ -72,7 +72,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, a context's `AGENTS.md` and `skills/` apply on the next turn; code
+`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md` and `skills/` apply on the next turn; code
 edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
 
 Send one turn:

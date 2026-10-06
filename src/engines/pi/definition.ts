@@ -1,9 +1,8 @@
 /**
  * Definition domain: read an agent definition directory into memory — its system prompt files, its skills and prompt
  * templates (each from the agent directory's root spelling first, then pi's `.pi/` and the standard `.agents/` ones),
- * and what its contexts provide: each one's root AGENTS.md and its skills, named `<context>/<skill>`. The agent
- * directory's own AGENTS.md is not loaded: it is for whoever changes the agent. docs/design/agent-model.md §2 is the
- * rule this follows.
+ * its own AGENTS.md, and what its contexts provide: each one's root AGENTS.md and its skills, named `<context>/<skill>`.
+ * docs/design/agent-model.md §2 is the rule this follows.
  */
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -57,7 +56,8 @@ export type DefinitionDiagnostic = SkillDiagnostic | PromptTemplateDiagnostic;
 
 /** Result of loading a definition directory. */
 export interface LoadedDefinition {
-  /** Each context's root AGENTS.md, in declaration order; pi renders them as project context. */
+  /** The agent directory's AGENTS.md, then each context's root one in declaration order; pi renders them as project
+   *  context, each marked with its path. */
   contextFiles: DefinitionFile[];
   /** `SYSTEM.md`, else `.pi/SYSTEM.md`: replaces pi's default prompt. Absent → pi builds its default. */
   systemPrompt?: DefinitionFile;
@@ -130,7 +130,10 @@ export async function loadAgentDefinition(
   const { skills, diagnostics: skillDiagnostics, collisions } = await readSkills(e, root);
   const { prompts, diagnostics: promptDiagnostics } = await readPrompts(e, root, shadowed);
   ignored.push(...(await ignoredPaths(e, root)));
-  const contextFiles: DefinitionFile[] = [];
+  // The agent works in its own directory, so its AGENTS.md is read like any working directory's: it is how this agent
+  // is built and how to change it, which is the agent's own business when it improves itself.
+  const own = await readIfExists(e, join(root, "AGENTS.md"));
+  const contextFiles: DefinitionFile[] = own === undefined ? [] : [own];
   for (const context of options.contexts ?? []) {
     const instructions = await readIfExists(e, join(context.location, "AGENTS.md"));
     if (instructions !== undefined) contextFiles.push(instructions);
