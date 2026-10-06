@@ -16,8 +16,7 @@ stage merges.
 
 Today "what the agent works on" is derived, in about fifteen places, from where the definition sits
 (`resolvePlacement` in `src/paths.ts`: workspace = the agent directory's parent). The model replaces that with a
-declaration whose meaning depends on where the instance runs: a local path, a checkout, a clone, a copy baked into
-an image. The hard part is to compute that answer **once per process, in one function, and have every consumer read
+declaration whose meaning depends on where the instance runs: a local path, a checkout, a clone. The hard part is to compute that answer **once per process, in one function, and have every consumer read
 the same value**: the prompt, the coding tools' working directory, skills, authored tools, `info`, `deploy`
 preflight and the startup report. Two derivations of it would disagree, the way the run and observation planes
 once did.
@@ -36,18 +35,17 @@ agent by git's own rules, which never overwrite the agent's work (what git refus
 restart check of §3.8) resolve without cloning, so they never touch the network, and `info` keeps its contract of
 creating nothing.
 
-What stage 4 adds is the `host` column; the `local` one is built:
+Built, except the `local` row's `host` cell, which the "Removing `copy`" stage (§5) builds; until then preflight
+refuses the deploy:
 
 | Declaration | `local` | `host` |
 |---|---|---|
-| `local` | The path; refused if missing or not a directory | Refused (preflight already refused the deploy) |
-| `local` + `copy` | The path | `.state/contexts/<name>`, seeded from the image (§3.7) |
+| `local` | The path; refused if missing or not a directory | Absent: left out of the resolution, named at start |
 | `github` with a usable `local` | The checkout; a notice when it is not at `ref` | A clone in `.state/contexts/<name>` |
 | `github` without one | A clone in `.state/contexts/<name>` | Same |
 
-On a host, seeding copies joins cloning in the one step a serving process takes when it starts, so
-`applyDeploymentRelease` copies nothing but the definition. A copy follows writability (agent model §3): one the
-instance only knows is seeded again on every deployment, one it works on once.
+A `local` context does not reach a host (agent model §3), so a host resolves `github` contexts only, and names the
+`local` ones it leaves out (`contextsAbsentHere`).
 
 **When it runs.** Resolution once per process start, before the assembly; cloning once per start of a process that
 runs the agent, before resolution. Fetching per turn would put network and git on every turn. What is re-read per
@@ -59,55 +57,29 @@ declaration is a config change, so it restarts the process (§3.8).
 ### 3.1–3.6 Addressing, working directory, prompt, definition loading, authored tools, `fastagent context`
 
 Landed in stage 2; [core](core.md) §2, [configuration](../configuration.md#contexts) and the
-[CLI reference](../cli.md#fastagent-context) describe them. Two choices were made there that this plan left open:
+[CLI reference](../cli.md#fastagent-context) describe them. Choices made there that this plan left open:
 
-- **`copy` is asked for.** `init --context` and `context add` declare a directory as `{ local }`, and `--copy` adds
-  `copy: true` (on `init`, for each of its contexts): copying ships the directory's contents off the machine, so it
-  is never a default. `--ref` and `--local` arrived with GitHub contexts (stage 3), on `context add`.
+- **Sources.** `init --context` and `context add` declare a directory as `{ local }`, the root of a GitHub checkout
+  as `{ github, local }`, and `github:owner/repo` as `{ github }`; `--ref` and `--local` arrived with GitHub
+  contexts (stage 3), on `context add`.
 - **The candidate config is `.fastagent.config.next.ts`** beside the real one: a dotfile `dev` does not watch, removed
   whether or not it replaces the config.
 
 ### 3.7 Deploy (`deploy/`)
 
-Stage 2 made the agent directory the build context, baked at `/app/definition`, with every artifact at its root
-(Railway reads `railway.json` and the Dockerfile there, so `RAILWAY_DOCKERFILE_PATH` is gone), and the storage holds
-`definition/` beside `.state/` and `.secrets/`; storage laid out with `base/` is refused. Stage 4 adds copied contexts
-to the image. New layout:
+Landed in stages 2 and 4. A release ships the definition and nothing else: the agent directory is the build context,
+baked at `/app/definition`, with every artifact at its root, and the storage holds `definition/` beside `.state/`
+and `.secrets/` (storage laid out with `base/` is refused). Contexts reach a host only by their type: a `github` one
+is cloned there by the same `cloneContext` as on a laptop, the author's `local` not looked for, with `GITHUB_TOKEN`
+from the host's environment through the credential helper in each clone's config; the image installs `git` for it.
+Preflight prints what each `github` context becomes on the host, says on AgentCore that every clone starts over on
+each deployment, and notes a missing `GITHUB_TOKEN`, which a public repository does not need. [core](core.md) §2
+and §9 describe it. As landed, preflight refuses a directory context.
 
-```text
-/app/definition/          the agent directory, minus .state/ and .secrets/
-/app/contexts/<name>/     each local context declared with copy
-```
-
-`deploy` stages that tree in a build directory it owns (`.state/deploy/build/`), because a copied context lives
-outside the agent directory and no host's build context can reach it.
-
-- **One exclusion rule.** The stage is copied with the rules the generated ignore file carries today
-  (`DOCKERIGNORE_BASE` in `container.ts`: `node_modules`, `.secrets/`, `.state`, `.cache`, `.env`, `.env.*`, logs,
-  plus the resolved machinery paths), from one list both use. `build-context.ts`'s check that a kept ignore file
-  does not let credentials through applies to what lands in the stage, so `deploy/build-context.ts` is part of this
-  change.
-- **Artifacts stay where they are.** The user-owned artifacts (`Dockerfile`, `fly.toml`, compose file, kept unless
-  `--force`) are read in place; only the build context points at the stage. So the compose file's
-  `env_file: .secrets/.env` keeps resolving next to it. Each host's way to name a separate build context
-  (compose `build.context`, the directory argument of `fly deploy` and `railway up`, `docker build`'s context for
-  AgentCore) is verified when stage 4 is built.
-- The Dockerfile loses `ENV FASTAGENT_AGENT` and the agent prefix. It installs `git` when the staged tree carries a
-  `.git` (today's `shipsGit` rule in `preflight.ts`) or any context is `github`.
-
-On the host, `applyDeploymentRelease` (`deploy/workspace.ts`) already replaces only `definition/` (stage 2); stage 4
-adds:
-
-- the definition: replaced from the image on every release, as `base/<agent>` is today, so a hosted agent's own
-  harness changes last until the next release (distribution, per the model);
-- each copied context (4b): seeded from `/app/contexts/<name>` into `.state/contexts/<name>` when absent (writable)
-  or on every release (read-only), with the decision written to the log;
-- each `github` context: cloned by `cloneContext` (built in 4a), with `GITHUB_TOKEN` from the host's environment.
-
-Preflight (`deploy/preflight.ts`) prints one line per context from the same `declare.ts` data (built in 4a), refuses
-a `local` context without `copy` (and, until 4b, one with it), and on AgentCore states that every clone starts over
-on each deployment. `GITHUB_TOKEN` is a value like any other in `.secrets/.env`, so it travels and the runbook lists
-it; preflight notes its absence, since a public repository needs none.
+The "Removing `copy`" stage (§5) changes that last point: a `local` context is absent on a host (agent model §3),
+left out of the resolution there (`contextsAbsentHere`) and named at start, and named by preflight, a warning for
+one the agent works on and a note for one it only knows, each with the way to change it: what the agent only reads
+can be copied into the agent directory, what it works on moves to a repository.
 
 ### 3.8 Restart when idle (`dev-supervisor.ts`, `start`)
 
@@ -148,8 +120,7 @@ passes every day, and one whose fires bunch only on some dates is refused every 
 
 ### 3.10 `init` and the scaffold
 
-Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every directory declared `{ local }` (`--copy`
-for a host's copy).
+Landed in stage 2 ([CLI reference](../cli.md#fastagent-init)), with every directory declared `{ local }`.
 Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `github:owner/repo` a remote context.
 
 ## 4. Decisions
@@ -157,7 +128,7 @@ Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `g
 | Question | Chosen | Not chosen, and why |
 |---|---|---|
 | When contexts are resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
-| How a copied context reaches a host | Baked into the image from a staged build directory | Uploaded after deploy through each host's shell: four mechanisms, and AgentCore has none that persists |
+| Whether a local directory reaches a host | No: a context reaches a host only by a type whose home the host reaches (a repository today), and the agent directory reaches it as the harness, replaced by each release | A copy baked into the image (`copy: true`, built through stage 3 and removed before it deployed): each instance's copy became data of its own, which nothing brought back together, so it was not the same data anywhere (agent model §3); it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host. What it served splits: reference material the agent only reads ships in the agent directory; data it works on needs a home, a repository today and further context types later |
 | How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would lose nothing of theirs but would need ours re-added by hand |
 | How a process restarts onto a new definition | A supervisor checks the load in a child, drains, restarts | In-process reload: built and removed in #600 for twelve limits |
 | How `fastagent context` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
@@ -166,15 +137,16 @@ Stage 3 makes a checkout whose `origin` is on GitHub `{ github, local }`, and `g
 ## 5. Stages
 
 Each stage is one PR, green on `npm run lint && npm run typecheck && npm test`, with the user docs it changes. No
-release is cut between stage 2 and stage 4: in between, `deploy` refuses an agent with contexts, by name.
+release is cut from stage 2 until "Removing `copy`" lands: before it, `copy` and `--copy` exist in the configuration
+and the CLI only to be removed, and none of them may reach a user.
 
 | Stage | Scope | Done when |
 |---|---|---|
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone brought up to date in place at each start; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
-| 4a. `github` contexts on a host (landed) | §3.7 for `github`: a clone on the host by the same `cloneContext`, the author's `local` not looked for; `GITHUB_TOKEN` through a credential helper in the clone's config; `git` in the image; preflight prints each context's fate and refuses directory ones | An agent whose contexts are all `github` deploys to every host; AgentCore says what it resets |
-| 4b. Copied contexts on a host | The rest of §3.7: the staged build directory, `local` + `copy` seeded on the host | Every host deploys an agent with each context type |
+| 4. `github` contexts on a host (landed) | §3.7 for `github`: a clone on the host by the same `cloneContext`, the author's `local` not looked for; `GITHUB_TOKEN` through a credential helper in the clone's config; `git` in the image; preflight prints each context's fate and refuses directory ones | An agent whose contexts are all `github` deploys to every host; AgentCore says what it resets |
+| Removing `copy` | `copy: true`, `--copy` and their reports, now that no host receives a copy (decision above); a `local` context is absent on a host, and said to be, rather than refusing the deploy | `copy` is refused at load like any key a declaration does not have (it was never released, so there is nothing to migrate); an agent with a `local` context deploys, and preflight and the host's start name it |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
 
 ## 6. Tests worth naming

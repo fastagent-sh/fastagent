@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { spawn } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { CommandSpec } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
+import { agentWorkspace, run } from "./cli-run.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the
@@ -287,31 +283,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 // ---------------------------------------------------------------------------------------------
 // End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
 
-const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-
-/** A workspace with an (empty) agent dir in it, as `init` produces the placement. */
-/** An agent directory. */
-async function agentWorkspace(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
-  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
-  return dir;
-}
-
-function run(
-  args: string[],
-  env?: Record<string, string>,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], env ? { env: { ...process.env, ...env } } : {});
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-}
-
 describe("cli end to end: the thin entry", () => {
   it("models --help renders the generated per-command help (exit 0)", async () => {
     const { code, stdout, stderr } = await run(["models", "--help"]);
@@ -351,7 +322,11 @@ describe("cli end to end: the thin entry", () => {
     const flag = await run(["start", dir, "--port", "abc"]);
     expect(flag.code).toBe(2);
     expect(flag.stderr).toMatch(/invalid --port/);
-    const env = await run(["start", dir], { PORT: "abc", FASTAGENT_MODEL: "openai/gpt-5.5" });
+    const env = await run(["start", dir], undefined, {
+      ...process.env,
+      PORT: "abc",
+      FASTAGENT_MODEL: "openai/gpt-5.5",
+    });
     expect(env.code).toBe(1);
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
