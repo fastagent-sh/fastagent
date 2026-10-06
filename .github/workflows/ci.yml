@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  # The merge queue tests each PR on top of the latest main; the required checks must run there too.
+  merge_group:
   push:
     branches: [main]
 
