@@ -11,7 +11,7 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import { resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
+import { resolveContextsDir, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
@@ -117,6 +117,7 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
+  process.env.FASTAGENT_CONTEXTS_DIR ||= join(root, ".contexts");
   // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
@@ -164,7 +165,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     model: modelSpec,
     serving: true,
   });
-  const { agent, config, stateRoot, sessionsDir } = opened;
+  const { agent, config, stateRoot, sessionsDir, contexts } = opened;
   await reportAssembly(
     { ...opened, modelSpec },
     {
@@ -182,6 +183,12 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
     log.info(
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
+    );
+  }
+  // Only when something is cloned: a clone holds what the agent changed and has not pushed.
+  if (contexts.some((c) => c.kind === "github" && c.clone) && isUnderDir(resolveContextsDir(agentDir), agentDir)) {
+    log.info(
+      "[fastagent] note: github context clones live under the definition; use FASTAGENT_CONTEXTS_DIR on persistent storage for deployment.",
     );
   }
   const traced = logAgentLoop(agent);

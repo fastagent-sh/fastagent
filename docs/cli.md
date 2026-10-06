@@ -91,7 +91,7 @@ Prints, without serving:
 - state, sessions and auth paths.
 
 A context that cannot be resolved (its directory is missing, say) is reported, not fatal. `--json` carries
-`contexts`, `contextsError` and `contextFiles` (each context's `AGENTS.md`). Read-only.
+`contexts`, `contextsError` and `contextFiles` (the agent directory's `AGENTS.md`, then each context's). Read-only.
 
 ## `fastagent context`
 
@@ -164,7 +164,7 @@ refuses and says where to `cd`.
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates
+Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, its own and each context's `AGENTS.md`, skills and prompt templates
 are re-read every turn. A supervisor restarts the
 worker on edits to `tools/`, `channels/`, `schedules/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
 once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
@@ -182,7 +182,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 fastagent chat [agent] [--model provider/modelId]
 ```
 
-Opens the agent in pi's TUI with the definition's prompt files, its contexts' `AGENTS.md`, skills, prompt
+Opens the agent in pi's TUI with the definition's prompt files, its own and its contexts' `AGENTS.md`, skills, prompt
 templates, `tools/` and `extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
 - Sessions are pi's per-directory records (`~/.pi/agent/sessions/<encoded agent directory>`), separate from served
@@ -287,6 +287,7 @@ bind:     --bind > all interfaces
 /invoke:  --no-invoke > fastagent.config.ts http.invoke > served
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets
+clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
 ```
 
 ## Global options

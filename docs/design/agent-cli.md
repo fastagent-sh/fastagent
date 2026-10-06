@@ -31,23 +31,20 @@ Commands that take an agent take `[agent]`: the path to an agent directory, the 
 | Anything else | Refused: pass the agent's path, or create one with `fastagent init` |
 
 Agents live in their own directories, not inside the projects they work on ([agent model](agent-model.md) §2), so
-there is nothing to search for below the current directory. These go away:
-
-- the one-level scan for agents inside a directory (`agentsAt`);
-- `FASTAGENT_AGENT`, and the rule that a directory named `fastagent` wins a tie;
-- the `ENV FASTAGENT_AGENT` a generated Dockerfile pins.
+there is nothing to search for below the current directory: no scan for agents inside a directory, and no
+environment variable that chooses among several; a generated Dockerfile names the one directory it ships.
 
 ## 2. The local instance
 
 On a machine, an agent directory has one instance. `dev`, `start` and a one-off `invoke` run in that directory
-are processes serving the same instance. Its state stays where it is today:
+are processes serving the same instance. Its state is kept beside the definition:
 
 ```text
 ~/agents/reviewer/                   the working directory
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
-└── .state/                          the instance's sessions, channel and schedule state, and the clones it
-                                     made, under each context's name (.state/contexts/<name>)
+├── .state/                          the instance's sessions, channel and schedule state
+└── .contexts/                       the clones the instance made, under each context's name
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
@@ -56,7 +53,7 @@ an agent needs no name on its own machine, and there is nothing to list or clean
 Terraform keeps its local state in `.terraform/` beside the configuration for the same reasons. Since an agent
 directory is never inside a context, this state never sits in a project's tree.
 
-What this asks of others: both directories stay out of version control (they do today), and a tool that copies an
+What this asks of others: both directories stay out of version control (the ignore files `init` writes keep them out), and a tool that copies an
 Agent to give it to someone leaves them out. duang's design already excludes `.secrets`, `.env` and session state
 from a preset.
 
@@ -91,7 +88,7 @@ with `fastagent context add --readonly`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
   with the command that creates the agent elsewhere and attaches this directory.
 
-`init` scaffolds `APPEND_SYSTEM.md` for the agent's standing instructions, in place of today's `persona.md`, so a
+`init` scaffolds `APPEND_SYSTEM.md` for the agent's standing instructions, so a
 new agent keeps pi's default prompt and follows it as pi improves it. An agent that should be someone other than
 pi's coding assistant replaces the default with `SYSTEM.md` instead ([agent model](agent-model.md) §2). An agent
 directory that still has a `persona.md` is refused rather than served with an identity it ignores; the refusal
@@ -131,7 +128,7 @@ Startup says what the agent works on and what it knows:
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
-knows     handbook  ~/agents/reviewer/.state/contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
+knows     handbook  ~/agents/reviewer/.contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -139,7 +136,7 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context has no checkout here | `cloned github acme/app into .state/contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
+| A `github` context has no checkout here | `cloned github acme/app into .contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
@@ -177,17 +174,4 @@ knows     papers    local ~/papers                stays on this machine; the dep
 
 ## 8. `login` and `add <channel>`
 
-Unchanged as commands. What they store goes to the local instance (`.secrets/`), as it does today.
-
-## 9. What changes from today
-
-| Today | In this design |
-|---|---|
-| `[dir]` is a workspace or an agent directory, found by a one-level scan | `[agent]` is an agent directory: the current one, or a path |
-| `FASTAGENT_AGENT` and a `fastagent`-named tie-break select among several agents | A path selects one |
-| The Dockerfile pins `ENV FASTAGENT_AGENT` | Nothing to pin |
-| `init [dir]` creates `./fastagent/` inside a project, and the project becomes its workspace | `init <dir>` creates the agent in its own directory; `--context` attaches what it works on |
-| An agent lives inside its project | A declared context never contains the agent directory, nor sits inside it |
-| Contexts do not exist | `fastagent context list/add/remove`, with `--readonly` for what the agent only knows |
-| Startup reports the workspace | Startup reports what the agent works on and what it knows |
-| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, clones repositories on the host, and leaves a local context on this machine, saying so |
+What they store goes to the local instance (`.secrets/`).

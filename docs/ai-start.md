@@ -36,7 +36,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 |---|---|---|
 | Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
 | An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
-| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`; the agent directory's own `AGENTS.md` is for whoever changes the agent. |
+| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`, after the agent directory's own, which says how the agent is built and changed. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
@@ -59,7 +59,7 @@ network, and credentials. Constrain the whole process when isolation is required
 ## 2. Create the agent beside what it works on
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
-`.state/` and `.secrets/`, and it is the agent's working directory. What the agent works on (a project, a folder) is
+`.state/`, `.secrets/` and `.contexts/` (its clones of github contexts), and it is the agent's working directory. What the agent works on (a project, a folder) is
 declared as a **context**; the agent never sits inside it, and a project never sits inside the agent.
 
 | Situation | Do |
@@ -278,7 +278,7 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, a context's `AGENTS.md`, skills and prompt
+`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md`, skills and prompt
 templates are
 read on the next turn.
 With watching enabled, changes under the agent's `tools/`, `channels/`, `schedules/`, and `extensions/`
@@ -444,7 +444,7 @@ so side effects must tolerate repetition.
 
 `fastagent info` shows resolved paths. Verify retention on the selected host; deleting its volume also
 deletes the data it holds. See [what deploy bakes](deploy.md#what-deploy-bakes), [host guarantees](deploy.md),
-and [state configuration](configuration.md#machinery-state-and-secrets).
+and [state configuration](configuration.md#machinery-state-secrets-and-contexts).
 
 ## 10. Report what was actually verified
 

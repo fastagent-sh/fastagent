@@ -29,7 +29,7 @@ async function layout() {
   const app = join(root, "app");
   const handbook = join(root, "handbook");
   for (const dir of [agentDir, app, handbook]) await mkdir(dir);
-  await writeFile(join(agentDir, "AGENTS.md"), "OWN-AGENTS: for whoever changes the agent.\n");
+  await writeFile(join(agentDir, "AGENTS.md"), "OWN-AGENTS: how this agent is built and changed.\n");
   await writeFile(join(app, "AGENTS.md"), "APP-AGENTS: run the tests before committing.\n");
   await writeFile(join(handbook, "AGENTS.md"), "HANDBOOK-AGENTS: style rules.\n");
   await skill(join(app, ".pi", "skills", "deploy"), "deploy", "Deploy the app (pi spelling).");
@@ -77,10 +77,10 @@ describe("an agent with contexts", () => {
     expect(prompt).toContain(`Your working directory, ${agentDir}, is your own directory`);
     expect(prompt).toContain(`You work on:\n- app: ${app} (a directory on this machine)`);
     expect(prompt).toContain(`You know, and do not write:\n- handbook: ${handbook} (a directory on this machine)`);
-    // Each context's root AGENTS.md is project context; the agent's own is not loaded.
-    expect(prompt).toContain("APP-AGENTS");
-    expect(prompt).toContain("HANDBOOK-AGENTS");
-    expect(prompt).not.toContain("OWN-AGENTS");
+    // The agent's own AGENTS.md is project context first, then each context's root one, in declaration order.
+    expect(prompt.indexOf("OWN-AGENTS")).toBeGreaterThan(-1);
+    expect(prompt.indexOf("OWN-AGENTS")).toBeLessThan(prompt.indexOf("APP-AGENTS"));
+    expect(prompt.indexOf("APP-AGENTS")).toBeLessThan(prompt.indexOf("HANDBOOK-AGENTS"));
     // A context's skills carry its name, so the agent's own `deploy` and the app's never collide.
     expect(prompt).toContain("<name>deploy</name>");
     expect(prompt).toContain("<name>app/deploy</name>");
@@ -136,7 +136,7 @@ describe("an agent with contexts", () => {
     const { agent } = await createPiAgentFromDefinition(agentDir, { model: "faux/faux-1", providers: [faux.provider] });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(prompt).toContain("You have no contexts: you work only in your own directory.");
-    expect(prompt).not.toContain("<project_context>");
+    expect(prompt).toContain("OWN-AGENTS"); // its own AGENTS.md is its project context still
   });
 });
 

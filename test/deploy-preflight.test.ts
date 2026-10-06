@@ -196,6 +196,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
     await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
+    await mkdir(join(agentDir, ".contexts")); // …and the clones of the agent's github contexts
     await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
@@ -204,6 +205,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const text = JSON.stringify(pre.messages);
       expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
       expect(text).toMatch(/does not exclude .{0,12}\.state/); // machine state would ship
+      expect(text).toMatch(/does not exclude .{0,12}\.contexts/); // so would the clones
       expect(text).toMatch(/does not exclude .{0,30}node_modules/); // the native-binary clobber hazard — named
       expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
@@ -327,7 +329,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       if (clean.ok)
         // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
         // beside auth.json must not ship either.
-        expect(clean.container.machineryPaths).toEqual(["creds", ".state"]);
+        expect(clean.container.machineryPaths).toEqual(["creds", ".state", ".contexts"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");

@@ -232,6 +232,7 @@ const start: CommandSpec = {
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets — .env + auth.json\n" +
+    "  clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts — github contexts\n" +
     "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +

@@ -6,8 +6,8 @@ status: current
 
 # Configuration
 
-- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`), `skills/`, `prompts/`, `tools/`, and
-  what its contexts provide: each one's `AGENTS.md` and skills.
+- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`,
+  `tools/`, and what its contexts provide: each one's `AGENTS.md` and skills.
 - What it works on and knows is declared in `fastagent.config.ts` as `contexts`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
@@ -194,8 +194,8 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
 
 ## Contexts
 
-An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on is declared, never inferred from where the directory sits:
+An agent's directory is its own: its definition, its working directory, and its local instance's `.state/`,
+`.secrets/` and `.contexts/`. What it works on is declared, never inferred from where the directory sits:
 
 ```ts
 export default {
@@ -220,7 +220,7 @@ A `github` context is one of two things on this machine:
 
 - **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
   as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
-- **Otherwise, a clone** in `.state/contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
+- **Otherwise, a clone** in `.contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
   `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by git's own
   rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it is pinned
   to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an untracked file
@@ -245,8 +245,8 @@ command refuses such a declaration at load, and one whose directory does not exi
 
 What each context gives the agent, re-read every turn:
 
-- **Its `AGENTS.md`**, at the context's root, as project context. The agent directory's own `AGENTS.md` is not
-  loaded: it is for whoever changes the agent, and the agent is told so.
+- **Its `AGENTS.md`**, at the context's root, as project context, after the agent directory's own `AGENTS.md`
+  (how the agent is built and changed, loaded first).
 - **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<context>/<skill>`: the `deploy` skill of the
   context `app` is `app/deploy`, so it never collides with the agent's own or another context's.
 - **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
@@ -263,8 +263,8 @@ declare it as `github`.
 ## The system prompt
 
 pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from each context's `AGENTS.md`, the skills, and the working directory. Two files in the agent directory
-change it, both re-read every turn:
+is), the project context from the agent directory's `AGENTS.md` and then each context's, the skills, and the working
+directory. Two more files in the agent directory change it, both re-read every turn like the `AGENTS.md` files:
 
 | File | Effect |
 |---|---|
@@ -343,8 +343,8 @@ project scope is read from a context.
 
 ### The prompt lives in the session record
 
-pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or a
-context's `AGENTS.md` is appended
+pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or an
+`AGENTS.md` (the agent's own or a context's) is appended
 as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
 others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
 
@@ -396,28 +396,32 @@ Channels that dial out (WebSocket) are reachable by whoever can message the bot,
 Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse a body that is not
 `application/json`, which stops cross-origin writes that skip the preflight.
 
-## Machinery: `.state/` and `.secrets/`
+## Machinery: `.state/`, `.secrets/` and `.contexts/`
 
 - `<agent dir>/.state/` — mutable machine state: sessions, channel state (`channels/<kind>/`), schedule state.
   Single-process; point it at a volume in a container.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
+- `<agent dir>/.contexts/` — the clones of the agent's `github` contexts, one per context name. They are data the
+  agent works on, so they are not inside `.state/`; like it, they are never part of the definition, and `init`'s
+  `.gitignore` and `deploy` keep them out.
 
 Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
-with `.state/` and `.secrets/` beside it.
+with `.state/`, `.secrets/` and `.contexts/` beside it.
 The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
 [Deploy](deploy.md#aws-bedrock-agentcore)).
 
 For a manually configured service:
 
 ```bash
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets FASTAGENT_CONTEXTS_DIR=/data/.contexts fastagent start
 ```
 
 ```txt
 state root: FASTAGENT_STATE_DIR    > <agent dir>/.state
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets
+clones:     FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
 sessions:   <state root>/sessions
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
 endpoints:  FASTAGENT_MODELS_PATH  > ~/.fastagent/models.json (under the agent's own models.json)

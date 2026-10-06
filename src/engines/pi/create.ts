@@ -275,8 +275,7 @@ function contextKind(c: ResolvedContext): string {
 function contextsSection({ agentDir, contexts }: { agentDir: string; contexts: readonly ResolvedContext[] }): string {
   const own =
     `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
-    `land there unless you put them elsewhere. Its AGENTS.md, if there is one, is for changing yourself: read it ` +
-    `before you do.`;
+    `land there unless you put them elsewhere.`;
   if (contexts.length === 0) return `${own} You have no contexts: you work only in your own directory.`;
   const line = (c: ResolvedContext) => `- ${c.name}: ${c.location} (${contextKind(c)})`;
   const worksOn = contexts.filter((c) => !c.readonly);

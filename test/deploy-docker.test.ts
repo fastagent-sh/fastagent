@@ -46,6 +46,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain('"127.0.0.1:8787:8787"');
     expect(yaml).toContain('FASTAGENT_STATE_DIR: "/data/.state"');
     expect(yaml).toContain('FASTAGENT_SECRETS_DIR: "/data/.secrets"');
+    expect(yaml).toContain('FASTAGENT_CONTEXTS_DIR: "/data/.contexts"');
     expect(yaml).toContain("- state:/data");
     expect(yaml).toContain("restart: unless-stopped");
     // Docker's default json-file driver never rotates, and this agent's log is where a failed turn's reason is

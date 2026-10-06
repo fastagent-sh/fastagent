@@ -24,6 +24,9 @@ export const SECRETS_DIRNAME = ".secrets";
 /** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
 
+/** The clones segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
+export const CONTEXTS_DIRNAME = ".contexts";
+
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
@@ -135,6 +138,15 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
   return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(resolve(dir), STATE_DIRNAME);
+}
+
+/**
+ * Where an instance keeps the clones of its github contexts, each under the context's name:
+ * `FASTAGENT_CONTEXTS_DIR` env > `<agentDir>/.contexts`. Not inside the state root: a clone is data the agent works
+ * on, so its location is one the agent is told and expected to write in, which `.state/` (bookkeeping) is not.
+ */
+export function resolveContextsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(env.FASTAGENT_CONTEXTS_DIR) ?? join(resolve(dir), CONTEXTS_DIRNAME);
 }
 
 /**
