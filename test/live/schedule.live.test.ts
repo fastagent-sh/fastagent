@@ -59,10 +59,10 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
-    const { schedules, stop } = startSchedules(agent, stateRoot, await loadServingSchedules(dir));
+    const { current, stop } = startSchedules(agent, stateRoot, dir, await loadServingSchedules(dir));
     cleanups.push(stop);
     expect(
-      schedules.map((s) => s.name),
+      current().map((s) => s.name),
       "the schedules/ file did not load",
     ).toEqual([SCHEDULE]);
 

@@ -13,7 +13,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
     expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
-    expect(ignored(join(root, "schedules", "daily.md"))).toBe(false); // loaded once per worker — restart is the re-read
+    // The running clock re-reads schedules/ itself, so an edit there restarts nothing (and cuts off no turn).
+    expect(ignored(join(root, "schedules", "daily.md"))).toBe(true);
     // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart
     // this watcher exists to give. (Their per-turn reload is a different thing and does not help:
     // it re-instantiates the set discovered at boot.)

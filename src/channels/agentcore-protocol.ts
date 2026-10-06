@@ -91,6 +91,8 @@ export interface WebhookReply {
 export interface WakeAlarm {
   id: string;
   at: string;
+  /** A schedule's alarm: the fire it delivers when it goes off (a wake-up's only pokes). */
+  fire?: ScheduleFireEvent["scheduleFire"];
 }
 
 /** The wire shape the wake sink POSTs to {@link RESERVED_PATHS.wakeAlarm} (the forwarder validates `secret`). */
@@ -100,10 +102,10 @@ export interface WakeAlarmRequest {
 }
 
 /**
- * What EventBridge hands the forwarder when a cron rule fires: which schedule, and which occurrence of it.
- * `occurrence` is `<aws.scheduler.scheduled-time>` — the clock names its own fire, which is the only thing that
- * survives a retry (schedule/run.ts).
+ * What EventBridge hands the forwarder when a schedule's alarm goes off: which schedule, and which instant of it.
+ * The container named the instant when it set the alarm, and EventBridge repeats the input byte-identical on every
+ * redelivery, which is what lets the container claim it once.
  */
-export interface ScheduleFireEvent {
+interface ScheduleFireEvent {
   scheduleFire: { name: string; occurrence: string };
 }

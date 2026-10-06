@@ -54,7 +54,7 @@ describe("createAgentService", () => {
     const dir = await agentDir({ "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\nsummarise the day\n` });
     const service = await createAgentService(dir);
     try {
-      expect(service.schedules).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
+      expect(service.schedules()).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
       // Work a caller starts itself is `POST /invoke`: there is no by-name route beside it.
       expect([...service.unverifiedRoutes].sort()).toEqual(["GET /health", "POST /invoke"]);
       expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(404);
@@ -238,15 +238,15 @@ describe("createAgentService", () => {
     }
   });
 
-  it("every serve polls the agent's own wake-ups — no schedule, no switch — and close() stops the poll", async () => {
+  it("every serve polls the agent's own wake-ups and re-reads schedules/ — no switch — and close() stops both", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
     const service = await createAgentService(await agentDir({}, `{ model: "openai-codex/gpt-5.5" }`));
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
-      expect(polls).toHaveLength(1);
+      expect(polls).toHaveLength(2);
       await service.close();
-      expect(cleared).toHaveBeenCalledWith(polls[0]);
+      for (const poll of polls) expect(cleared).toHaveBeenCalledWith(poll);
     } finally {
       await service.close();
       timers.mockRestore();

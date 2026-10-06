@@ -84,7 +84,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     config,
     run: !!opts.run,
     force: !!opts.force,
-    externalClock: host === "agentcore", // cron rides EventBridge there — the resident-host notes don't apply
+    externalClock: host === "agentcore", // alarms wake the container there — the resident-host notes do not apply
     // AgentCore DOES get a public URL (the forwarder's, AuthType NONE) — but nothing of ours answers behind it:
     // that relay reaches the channels' routes only, each verifying its platform's signature (agentcore-service.ts).
     publicUrl: host !== "agentcore",

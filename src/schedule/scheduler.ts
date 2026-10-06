@@ -8,6 +8,8 @@ import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
+import { basename } from "node:path";
+import type { ModuleLoadFailure } from "../loader.ts";
 import { type Schedule, scheduleSession } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
@@ -48,17 +50,31 @@ export interface Scheduler {
   start(): void;
   /** Cancel pending waits. */
   stop(): void;
+  /** The schedules armed now: the loaded set, as each re-read of `schedules/` left it. */
+  current(): readonly Schedule[];
+}
+
+/** What a re-read of `schedules/` found: the valid files, and the ones that are not. */
+export interface ScheduleLoad {
+  schedules: readonly Schedule[];
+  failures: readonly ModuleLoadFailure[];
 }
 
 export interface SchedulerOptions {
   agent: Agent;
   stateRoot: string;
-  /** Every schedule this serve loaded. */
+  /** Every schedule this serve loaded at start (a file that is not valid refused the start before this). */
   schedules: readonly Schedule[];
+  /**
+   * Re-read `schedules/`, every {@link RELOAD_MS}: a schedule added, changed or removed while the process runs is
+   * armed, re-armed or disarmed without a restart. Absent, the start's set is fixed.
+   */
+  reload?: () => Promise<ScheduleLoad>;
+  /** Told when the armed set or a next instant changed: a re-read changed it, or a schedule fired (AgentCore mirrors
+   *  it into alarms). */
+  onChange?: () => void;
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
   now?: () => Date;
-  /** External slot delivery owns cron timers and catch-up; local wake polling still runs. */
-  externalClock?: boolean;
 }
 
 /**
@@ -76,6 +92,14 @@ export interface SchedulerOptions {
  */
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 const WAKEUP_POLL_MS = 30_000;
+/** How often `schedules/` is re-read: an edit is armed within this. */
+const RELOAD_MS = 30_000;
+
+/** Whether two loads of one schedule would fire the same turns at the same instants. */
+const sameSchedule = (a: Schedule, b: Schedule): boolean => a.cron === b.cron && a.tz === b.tz && a.prompt === b.prompt;
+
+/** The schedule a `schedules/<name>.md` failure label names. */
+const scheduleNameOf = (label: string): string => basename(label, ".md");
 
 /**
  * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
@@ -227,13 +251,16 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       agent,
       stateRoot,
       schedules,
+      reload,
+      onChange,
       now = () => new Date(clock.currentTimeMillisUnsafe()),
-      externalClock = false,
     } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
+    /** The armed set, by name, with the loop that fires each. */
+    const armed = new Map<string, { schedule: Schedule; loop?: Fiber.Fiber<unknown, unknown> }>();
 
-    const launch = (label: string, work: Effect.Effect<void>): void => {
+    const launch = (label: string, work: Effect.Effect<void>): Fiber.Fiber<unknown, unknown> =>
       fork(
         Effect.withFiber((fiber) => {
           // Publish ownership before a synchronous invoke callback can re-enter stop().
@@ -253,7 +280,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           );
         }),
       );
-    };
     const cronLoop = (s: Schedule, first: Date) =>
       Effect.gen(function* () {
         let due: Date | undefined = first;
@@ -280,6 +306,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             Effect.uninterruptible,
           );
           due = nextRun(s.cron, s.tz, now());
+          // Its next instant moved: whoever mirrors the armed set (AgentCore's alarms) hears it.
+          onChange?.();
         }
       });
 
@@ -333,6 +361,76 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       }
     });
 
+    /** Arm `s` to fire next at `due` (or say it never will), replacing whatever loop armed it before. */
+    const arm = (s: Schedule, due: Date | undefined): void => {
+      armed.get(s.name)?.loop?.interruptUnsafe();
+      if (!due) {
+        log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
+        armed.set(s.name, { schedule: s });
+        return;
+      }
+      armed.set(s.name, { schedule: s, loop: launch(s.name, cronLoop(s, due)) });
+    };
+
+    /** The failures last reported, so a broken file is said when it breaks, not on every re-read. */
+    let reported = new Set<string>();
+    /**
+     * One re-read of `schedules/`. An edit takes effect from the NEXT instant after now: catching up is for what was
+     * missed while the process was down, not for a cron that was just written. A file that stops being valid keeps
+     * the definition it last had, and says so; one that was never valid is not armed.
+     */
+    const reloadOnce = (load: () => Promise<ScheduleLoad>) =>
+      Effect.gen(function* () {
+        const loaded = yield* Effect.tryPromise({ try: load, catch: (cause) => new PortFailure(cause) });
+        const next = new Map(loaded.schedules.map((s) => [s.name, s] as const));
+        const said = new Set<string>();
+        for (const f of loaded.failures) {
+          const name = scheduleNameOf(f.label);
+          const kept = armed.get(name);
+          if (kept) next.set(name, kept.schedule);
+          const line = `${f.label}: ${f.message}`;
+          said.add(line);
+          if (!reported.has(line)) {
+            log.error(
+              `[schedule] ${f.label} is not a valid schedule (${f.message}) — ` +
+                (kept ? "it keeps its previous definition" : "not armed"),
+            );
+          }
+        }
+        reported = said;
+        let changed = false;
+        for (const [name, { loop }] of armed) {
+          if (next.has(name)) continue;
+          loop?.interruptUnsafe();
+          armed.delete(name);
+          log.info(`[schedule] ${name}: removed`);
+          changed = true;
+        }
+        const current = now();
+        for (const s of next.values()) {
+          const before = armed.get(s.name)?.schedule;
+          if (before && sameSchedule(before, s)) continue;
+          log.info(`[schedule] ${s.name}: ${before ? "changed" : "added"} (cron "${s.cron}"${s.tz ? ` ${s.tz}` : ""})`);
+          arm(s, nextRun(s.cron, s.tz, current));
+          changed = true;
+        }
+        if (changed) onChange?.();
+      }).pipe(
+        Effect.catchTag("PortFailure", (error) =>
+          Effect.sync(() => {
+            // The armed set stands: a directory that cannot be read now is not a reason to disarm what was.
+            log.error(`[schedule] re-reading schedules/ failed (keeping what is armed): ${String(error.cause)}`);
+          }),
+        ),
+      );
+    const reloadLoop = (load: () => Promise<ScheduleLoad>) =>
+      Effect.gen(function* () {
+        for (;;) {
+          yield* Effect.sleep(RELOAD_MS);
+          yield* reloadOnce(load);
+        }
+      });
+
     return {
       start() {
         stopped = false;
@@ -342,29 +440,27 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         // one to run blind, it is a boot failure. The rest of the window is history, and history does not gate a
         // boot (`latestFire`).
         const lastFires = new Map<string, string>();
-        if (!externalClock) {
-          for (const s of schedules) {
-            const fire = latestFire(stateRoot, s.name);
-            if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
-            markInterruptedFire(stateRoot, s.name, fire);
-          }
+        for (const s of schedules) {
+          const fire = latestFire(stateRoot, s.name);
+          if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
+          markInterruptedFire(stateRoot, s.name, fire);
         }
         const current = now();
-        for (const s of externalClock ? [] : schedules) {
+        for (const s of schedules) {
           if (stopped) break;
           // FROM THE LAST FIRE, or from now when there was none. A schedule that has never fired does not catch
           // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
           // so "missed" is not a fact this process has. Every boot after the first resumes from the claim.
           const last = lastFires.get(s.name);
           const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
-          if (!due) {
-            log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
-            continue;
-          }
-          if (due.getTime() <= current.getTime()) log.info(`[schedule] ${s.name}: catching up a missed run`);
-          launch(s.name, cronLoop(s, due));
+          if (due && due.getTime() <= current.getTime()) log.info(`[schedule] ${s.name}: catching up a missed run`);
+          arm(s, due);
         }
         if (!stopped) launch("wake-up poll", wakeLoop);
+        if (!stopped && reload) launch("schedules/ re-read", reloadLoop(reload));
+      },
+      current() {
+        return [...armed.values()].map((a) => a.schedule);
       },
       stop() {
         stopped = true;

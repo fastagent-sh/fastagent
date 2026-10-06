@@ -102,7 +102,7 @@ describe("mountAgentcore", () => {
     const routes = mountAgentcore({
       agent,
       stateRoot: dir,
-      schedules: [],
+      schedules: () => [],
       channels: () => ({ routes: { "POST /telegram": () => text("ok\n", 200) } }),
     });
     // The channel is NOT beside them: AgentCore routes only these two into the container, so a
@@ -114,15 +114,24 @@ describe("mountAgentcore", () => {
     });
   });
 
-  it("binds schedule fires by name — an unknown name 404s through the adapter", async () => {
+  it("binds schedule fires by name; an alarm for a removed schedule or an instant its cron lost is skipped", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-fire-"));
     // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
-    const routes = mountAgentcore({ agent, stateRoot: dir, schedules: [schedule], channels: () => ({ routes: {} }) });
-    // The clock's name for this fire — the instant EventBridge would have injected.
+    const onFired = vi.fn();
+    const routes = mountAgentcore({
+      agent,
+      stateRoot: dir,
+      schedules: () => [schedule],
+      onFired,
+      channels: () => ({ routes: {} }),
+    });
+    // The instant the container set the alarm for: a grid point of the hourly cron.
     // (a schedule's fire history is claimed by occurrence — schedule/scheduler.ts).
-    const occurrence = new Date().toISOString();
+    const hour = new Date();
+    hour.setUTCMinutes(0, 0, 0);
+    let occurrence = hour.toISOString();
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {
@@ -130,10 +139,20 @@ describe("mountAgentcore", () => {
           body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name, occurrence }),
         }),
       );
-    expect((await fire("nope")).status).toBe(404);
+    // Not errors: an alarm outlives the edit that made it stale, and a 4xx would have EventBridge retry it.
+    const gone = await fire("nope");
+    expect(gone.status).toBe(200);
+    expect(await gone.json()).toMatchObject({ fired: false, skippedReason: "no such schedule any more" });
+    expect(onFired).not.toHaveBeenCalled(); // a skip moves no next instant
     const res = await fire("job");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
+    expect(onFired).toHaveBeenCalledOnce(); // the fire moved its next instant: the alarms are mirrored again
+    occurrence = new Date(hour.getTime() + 60_000).toISOString(); // 00:01 is no instant of "0 * * * *"
+    expect(await (await fire("job")).json()).toMatchObject({
+      fired: false,
+      skippedReason: expect.stringMatching(/not an instant of its cron/),
+    });
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
   });
 });

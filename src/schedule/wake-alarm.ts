@@ -1,6 +1,8 @@
 /**
- * Wake ALARMS for the AgentCore deployment: the piece that makes the agent's self-scheduled wake-ups (`wake`) reliable
- * on a host with NO resident process.
+ * Wake ALARMS for the AgentCore deployment: what makes the agent's self-scheduled wake-ups (`wake`) and its schedules
+ * fire on a host with NO resident process. Each is mirrored into a one-shot EventBridge schedule the forwarder sets;
+ * a schedule's alarm carries the instant it is for, and after each fire the next one is mirrored. Because the
+ * container sets them, a schedule written or edited while it runs gets its alarm without a deploy.
  */
 import { readFileSync } from "node:fs";
 import * as Clock from "effect/Clock";
@@ -11,6 +13,8 @@ import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { scheduleFile, writeScheduleFile } from "./state.ts";
 import { type Wakeup, listWakeups } from "./wakeups.ts";
+import { nextRun } from "./cron.ts";
+import type { Schedule } from "./schedule.ts";
 
 const URL_FILE = "wake-alarm-url";
 
@@ -45,11 +49,22 @@ const SYNC_TIMEOUT_MS = 10_000;
 /** Alarms due within this margin are NOT mirrored. */
 const DUE_MARGIN_MS = 5_000;
 
-/** Pending wake-ups → the desired alarm set, minus already-due entries (see {@link DUE_MARGIN_MS}). */
-export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
-  return pending
-    .filter((w) => Date.parse(w.fireAt) > now.getTime() + DUE_MARGIN_MS)
-    .map((w) => ({ id: w.id, at: w.fireAt }));
+/**
+ * Pending wake-ups and each schedule's next instant → the desired alarm set, minus what is already due (see
+ * {@link DUE_MARGIN_MS}): the container is awake for those, and its own clock fires them. A schedule's alarm is keyed
+ * by the schedule, so mirroring again moves it to the next instant rather than adding one.
+ */
+export function toAlarms(pending: Wakeup[], schedules: readonly Schedule[], now: Date): WakeAlarm[] {
+  const future = (at: number) => at > now.getTime() + DUE_MARGIN_MS;
+  return [
+    ...pending.filter((w) => future(Date.parse(w.fireAt))).map((w) => ({ id: w.id, at: w.fireAt })),
+    ...schedules.flatMap((s) => {
+      const next = nextRun(s.cron, s.tz, now);
+      if (!next || !future(next.getTime())) return [];
+      const at = next.toISOString();
+      return [{ id: `schedule:${s.name}`, at, fire: { name: s.name, occurrence: at } }];
+    }),
+  ];
 }
 
 /**
@@ -58,6 +73,8 @@ export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
  */
 export function createWakeAlarmSink(options: {
   secret: string;
+  /** The schedules armed now, whose next instants are mirrored with the wake-ups. */
+  schedules?: () => readonly Schedule[];
   fetchImpl?: typeof fetch;
   /** Injectable clock (tests); defaults to the wall clock. */
   now?: () => Date;
@@ -67,7 +84,13 @@ export function createWakeAlarmSink(options: {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const fork = Effect.runForkWith(yield* Effect.context<never>());
-    const { secret, fetchImpl = fetch, now = () => new Date(clock.currentTimeMillisUnsafe()), delay: pause } = options;
+    const {
+      secret,
+      schedules = () => [],
+      fetchImpl = fetch,
+      now = () => new Date(clock.currentTimeMillisUnsafe()),
+      delay: pause,
+    } = options;
     const delay = (ms: number) => (pause ? portJoin(() => pause(ms)) : Effect.sleep(ms));
     let running = false;
     let dirty = false;
@@ -76,7 +99,7 @@ export function createWakeAlarmSink(options: {
     const attemptOnce = (stateRoot: string, attempt: number) =>
       Effect.gen(function* () {
         const alarms = yield* Effect.try({
-          try: () => toAlarms(listWakeups(stateRoot), now()),
+          try: () => toAlarms(listWakeups(stateRoot), schedules(), now()),
           catch: (cause) => new PortFailure(cause),
         });
         // Nothing future to mirror: converged.

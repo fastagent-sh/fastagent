@@ -52,8 +52,8 @@ async function invoke(envelope) {
   return { status: res.statusCode ?? 200, body };
 }
 
-// Mirror the container's pending wake-ups into one-shot schedules: at(fireAt), poke me, delete
-// after firing. Upsert (create → conflict → update). The container pre-filters DUE alarms (it is
+// Mirror the container's pending wake-ups and its schedules' next instants into one-shot schedules: at(fireAt),
+// poke me (or deliver the schedule's fire), delete after firing. Upsert (create → conflict → update). The container pre-filters DUE alarms (it is
 // awake handling those), so every failure here is REAL — counted and propagated: a swallowed error
 // would leave a pending wake with no alarm, exactly the reliability hole this mechanism closes.
 // Cancelled wakes are NOT deleted here: their poke fires, finds nothing due, and the schedule
@@ -80,7 +80,12 @@ async function syncAlarms(alarms, ctx) {
       ScheduleExpressionTimezone: "UTC",
       FlexibleTimeWindow: { Mode: "OFF" },
       ActionAfterCompletion: "DELETE",
-      Target: { Arn: ctx.invokedFunctionArn, RoleArn: process.env.WAKE_ROLE_ARN, Input: '{"wakePoke":true}' },
+      // A schedule's alarm delivers its fire; a wake-up's only wakes the container, whose pump fires what is due.
+      Target: {
+        Arn: ctx.invokedFunctionArn,
+        RoleArn: process.env.WAKE_ROLE_ARN,
+        Input: a.fire ? JSON.stringify({ scheduleFire: a.fire }) : '{"wakePoke":true}',
+      },
     };
     try {
       await sch.send(new CreateScheduleCommand(p));

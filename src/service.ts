@@ -11,7 +11,7 @@ import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
-import { createScheduler } from "./schedule/scheduler.ts";
+import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
@@ -232,24 +232,28 @@ export async function loadServingSchedules(agentDir: string): Promise<Schedule[]
 
 /**
  * Start the clock over the schedules {@link loadServingSchedules} loaded — on every serve, schedules or not: the
- * agent's own wake-ups are a default capability, and this is what fires them.
+ * agent's own wake-ups are a default capability, and this is what fires them. It re-reads `<agentDir>/schedules/`
+ * while it runs, so a schedule written or edited then is armed without a restart; `onChange` hears each change.
  */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
+  agentDir: string,
   schedules: readonly Schedule[],
-  options: { externalClock?: boolean } = {},
-): { schedules: readonly Schedule[]; stop: () => void } {
+  options: { onChange?: () => void } = {},
+): Pick<Scheduler, "current" | "stop"> {
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
+    createScheduler({
+      agent,
+      stateRoot,
+      schedules,
+      reload: () => loadSchedules(agentDir),
+      ...(options.onChange ? { onChange: options.onChange } : {}),
+    }),
   );
   scheduler.start();
-  if (schedules.length > 0) {
-    log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-    );
-  }
-  return { schedules, stop: () => scheduler.stop() };
+  if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
+  return scheduler;
 }
 
 export interface AgentService {
@@ -275,7 +279,8 @@ export interface AgentService {
    * about this surface must come from what was actually assembled, not from re-deriving it.
    */
   corsOrigins?: readonly string[];
-  schedules: readonly Schedule[];
+  /** The schedules armed now: `schedules/` is re-read while the service runs, so this follows its edits. */
+  schedules: () => readonly Schedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
   /** The control plane's prefix, when `sessionControl` is on. */
@@ -394,7 +399,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, schedules),
+            try: () => startSchedules(agent, stateRoot, agentDir, schedules),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),
@@ -482,7 +487,7 @@ export async function mountAgentService(
           },
           unverifiedRoutes: Object.keys(routed.unverified),
           ...(corsOrigins ? { corsOrigins } : {}),
-          schedules: scheduled.schedules,
+          schedules: () => scheduled.current(),
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,

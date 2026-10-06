@@ -373,6 +373,24 @@ describe("agentcore forwarder (executed)", () => {
       ]);
     });
 
+    it("a schedule's alarm delivers its fire, naming the instant it is for", async () => {
+      const f = loadForwarder({ env });
+      const fire = { name: "digest", occurrence: "2026-07-28T10:30:00.000Z" };
+      await f.handler(alarmEvent("s3cret", [{ id: "schedule:digest", at: fire.occurrence, fire }]));
+      expect(f.scheduleCalls).toEqual([
+        {
+          type: "create",
+          input: expect.objectContaining({
+            ScheduleExpression: "at(2026-07-28T10:30:00)",
+            Target: expect.objectContaining({ Input: JSON.stringify({ scheduleFire: fire }) }),
+          }),
+        },
+      ]);
+      // …and that event is the one the forwarder relays as a `schedule-fire` envelope.
+      await f.handler({ scheduleFire: fire });
+      expect(f.envelopes.at(-1)).toMatchObject({ kind: "schedule-fire", ...fire });
+    });
+
     it("upserts: an existing schedule (Conflict) is updated in place", async () => {
       const f = loadForwarder({
         env,

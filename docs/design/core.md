@@ -595,13 +595,18 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 ## 8. Schedules and self-scheduling
 
 A **schedule** is `schedules/<name>.md`: a frontmatter holding `cron` and an optional `tz`, over the prompt. It is
-data, like a skill, so an author or a client writes one without TypeScript (the agent's own follow-up work is a
-wake-up: a schedule is loaded at start and replaced by each release); the frontmatter is read
+data, like a skill, so an author, a client or the agent writes one without TypeScript; the frontmatter is read
 strictly (two keys, one line each) rather than as YAML, so a bare `*/5 * * * *` works and anything else is refused
 naming the file. Every fire runs in the stable session `schedule:<name>`. The clock claims a slot before invoking,
 catches up one overdue occurrence after downtime (not every missed slot, and not at all before its first fire —
 nothing recorded that it was armed then), writes the outcome back into that claim, and leaves delivery to agent
 tools.
+
+**Edits are armed while the agent runs.** The clock re-reads `schedules/` every 30 seconds: an added or changed
+schedule is armed from its next instant (an edit is not a missed run to catch up), a removed one is disarmed, and a
+file that stops being valid keeps the definition it last had, said once in the log. At start an invalid file still
+refuses the serve. So an agent can schedule work in its definition and have it run without a restart; a release
+replaces the file like anything else the agent wrote there. `dev` does not restart on `schedules/`.
 
 **Nothing runs a schedule by name.** Work a caller starts is `POST /invoke`, and a prompt it reuses is a prompt
 template (`/<name>`), which pi expands on every invoke. An earlier design had a named unit of work with an optional
@@ -767,12 +772,13 @@ existence alone cannot authorize reuse.
 is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute is per-session microVMs,
 reclaimed when idle). The generated CloudFormation stack therefore carries a forwarder Lambda (public
 Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`) fronting the webhooks,
-and EventBridge Scheduler rules delivering each cron slot. Inside the container,
+and no per-schedule resource: the container sets its own alarms (below). Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
 reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
-the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
+the slot as the idempotency key (EventBridge delivery is at-least-once, and the container's own clock may have fired
+the same slot while it was alive), and an invoke streams back as
 SSE. `GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every leased session, a turn,
 compaction or control write however it started, and channel work not yet at one) so an idle reclaim cannot kill a
 post-ACK turn, and always carries `time_of_last_update`: the field is documented
@@ -847,11 +853,17 @@ claim notification and the scheduler's execution admission. A persisted alarm UR
 missing file reads as "not configured yet".
 
 A live session keeps its old compute (and the old image) until reclaimed, so `--run` stops the ingress
-session after a successful deploy. Self-scheduled wake-ups are EventBridge-backed: every wakeups-store
-mutation notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's
-reserved path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
-schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
-entry. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+session after a successful deploy. Wake-ups and schedules are EventBridge-backed the same way: every wakeups-store
+mutation, every change the schedule clock sees and every fire notifies a sink (`schedule/wake-alarm.ts`) that POSTs
+the pending wake-ups and each schedule's next instant to the forwarder's reserved path (shared secret), and the
+forwarder mirrors each into a self-deleting one-shot EventBridge schedule. A wake-up's pokes the container, whose
+ordinary wake pump fires the due entry; a schedule's carries `{scheduleFire: {name, occurrence}}`, which the
+container claims and runs. The container runs the ordinary clock too while it is alive; the claim makes the two one
+fire. A schedule's alarm is keyed by the schedule, so mirroring again moves it. An alarm that outlived an edit (a
+schedule removed, an instant its cron no longer has) is answered as skipped. Because the container sets the
+alarms, a schedule written on the runtime is armed without a deploy; the cost is that the alarms exist only once
+the container has run after a deploy (`--run` probes it), and that a failed mirror leaves a schedule unarmed until
+the next wake re-mirrors the whole set. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
 template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
 callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
 run, because nothing can restore their ingress when compute is reclaimed.

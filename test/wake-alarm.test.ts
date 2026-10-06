@@ -382,6 +382,27 @@ describe("schedule/wake-alarm: helpers", () => {
       { id: "future", session: "s", prompt: "p", fireAt: "2026-07-28T11:00:00.000Z" },
       { id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:01.000Z" }, // inside the due margin
     ];
-    expect(toAlarms(entries, now)).toEqual([{ id: "future", at: "2026-07-28T11:00:00.000Z" }]);
+    expect(toAlarms(entries, [], now)).toEqual([{ id: "future", at: "2026-07-28T11:00:00.000Z" }]);
+  });
+
+  it("toAlarms adds each schedule's NEXT instant, carrying the fire it delivers, keyed by the schedule", () => {
+    const now = new Date("2026-07-28T10:00:00Z");
+    const schedules = [
+      { name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai", prompt: "p" }, // 09:00 Shanghai = 01:00 UTC
+      { name: "soon", cron: "0 10 * * *", prompt: "p" }, // due right now: the awake container's clock fires it
+    ];
+    expect(toAlarms([], schedules, now)).toEqual([
+      {
+        id: "schedule:digest",
+        at: "2026-07-29T01:00:00.000Z",
+        fire: { name: "digest", occurrence: "2026-07-29T01:00:00.000Z" },
+      },
+      // `soon`'s next instant after now is tomorrow's 10:00, far outside the margin.
+      {
+        id: "schedule:soon",
+        at: "2026-07-29T10:00:00.000Z",
+        fire: { name: "soon", occurrence: "2026-07-29T10:00:00.000Z" },
+      },
+    ]);
   });
 });

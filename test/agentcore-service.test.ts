@@ -305,7 +305,7 @@ describe("mountAgentcoreService", () => {
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
 
-      // A name no schedule declares is the deploy-drift case: answered, never crashed.
+      // An alarm for a schedule since removed: answered as skipped, never as an error EventBridge would retry.
       const unknown = await service.handler(
         new Request("http://h/invocations", {
           method: "POST",
@@ -313,7 +313,8 @@ describe("mountAgentcoreService", () => {
           body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "gone", occurrence }),
         }),
       );
-      expect(unknown.status).toBe(404);
+      expect(unknown.status).toBe(200);
+      expect(await unknown.json()).toMatchObject({ fired: false, skippedReason: "no such schedule any more" });
     } finally {
       process.env.FASTAGENT_INGRESS_SECRET = undefined;
       await service.close();
@@ -326,7 +327,7 @@ describe("mountAgentcoreService", () => {
       `{ model: "openai-codex/gpt-5.5" }`,
     );
     const service = await mountAgentcoreService(await open(dir));
-    expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
+    expect(service.schedules().map((s) => s.name)).toEqual(["digest"]);
 
     await service.close();
     // Both the shutdown hook and an explicit close can run.
