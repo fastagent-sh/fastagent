@@ -21,7 +21,8 @@
  * `schedule-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
  * whole point of reading CloudWatch rather than the container.
  *
- * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
+ * The cron is every ten minutes, the floor every recurring schedule is held to (schedule/cron.ts), so the wait is
+ * bounded by that.
  *
  * WHAT IT MEASURED, ap-southeast-1, 2026-09-21, under the earlier deploy-time RULE (the alarm path has not been
  * measured live yet) — recorded so the next reader does not have to deploy to learn it. Seven consecutive deliveries
@@ -70,7 +71,7 @@ const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
 const SCHEDULE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
-const CRON = "* * * * *";
+const CRON = "*/10 * * * *";
 
 let agentDir = "";
 
@@ -197,10 +198,9 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // SIX MINUTES, on the numbers in this file's header. The schedule runs from the minute after the stack
-    // is created, so the first delivery's instant is within 60s of this point; the cold invocation then
-    // took 49.9s end to end (container start, definition open, model turn), and the poll interval is 10s
-    // — about 120s to the first match, against a 360s budget. Roughly 3x headroom.
+    // FIFTEEN MINUTES. The first instant is within 10 minutes of this point (the recurring floor); the cold invocation
+    // then took 49.9s end to end in the measurements above (container start, definition open, model turn), and the
+    // poll interval is 10s — at most ~11 minutes to the first match, against a 900s budget.
     //
     // THE JITTER IS THE REASON TO STATE THAT RATIO RATHER THAN A MARGIN IN SECONDS: between the
     // 2026-09-20 and 2026-09-21 runs the steady-state latency DOUBLED, 23.5-24.5s to 43.6-45.0s, with no
@@ -212,7 +212,7 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
     // `--filter-pattern`, not the clock. The budget is a cost ceiling — one real model turn per minute of
     // it — so it stays at the measured number until something is observed to exceed it. It also has to
     // fit inside this test's own timeout alongside the deploy (~7 minutes measured).
-    const fire = await waitForFire(deployedAt, 360_000);
+    const fire = await waitForFire(deployedAt, 900_000);
 
     // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model
     // turn or the forwarder's timeout failing — invisible from inside an agent that would never run.
@@ -225,5 +225,5 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
     expect(new Date(reply.slot as string).toISOString(), `container ran a different occurrence: ${fire.raw}`).toBe(
       new Date(fire.occurrence).toISOString(),
     );
-  }, 1_800_000);
+  }, 2_400_000);
 });

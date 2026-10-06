@@ -542,9 +542,12 @@ Generate today's digest and send it with slack-send to channel C0123456789.
 ```
 
 - **The frontmatter** holds `cron` (5 fields, required) and `tz` (an IANA timezone, default UTC), one `key: value`
-  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file, and
-  a serve refuses to start over a file that is not a valid schedule (`fastagent info` reports it first). Only `*.md`
-  files are schedules; rename one to `<name>.md.disabled` to turn it off.
+  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file.
+  Only `*.md` files are schedules; rename one to `<name>.md.disabled` to turn it off.
+- **The same guard as a recurring wake-up**, since the agent can write these files too: a schedule fires at most
+  every 10 minutes (the gap between its next two instants), which also refuses the six-field per-second form, and at
+  most 20 are armed (the first 20 by name). A file refused for any reason is logged and not armed; it never stops a
+  serve, and `deploy --run` refuses to ship one.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.

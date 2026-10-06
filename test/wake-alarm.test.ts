@@ -10,6 +10,7 @@ import { log } from "../src/log.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
 import { RESERVED_PATHS, type WakeAlarmRequest } from "../src/channels/agentcore-protocol.ts";
 import {
+  HEAL_MS,
   MAX_SYNC_ATTEMPTS,
   createWakeAlarmSink as alarmSink,
   readWakeAlarmUrl,
@@ -226,7 +227,7 @@ describe("schedule/wake-alarm: the sink", () => {
     expect(posted).toHaveLength(1); // no empty POST either — deletion is lazy by design
   });
 
-  it("retries a failed sync with backoff (counted as in-flight work), then gives up loudly", async () => {
+  it("retries a failed sync with backoff (counted as in-flight work), gives up loudly, then heals while alive", async () => {
     const { activeWork } = await import("../src/channels/busy.ts");
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
@@ -242,13 +243,21 @@ describe("schedule/wake-alarm: the sink", () => {
       secret: "x",
       fetchImpl: failing as unknown as typeof fetch,
       now: () => new Date("2026-07-28T09:00:00Z"),
-      delay: async () => {}, // no real waiting in tests
+      // No real waiting in tests; the heal's wait is held until the test lets it go.
+      delay: (ms) => (ms === HEAL_MS ? new Promise<void>((resolve) => heals.push(resolve)) : Promise.resolve()),
     });
+    const heals: (() => void)[] = [];
     seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
     sink(root);
     await vi.waitFor(() => expect(attempts.length).toBe(MAX_SYNC_ATTEMPTS));
     expect(sawBusy).toBe(true);
-    await vi.waitFor(() => expect(activeWork()).toBe(base)); // released after giving up
+    // Released after giving up, while the heal waits: a container only waiting to retry can be reclaimed.
+    await vi.waitFor(() => expect(activeWork()).toBe(base));
+    expect(attempts.length).toBe(MAX_SYNC_ATTEMPTS);
+    expect(heals).toHaveLength(1);
+    heals[0]!();
+    // One failed sync does not end the chain while the process lives: the whole sync runs again.
+    await vi.waitFor(() => expect(attempts.length).toBe(2 * MAX_SYNC_ATTEMPTS));
   });
 
   it("a store mutating faster than the backoff cannot renew the retry budget", async () => {
@@ -270,7 +279,8 @@ describe("schedule/wake-alarm: the sink", () => {
       secret: "x",
       fetchImpl: failing as unknown as typeof fetch,
       now: () => new Date("2026-07-28T09:00:00Z"),
-      delay: async () => sink(root), // a save lands inside every single backoff
+      // A save lands inside every single backoff; the heal after the give-up never comes.
+      delay: (ms) => (ms === HEAL_MS ? new Promise<void>(() => {}) : Promise.resolve(sink(root))),
     });
     seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
     sink(root);

@@ -10,7 +10,11 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
-import { cronError } from "./cron.ts";
+import { recurringCronError } from "./cron.ts";
+import { MAX_PENDING_WAKEUPS } from "./wakeups.ts";
+
+/** As many schedules as one conversation may have pending wake-ups: the same bound on what the agent can set going. */
+const MAX_SCHEDULES = MAX_PENDING_WAKEUPS;
 import type { Schedule } from "./schedule.ts";
 import { isSafeScheduleName } from "./state.ts";
 
@@ -83,13 +87,18 @@ export async function loadSchedules(dir: string): Promise<{ schedules: Schedule[
       fail('its frontmatter needs a "cron" (e.g. cron: "0 9 * * 1-5")');
       continue;
     }
-    const invalid = cronError(cron, tz);
+    // The same guard a recurring wake-up passes: the agent writes these files too.
+    const invalid = recurringCronError(cron, tz, new Date());
     if (invalid) {
-      fail(`invalid cron/tz — ${invalid}`);
+      fail(invalid);
       continue;
     }
     if (parsed.body === "") {
       fail("it has no prompt: write what the agent should do under the frontmatter");
+      continue;
+    }
+    if (schedules.length >= MAX_SCHEDULES) {
+      fail(`more than ${MAX_SCHEDULES} schedules — the ones after the first ${MAX_SCHEDULES} by name are not armed`);
       continue;
     }
     schedules.push({ name, cron, ...(tz !== undefined ? { tz } : {}), prompt: parsed.body });

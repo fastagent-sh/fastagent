@@ -114,7 +114,7 @@ describe("mountAgentcore", () => {
     });
   });
 
-  it("binds schedule fires by name; an alarm for a removed schedule or an instant its cron lost is skipped", async () => {
+  it("binds schedule fires by name; skips stale alarms; every delivery, a failed one too, mirrors the alarms again", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-fire-"));
     // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
     // routing (see the adapter's authentication boundary), so the mount must carry it.
@@ -143,16 +143,38 @@ describe("mountAgentcore", () => {
     const gone = await fire("nope");
     expect(gone.status).toBe(200);
     expect(await gone.json()).toMatchObject({ fired: false, skippedReason: "no such schedule any more" });
-    expect(onFired).not.toHaveBeenCalled(); // a skip moves no next instant
+    // Every delivery spends its alarm, so every one mirrors the alarms again, however it ended: a chain only a
+    // successful fire extended would end at the first fault.
+    expect(onFired).toHaveBeenCalledOnce();
     const res = await fire("job");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
-    expect(onFired).toHaveBeenCalledOnce(); // the fire moved its next instant: the alarms are mirrored again
+    expect(onFired).toHaveBeenCalledTimes(2);
     occurrence = new Date(hour.getTime() + 60_000).toISOString(); // 00:01 is no instant of "0 * * * *"
     expect(await (await fire("job")).json()).toMatchObject({
       fired: false,
       skippedReason: expect.stringMatching(/not an instant of its cron/),
     });
+    expect(onFired).toHaveBeenCalledTimes(3);
+    // A claim-state fault (the state root is a file): a 500 EventBridge retries, and still a mirror.
+    const broken = join(dir, "not-a-dir");
+    await writeFile(broken, "");
+    const failing = mountAgentcore({
+      agent,
+      stateRoot: broken,
+      schedules: () => [schedule],
+      onFired,
+      channels: () => ({ routes: {} }),
+    });
+    occurrence = hour.toISOString();
+    const failed = await failing["POST /invocations"]!(
+      new Request("http://x/invocations", {
+        method: "POST",
+        body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "job", occurrence }),
+      }),
+    );
+    expect(failed.status).toBe(500);
+    expect(onFired).toHaveBeenCalledTimes(4);
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
   });
 });

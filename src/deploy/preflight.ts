@@ -430,7 +430,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   for (const failure of loadedSchedules.failures) {
     report.issue(
-      `${failure.label} is not a valid schedule (${failure.message}) — the deployed box would refuse to start`,
+      `${failure.label} is not a valid schedule (${failure.message}) — the deployed box would leave it unarmed, so ` +
+        `it would never fire there`,
     );
   }
   const declaredSecrets: DeclaredSecret[] = [

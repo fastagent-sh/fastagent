@@ -276,10 +276,8 @@ describe("mountAgentcoreService", () => {
   });
 
   it("OCCURRENCE SEMANTICS live here, on the authenticated envelope — a redelivery claims nothing twice", async () => {
-    // A slot, a claim, a fire history and the overlap policy live here:
-    // `deploy` wrote the EventBridge rule and injected `<aws.scheduler.scheduled-time>`, the forwarder
-    // relays it behind the ingress secret, so the instant IS a grid point of that schedule and the
-    // claim means something.
+    // A slot, a claim, a fire history and the overlap policy live here: the container set the alarm for this instant
+    // and the forwarder relays it behind the ingress secret, so the claim means something.
     const dir = await agentDir({ "schedules/digest.md": `---\ncron: "0 9 * * *"\n---\nhi\n` });
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const service = await mountAgentcoreService(await open(dir));

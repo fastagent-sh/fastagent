@@ -4,7 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { log } from "../log.ts";
-import { cronError, nextRun } from "./cron.ts";
+import { cronError, nextRun, recurringCronError } from "./cron.ts";
 import { readScheduleFile, scheduleFile, writeScheduleFile } from "./state.ts";
 
 export interface Wakeup {
@@ -33,8 +33,6 @@ export const MIN_WAKE_MS = 60_000; // 1 minute
 export const MAX_PENDING_WAKEUPS = 20;
 /** How many times a busy/transient wake is retried (deferred) before being dropped. */
 export const MAX_WAKE_ATTEMPTS = 120;
-/** The minimum gap between two consecutive fires of a RECURRING wake. */
-const MIN_RECURRING_GAP_MS = 10 * 60_000; // 10 minutes
 
 /** A stored entry is a real Wakeup: the fields are present and `fireAt` is a parseable date. */
 function isWakeup(e: unknown): e is Wakeup {
@@ -99,21 +97,12 @@ export function addWakeup(
 ): AddWakeupResult {
   let fireAtDate: Date;
   if (input.cron !== undefined) {
-    const err = cronError(input.cron, input.tz);
-    if (err) return { ok: false, error: `invalid cron/tz: ${err}` };
-    // A recurring wake runs FOREVER — gate its frequency harder than a one-shot: the gap between the next two
-    // instants must be ≥ the recurring floor.
-    const first = nextRun(input.cron, input.tz, now);
-    const second = first && nextRun(input.cron, input.tz, first);
-    if (!first || !second)
-      return { ok: false, error: "this cron never fires (or fires only once) — use `in` for a one-shot." };
-    if (second.getTime() - first.getTime() < MIN_RECURRING_GAP_MS) {
-      return {
-        ok: false,
-        error: `too frequent — a recurring wake must fire at most every ${MIN_RECURRING_GAP_MS / 60_000} minutes.`,
-      };
-    }
-    fireAtDate = first; // DERIVED from the cron — a caller-passed fireAt can't disagree with the schedule
+    // A recurring wake runs FOREVER — gated harder than a one-shot, by the rule every recurring producer shares.
+    const err = recurringCronError(input.cron, input.tz, now);
+    if (err)
+      return { ok: false, error: `${err}${err.startsWith("this cron never") ? " — use `in` for a one-shot" : ""}.` };
+    // DERIVED from the cron — a caller-passed fireAt can't disagree with the schedule.
+    fireAtDate = nextRun(input.cron, input.tz, now) as Date;
   } else {
     if (!input.fireAt) return { ok: false, error: "a one-shot wake needs its fire time (`in`)." };
     if (input.fireAt.getTime() < now.getTime() + MIN_WAKE_MS) {

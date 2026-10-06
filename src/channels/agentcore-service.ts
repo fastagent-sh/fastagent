@@ -205,7 +205,7 @@ export function mountAgentcore(options: {
   /** The schedules armed now (they follow edits to `schedules/`). */
   schedules: () => readonly Schedule[];
   onStateReady?: () => void;
-  /** After a fire: its schedule's next instant moved, so the alarms are mirrored again. */
+  /** After every schedule-fire delivery, however it ended: that alarm is spent, so the alarms are mirrored again. */
   onFired?: () => void;
   /** The channel surface, initialized once by the adapter on trusted ingress. */
   channels: AgentcoreAdapterOptions["channels"];
@@ -222,23 +222,28 @@ export function mountAgentcore(options: {
       log.info(`[schedule] ${name}: alarm for ${occurrence.toISOString()} skipped — ${why}`);
       return Response.json({ slot: occurrence.toISOString(), fired: false, skippedReason: why, ms: 0 });
     };
-    if (!schedule) return skip("no such schedule any more");
-    if (nextRun(schedule.cron, schedule.tz, new Date(occurrence.getTime() - 1))?.getTime() !== occurrence.getTime()) {
-      return skip(`not an instant of its cron "${schedule.cron}" any more`);
+    // This alarm is spent whatever happens below, so the alarms are mirrored again whatever happens below: a skip, a
+    // failure and a fire alike. A chain that only a successful fire extended would end at the first fault.
+    try {
+      if (!schedule) return skip("no such schedule any more");
+      if (nextRun(schedule.cron, schedule.tz, new Date(occurrence.getTime() - 1))?.getTime() !== occurrence.getTime()) {
+        return skip(`not an instant of its cron "${schedule.cron}" any more`);
+      }
+      const outcome = await Effect.runPromise(
+        fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+      ).catch((cause: unknown) => {
+        // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
+        // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
+        log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
+        return undefined;
+      });
+      if (outcome === undefined) {
+        return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
+      }
+      return Response.json({ slot: occurrence.toISOString(), ...outcome });
+    } finally {
+      onFired?.();
     }
-    const outcome = await Effect.runPromise(
-      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
-    ).catch((cause: unknown) => {
-      // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
-      // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
-      log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
-      return undefined;
-    });
-    if (outcome === undefined) {
-      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
-    }
-    onFired?.();
-    return Response.json({ slot: occurrence.toISOString(), ...outcome });
   };
   return agentcoreRoutes({
     channels,

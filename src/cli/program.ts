@@ -375,7 +375,7 @@ const deploy: CommandSpec = {
     "(autostop=suspend, state→volume). railway: railway.json (healthcheck /health); its " +
     "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. agentcore: one " +
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
-    "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
+    "the alarms the container sets for schedules and wake-ups; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [

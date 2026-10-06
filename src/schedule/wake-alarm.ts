@@ -45,6 +45,12 @@ export function readWakeAlarmUrl(stateRoot: string): string | undefined {
  */
 export const MAX_SYNC_ATTEMPTS = 5;
 const RETRY_BASE_MS = 2_000;
+/**
+ * After a whole sync gives up, how long until it is tried again, for as long as this process lives: one failed sync
+ * must not leave a schedule's chain of alarms broken while the container is still up to repair it. Outside the busy
+ * count, so a container that is only waiting to retry can still be reclaimed; its next start sets the alarms again.
+ */
+export const HEAL_MS = 5 * 60_000;
 const SYNC_TIMEOUT_MS = 10_000;
 /** Alarms due within this margin are NOT mirrored. */
 const DUE_MARGIN_MS = 5_000;
@@ -159,19 +165,21 @@ export function createWakeAlarmSink(options: {
             if (dirty) break;
           }
         }
-        if (failures >= MAX_SYNC_ATTEMPTS) {
-          log.error(
-            `[schedule] alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups and the schedules' ` +
-              `next instants have no alarm until something wakes this container again and re-mirrors them (an ` +
-              `invocation, a webhook, a store change). A deployment with nothing else to wake it stays asleep ` +
-              `through every instant after this one`,
-          );
-        }
+        if (failures < MAX_SYNC_ATTEMPTS) return true;
+        log.error(
+          `[schedule] alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups and the schedules' ` +
+            `next instants have no alarm. It is tried again every ${HEAL_MS / 60_000} minutes while this container ` +
+            `runs; if the container is reclaimed first, they are set again when something next wakes it, and a ` +
+            `deployment with nothing else to wake it sleeps through every instant until then`,
+        );
+        return false;
       });
 
+    /** One retry pending at a time, however many syncs gave up meanwhile. */
+    let healing = false;
     // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces into one more pass
     // instead of one concurrent loop each.
-    return (stateRoot) => {
+    const sink = (stateRoot: string): void => {
       dirty = true;
       if (running) return;
       running = true;
@@ -186,8 +194,9 @@ export function createWakeAlarmSink(options: {
                 Effect.sync(() => {
                   // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.
                   log.error(
-                    `[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(portError(cause))}`,
+                    `[schedule] alarm reconcile failed (alarms are stale until the next store change or fire): ${String(portError(cause))}`,
                   );
+                  return true;
                 }),
               ),
             ),
@@ -196,8 +205,25 @@ export function createWakeAlarmSink(options: {
               running = false;
               done();
             }),
+        ).pipe(
+          Effect.flatMap((converged) =>
+            converged || healing
+              ? Effect.void
+              : Effect.sync(() => {
+                  healing = true;
+                }).pipe(
+                  Effect.andThen(delay(HEAL_MS)),
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      healing = false;
+                      sink(stateRoot);
+                    }),
+                  ),
+                ),
+          ),
         ),
       );
     };
+    return sink;
   });
 }
