@@ -9,9 +9,9 @@ import { defineChannel } from "@fastagent-sh/fastagent";
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`
 //      (group @mentions), `im:message:send_as_bot` (reply), `im:resource` (attachments), and the
 //      card scope ("Create and update card" — the live preview streams through a card). So the Agent
-//      hears its group chats, also add `im:message.group_msg` (sensitive), `im:message:readonly`,
-//      `im:message.group_msg.include_bot:read` and `im:chat.members:read`; what each one is for is in
-//      the channel guide, and the channel warns at startup about any it lacks.
+//      hears its group chats, also add `im:message.group_msg` (sensitive), `im:message:readonly` and
+//      `im:chat.members:read`; what each one is for is in the channel guide, and the channel warns at
+//      startup about any it lacks.
 //   3. Events & Callbacks → subscribe to `im.message.receive_v1`; copy the Verification Token into
 //      .env; RECOMMENDED: set an Encrypt Key there and mirror it in FEISHU_ENCRYPT_KEY
 //   4. the event Request URL (https://your.host/feishu) is registered AUTOMATICALLY by

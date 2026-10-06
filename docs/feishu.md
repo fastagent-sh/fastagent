@@ -52,7 +52,6 @@ then checks what the app actually holds and names any scope your tenant withheld
 |---|---|
 | `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in the Agent's threads, no group discussion as context |
 | `im:message:readonly` (or `im:message`) | a message quoted by an ask cannot be read and degrades to a marker in the prompt |
-| `im:message.group_msg.include_bot:read` | other bots' group messages (CI, alerts, deploy notices) never arrive |
 | `im:chat.members:read` | the Agent cannot list a chat's members by name (events carry only open_ids) |
 
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
@@ -139,7 +138,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 2. **Permissions** — add:
    - `im:message.p2p_msg:readonly` — receive direct messages,
    - `im:message.group_at_msg:readonly` — receive group messages that @mention the bot,
-   - the four agent scopes in the table under [Add the channel](#add-the-channel),
+   - the agent scopes in the table under [Add the channel](#add-the-channel),
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
