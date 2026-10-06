@@ -120,12 +120,14 @@ services:
       - ${SECRETS_DIRNAME}/.env
     environment:
       PORT: "${input.port}"
-      # Machinery on the ONE state volume: mutable state and credentials (logged in on the box). Pinned AFTER
-      # env_file so a local path in that file (the scaffold lists these) cannot send the container's state, sessions
-      # or credentials somewhere outside the volume — or at a host path that does not exist here at all.
+      # Machinery on the ONE state volume: mutable state, credentials (logged in on the box) and the clones of the
+      # agent's github contexts. Pinned AFTER env_file so a local path in that file (the scaffold lists these) cannot
+      # send the container's state, sessions, credentials or clones somewhere outside the volume — or at a host path
+      # that does not exist here at all.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"
       FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
       FASTAGENT_AUTH_PATH: "${MOUNT}/.secrets/auth.json"
+      FASTAGENT_CONTEXTS_DIR: "${MOUNT}/.contexts"
     volumes:
       - state:${MOUNT}
     # The agent's log is where a failure's reason is recorded (a scheduled fire logs the detail; what the turn

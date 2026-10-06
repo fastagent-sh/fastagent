@@ -7,7 +7,14 @@ import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { isAbsolute, relative, join, sep } from "node:path";
 import ignore from "ignore";
-import { AGENT_CONFIG_FILE, exists, readTextIfExists, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
+import {
+  AGENT_CONFIG_FILE,
+  exists,
+  readTextIfExists,
+  resolveContextsDir,
+  resolveSecretsDir,
+  resolveStateRoot,
+} from "../paths.ts";
 import { isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
 
@@ -52,6 +59,8 @@ export interface BuildContextPaths {
   leakCandidates: string[];
   /** The state root, when it exists inside the context. */
   stateShips?: string;
+  /** The clones of the agent's github contexts, when they exist inside the context. */
+  clonesShip?: string;
   /** The agent's node_modules, when it exists. */
   depDirs: string[];
 }
@@ -78,6 +87,8 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const stateRel = inContext(resolveStateRoot(agentDir));
   // Existence gates the WARNING, never the generated exclude (same split as secretPaths vs leakCandidates).
   const stateShips = stateRel !== undefined && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
+  const clonesRel = inContext(resolveContextsDir(agentDir));
+  const clonesShip = clonesRel !== undefined && (await exists(join(agentDir, clonesRel))) ? clonesRel : undefined;
   // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
   const envFiles = (await entriesIfExists(agentDir))
     .map((entry) => entry.name)
@@ -101,8 +112,8 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present(["node_modules"]);
-  const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
-  return { machineryPaths, leakCandidates, stateShips, depDirs };
+  const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : []), ...(clonesRel ? [clonesRel] : [])];
+  return { machineryPaths, leakCandidates, stateShips, clonesShip, depDirs };
 }
 
 /** Interrogate BOTH ignore files deploy emits, when the author kept them. */
@@ -111,7 +122,7 @@ export async function checkKeptIgnoreFiles(
   report: DeployReport,
 ): Promise<void> {
   const { agentDir, force } = ctx;
-  const { leakCandidates, stateShips, depDirs } = ctx.paths;
+  const { leakCandidates, stateShips, clonesShip, depDirs } = ctx.paths;
   for (const rel of [".dockerignore", "Dockerfile.dockerignore"]) {
     const kept = await readTextIfExists(join(agentDir, rel));
     if (kept === undefined) continue;
@@ -142,6 +153,11 @@ export async function checkKeptIgnoreFiles(
     if (stateShips && !excluded(`${stateShips}/sessions`)) {
       report.warn(
         `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateShips}`])}`,
+      );
+    }
+    if (clonesShip && !excluded(`${clonesShip}/x`)) {
+      report.warn(
+        `your ${rel} (kept) does not exclude \`${clonesShip}\` — the build machine's clones of the agent's github contexts would ship in the image. ${remedy([`/${clonesShip}`])}`,
       );
     }
     const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));

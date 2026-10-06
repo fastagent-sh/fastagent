@@ -136,7 +136,8 @@ const service = await openStartService(${JSON.stringify(agent)}, { input: false 
 try {
   const events = [];
   for await (const event of service.agent.invoke({ session: "deployed-conversation" }, { text: "Read my context" })) events.push(event);
-  console.log(JSON.stringify(events));
+  // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
+  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, clones: process.env.FASTAGENT_CONTEXTS_DIR }));
 } finally {
   await service.close();
 }
@@ -151,7 +152,15 @@ try {
       ["--experimental-test-module-mocks", "--input-type=module", "-e", script],
       { env, timeout: CHILD_TIMEOUT_MS },
     );
-    const events = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as { type: string; content?: unknown }[];
+    const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
+      events: { type: string; content?: unknown }[];
+      state: string;
+      clones: string;
+    };
+    const { events } = reported;
+    // Every machinery dir lands on the storage, never in `definition/`, which each release replaces: a clone there
+    // would take the agent's unpushed work with it.
+    expect(reported).toMatchObject({ state: join(root, ".state"), clones: join(root, ".contexts") });
     expect(events.at(-1)).toEqual({ type: "completed" });
     const result = events.find((event) => event.type === "tool_ended");
     expect(JSON.stringify(result)).toContain("deployed-conversation");

@@ -40,7 +40,7 @@ One agent shape, one marker:
 <agent dir>/                # any name — the config below is what makes it an agent
 ├── SYSTEM.md               # optional: replaces pi's default system prompt
 ├── APPEND_SYSTEM.md        # optional: standing instructions added to it
-├── AGENTS.md               # optional: for whoever changes the agent — not loaded into a turn
+├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
 ├── skills/  prompts/  tools/  channels/  routines/
 ├── fastagent.config.ts     # THE marker, and the agent's declared contexts
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
@@ -50,7 +50,8 @@ One agent shape, one marker:
 │                           # pi, travels like models.json; the machine's ~/.fastagent/ one layers under it
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
-└── .state/                 # the local instance's mutable state: sessions, channel state, schedule state, clones
+├── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
+└── .contexts/              # the local instance's clones of its github contexts, one per context name
 ```
 
 **The agent directory is the agent's working directory**, its coding tools' root, the key its session records
@@ -130,7 +131,7 @@ pi builds the prompt; FastAgent hands it the pieces and adds its own sections:
 |---|---|
 | preamble, tools, rules, docs | pi's default, built by pi so it follows pi; L2's `base` (else `SYSTEM.md`, else `.pi/SYSTEM.md`) replaces all four; a blank file or `base` is no prompt (pi would build its default), so it is reported or refused. Never the machine's `~/.pi/agent/SYSTEM.md` (`systemPromptOverride` ignores pi's `base`) |
 | addendum | `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`; never the machine's |
-| project context | each context's root `AGENTS.md`, in declaration order, handed to pi through `agentsFilesOverride`; the agent directory's own is never loaded |
+| project context | the agent directory's `AGENTS.md`, then each context's root one in declaration order, handed to pi through `agentsFilesOverride`; none above them |
 | skills | pi lists the agent's skills — the definition's (`skills/`, `.pi/skills/`, `.agents/skills/`), each context's (`.pi/skills/`, `.agents/skills/`, named `<context>/<skill>`) and the machine's (§5) — when `read` is active |
 | cwd | pi appends it, without a date line that would invalidate the prefix cache daily |
 | FastAgent's sections | `contexts` (the agent's own directory, then what it works on and knows, each with its location), `deferred_tools` and, on a deployed host, `self_change`, added on `before_agent_start` as named sections, so they hold under a `SYSTEM.md` |
@@ -140,8 +141,8 @@ carry none, so FastAgent copies pi's own snippets and guidelines onto them; an a
 first line of its description. pi's default says the agent reads files, runs commands and edits code, so an L2
 `tools` list without the coding tools needs `base` or a `SYSTEM.md`, checked at assembly and every turn.
 
-`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; a context's `AGENTS.md`
-is project context. A `persona.md` is refused, naming both files. The definition is re-read for every invocation, so prompt,
+`SYSTEM.md` is an identity of the agent's own; `APPEND_SYSTEM.md` is standing instructions; the agent directory's
+`AGENTS.md` is how the agent is built and changed; a context's `AGENTS.md` is project context. A `persona.md` is refused, naming both files. The definition is re-read for every invocation, so prompt,
 context and skill edits take effect on the next turn; code modules are reloaded by
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new

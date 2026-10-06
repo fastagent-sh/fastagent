@@ -64,7 +64,7 @@ src/
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
-│                           # shared path predicates and the machinery paths that follow (.secrets/.state)
+│                           # shared path predicates and the machinery paths that follow (.secrets/.state/.contexts)
 ├── contexts/               # what an agent works on and knows — engine-neutral
 │   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
 │   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses

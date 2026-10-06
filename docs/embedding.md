@@ -69,7 +69,7 @@ const agent = createPiAgent({
 
 Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately installed `zod`: `defineTool` converts schemas with its own copy. Every type our signatures name (`AgentTool`, `Skill`, `Model`, `PiSessionEntry`, …) is re-exported. Import `createProvider` and a provider's wire-protocol `api` from `@earendil-works/pi-ai` (see §5).
 
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine identity prepended. The directory path instead has pi build its default prompt (or uses `SYSTEM.md` in its place), then adds `APPEND_SYSTEM.md`, each context's `AGENTS.md` as project context, skills, and environment context. See [core design §2](design/core.md).
+`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine identity prepended. The directory path instead has pi build its default prompt (or uses `SYSTEM.md` in its place), then adds `APPEND_SYSTEM.md`, the agent directory's and each context's `AGENTS.md` as project context, skills, and environment context. See [core design §2](design/core.md).
 
 ## 2. Consume the stream (three ways)
 
