@@ -8,12 +8,12 @@ import { isUnderDir } from "../paths.ts";
 
 /** One entry of `contexts`, as an author writes it. */
 export type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
+  | { local: string; readonly?: boolean; name?: string }
   | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
 /** A declaration read: its name settled and its paths absolute. */
 export type DeclaredContext = { name: string; readonly: boolean } & (
-  | { kind: "local" | "copy"; path: string }
+  | { kind: "local"; path: string }
   | { kind: "github"; repo: string; ref?: string; checkout?: string }
 );
 
@@ -43,7 +43,7 @@ export function isGithubRepo(repo: string): boolean {
  * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
  * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
  */
-export const CONTEXT_KEYS = ["github", "local", "ref", "copy", "readonly", "name"] as const;
+export const CONTEXT_KEYS = ["github", "local", "ref", "readonly", "name"] as const;
 
 /**
  * Read `contexts` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
@@ -80,7 +80,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
       throw new Error(`${at}: "${key}" must be a non-empty string`);
     }
   }
-  for (const key of ["copy", "readonly"] as const) {
+  for (const key of ["readonly"] as const) {
     if (e[key] !== undefined && typeof e[key] !== "boolean") throw new Error(`${at}: "${key}" must be a boolean`);
   }
   const readonly = e.readonly === true;
@@ -90,7 +90,6 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
   if (e.github !== undefined) {
     const repo = e.github as string;
     if (!isGithubRepo(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
-    if (e.copy !== undefined) throw new Error(`${at}: "copy" applies to a local context; a github one is cloned`);
     // git reads a leading "-" as an option, and no branch, tag or commit name has one.
     if (e.ref !== undefined && (e.ref as string).startsWith("-")) {
       throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${e.ref}"`);
@@ -106,7 +105,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
     defaultName = defaultContextName({ github: repo });
   } else if (local !== undefined) {
     if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a github context`);
-    declared = { name: "", readonly, kind: e.copy === true ? "copy" : "local", path: local };
+    declared = { name: "", readonly, kind: "local", path: local };
     defaultName = defaultContextName({ local });
   } else {
     throw new Error(`${at}: declare where it comes from — "local" (a directory) or "github" ("owner/repo")`);

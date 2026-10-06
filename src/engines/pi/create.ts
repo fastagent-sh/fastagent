@@ -256,11 +256,7 @@ export function fastagentPromptSections(options: {
 
 /** What a context of this kind is, said to the agent: where it is, and whether another instance shares it. */
 function contextKind(c: ResolvedContext): string {
-  if (c.kind !== "github") {
-    return c.kind === "copy"
-      ? "a directory on this machine; a deployed instance has its own copy"
-      : "a directory on this machine";
-  }
+  if (c.kind !== "github") return "a directory on this machine";
   if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
   // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
   // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about

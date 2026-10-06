@@ -365,7 +365,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     }
   });
 
-  it("a deployed start clones a repository, whatever checkout its author named", async () => {
+  it("a deployed start clones a repository, whatever checkout its author named, and goes without a directory", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "AGENTS.md": "APP: ship it.\n" });
     const { root, agentDir } = await agent();
@@ -373,13 +373,20 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
     await writeFile(
       join(agentDir, "fastagent.config.ts"),
-      `export default {\n  contexts: [{ github: "acme/app", local: ${JSON.stringify(checkout)} }],\n};\n`,
+      `export default {\n  contexts: [{ github: "acme/app", local: ${JSON.stringify(checkout)} }, { local: "/Users/me/notes" }],\n};\n`,
     );
     // What marks a process as the deployed one (paths.ts isDeployedWorkspace).
     vi.stubEnv("FASTAGENT_RELEASE_FILE", join(agentDir, "fastagent.release.json"));
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
     const opened = await createPiAgentFromDir(agentDir);
+    const said = info.mock.calls.map(([line]) => line);
+    info.mockRestore();
     const clone = join(agentDir, ".state", "contexts", "app");
+    // The author's directory is not on the host: absent from what the agent is given, and said at start.
     expect(opened.contexts).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
+    expect(said).toContain(
+      `[fastagent] context "notes" is a directory of the author's machine (/Users/me/notes): not on this host, and the agent is not told of it`,
+    );
     expect(readFileSync(join(clone, "AGENTS.md"), "utf8")).toBe("APP: ship it.\n");
   });
 
@@ -435,7 +442,7 @@ describe("github contexts: what a command's <source> declares", () => {
     }
   });
 
-  it("a checkout's root is its repository; a directory in it, or one asked to be copied, is itself", async () => {
+  it("a checkout's root is its repository; a directory in it is itself", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "src/index.ts": "x\n" });
     const { root } = await agent();
@@ -453,13 +460,9 @@ describe("github contexts: what a command's <source> declares", () => {
         `${join(checkout, "src")} is in a checkout of github acme/app: declare github:acme/app for the whole repository`,
       ],
     });
-    expect(declarationFor(checkout, root, { copy: true })).toEqual({
-      declaration: { local: checkout, copy: true },
-      notes: [],
-    });
-    expect(declarationFor("github:acme/docs", root, { ref: "v1", local: "docs", readonly: true, copy: true })).toEqual({
+    expect(declarationFor("github:acme/docs", root, { ref: "v1", local: "docs", readonly: true })).toEqual({
       declaration: { github: "acme/docs", local: join(root, "docs"), ref: "v1", readonly: true },
-      notes: ["github acme/docs is cloned on a host, so --copy does not apply to it"],
+      notes: [],
     });
     expect(() => declarationFor(join(checkout, "src"), root, { ref: "main" })).toThrow(
       /--ref applies to a repository, and .* is declared as a directory/,

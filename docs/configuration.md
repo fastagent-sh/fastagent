@@ -21,7 +21,7 @@ accept `.ts`, `.js`, or `.mjs`.)
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
-  contexts: [{ local: "/Users/me/code/app", copy: true }],
+  contexts: [{ github: "acme/app", local: "/Users/me/code/app" }],
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
 } satisfies FastagentConfig;
@@ -201,10 +201,10 @@ An agent's directory is its own: its definition, its working directory, and its 
 ```ts
 export default {
   contexts: [
-    { local: "/Users/me/notes" },                                // works on, on this machine
-    { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
-    { github: "acme/app", local: "/Users/me/code/app" },         // works on: this checkout here
-    { github: "acme/docs", ref: "main", readonly: true },        // knows: a clone, kept up to date
+    { local: "/Users/me/notes" },                         // works on, on this machine only
+    { local: "/Users/me/handbook", readonly: true },      // knows, on this machine only
+    { github: "acme/app", local: "/Users/me/code/app" },  // works on: this checkout here, a clone on a host
+    { github: "acme/docs", ref: "main", readonly: true }, // knows: a clone, kept up to date
   ],
 } satisfies FastagentConfig;
 ```
@@ -214,7 +214,6 @@ export default {
 | `local` | A directory, absolute or relative to the agent directory. With `github`, the checkout of that repository on this machine |
 | `github` | A repository, `owner/repo` |
 | `ref` | With `github`: the branch, tag or full commit to clone. Defaults to the repository's default branch |
-| `copy` | An instance on a host gets its own copy of a directory, so its contents ship in the image. Without it a directory exists only on this machine, and deploying refuses the agent. Commands write it only when given `--copy` |
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
 | `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's or the repository's name |
 
@@ -256,8 +255,11 @@ What each context gives the agent, re-read every turn:
 - **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
 
 The locations are resolved when a process starts; editing `contexts` restarts `dev`. On a deployed host a `github`
-context is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)); a
-directory context does not reach a host yet, and `deploy` refuses it by name.
+context is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)). A
+`local` context is a directory of this machine, which a host does not have: the deployed agent works without it,
+and `deploy` and the host's startup say so by name. To give a host what the agent only reads there, copy it into the
+agent directory, which every release ships; to have the agent work on it from a host, move it to a repository and
+declare it as `github`.
 
 ## The system prompt
 
