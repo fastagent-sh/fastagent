@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
-import { devWatchIgnored } from "../src/dev-supervisor.ts";
+import { devWatchIgnored, listenForRestart } from "../src/dev-supervisor.ts";
+import { log } from "../src/log.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   const root = join("/work", "agent");
@@ -84,5 +85,39 @@ describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () =>
     const ig = devWatchIgnored(root, "/data/.secrets/.env");
     expect(ig("/agent/.secrets/.env")).toBe(true);
     expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
+  });
+});
+
+describe("dev-supervisor: a restart waits for the turns running in the worker", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("stops once nothing runs, not before, and hears one restart however often it is asked", async () => {
+    vi.useFakeTimers();
+    let running = 2;
+    const stop = vi.fn();
+    const listen = listenForRestart(stop, { busy: () => running, pollMs: 100 });
+    listen({ type: "something else" });
+    listen({ type: "restart" });
+    listen({ type: "restart" }); // a second edit while waiting
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stop).not.toHaveBeenCalled(); // the turn that wrote the file is still running
+    running = 0;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts anyway after the limit, saying it cut work off", async () => {
+    vi.useFakeTimers();
+    const stop = vi.fn();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    listenForRestart(stop, { busy: () => 1, limitMs: 60_000, pollMs: 100 })({ type: "restart" });
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/restarting with work still running after 1 minutes: it is cut off/),
+    );
+    warn.mockRestore();
   });
 });

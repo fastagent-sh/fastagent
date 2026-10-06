@@ -168,7 +168,9 @@ fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-
 
 Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates
 are re-read every turn. A supervisor restarts the
-worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`.
+worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
+once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
+an agent that edits its own `tools/` does not cut off the turn that made the edit.
 
 With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `routine run`,
 `chat`, `deploy`) show the model catalog and write the pick to the config.

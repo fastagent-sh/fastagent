@@ -82,7 +82,8 @@ const dev: CommandSpec = {
     "Assemble the agent (default .) and serve a local HTTP channel. SYSTEM.md/APPEND_SYSTEM.md/" +
     "skills/prompts " +
     "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
-    "fastagent.config.ts, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
+    "fastagent.config.ts, package.json, .secrets/.env — restart the worker once its running turns finish. " +
+    "Files the agent writes as " +
     "work product never trigger a restart.",
   args: [AGENT_ARG],
   flags: [

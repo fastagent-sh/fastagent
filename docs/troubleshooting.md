@@ -95,7 +95,7 @@ For `start`, hosted environments can set `PORT`.
 - **`SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates** are re-read every
   turn.
 - **Code inputs** (`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
-  restart the dev worker.
+  restart the dev worker once the turns running in it finish (at most 10 minutes).
 
 Nothing else is watched, including files the agent writes and helper code imported from outside those
 directories; restart manually for those. `fastagent chat` reads everything once at startup.

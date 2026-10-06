@@ -5,6 +5,7 @@ import { port, portCleanup } from "../../effect-port.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import type { SessionInheritance } from "./session-inheritance.ts";
 import type { Lease } from "./turn-kit.ts";
+import { beginWork } from "../../channels/busy.ts";
 
 /** Admission was refused: another turn (or another write) holds this session. Its own tag because it
  *  is CONTROL FLOW — a caller answers it with `session_busy` and a retry — not a port failure. */
@@ -15,11 +16,24 @@ export class SessionBusy extends Error {
   }
 }
 
+/**
+ * The session lease, held for the scope. Every turn, compaction and control write takes one here, whatever `Lease`
+ * the assembly runs on, so a held session is also the process's work in flight (`channels/busy.ts`): what `dev`
+ * waits for before it restarts, and what AgentCore's `/ping` reports as busy.
+ */
 export function acquireSessionLease(lease: Lease, session: string) {
   return Effect.acquireRelease(
     Effect.suspend(() => {
       const release = lease.tryAcquire(session);
-      return release ? Effect.succeed(release) : Effect.fail(new SessionBusy());
+      if (!release) return Effect.fail(new SessionBusy());
+      const workDone = beginWork();
+      return Effect.succeed(() => {
+        try {
+          release();
+        } finally {
+          workDone();
+        }
+      });
     }),
     (release) => portCleanup("lease release", release),
   );

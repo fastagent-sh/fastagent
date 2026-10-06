@@ -93,8 +93,9 @@ src/
 │   │                       # and the shared-secret boundary that separates a forwarder call from any IAM one
 │   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container (types + constants)
 │   ├── agentcore-limits.ts # the host's body ceilings, computed once
-│   ├── busy.ts             # process-wide background work counter read by /ping (HealthyBusy): a webhook
-│                           # ACK does not mean the turn has finished
+│   ├── busy.ts             # the process's work in flight (every leased session, channel work not yet at one),
+│                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
+│                           # of a turn
 │   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
 │   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
 │   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
