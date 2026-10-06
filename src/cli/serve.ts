@@ -32,14 +32,9 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
  *
  * `--no-invoke` outranks `http.invoke`: a config value travels into a deployed image, so "do not publish a turn
  * endpoint on this tunnel" has to be sayable without editing the definition.
- *
- * It takes `POST /run` WITH it, including over a definition that said `http.run: true`. Both routes start a
- * turn for an anonymous caller, and the flag's whole reason for existing is the case where the definition cannot be
- * edited — `dev --tunnel --no-invoke` leaving the other one published at the tunnel URL would be the flag failing at
- * exactly the job it was added for.
  */
 export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
-  return run.invoke === false ? { ...opened, http: { ...opened.http, invoke: false, run: false } } : opened;
+  return run.invoke === false ? { ...opened, http: { ...opened.http, invoke: false } } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -139,7 +134,6 @@ export function announceControl(
   // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
   const exposed = describeAnonymousSurface({
     invoke: service.unverifiedRoutes.includes("POST /invoke"),
-    run: service.unverifiedRoutes.includes("POST /run"),
     ...(controlPrefix ? { controlPrefix } : {}),
   });
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)

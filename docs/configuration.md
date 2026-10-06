@@ -14,8 +14,8 @@ status: current
 
 ## Config file
 
-An agent is identified by one filename, `fastagent.config.ts`. (Your own `tools/`, `channels/`, and `routines/`
-accept `.ts`, `.js`, or `.mjs`.)
+An agent is identified by one filename, `fastagent.config.ts`. (Your own `tools/` and `channels/` accept `.ts`,
+`.js`, or `.mjs`.)
 
 ```ts
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
@@ -40,8 +40,7 @@ Every key is optional. Unknown keys fail at startup.
 | `tools` | `[]` | Extra programmatic tools appended after the coding tools. Prefer `tools/` files. |
 | `http.port` | `8787` | Default port for `dev` / `start`. |
 | `http.cors` | `*` | Which origins a **browser** may call this serve from. The default answers every origin, on every bind: any page your users visit can call this port and read the reply, including a loopback `dev` serve. Setting it replaces the default: `["https://app.example.com"]` allows only that origin. An empty list is refused. `*` cannot be combined with cookie credentials. Channel routes are never browser-callable. |
-| `http.invoke` | `true` | Serve `POST /invoke`. It is unauthenticated and runs a turn with the agent's full tools; set `false` when the port is public and the channels' signature checks should be the only way in. With it off, a channel may serve `POST /invoke` itself, and `POST /run` is withheld too unless `http.run` is set. `--no-invoke` does the same for one run. |
-| `http.run` | follows `http.invoke` | Serve `POST /run` and `GET /routines` (see [API reference](api-reference.md#post-run)). Set `true` to keep them when `http.invoke` is `false` — for an external clock driving your routines. `--no-invoke` withholds them for one run. Inert on AgentCore. No effect when `routines/` declares nothing. |
+| `http.invoke` | `true` | Serve `POST /invoke`. It is unauthenticated and runs a turn with the agent's full tools; set `false` when the port is public and the channels' signature checks should be the only way in. With it off, a channel may serve `POST /invoke` itself. `--no-invoke` does the same for one run. |
 | `sessionControl` | `false` | Serve the session control plane at `/control/*` (state, entries, live events, steer/abort/compact, session properties, the session list) for remote clients. A chat channel's stop command does not need it. **Unauthenticated**: bind loopback (`--bind 127.0.0.1`), firewall the port, or put a gateway in front. |
 | `deploy.agentcore.idleTimeoutSeconds` | `180` | `deploy agentcore` only: how long an idle session keeps its microVM (60–1209600 s). Memory bills for the idle tail; a session past it cold-starts. Changing it changes the template, so a kept `agentcore.template.yaml` needs `--force`. |
 | `deploy.apt` | `[]` | Extra apt packages baked into the generated image (Debian default repos). For a custom apt repo or base image, write your own `Dockerfile`; `deploy` keeps it and warns that `deploy.apt` is not applied. A generated `Dockerfile` that drifts from the config is kept and flagged stale; `--force` regenerates it. |
@@ -222,7 +221,7 @@ A `github` context is one of two things on this machine:
 - **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
   as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
 - **Otherwise, a clone** in `.state/contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
-  `start`, `chat`, `invoke`, `routine run`). At each later start it is brought up to date in place, by git's own
+  `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by git's own
   rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it is pinned
   to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an untracked file
   it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone is on another
@@ -430,7 +429,7 @@ permissions you gave them. `FASTAGENT_SECRETS_DIR` set inside `.env` moves `auth
 
 ## Code inputs must be real files
 
-Each of `tools/`, `channels/`, and `routines/` must be inside the agent directory, and each entry must be a real
+Each of `tools/`, `channels/`, and `schedules/` must be inside the agent directory, and each entry must be a real
 file. A symlink is skipped with a warning (`info`, `dev`, `start`), never followed. To share code between agents,
 publish a package or copy the file.
 
@@ -510,7 +509,7 @@ Extension code changes need a restart; `dev` restarts on its own.
 
 ### More than one agent
 
-Each agent is a directory of its own, with its own config, prompt, skills, tools, channels, routines, `.state/` and
+Each agent is a directory of its own, with its own config, prompt, skills, tools, channels, schedules, `.state/` and
 `.secrets/`. Several agents can work on one project: each declares it as a context.
 
 ```bash
@@ -523,6 +522,44 @@ fastagent dev ~/agents/reviewer
 
 A file under `channels/` (`.ts` / `.js` / `.mjs`) enables a channel; rename it to `<name>.ts.disabled` to disable
 it. Channels are not configured in `fastagent.config.ts`. See [Channels](channels.md).
+
+## Schedules
+
+A schedule is a prompt the agent runs on a cron: `schedules/<name>.md`, with the cron and its timezone in the
+frontmatter and the prompt as the body. The file name is the schedule's name.
+
+```md
+---
+cron: "0 9 * * 1-5"
+tz: America/New_York
+---
+
+Generate today's digest and send it with slack-send to channel C0123456789.
+```
+
+- **The frontmatter** holds `cron` (5 fields, required) and `tz` (an IANA timezone, default UTC), one `key: value`
+  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file, and
+  a serve refuses to start over a file that is not a valid schedule (`fastagent info` reports it first). Only `*.md`
+  files are schedules; rename one to `<name>.md.disabled` to turn it off.
+- **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
+  did, and nothing of users' chats.
+- **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.
+  What a run said is in its session under `<stateRoot>/sessions/`.
+- **Each instant fires at most once**, even with several schedulers over one state root: a claim under
+  `<stateRoot>/schedule/claims/<name>/` is taken before the turn. After downtime one overdue run is caught up, not
+  one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
+  next instant arrives makes that one `skipped`.
+- **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore, `deploy` turns each schedule into
+  an EventBridge rule. A schedule keeps one Fly or Railway machine running; to scale to zero, keep the time in a
+  scheduler you own and let it call `POST /invoke`.
+- **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
+  prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body
+  can be that same `/<name>`.
+- **Edits take effect when the process starts** (`dev` restarts on them).
+
+`fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
+agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve
+([API reference](api-reference.md#self-scheduling)).
 
 ## Logging
 

@@ -65,8 +65,8 @@ checkout**, packed once per run by the `globalSetup` in `vitest.live.config.ts`.
 
 It used to be a version string, which npm resolves from the **registry**. The container then ran the
 last published release while the CLI, the generated template and the forwarder all came from the
-working tree — a pair that exists nowhere, and a probe that cannot fail on the code under review. A
-`POST /run` branch shipped a forwarder speaking a newer envelope than the container it deployed,
+working tree — a pair that exists nowhere, and a probe that cannot fail on the code under review. One
+branch shipped a forwarder speaking a newer envelope than the container it deployed,
 and the only symptom was "EventBridge never delivered".
 
 `FASTAGENT_LIVE_VERSION` no longer reaches a deploy probe, in CI either. Three of the four artifacts

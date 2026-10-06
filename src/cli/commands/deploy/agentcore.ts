@@ -22,7 +22,7 @@ import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { loadRoutines } from "../../../schedule/discover.ts";
+import { loadSchedules } from "../../../schedule/discover.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { isInteractive } from "../../shared.ts";
@@ -84,11 +84,11 @@ export const agentcoreHost: HostDeploy = {
     // Wake-ups are a default capability here as everywhere: pending ones are mirrored into one-shot EventBridge
     // schedules via the forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts), which is why every stack
     // has one.
-    const loaded = await loadRoutines(agentDir).catch(failStartup);
+    const loaded = await loadSchedules(agentDir).catch(failStartup);
     if (loaded.failures.length > 0) {
       failStartup(
         new Error(
-          `deploy stopped: cannot load routines: ${loaded.failures.map((x) => `${x.label}: ${x.message}`).join("; ")}`,
+          `deploy stopped: cannot load schedules: ${loaded.failures.map((x) => `${x.label}: ${x.message}`).join("; ")}`,
         ),
       );
     }
@@ -108,12 +108,11 @@ export const agentcoreHost: HostDeploy = {
       boxLogin,
       channels,
       secrets: pre.secrets,
-      // ONLY THE ONES WITH A CRON become rules. A routine without one is reached by NAME, through this host's
-      // IAM-gated `routine-run` envelope (channels/agentcore.ts) rather than a route — so it needs no rule and
-      // loses nothing by not having one.
-      schedules: loaded.routines.flatMap((r) =>
-        r.cron === undefined ? [] : [{ name: r.name, cron: r.cron, ...(r.tz !== undefined ? { tz: r.tz } : {}) }],
-      ),
+      schedules: loaded.schedules.map((s) => ({
+        name: s.name,
+        cron: s.cron,
+        ...(s.tz !== undefined ? { tz: s.tz } : {}),
+      })),
       idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
@@ -136,7 +135,7 @@ export const agentcoreHost: HostDeploy = {
         // wordings drift apart.
         console.error(
           `[fastagent] warn: ${templateArtifact.path} no longer matches this definition ` +
-            `(channels/routines or a deploy.agentcore setting changed) — the kept template would ` +
+            `(channels/schedules or a deploy.agentcore setting changed) — the kept template would ` +
             `silently drop the difference.`,
         );
       }

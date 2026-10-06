@@ -171,12 +171,9 @@ async function loadConfigFile(path: string, dir: string): Promise<FastagentConfi
   if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
     throw new Error(`${path}: "http" must be an object`);
   }
-  refuseUnknownKeys(c.http ?? {}, ["port", "cors", "invoke", "run"], "http.", path);
+  refuseUnknownKeys(c.http ?? {}, ["port", "cors", "invoke"], "http.", path);
   if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
     throw new Error(`${path}: "http.invoke" must be a boolean`);
-  }
-  if (c.http?.run !== undefined && typeof c.http.run !== "boolean") {
-    throw new Error(`${path}: "http.run" must be a boolean`);
   }
   if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
@@ -296,7 +293,7 @@ export async function writeContexts(agentDir: string, declarations: readonly Con
 }
 
 /**
- * The refusal of a process that runs the agent here (the CLI's dev/start/invoke/routine run, and chat) when no
+ * The refusal of a process that runs the agent here (the CLI's dev/start/invoke, and chat) when no
  * default model resolves. The agent itself opens without one; such a process would fail every new conversation, so it
  * stops at startup instead.
  */

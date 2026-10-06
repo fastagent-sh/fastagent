@@ -19,13 +19,13 @@
  * a container. The numbers are recorded in schedule/run.ts, where the design reads them.
  *
  * WHAT IT OBSERVES, and from where. The forwarder logs one line per delivery —
- * `routine-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
+ * `schedule-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
  * whole point of reading CloudWatch rather than the container.
  *
  * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
  *
  * WHAT IT MEASURED, ap-southeast-1, 2026-09-21 — recorded so the next reader does not have to deploy
- * to learn it. Seven consecutive deliveries of a `* * * * *` routine, read from the forwarder's log:
+ * to learn it. Seven consecutive deliveries of a `* * * * *` schedule, read from the forwarder's log:
  *
  *     occurrence (clock)     container slot             status     lag     turn
  *     2026-09-21T07:39:00Z   2026-09-21T07:39:00.000Z   200      49.9s   3224ms   fired=true
@@ -34,8 +34,8 @@
  *
  * The first is the cold one: container start, definition open and a model turn inside one invocation.
  * Steady state is 43.6–45.0s from the scheduled instant to a completed turn, of which ~2.4–3.8s is the
- * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what
- * `POST /run`'s callers never have to think about and what a claim-keeping clock does.
+ * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what a claim-keeping
+ * clock has to account for.
  *
  * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
  * design's whole claim: the clock names the occurrence and the container does not recompute it.
@@ -68,7 +68,7 @@ const MODEL = requireEnv("FASTAGENT_LIVE_MODEL", 'the model under test, e.g. "an
 
 const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
-const ROUTINE = "tick";
+const SCHEDULE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
 const CRON = "* * * * *";
 
@@ -80,19 +80,13 @@ beforeAll(async () => {
   if (process.env.RUNNER_TEMP) await appendFile(join(process.env.RUNNER_TEMP, "agentcore-probe-names"), `${NAME}\n`);
 
   agentDir = join(tmpdir(), NAME);
-  await mkdir(join(agentDir, "routines"), { recursive: true });
+  await mkdir(join(agentDir, "schedules"), { recursive: true });
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
   // The ONE line that decides this deployment's topology: a schedule puts a forwarder, a Function URL
   // and an EventBridge rule into the template (plan.ts agentcoreTopology).
-  // A plain default export, not `defineRoutine`: that helper is an identity function, so the loader
-  // sees the same shape either way, and this fixture then needs no `npm install` before `deploy` reads
-  // it. (The deployed image installs the package itself; this file is read on the BUILDER.)
-  await writeFile(
-    join(agentDir, "routines", `${ROUTINE}.ts`),
-    `export default { cron: ${JSON.stringify(CRON)}, prompt: "Reply with just: tick" };\n`,
-  );
+  await writeFile(join(agentDir, "schedules", `${SCHEDULE}.md`), `---\ncron: "${CRON}"\n---\nReply with just: tick\n`);
   await writeFile(
     join(agentDir, "package.json"),
     `${JSON.stringify(
@@ -130,7 +124,7 @@ async function waitForFire(
     // NO `--filter-pattern`. The group holds one Lambda's output, so the server-side term index buys
     // nothing here — and it is a SECOND eventually-consistent thing to wait on: a run whose fires were
     // all delivered and logged still timed out against it, then reported "the log group exists but has
-    // logged no routine-fire" while seven `200 {"fired":true}` lines sat in that very group. The regex
+    // logged no schedule-fire" while seven `200 {"fired":true}` lines sat in that very group. The regex
     // below already does the matching; this asks only for the stream.
     const events = await aws([
       "logs",
@@ -151,13 +145,13 @@ async function waitForFire(
         // it, and `test/live/**` is outside `npm test` — the defect it was extracted over cost a paid
         // deployment to find.
         const raw = (event.message ?? "").trim();
-        const line = parseFireLine(raw, ROUTINE);
+        const line = parseFireLine(raw, SCHEDULE);
         if (line === undefined) continue;
         // A CALL THAT NEVER CAME BACK names the timeout, and does not end the run. `invokeLogged` rethrows so
         // that EventBridge RETRIES (forwarder.js), which makes one cold-start miss a recoverable state the
         // system is allowed to be in — failing here would call a compliant deployment red. What this fixes is
         // the other half: the timeout now quotes the forwarder instead of claiming "none of them a
-        // routine-fire", which is the misreading `invokeLogged` exists to prevent.
+        // schedule-fire", which is the misreading `invokeLogged` exists to prevent.
         if (line.kind === "failed") {
           unreachable = `the forwarder could not reach the container for ${line.occurrence}: ${line.message}`;
           continue;
@@ -166,7 +160,7 @@ async function waitForFire(
       }
       // The forwarder's own words WIN over a count: a reported miss says what went wrong, "N lines, none of
       // them a fire" only says this function did not find one.
-      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a routine-fire for "${ROUTINE}"`;
+      lastError = unreachable ?? `the forwarder logged ${seen} line(s), none of them a schedule-fire for "${SCHEDULE}"`;
     } else {
       // Absent until first use: AWS creates the group when the Lambda first writes.
       lastError = events.stderr.trim().slice(0, 300);
@@ -174,14 +168,14 @@ async function waitForFire(
     await new Promise((resolve) => setTimeout(resolve, 10_000));
   }
   // WHAT IT SAW, not just what it wanted. The previous wording asserted something this function cannot
-  // observe ("has logged no routine-fire") and sent a real investigation after the wrong cause twice.
+  // observe ("has logged no schedule-fire") and sent a real investigation after the wrong cause twice.
   throw new Error(
-    `no routine-fire delivery within ${Math.round(budgetMs / 1000)}s — ${lastError}` +
+    `no schedule-fire delivery within ${Math.round(budgetMs / 1000)}s — ${lastError}` +
       (lastLine ? `\n  last line in ${group}: ${lastLine}` : ""),
   );
 }
 
-describe("agentcore routines: EventBridge holds the clock and names each fire", () => {
+describe("agentcore schedules: EventBridge holds the clock and names each fire", () => {
   it("delivers a fire the container accepts, and runs the occurrence the clock named", async () => {
     const deployedAt = Date.now();
     await deployAgentcore(agentDir, STACK);
@@ -203,7 +197,7 @@ describe("agentcore routines: EventBridge holds the clock and names each fire", 
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // SIX MINUTES, on the numbers in this file's header. The routine runs from the minute after the stack
+    // SIX MINUTES, on the numbers in this file's header. The schedule runs from the minute after the stack
     // is created, so the first delivery's instant is within 60s of this point; the cold invocation then
     // took 49.9s end to end (container start, definition open, model turn), and the poll interval is 10s
     // — about 120s to the first match, against a 360s budget. Roughly 3x headroom.

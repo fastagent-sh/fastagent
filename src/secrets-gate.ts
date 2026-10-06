@@ -2,11 +2,11 @@
  * THE GATE: refuse to run while a declaration for what is ABOUT TO RUN has no value.
  *
  * `declared-secrets.ts` answers "which env vars did this code declare, and which have no value" —
- * a predicate. This module owns the three decisions that turn that predicate into a refusal, for all five call
- * sites (the agent opener, the scheduler start, channel loading, `fastagent tool`, `fastagent routine run`):
+ * a predicate. This module owns the three decisions that turn that predicate into a refusal, for all three call
+ * sites (the agent opener, channel loading, `fastagent tool`):
  *
- *  1. WHICH declarations gate this run. A serve mounts every tool, schedule and channel, so all of
- *     them gate it; `fastagent tool <name>` / `fire <name>` run exactly one owner, and requiring the
+ *  1. WHICH declarations gate this run. A serve mounts every tool and channel, so all of
+ *     them gate it; `fastagent tool <name>` runs exactly one owner, and requiring the
  *     credentials of the ones they are not running blocks a machine that is configured correctly for
  *     the job at hand. That is why declarations travel keyed BY OWNER.
  *  2. ORDER against load failures. The refusal throws, and a caller that prints `failures` after it

@@ -27,7 +27,7 @@ export interface RailwayPlanInput extends ContainerInput {
    * carries.
    */
   secrets?: readonly DeploymentSecret[];
-  /** `routines/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
+  /** `schedules/` declares a schedule — one of the things that forbids App Sleeping (deploy/residency.ts). */
   hasCron: boolean;
 }
 
@@ -164,14 +164,14 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...(residency?.reason === CRON_CAN_BE_EXTERNAL
       ? [
           `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
-          `# calls this service's \`POST /run\` over the private network — traffic from another service in the`,
+          `# calls this service's \`POST /invoke\` over the private network — traffic from another service in the`,
           `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
           `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
-          `#     AGENT_RUN=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/run`,
-          `#     curl --retry 3 -fsS -X POST "$AGENT_RUN" -H 'content-type: application/json' -d '{"name":"<routine>"}'`,
+          `#     AGENT_INVOKE=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/invoke`,
+          `#     curl --retry 3 -fsS -X POST "$AGENT_INVOKE" -H 'content-type: application/json' \\`,
+          `#       -d '{"scope":{"session":"schedule:<name>"},"prompt":{"text":"/<prompt template>"}}'`,
           `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
           `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
-          `# \`POST /run\` is an API, not a clock: read its contract — docs/api-reference.md#post-run.`,
           `# Asleep, ${WAKEUPS_WHEN_ASLEEP}.`,
         ]
       : []),

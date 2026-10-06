@@ -94,7 +94,7 @@ For `start`, hosted environments can set `PORT`.
 
 - **`SYSTEM.md`, `APPEND_SYSTEM.md`, each context's `AGENTS.md`, skills and prompt templates** are re-read every
   turn.
-- **Code inputs** (`tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
+- **Code inputs** (`tools/`, `channels/`, `schedules/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
   restart the dev worker once the turns running in it finish (at most 10 minutes).
 
 Nothing else is watched, including files the agent writes and helper code imported from outside those
@@ -136,8 +136,8 @@ Fixes depend on the channel:
 
 ## Tool, channel or schedule failed to load
 
-If an enabled file under `tools/`, `channels/` or `routines/` cannot import, is missing a declared secret, or has
-an invalid export, `dev` / `start` fails and names every such file.
+If an enabled file under `tools/` or `channels/` cannot import, is missing a declared secret, or has an invalid
+export, or a file under `schedules/` is not a valid schedule, `dev` / `start` fails and names every such file.
 
 Fix the reported files and environment. To intentionally disable one without deleting it, rename it so
 it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
@@ -258,22 +258,16 @@ version. If the CLI reports a Lark config-API fallback, add the scope manually. 
 
 Cron schedules fire only while a serving process is up:
 
-- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `routine run` do
-  not start the scheduler,
+- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` does not start the
+  scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,
-- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call [`POST /run`](api-reference.md#post-run) (see
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call `POST /invoke` (see
   [Deploy](deploy.md)).
 
-Diagnose with commands that exit:
-
-```bash
-fastagent routine list             # everything that will fire, with the next instant
-fastagent routine history <name>   # did last night's run silently fail?
-fastagent routine run <name>      # run the schedule's turn now, without touching cron state
-```
-
-A broken `routines/<name>.ts` file is reported by `fastagent info` before it ever reaches `dev`.
+Diagnose with `fastagent schedules list`: every schedule's next instant and how its last run ended (`--json` for the
+retained history). A `schedules/<name>.md` that is not a valid schedule is reported by `fastagent info` before it ever
+reaches `dev`.
 
 ## Deployed agent crash-loops with `missing model`
 

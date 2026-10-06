@@ -75,8 +75,6 @@ describe("cli kernel: spec conformance", () => {
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
       [["init"], "must be new or empty"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
-      [["routine", "run"], "does NOT advance its fire state"],
-      [["routine", "history"], "did last night's run silently fail"],
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["start"], "frozen by git"],
@@ -88,7 +86,7 @@ describe("cli kernel: spec conformance", () => {
       [["deploy"], "provision app/service + volume + secrets + deploy + webhook setup"],
       [["deploy"], "missing CLI/daemon/login/secret"],
       [["deploy"], "Existing Compose stays authoritative"],
-      [["deploy"], "routine redeploy of an already-provisioned agent"],
+      [["deploy"], "plain redeploy of an already-provisioned agent"],
       [["login"], "outside an agent it writes the global ~/.fastagent/.secrets/auth.json"],
     ];
     const rendered = new Map<string, string>();
@@ -176,9 +174,9 @@ describe("cli kernel: help", () => {
   });
 
   it("nested subcommand help works and shows its flags", async () => {
-    const r = await parse(["routine", "history", "--help"]);
+    const r = await parse(["schedules", "list", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/Usage: fastagent routine history/);
+    expect(r.out).toMatch(/Usage: fastagent schedules list/);
     expect(r.out).toMatch(/--json/);
   });
 
@@ -199,7 +197,7 @@ describe("cli kernel: the top-level surface", () => {
     expect(r.out).not.toMatch(/Author|Verify|Serve & ship|Operate:/);
     // …one flat section, in the original synopsis order.
     expect(r.out).toMatch(/^Commands:$/m);
-    const order = ["init", "models", "info", "tool", "invoke", "routine", "dev", "chat", "start"];
+    const order = ["init", "models", "info", "tool", "invoke", "schedules", "dev", "chat", "start"];
     const at = (name: string) => r.out.search(new RegExp(`^  ${name}`, "m"));
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), `${order[i - 1]} before ${order[i]}`).toBeLessThan(at(order[i] as string));
@@ -231,31 +229,31 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a missing required argument is a usage error: exit 2", async () => {
-    const r = await parse(["routine", "history"]);
+    const r = await parse(["context", "remove"]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/missing required argument 'name'/);
   });
 
   it("a bare group command shows its subcommand help and exits 2", async () => {
-    const r = await parse(["routine"]);
+    const r = await parse(["schedules"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/Usage: fastagent routine/);
-    expect(r.err).toMatch(/history/);
+    expect(r.err).toMatch(/Usage: fastagent schedules/);
+    expect(r.err).toMatch(/list/);
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
-    const r = await parse(["routine", "histry", "digest"]);
+    const r = await parse(["context", "remvoe", "app"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/unknown command 'histry'/);
-    expect(r.err).toMatch(/history/); // did-you-mean
+    expect(r.err).toMatch(/unknown command 'remvoe'/);
+    expect(r.err).toMatch(/remove/); // did-you-mean
   });
 
   it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
     const cases = [
       ["invoke", ""],
-      ["routine", "run", ""],
+      ["context", "add", ""],
       ["tool", ""],
-      ["routine", "history", ""],
+      ["context", "remove", ""],
     ];
     for (const argv of cases) {
       const r = await parse(argv);
@@ -270,7 +268,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     const cases = [
       ["--json", "info"],
       ["--model", "x", "invoke", "hi"],
-      ["routine", "--json", "list"],
+      ["schedules", "--json", "list"],
     ];
     for (const argv of cases) {
       const r = await parse(argv);
@@ -303,12 +301,12 @@ describe("cli end to end: the thin entry", () => {
     expect(help.out).toContain("railway down");
   });
 
-  it("routine list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
+  it("schedules list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
     const dir = await agentWorkspace("fa-kernel-sched-");
-    const { code, stdout, stderr } = await run(["routine", "list", dir]);
+    const { code, stdout, stderr } = await run(["schedules", "list", dir]);
     expect(code).toBe(0);
     expect(stdout).toBe("");
-    expect(stderr).toMatch(/nothing declared or pending/);
+    expect(stderr).toMatch(/nothing scheduled/);
   });
 
   it("tool with no args is a usage error from the kernel: exit 2", async () => {

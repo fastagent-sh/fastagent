@@ -1,5 +1,5 @@
 // The CLI as a subprocess, for the process-contract tests: cli.test.ts, cli-deploy*.test.ts,
-// cli-routine-tool.test.ts, cli-info.test.ts, cli-login.test.ts and cli-kernel.test.ts's end-to-end block.
+// cli-schedules-tool.test.ts, cli-info.test.ts, cli-login.test.ts and cli-kernel.test.ts's end-to-end block.
 // Each run cold-starts the engine, so these tests are spread across files by command to let vitest run them
 // in parallel; one file runs its tests serially.
 import { spawn } from "node:child_process";

@@ -1,67 +1,98 @@
 /**
- * Routine discovery: an agent declares its named units of work by dropping files in `routines/`, mirroring
- * `tools/` and `channels/`.
+ * Schedule discovery: `schedules/<name>.md`, each a frontmatter (`cron`, optional `tz`) over the prompt.
+ *
+ * The frontmatter is read STRICTLY rather than as YAML: two keys whose values are one line each, and a cron written
+ * bare, starting with `*`, is what an author types even though YAML reads a leading `*` as an alias. Anything else in it —
+ * an unknown key, a line that is not `key: value`, a key twice — is refused naming the file, never guessed at.
  */
+import type { Dirent } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
-import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
+import type { ModuleLoadFailure } from "../loader.ts";
+import { log } from "../log.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { cronError } from "./cron.ts";
+import type { Schedule } from "./schedule.ts";
 import { isSafeScheduleName } from "./state.ts";
-import type { LoadedRoutine, Routine } from "./routine.ts";
 
-/**
- * Discover routines in `<dir>/routines/`: each file default-exports a `defineRoutine({...})`, named from its
- * filename.
- */
-export async function loadRoutines(dir: string): Promise<{
-  routines: LoadedRoutine[];
-  /** What each loaded routine declared it needs, BY ROUTINE NAME and attributed to its file. Per
-   *  routine because a caller that runs exactly ONE of them (`fastagent routine run`) must not be stopped
-   *  by a sibling's credential, and because two routines declaring the same variable would
-   *  otherwise blame whichever file was read first. The clock flattens it (it runs all of them).
-   *  Data, not a check — only a serving path asserts it (src/declared-secrets.ts). */
-  secrets: Map<string, DeclaredSecret[]>;
-  failures: ModuleLoadFailure[];
-}> {
-  await assertInsideAgentDir(dir, "routines");
-  const { modules, failures } = await loadModuleDir(join(dir, "routines"));
-  const byName = new Map<string, LoadedRoutine>();
-  const secrets = new Map<string, DeclaredSecret[]>();
-  for (const { name, label, file, mod } of modules) {
-    try {
-      const r = mod.default as Partial<Routine> | undefined;
-      if (!r || typeof r.prompt !== "string") {
-        throw new Error(`${label} must default-export defineRoutine({ prompt, cron? })`);
-      }
-      const declaration = readSecretDeclaration(r, label);
-      if (declaration.error !== undefined) throw new Error(declaration.error);
-      // NO CRON IS NOT AN ERROR: the routine is then reachable by name only (`POST /run`, the CLI, a scheduler
-      // that calls the route). A `tz` without one is, though — it would read as a time this routine does not have.
-      if (r.cron !== undefined && typeof r.cron !== "string") throw new Error(`${label}: "cron" must be a string`);
-      if (r.cron === undefined && r.tz !== undefined) {
-        throw new Error(`${label}: "tz" means nothing without "cron" — remove it, or give this routine a cron`);
-      }
-      if (r.cron !== undefined) {
-        const err = cronError(r.cron, r.tz);
-        if (err) throw new Error(`${label}: invalid cron/tz — ${err}`);
-      }
-      // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`), so anything that could
-      // leave that directory is refused here — where the author sees which file is wrong — rather than deeper.
-      if (!isSafeScheduleName(name)) {
-        throw new Error(`${label}: a routine name cannot be ".", ".." or contain a path separator`);
-      }
-      if (byName.has(name)) throw new Error(`${label}: duplicate routine name "${name}" — kept the first`);
-      byName.set(name, {
-        name,
-        prompt: r.prompt,
-        ...(r.cron !== undefined ? { cron: r.cron } : {}),
-        ...(r.tz !== undefined ? { tz: r.tz } : {}),
-      });
-      secrets.set(name, declaration.secrets);
-    } catch (error) {
-      failures.push({ label, file, message: (error as Error).message });
-    }
+const KEYS = new Set(["cron", "tz"]);
+
+/** The frontmatter's keys and the body under it, or why the file is not a schedule. */
+function parse(text: string): { fields: Map<string, string>; body: string } | { error: string } {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return { error: 'it must start with a "---" frontmatter line holding its cron' };
+  const end = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  if (end === -1) return { error: 'its frontmatter has no closing "---" line' };
+  const fields = new Map<string, string>();
+  for (const raw of lines.slice(1, end)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const match = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
+    if (!match) return { error: `frontmatter line ${JSON.stringify(line)} is not "key: value"` };
+    const [, key, rawValue] = match as unknown as [string, string, string];
+    if (!KEYS.has(key)) return { error: `unknown frontmatter key "${key}" (a schedule has "cron" and "tz")` };
+    if (fields.has(key)) return { error: `frontmatter key "${key}" appears twice` };
+    const quoted = /^(["'])(.*)\1$/.exec(rawValue);
+    fields.set(key, quoted ? (quoted[2] as string) : rawValue);
   }
-  return { routines: [...byName.values()], secrets, failures };
+  return {
+    fields,
+    body: lines
+      .slice(end + 1)
+      .join("\n")
+      .trim(),
+  };
+}
+
+/** Discover the schedules in `<dir>/schedules/`, sorted by name. A file that is not a valid schedule is a failure. */
+export async function loadSchedules(dir: string): Promise<{ schedules: Schedule[]; failures: ModuleLoadFailure[] }> {
+  await assertInsideAgentDir(dir, "schedules");
+  const scheduleDir = join(dir, "schedules");
+  let dirents: Dirent[];
+  try {
+    dirents = await readdir(scheduleDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schedules: [], failures: [] };
+    throw new Error(`cannot read ${scheduleDir}: ${(error as Error).message}`);
+  }
+  const schedules: Schedule[] = [];
+  const failures: ModuleLoadFailure[] = [];
+  for (const dirent of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!dirent.name.endsWith(".md")) continue;
+    const label = `schedules/${dirent.name}`;
+    const file = join(scheduleDir, dirent.name);
+    if (!dirent.isFile()) {
+      log.warn(`[fastagent] ${label} is not a regular file — schedules must be real files inside the agent dir`);
+      continue;
+    }
+    const name = dirent.name.slice(0, -".md".length);
+    const fail = (message: string) => failures.push({ label, file, message });
+    // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`).
+    if (!isSafeScheduleName(name)) {
+      fail('a schedule name cannot be empty, ".", ".." or contain a path separator');
+      continue;
+    }
+    const parsed = parse(await readFile(file, "utf8"));
+    if ("error" in parsed) {
+      fail(parsed.error);
+      continue;
+    }
+    const cron = parsed.fields.get("cron");
+    const tz = parsed.fields.get("tz");
+    if (cron === undefined || cron === "") {
+      fail('its frontmatter needs a "cron" (e.g. cron: "0 9 * * 1-5")');
+      continue;
+    }
+    const invalid = cronError(cron, tz);
+    if (invalid) {
+      fail(`invalid cron/tz — ${invalid}`);
+      continue;
+    }
+    if (parsed.body === "") {
+      fail("it has no prompt: write what the agent should do under the frontmatter");
+      continue;
+    }
+    schedules.push({ name, cron, ...(tz !== undefined ? { tz } : {}), prompt: parsed.body });
+  }
+  return { schedules, failures };
 }

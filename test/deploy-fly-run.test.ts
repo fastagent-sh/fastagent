@@ -344,7 +344,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   it("a declared name is REQUIRED: absent from the value file → missingSecrets, listed once", () => {
     const declared = [
       { name: "GH_TOKEN", source: "tools/gh.ts" },
-      { name: "GH_TOKEN", source: "routines/digest.ts" },
+      { name: "GH_TOKEN", source: "channels/digest.ts" },
     ];
     const present = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",

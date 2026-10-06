@@ -38,7 +38,7 @@ export const WAKEUPS_WHEN_ASLEEP =
 /** What forbids scale-to-zero for this deployment, or `undefined` when nothing does. */
 export function residencyFor(facts: {
   channels: readonly DeclaredChannel[];
-  /** `routines/` declares at least one cron. */
+  /** `schedules/` declares at least one schedule. */
   hasCron: boolean;
 }): Residency | undefined {
   if (facts.channels.some((channel) => channel.ingress === "long-connection")) {

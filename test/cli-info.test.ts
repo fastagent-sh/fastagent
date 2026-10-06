@@ -109,12 +109,12 @@ describe("cli: info", () => {
     expect(text.stderr).toMatch(/broken\.ts/); // the reason is a warning on stderr
   });
 
-  it("info loads routines — a broken one is reported (exit 0), a good one carries its next instant", async () => {
+  it("info loads schedules — a broken one is reported (exit 0), a good one carries its next instant", async () => {
     // Same G2 isolation as tools: a broken schedule file (bad cron) is skipped + reported at info time,
     // not first at `dev`; the good schedule still shows, with its next fire instant.
     const dir = await agentWorkspace("fa-info-schedfail-", {
-      "routines/good.mjs": 'export default { cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
-      "routines/bad.mjs": 'export default { cron: "not a cron", prompt: "x" };\n',
+      "schedules/good.md": '---\ncron: "0 9 * * *"\ntz: UTC\n---\ndigest\n',
+      "schedules/bad.md": "---\ncron: not a cron\n---\nx\n",
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
     const env = { ...process.env };
@@ -123,17 +123,17 @@ describe("cli: info", () => {
     const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
     expect(code).toBe(0); // reported, not fatal
     const info = JSON.parse(stdout);
-    expect(info.routines).toHaveLength(1);
-    expect(info.routines[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
-    expect(info.routines[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
-    expect(JSON.stringify(info.routineFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
+    expect(info.schedules).toHaveLength(1);
+    expect(info.schedules[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
+    expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
+    expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.md/); // the broken one is surfaced per-file
     expect(info).not.toHaveProperty("selfSchedule"); // not a switch: every serve mounts the wake tool
     expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]); // omitted = everything
 
-    // text mode: next instant on the routines line, the failure as a stderr warning
+    // text mode: next instant on the schedules line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);
     expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(/routines:\s+good \(next .*T09:00:00\.000Z\)/);
-    expect(text.stderr).toMatch(/bad\.mjs/);
+    expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
+    expect(text.stderr).toMatch(/bad\.md/);
   });
 });

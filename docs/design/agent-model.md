@@ -27,7 +27,7 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 |---|---|---|
 | **Agent** | The definition, the way a program is | Its model, harness and contexts, as declared in its directory |
 | Model | What the agent thinks with | The default model and thinking level. Credentials are not part of it |
-| Harness | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
+| Harness | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
@@ -83,7 +83,8 @@ interface or pi's, and the definition says which:
 |---|---|---|
 | `AGENTS.md` (in a context) | Markdown | Open standard ([agents.md](https://agents.md)) |
 | `skills/<name>/SKILL.md` | Markdown with frontmatter | Open standard ([Agent Skills](https://agentskills.io/specification)) |
-| `tools/`, `channels/`, `routines/`, `fastagent.config.ts` | TypeScript modules (`defineTool`, `defineChannel`, `defineRoutine`) | FastAgent |
+| `tools/`, `channels/`, `fastagent.config.ts` | TypeScript modules (`defineTool`, `defineChannel`) | FastAgent |
+| `schedules/<name>.md` | Markdown with a `cron`/`tz` frontmatter | FastAgent |
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, `extensions/`, `.pi/`, `models.json`, `models-store.json` | pi's conventions and APIs | pi, the reference engine: these do not carry over to another engine |
 | `<context>/<skill>` | A skill name | FastAgent's convention, not the Agent Skills specification (below) |
 | `package.json` | npm | npm |
@@ -359,7 +360,7 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
-| What a process loads once: `tools/`, `channels/`, `routines/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| What a process loads once: `tools/`, `channels/`, `schedules/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
 through `bash`, its prompt files and `AGENTS.md`, and `wake` for its own follow-up work. Code modules and
@@ -367,7 +368,7 @@ configuration are the author's to put into service, with a restart or a release:
 [core](core.md) §2 and the deployed prompt give.
 
 An earlier version of this note reversed that rule: every process would restart onto a changed definition by
-itself once idle, after checking that it loads, and every routine would be held to `wake`'s 10-minute floor. It
+itself once idle, after checking that it loads, and every schedule would be held to `wake`'s 10-minute floor. It
 was not built:
 
 - **No observed need.** What a script cannot be is a tool with a typed interface, a channel or an extension, and

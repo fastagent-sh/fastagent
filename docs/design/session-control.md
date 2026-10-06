@@ -461,7 +461,7 @@ flag per block. How long the thinking took is not recorded.
 `outcome` `{ status: "failed" | "aborted" | "truncated", error?: { message } }` says how an answer ended when it
 did not end normally, and is absent when it did. The answer's `message_finished` carries the same value, so a
 client applies one rule to the live event and to the entry it reads back, and a failure a client never watched (a
-channel's run, a routine's, one before a restart) still shows. `truncated` means the answer was cut off at the
+channel's run, a schedule's, one before a restart) still shows. `truncated` means the answer was cut off at the
 output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
 a later complete answer. `aborted` is an answer the run's stop ended, wherever the stop landed: while the model was
 writing, or during a tool, after which the engine's next model request fails on the stop (the stopped call's own
@@ -663,8 +663,6 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane (NOT this prefix — see below)
-GET    /routines                           the catalogue of runnable work (also not this prefix)
-POST   /run                                run one declared routine by name (also not this prefix)
 ```
 
 - **PATCH for properties, POST …/actions for actions.** What a session HAS is a resource field; what
@@ -799,15 +797,13 @@ credential:
 | Endpoint | What an anonymous caller gets |
 |---|---|
 | `POST /invoke` | A turn with this agent's full tool authority, on any session id, billed to your model account. Always served. |
-| `GET /routines` | The catalogue: which names `POST /run` accepts, with each one's cron if it has one. Never a prompt. |
-| `POST /run` | A turn from a prompt the definition wrote down, for any routine it declares. Both are served when there is at least one AND the data plane is on — `http.run` defaults to `http.invoke`. |
 | `GET /control/sessions` | Every conversation on the deployment |
 | `GET /control/sessions/{id}/entries`, `.../image`, `.../events` | The full contents of any one of them, images included |
 | `POST /control/sessions/{id}/actions` | Steer, abort or compact a running turn |
 | `PATCH`/`PUT`/`DELETE /control/sessions/{id}` | Rewrite, fork, or IRREVERSIBLY delete a session |
 | `GET /health` | Liveness |
 
-`GET /routines` and `POST /run` appear only where `routines/` declares something, and follow `http.invoke` unless `http.run` says otherwise. `/control/*` appears only under
+`/control/*` appears only under
 `sessionControl: true`, and **not at all on AgentCore**. That host has
 two doors, and this plane fits neither:
 
@@ -817,7 +813,7 @@ two doors, and this plane fits neither:
   it verifies its platform's signature inside itself; this plane has nothing to verify. So the relay
   reaches the channels' routes only.
 - The Runtime's own `InvokeAgentRuntime` is IAM-gated, and the forwarder emits only four envelope
-  kinds (`webhook`, `routine-fire`, `wake-poke`, `probe`), so a kind it never sends can only come
+  kinds (`webhook`, `schedule-fire`, `wake-poke`, `probe`), so a kind it never sends can only come
   from a direct IAM call. That is how `kind: "invoke"` runs a turn here with no ingress secret, and a
   `kind: "control"` on the same footing is the recipe if this is ever wanted.
 

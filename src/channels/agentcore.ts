@@ -22,7 +22,7 @@ import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.t
  * so behind THIS door an anonymous caller and an IAM one are the same thing. A channel route survives that because
  * it verifies the platform's signature inside itself; nothing fastagent serves does.
  *
- * The other door is the Runtime's own, IAM-gated: the forwarder emits only `webhook`, `routine-fire`, `wake-poke`
+ * The other door is the Runtime's own, IAM-gated: the forwarder emits only `webhook`, `schedule-fire`, `wake-poke`
  * and `probe`, so any other KIND can only come from a direct `InvokeAgentRuntime` call. That is what lets
  * `kind: "invoke"` run a turn here with no ingress secret, and it is where anything else that needs a real caller
  * identity belongs.
@@ -40,26 +40,16 @@ export interface AgentcoreAdapterOptions {
   /** Process-wide background-work signal (busy.ts `activeWork() > 0`) — injected for tests. */
   isBusy: () => boolean;
   /**
-   * Fire ONE declared schedule for the occurrence EventBridge named — the claim/run/settle the resident clock uses,
-   * not the `POST /run` API.
+   * Fire ONE declared schedule for the occurrence EventBridge named — the claim/run/settle the resident clock uses.
    *
-   * THIS IS WHERE OCCURRENCE SEMANTICS LIVE ON THIS HOST, and it is separate from that route on purpose. `deploy`
-   * wrote the rule, injected `<aws.scheduler.scheduled-time>` and the forwarder relays it behind the ingress
+   * `deploy` wrote the rule, injected `<aws.scheduler.scheduled-time>` and the forwarder relays it behind the ingress
    * secret, so this caller is one we produced and authenticated: the instant it names really is a grid point of
    * that schedule, which is what makes a claim (and therefore dedup across EventBridge's redeliveries, a fire
-   * history and the overlap policy) mean anything. `POST /run` has none of that — it is an unauthenticated API
-   * whose caller cannot be told which occurrence it means, so it does not pretend to (schedule/run.ts).
+   * history and the overlap policy) mean anything.
    *
    * Undefined when the definition declares no schedules.
    */
-  fireRoutine?: (name: string, occurrence: Date) => Promise<Response>;
-  /**
-   * Run a declared routine BY NAME — the `POST /run` contract, for the host that publishes no routes.
-   *
-   * Undefined when the definition declares none. Note what this does NOT do: no occurrence, no claim, no fire
-   * history. Those belong to {@link fireRoutine}, whose caller is a clock we wrote.
-   */
-  runRoutine?: (name: string) => Promise<Response>;
+  fireSchedule?: (name: string, occurrence: Date) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */
   ingressSecret?: string;
   /** Runs once on activation, after accepting the current forwarder callback URL. */
@@ -121,7 +111,7 @@ function createActivation(deps: {
 }
 
 export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
-  const { channels, agent, stateRoot, isBusy, fireRoutine, runRoutine, ingressSecret, onStateReady } = options;
+  const { channels, agent, stateRoot, isBusy, fireSchedule, ingressSecret, onStateReady } = options;
   const activation = createActivation({ stateRoot, onStateReady, channels });
   const invokeHandler = createInvokeHandler(agent);
 
@@ -143,7 +133,7 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
       // The IAM door's kinds: AWS authenticated this caller, so no ingress secret is expected or wanted. A `probe`
       // here only opens the deployed definition (the deferred wrapper did that before this line) and says so: it is
       // how `login --deployment` gets a definition to log in, after a reset, on a runtime nothing has invoked yet.
-      if (envelope.kind !== "invoke" && envelope.kind !== "routine-run" && envelope.kind !== "probe") {
+      if (envelope.kind !== "invoke" && envelope.kind !== "probe") {
         log.warn(`[agentcore] rejected an unauthenticated "${envelope.kind}" envelope`);
         return text("forbidden\n", 403);
       }
@@ -215,33 +205,19 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
         };
         return json(reply, 200);
       }
-      case "routine-fire": {
+      case "schedule-fire": {
         const { name, occurrence } = envelope;
         if (typeof name !== "string" || typeof occurrence !== "string" || Number.isNaN(Date.parse(occurrence))) {
-          return text('routine-fire envelope needs { "name": string, "occurrence": ISO-date }\n', 400);
+          return text('schedule-fire envelope needs { "name": string, "occurrence": ISO-date }\n', 400);
         }
         // No schedules in this definition: nothing to fire, and no rule should have survived a deploy that removed
         // them either.
-        if (!fireRoutine) return text(`no routines in this deployment (routine-fire "${name}")\n`, 404);
+        if (!fireSchedule) return text(`no schedules in this deployment (schedule-fire "${name}")\n`, 404);
         // The whole agent turn runs inside this request — but the CALLER (the forwarder Lambda) may time out and drop
         // the connection while the turn keeps running server-side.
         const workDone = beginWork();
         try {
-          return await fireRoutine(name, new Date(occurrence));
-        } finally {
-          workDone();
-        }
-      }
-      case "routine-run": {
-        const { name } = envelope;
-        if (typeof name !== "string" || name === "") {
-          return text('routine-run envelope needs { "name": string }\n', 400);
-        }
-        if (!runRoutine) return text(`no routines in this deployment (routine-run "${name}")\n`, 404);
-        // The whole agent turn runs inside this request; the caller may time out while it keeps running.
-        const workDone = beginWork();
-        try {
-          return await runRoutine(name);
+          return await fireSchedule(name, new Date(occurrence));
         } finally {
           workDone();
         }

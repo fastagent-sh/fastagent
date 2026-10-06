@@ -86,7 +86,7 @@ export async function tailAgentcoreLogs(
   const matches = groups.filter((group) => (exact ? group === exact : group.startsWith(prefix))).sort();
   if (matches.length === 0) {
     // Absent group = never used.
-    const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or routine run";
+    const trigger = plan.source === "runtime" ? "invoke the Runtime once" : "deliver one webhook or schedule fire";
     return {
       ok: false,
       gate: `no ${plan.source} log group exists yet — ${trigger}, then retry (AWS creates it on first use)`,

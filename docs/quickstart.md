@@ -178,36 +178,28 @@ Read [Channels](channels.md) for the channel model, [Telegram channel](telegram.
 ## 8. Run on a clock
 
 Channels turn external events into invocations; **schedules** do the same for the clock — firing the
-agent on a cron: a daily digest, a periodic check. Drop a file in `routines/` (mirroring `tools/`), named by its filename:
+agent on a cron: a daily digest, a periodic check. Drop a Markdown file in `schedules/`, named by its filename: the
+cron in the frontmatter, the prompt under it.
 
-```ts
-// routines/daily-digest.ts
-import { defineRoutine } from "@fastagent-sh/fastagent";
+```md
+<!-- schedules/daily-digest.md -->
+---
+cron: "0 9 * * *"
+tz: America/New_York
+---
 
-export default defineRoutine({
-  cron: "0 9 * * *",
-  tz: "America/New_York",
-  secrets: ["TEAM_CHAT_ID"],
-  prompt: (secrets) => `Summarize yesterday's activity and send it with telegram-send to chat ${secrets.TEAM_CHAT_ID}.`,
-});
+Summarize yesterday's activity and send it with telegram-send to chat 123456789.
 ```
 
 The scheduler only fires the agent; a send tool delivers the output (`fastagent add telegram` scaffolds
-`tools/telegram-send.ts`). A scheduled turn has no chat, so **the prompt must name the target chat id**. Declare the
-id in `secrets` and build the prompt from it: `dev`/`start` refuse to boot while it is unset. Set `TEAM_CHAT_ID` in
-`.secrets/.env`, then test without waiting for the cron (the real fire state is not touched):
-
-```bash
-fastagent routine run daily-digest
-```
+`tools/telegram-send.ts`). A scheduled turn has no chat, so **the prompt must name the target chat id**. Every fire
+continues one conversation, `schedule:daily-digest`, so the agent sees what its earlier runs did.
 
 On resident hosts, the cron fires while `dev`/`start` is serving; keep the process running.
 [AgentCore ingress](deploy.md#aws-bedrock-agentcore) instead uses EventBridge and supports scale-to-zero.
-`fastagent routine history <name>` answers "did last night's run silently fail?", and
-`fastagent routine list` shows the selected local state's pending work. Agents can
-also schedule **themselves** with the built-in `wake` tool ("check the deploy in 10 minutes"), mounted on every
-serve. See the [CLI reference](cli.md) and
-[API reference](api-reference.md#routine-authoring).
+`fastagent schedules list` shows when each schedule runs next and how its last run ended. To try the prompt now,
+`fastagent invoke` it. Agents can also schedule **themselves** with the built-in `wake` tool ("check the deploy in
+10 minutes"), mounted on every serve. See [Schedules](configuration.md#schedules).
 
 ## Where next
 

@@ -32,7 +32,7 @@ describe("deploy/residency", () => {
   });
 
   it("reports the reason WITHOUT a way out first — the message depends on which one it is", () => {
-    // A cron is the one reason with a way out: someone else's clock can call POST /run.
+    // A cron is the one reason with a way out: someone else's clock can call POST /invoke.
     expect(residencyFor({ ...nothing, hasCron: true })?.reason).toBe(CRON_CAN_BE_EXTERNAL);
     // With both, the long connection is the reason: offering the cron's way out would advise scaling a box to
     // zero that holds a connection nothing can re-open from zero.
@@ -42,7 +42,7 @@ describe("deploy/residency", () => {
   });
 
   it("names exactly one reason as externally replaceable", () => {
-    // A guard on the constant itself: it decides whether a host prints "…or drive POST /run", and
+    // A guard on the constant itself: it decides whether a host prints "…or keep the time elsewhere", and
     // pointing it at any other reason would publish advice that loses turns.
     expect(CRON_CAN_BE_EXTERNAL).toBe("cron");
   });

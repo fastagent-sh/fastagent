@@ -19,7 +19,7 @@ reviewer/                   # the agent, and its working directory
 ├── skills/                 # optional reusable markdown expertise
 ├── tools/                  # optional code tools
 ├── channels/               # optional webhook/bot adapters
-├── routines/               # optional named units of work (a cron, an API call, or both)
+├── schedules/              # optional prompts run on a cron (<name>.md)
 ├── extensions/             # optional pi extension modules (see configuration.md)
 └── reference.md            # optional markdown context (any file layout)
 
@@ -33,9 +33,9 @@ app/                        # a context it works on, declared in fastagent.confi
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`), `skills/`, `tools/`, `channels/`, and markdown context as files you can inspect, edit, and commit. What it works on and knows is declared as [contexts](configuration.md#contexts), each with its `AGENTS.md` as project context.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `routine`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
+4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Time triggers** — cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent routine history`).
+6. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
 
@@ -127,8 +127,8 @@ Implemented today:
 - Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
-- Cron schedules (`routines/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `routine`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
+- Schedules (`schedules/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
+- `dev`, `chat`, `invoke`, `tool`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`).
 

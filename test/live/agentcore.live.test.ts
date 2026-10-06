@@ -65,13 +65,8 @@ describe("aws CLI output still matches what the AgentCore driver reads", () => {
     // are on every stack, and the schedule adds an `AWS::Scheduler::Schedule`. This fixture emits all of them
     // and still creates nothing.
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: "openai-codex/gpt-5.5" };\n`);
-    // A plain default export, not `defineRoutine(...)`: loadRoutines validates the SHAPE, and this
-    // fixture has no node_modules to import the package's helper from.
-    await mkdir(join(agentDir, "routines"), { recursive: true });
-    await writeFile(
-      join(agentDir, "routines", "nightly.mjs"),
-      `export default { cron: "0 3 * * *", prompt: "probe" };\n`,
-    );
+    await mkdir(join(agentDir, "schedules"), { recursive: true });
+    await writeFile(join(agentDir, "schedules", "nightly.md"), `---\ncron: "0 3 * * *"\n---\nprobe\n`);
     await writeFile(join(agentDir, "package.json"), `${JSON.stringify({ name: "p", private: true }, null, 2)}\n`);
     // Generation only: `deploy agentcore` without --run writes artifacts and touches no AWS API.
     const generated = await run(process.execPath, [CLI, "deploy", "agentcore"], agentDir);

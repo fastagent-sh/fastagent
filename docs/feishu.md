@@ -365,7 +365,7 @@ as well posts it twice.
 The tools use `feishuTransport(ctx.cwd)` / `larkTransport(ctx.cwd)` from their respective package
 subpaths. Within a serving process, they share the mounted channel's credentials, custom gateway,
 token cache, bounded retries, and UTF-8 text splitting. Feishu and Lark remain isolated even in one
-agent. With no channel mounted (`routine run`, `invoke`, `tool`, or an embedded agent), the transport
+agent. With no channel mounted (`invoke`, `tool`, or an embedded agent), the transport
 reads the matching `FEISHU_*` / `LARK_*` environment credentials and uses that cloud's default gateway.
 Standalone sending requires no `fastagent.config.ts`: the transport is keyed to the state root of the tool's `cwd`,
 the agent directory.

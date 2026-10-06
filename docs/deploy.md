@@ -31,7 +31,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | Requirement | How |
 |---|---|
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
-| **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`/`defineRoutine({ secrets })`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
+| **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/` and `.secrets/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Contexts that reach a host** | A `github` [context](configuration.md#contexts) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` context stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, which every release ships; move what it works on and must keep to a repository. |
@@ -75,7 +75,7 @@ still log the other out. Replace it once: delete the old secret (`fly secrets un
 login (its Compose no longer passes the seed); AgentCore needs nothing, its storage is reset by every deploy.
 
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
-and routines fire on schedule, and each turn they start fails for want of a model credential. Only webhooks wait for
+and schedules fire, and each turn they start fails for want of a model credential. Only webhooks wait for
 the login. For an unattended first deploy of such an agent, use an API key.
 
 When the credential is missing or rejected later (revoked, volume lost), the box's startup log names
@@ -209,7 +209,7 @@ deploy whose box crashes on boot as failed.
 
 | Definition has | Fly (`min_machines_running`) / Railway (App Sleeping) |
 |---|---|
-| a routine with a `cron` | kept up — unless an external clock calls [`POST /run`](api-reference.md#post-run) instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job) |
+| a schedule (`schedules/*.md`) | kept up — unless an external clock calls `POST /invoke` instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job) |
 | a long-connection channel | kept up; an outbound connection cannot wake a stopped machine |
 | neither | may scale to zero |
 
@@ -239,7 +239,7 @@ The stack carries:
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
   verify signatures as on every host) and manages wake alarms;
-- **EventBridge Scheduler rules** for each routine's `cron`. A cron EventBridge cannot express stops the deploy;
+- **EventBridge Scheduler rules** for each schedule's `cron`. A cron EventBridge cannot express stops the deploy;
 - **wake alarms**: pending wake-ups become one-shot EventBridge schedules that wake the container on time.
 
 Variables from `.secrets/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
@@ -264,7 +264,7 @@ What to know:
 - **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
   `session` selects the conversation.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).
-- **A kept template that no longer matches the definition** (a new routine or channel) stops `--run` until
+- **A kept template that no longer matches the definition** (a new schedule or channel) stops `--run` until
   `--force`. A template without the marker line is never regenerated.
 
 ### Logs

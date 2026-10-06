@@ -5,11 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allSecrets, describeSecrets, missingSecrets } from "../src/declared-secrets.ts";
 import { gateSecrets } from "../src/secrets-gate.ts";
-import { defineChannel, defineRoutine, defineTool, z } from "../src/index.ts";
+import { defineChannel, defineTool, z } from "../src/index.ts";
 import { inspectChannels, loadChannels } from "../src/channels/discover.ts";
 import { loadTools } from "../src/engines/pi/tool.ts";
 import { resolveAgentTools } from "../src/engines/pi/create.ts";
-import { loadRoutines } from "../src/schedule/discover.ts";
 import { resolveAgentAssembly } from "../src/engines/pi/open.ts";
 
 /** An agent dir: `<host>/fastagent/`. */
@@ -17,7 +16,6 @@ async function agent(files: Record<string, string>): Promise<string> {
   const host = await mkdtemp(join(tmpdir(), "fa-declared-"));
   const dir = join(host, "fastagent");
   await mkdir(join(dir, "tools"), { recursive: true });
-  await mkdir(join(dir, "routines"), { recursive: true });
   await mkdir(join(dir, "channels"), { recursive: true });
   await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "openai/gpt-4o-mini" };\n`);
   for (const [name, content] of Object.entries(files)) await writeFile(join(dir, name), content);
@@ -29,12 +27,12 @@ describe("declared secrets: the rule", () => {
     const declared = [
       { name: "X_API_KEY", source: "tools/x-post.ts" },
       { name: "X_API_SECRET", source: "tools/x-post.ts" },
-      { name: "SLACK_TOKEN", source: "routines/digest.ts" },
+      { name: "SLACK_TOKEN", source: "channels/slack.ts" },
     ];
     const env = { X_API_KEY: "k", X_API_SECRET: "" }; // empty counts as missing (an unset .env line)
     expect(missingSecrets(declared, env).map((s) => s.name)).toEqual(["X_API_SECRET", "SLACK_TOKEN"]);
     expect(describeSecrets(declared)).toBe(
-      "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (routines/digest.ts)",
+      "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (channels/slack.ts)",
     );
   });
 
@@ -43,11 +41,11 @@ describe("declared secrets: the rule", () => {
     // and (below, in the loader cases) reporting load failures before it throws.
     const declared = new Map([
       ["x-post", [{ name: "X_API_KEY", source: "tools/x-post.ts" }]],
-      ["digest", [{ name: "SLACK_TOKEN", source: "routines/digest.ts" }]],
+      ["slack", [{ name: "SLACK_TOKEN", source: "channels/slack.ts" }]],
     ]);
     const env = { SLACK_TOKEN: "t" };
     expect(() => gateSecrets({ declared, failures: [], env })).toThrow(/X_API_KEY \(tools\/x-post\.ts\)/);
-    expect(() => gateSecrets({ declared, failures: [], owner: "digest", env })).not.toThrow();
+    expect(() => gateSecrets({ declared, failures: [], owner: "slack", env })).not.toThrow();
     expect(() => gateSecrets({ declared, failures: [], owner: "x-post", env })).toThrow(/X_API_KEY/);
     // An owner nobody declared for is not a refusal: it declared nothing, so nothing gates it.
     expect(() => gateSecrets({ declared, failures: [], owner: "unknown", env })).not.toThrow();
@@ -100,15 +98,10 @@ describe("declared secrets: where they are declared", () => {
     ]);
   });
 
-  it("defineRoutine declares too; a malformed declaration is a load failure, never dropped", async () => {
+  it("a malformed declaration is a load failure, never dropped", async () => {
     const dir = await agent({
-      "routines/digest.mjs": `export default { cron: "0 9 * * *", prompt: "d", secrets: ["SLACK_TOKEN"] };\n`,
-      "routines/bad.mjs": `export default { cron: "0 9 * * *", prompt: "d", secrets: "SLACK_TOKEN" };\n`,
       "tools/bad.mjs": `export default { name: "b", description: "b", parameters: {}, secrets: "X", execute: async () => ({}) };\n`,
     });
-    const loaded = await loadRoutines(dir);
-    expect([...loaded.secrets]).toEqual([["digest", [{ name: "SLACK_TOKEN", source: "routines/digest.mjs" }]]]);
-    expect(loaded.failures.map((f) => f.label)).toEqual(["routines/bad.mjs"]);
     expect((await loadTools(dir)).failures.map((f) => f.message)).toEqual([
       "tools/bad.mjs: secrets must be an array of env-var names",
     ]);
@@ -173,21 +166,6 @@ describe("declared secrets: the values reach the code that declared them", () =>
       ]);
     } finally {
       delete process.env.FA_TEST_BOT_TOKEN;
-    }
-  });
-
-  it("a schedule builds its prompt from the values it declared", async () => {
-    process.env.FA_TEST_DIGEST = "#ops";
-    try {
-      const schedule = defineRoutine({
-        cron: "0 9 * * *",
-        secrets: ["FA_TEST_DIGEST"],
-        prompt: (secrets) => `Post the digest to ${secrets.FA_TEST_DIGEST}`,
-      });
-      expect(schedule.prompt).toBe("Post the digest to #ops"); // resolved at load: consumers see one shape
-      expect(schedule.secrets).toEqual(["FA_TEST_DIGEST"]);
-    } finally {
-      delete process.env.FA_TEST_DIGEST;
     }
   });
 });

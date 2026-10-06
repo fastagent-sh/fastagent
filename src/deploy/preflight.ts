@@ -12,7 +12,7 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
-import { loadRoutines } from "../schedule/discover.ts";
+import { loadSchedules } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
 import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
@@ -38,7 +38,7 @@ import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { CRON_CAN_BE_EXTERNAL, residencyFor } from "./residency.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
-import { DEFAULT_HTTP_PORT, describeAnonymousSurface, shouldServeRun } from "../service.ts";
+import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
@@ -53,8 +53,8 @@ interface DeployFacts {
   /** Every declared channel with the ingress its module shape says it has, custom ones included. */
   channels: DeclaredChannel[];
   /**
-   * `routines/` declares at least one cron — the one residency reason with an external substitute: `POST /run` lets
-   * someone else's clock run a declared routine, so an operator who wants scale-to-zero has an option here.
+   * `schedules/` declares at least one schedule — the one residency reason with an external substitute: someone
+   * else's clock calling `POST /invoke`, so an operator who wants scale-to-zero has an option here.
    */
   hasCron: boolean;
   /**
@@ -76,7 +76,7 @@ interface DeployFacts {
    * box is its only holder.
    */
   boxLogin: string | undefined;
-  /** Every tool/routine/channel declaration — the names the value file must supply, by declaring file. */
+  /** Every tool/channel declaration — the names the value file must supply, by declaring file. */
   declaredSecrets: DeclaredSecret[];
   /** The runbook's variable list: the declared names, then everything else the value file carries. */
   secrets: DeploymentSecret[];
@@ -239,19 +239,16 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const modelSpec = model.spec;
 
-  // Time triggers (static routines or self-scheduling) need a machine kept running, and a declared schedule also
-  // decides whether `POST /run` mounts — so the load happens HERE, before the warning that has to name it.
-  // Loaded, not just listed: the same load answers "are there time triggers" AND "what did they declare they need".
-  // A file that FAILED to load still counts as a trigger — the author will fix it, and a plan that scaled to zero
-  // because a cron was broken on deploy day would sleep through it afterwards.
-  const loadedRoutines = await loadRoutines(agentDir);
+  // Time triggers (schedules or self-scheduling) need a machine kept running. A file that FAILED to load still counts
+  // as a trigger — the author will fix it, and a plan that scaled to zero because a cron was broken on deploy day
+  // would sleep through it afterwards.
+  const loadedSchedules = await loadSchedules(agentDir);
 
-  // What the PUBLIC host URL answers with no authentication of ours, NAMED FROM WHAT WILL ACTUALLY MOUNT (through the
-  // same `shouldServeRun` the assembly uses), never from the host alone: listing an endpoint this deployment does not
+  // What the PUBLIC host URL answers with no authentication of ours, NAMED FROM WHAT WILL ACTUALLY MOUNT, never from
+  // the host alone: listing an endpoint this deployment does not
   // serve is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
   const unauthenticated = describeAnonymousSurface({
     invoke: config.http?.invoke !== false,
-    run: loadedRoutines.routines.length > 0 && shouldServeRun(config.http),
     ...(config.sessionControl === true ? { controlPrefix: CONTROL_PREFIX } : {}),
   });
   if (publicUrl && unauthenticated.length > 0) {
@@ -282,14 +279,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
 
-  // A ROUTINE IS NOT A CRON. `cron` is a field, so counting routine FILES answered a different question: a
-  // definition whose only routine is reached by name (`POST /run`) would pin one machine up forever and print a
-  // note about a cron instant it does not have. `deploy agentcore` already filtered the same way when it turned
-  // routines into EventBridge rules; this is the other reader of that fact, and they must agree.
-  //
-  // A FAILED file still counts, on the conservative side: it may well declare a cron, and a plan that scaled to
-  // zero because the file did not parse would hide that behind silence.
-  const hasCron = loadedRoutines.routines.some((r) => r.cron !== undefined) || loadedRoutines.failures.length > 0;
+  // A FAILED file still counts, on the conservative side: it may well be a valid schedule tomorrow, and a plan that
+  // scaled to zero because the file did not parse would hide that behind silence.
+  const hasCron = loadedSchedules.schedules.length > 0 || loadedSchedules.failures.length > 0;
   if (longConnectionChannels.length > 0 && !externalClock) {
     report.note(
       `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
@@ -301,11 +293,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   if (hasCron && !externalClock) {
     const wayOut = residencyFor({ channels, hasCron })?.reason === CRON_CAN_BE_EXTERNAL;
     report.note(
-      `routines/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
+      `schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron ` +
         `instant).` +
         (wayOut
-          ? ` To scale to zero instead, keep the time in a scheduler you own and let it call ` +
-            `\`POST /run\` (an API that runs one declared unit of work by name — docs/api-reference.md#post-run).`
+          ? ` To scale to zero instead, keep the time in a scheduler you own and let it call \`POST /invoke\` ` +
+            `with the prompt (a prompt template's \`/name\` reuses one the definition holds).`
           : ""),
     );
   }
@@ -436,15 +428,19 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // a crash loop, which is the failure mode this whole mechanism exists to move to build time. Under
   // `--run` that is a gate, like a channel that fails to inspect; generate-only warns, since the
   // operator may be producing artifacts from a machine that never installed the agent's deps.
-  for (const failure of [...resolvedTools.toolFailures, ...loadedRoutines.failures]) {
+  for (const failure of resolvedTools.toolFailures) {
     const issue =
       `${failure.label} failed to load (${failure.message}) — any secrets it declares cannot be carried ` +
       `to the host, so the deployed box would refuse to start`;
     report.issue(issue);
   }
+  for (const failure of loadedSchedules.failures) {
+    report.issue(
+      `${failure.label} is not a valid schedule (${failure.message}) — the deployed box would refuse to start`,
+    );
+  }
   const declaredSecrets: DeclaredSecret[] = [
     ...allSecrets(resolvedTools.toolSecrets),
-    ...allSecrets(loadedRoutines.secrets),
     ...allSecrets(inspected.secrets),
   ];
   await checkKeptDockerfile(agentDir, config, model.envValue, valueFile, report);

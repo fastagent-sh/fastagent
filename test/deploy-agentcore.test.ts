@@ -230,7 +230,7 @@ describe("deploy agentcore: the plan", () => {
   });
 
   it("every stack carries the full wake-alarm topology: forwarder, secret param, roles, env", () => {
-    // Wake-ups are a default capability, so even a definition with no channel and no routine needs the forwarder —
+    // Wake-ups are a default capability, so even a definition with no channel and no schedule needs the forwarder —
     // it is the alarm registrar and the poke target.
     const plan = planAgentcoreDeploy(baseInput());
     const template = plan.artifacts[0]!.content;
