@@ -464,9 +464,9 @@ const context: CommandSpec = {
         { cmd: "fastagent context add github:acme/docs --readonly", note: "knows a clone" },
       ],
       notes:
-        "A directory in a GitHub checkout is declared `{ github, local }`: the whole repository, with that " +
-        "checkout used as it is on this machine. A repository with no checkout here is cloned, and kept up to " +
-        "date while the agent has not changed it. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
+        "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
+        "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
+        "place at each start where git can do so without touching the agent's work. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
         "own copy. A context may not contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {

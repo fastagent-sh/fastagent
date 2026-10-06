@@ -238,7 +238,9 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be th
 ```ts
 // From `@fastagent-sh/fastagent/node`.
 function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
-function cloneContext(context: ResolvedContext & { kind: "github" }): Promise<{ cloned: boolean; warning?: string }>;
+function cloneContext(
+  context: ResolvedContext & { kind: "github" },
+): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
 type ContextDeclaration =
   | { local: string; copy?: boolean; readonly?: boolean; name?: string }
@@ -259,8 +261,9 @@ The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fa
 naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
 directory or sits inside it ([Configuration](configuration.md#contexts)). It reads the disk and git, never the
 network, and writes nothing: a `github` context with no checkout here resolves to its clone's location, which
-`cloneContext` makes, or brings up to date when that loses nothing: a clone with changes of the agent's, or one the
-remote cannot be asked about, is kept (`cloned: false`, with a `warning` saying why). `createPiAgentFromDir` clones before it resolves; a caller that
+`cloneContext` makes, or brings up to date in place by git's rules, which never overwrite the agent's work: what git
+refuses, a fetch that fails, or a clone on another branch than declared keeps it as it is (`kept`, with the
+`reason`). `createPiAgentFromDir` clones before it resolves; a caller that
 resolves for `createPiAgentFromDefinition` calls `cloneContext` for each context with `clone: true`, then resolves
 again.
 

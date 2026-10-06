@@ -59,13 +59,13 @@ Each `--context <source>` declares something the agent works on in the config's 
 
 | `<source>` | Declared |
 |---|---|
-| `github:owner/repo` | `{ github: "owner/repo" }`, cloned when the agent starts and kept up to date while unchanged |
-| A directory in a checkout whose `origin` is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }`, the whole repository; a subdirectory is said to mean the root |
-| Any other directory | `{ local: "<absolute path>" }` |
+| `github:owner/repo` | `{ github: "owner/repo" }`, cloned when the agent starts and brought up to date in place at each start |
+| The root of a checkout whose `origin` is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }`, unless `--copy` |
+| Any other directory, a subdirectory of such a checkout included | `{ local: "<absolute path>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
 
-`--copy` declares each directory with `copy: true`, so an instance on a host gets its own copy; without it the
-context stays on this machine and deploying refuses the agent. A repository is cloned on a host, so `--copy` does
-not apply to one, and `init` says so. Every context is checked before anything is written: a directory must exist,
+`--copy` declares each directory with `copy: true`, so an instance on a host gets its own copy, a checkout's root
+included; without it the context stays on this machine and deploying refuses the agent. A `github:` source is cloned
+on a host, so `--copy` does not apply to it, and `init` says so. Every context is checked before anything is written: a directory must exist,
 and no declared location may contain the agent directory or sit inside it. Without `--context` the agent has none
 and works only in its own directory.
 
@@ -105,7 +105,7 @@ fastagent context remove <name> [agent]
 ```
 
 Edits the literal `contexts` list in `fastagent.config.ts`. `add` reads `<source>` the way `init --context` does: a
-directory, a directory in a GitHub checkout (declared as that repository, with the checkout as its `local`), or
+directory, the root of a GitHub checkout (declared as that repository, with the checkout as its `local`), or
 `github:owner/repo`. Paths are written absolute. `--readonly` makes it a context the agent knows rather than works
 on; `--copy` gives an instance on a host its own copy of a directory (its contents ship in the image; without it,
 deploying refuses); `--ref` names a repository's branch, tag or commit; `--local` names the checkout of a

@@ -1,22 +1,12 @@
 /**
  * The git a GitHub context needs on this machine: which repository a checkout is of, whether it is at the declared
- * `ref`, and a fresh clone. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
+ * `ref`, and a clone, made or brought up to date in place. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
  * a private repository is reached the way the user's own `git clone` reaches it.
  */
 import { execFile, execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import lockfile from "proper-lockfile";
 
 /**
  * Never wait on a terminal prompt for a credential: a serving process has nobody to answer it, so git fails and says
@@ -47,13 +37,12 @@ function gitAnswer(args: string[], cwd: string): string | undefined {
 
 const execGit = promisify(execFile);
 
-/** Run git in `cwd`: its output, or its stderr as the error. A `timeoutMs` that runs out is an error too. */
-async function runGit(args: string[], cwd: string, timeoutMs?: number): Promise<string> {
+/** Run git in `cwd`: its output, or its stderr as the error. */
+async function runGit(args: string[], cwd: string): Promise<string> {
   try {
-    return (await execGit("git", args, { cwd, env: gitEnv(), ...(timeoutMs ? { timeout: timeoutMs } : {}) })).stdout;
+    return (await execGit("git", args, { cwd, env: gitEnv() })).stdout;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(NO_GIT);
-    if ((error as { killed?: boolean }).killed) throw new Error(`no answer within ${(timeoutMs ?? 0) / 1000}s`);
     const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
     throw new Error(stderr || (error as Error).message);
   }
@@ -69,7 +58,7 @@ export function githubRepoOf(url: string): string | undefined {
 }
 
 /** The URL fastagent clones github `repo` from. */
-export function githubUrl(repo: string): string {
+function githubUrl(repo: string): string {
   return `https://github.com/${repo}.git`;
 }
 
@@ -121,174 +110,116 @@ export function refNotice(dir: string, ref: string): string | undefined {
 /** A commit named in full: fetched by its hash, since `clone --branch` takes only a branch or a tag. */
 const FULL_COMMIT = /^[0-9a-f]{40}$/i;
 
-/** What a clone holds that a fresh clone would show: the commit checked out, and the branch (`HEAD` when detached). */
-type Checkout = { commit: string; branch: string };
+/**
+ * git aborts a transfer that moves under 1 KB/s for 15 seconds, so a network that drops packets silently does not hold
+ * a start until TCP gives up, while a large transfer that is moving is left alone. http(s) only. Not covered by a
+ * test: it takes a remote that stops answering.
+ */
+const SLOW_NETWORK = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15"];
 
 /**
- * Bring the clone of github `repo` at `ref` (its default branch when unset) in `dir` up to date, without ever losing
- * what was done in it: a clone is replaced only when replacing it loses nothing.
- * - None yet: cloned. A failure stops the start.
- * - A clone of another repository (the context was renamed or redeclared): replaced when it holds nothing of the
- *   agent's, refused, naming it, when it does.
- * - Changes of its own (files changed, added or ignored, a commit, branch, tag or stash since it was cloned): kept as
- *   it is, and the warning says it is not brought up to date. Merging it with the remote is git's, the agent's or the
- *   user's.
- * - Untouched: kept when it is on the commit and branch the remote names now, cloned again when the remote moved, and
- *   kept with a warning when the remote cannot be reached. Asked again under the lock that replaces it, since the
- *   agent of another process may have written to it while the new clone was made.
+ * The ref that holds the commit a clone pinned to a commit was last put on. Fetching a commit by its hash creates no
+ * ref, and without one every commit of a detached clone would look like the agent's own.
  */
-export async function refreshClone(
-  repo: string,
-  ref: string | undefined,
-  dir: string,
-): Promise<{ cloned: boolean; warning?: string }> {
+const PINNED = "refs/remotes/origin/pinned";
+
+/**
+ * What a start did with a clone: made it, moved it to what the remote has now, found it there already, or kept it as
+ * it is, for the `reason` given (git refused to touch the agent's work, or the remote could not be reached).
+ */
+export type CloneOutcome = { outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string };
+
+/**
+ * Clone github `repo` at `ref` (its default branch when unset) into `dir`, or bring the clone there up to date IN
+ * PLACE, by git's own rules: a fetch, then a fast-forward of the branch it is on, or a checkout of the tag or commit
+ * it is pinned to. git refuses whatever would overwrite the agent's work (a changed file the update touches, an
+ * untracked file it would replace, commits the remote does not have), and the clone is then kept as it is, with
+ * git's reason; so it is when the fetch fails, or when the clone is on another branch than declared. Nothing is
+ * deleted: the agent's branches, stashes and the changes an update does not touch stay where they are.
+ * - None yet: cloned beside it and renamed into place. A first clone that fails stops the start.
+ * - A clone of another repository there (the context was renamed or redeclared): refused, naming it.
+ */
+export async function refreshClone(repo: string, ref: string | undefined, dir: string): Promise<CloneOutcome> {
   // A library caller can hand this anything; git reads a leading "-" as an option, and no repository or ref has one
   // (a declaration with one is refused at load, declare.ts).
   if (repo.startsWith("-") || ref?.startsWith("-")) {
     throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
   }
-  const kept = (own: string) => ({
-    cloned: false,
-    warning: `the clone has ${own}: kept as it is, not brought up to date with github ${repo}`,
-  });
-  if (existsSync(dir) && isCloneOf(dir, repo)) {
-    const own = ownChanges(dir);
-    if (own !== undefined) return kept(own);
-    const current = untouched(dir);
-    let remote: Checkout | undefined;
-    try {
-      remote = await remoteCheckout(githubUrl(repo), ref, dirname(dir));
-    } catch (error) {
-      const reason = (error as Error).message.split("\n")[0];
-      const made = statSync(dir).mtime.toISOString();
-      return { cloned: false, warning: `could not reach github ${repo} (${reason}); using the clone made at ${made}` };
-    }
-    if (remote?.commit === current.commit && remote.branch === current.branch) return { cloned: false };
-  } else if (existsSync(dir)) {
-    // Its name now stands for another repository. Replaced only when nothing in it is the agent's: the agent was told
-    // it is a clone of the repository it came from, and its work there must not vanish under another name.
-    const own = ownChanges(dir);
-    if (own !== undefined) {
-      const origin = gitAnswer(["config", "--get", "remote.origin.url"], dir) ?? "no repository";
-      throw new Error(
-        `${dir} is a clone of ${origin}, not of github ${repo}, and has ${own}: move it away (push what should last ` +
-          `first), then start again`,
-      );
-    }
-  }
-  const unreplaced = await cloneInto(repo, ref, dir, () => (existsSync(dir) ? ownChanges(dir) : undefined));
-  return unreplaced === undefined ? { cloned: true } : kept(unreplaced);
-}
-
-/** Whether `dir` is a clone of github `repo`, by its `origin`. */
-function isCloneOf(dir: string, repo: string): boolean {
+  if (!existsSync(dir)) return cloneInto(repo, ref, dir);
   const origin = gitAnswer(["config", "--get", "remote.origin.url"], dir);
-  return origin !== undefined && githubRepoOf(origin)?.toLowerCase() === repo.toLowerCase();
-}
-
-/**
- * Where a clone records what it held when it was made, inside its own `.git`: HEAD and every branch, tag and stash.
- * What differs from it later is the agent's.
- */
-const CLONED_AS = "fastagent-cloned-as";
-
-/** HEAD and the refs a replacement would drop with the directory: branches, tags, the stash. */
-function refsOf(dir: string): string | undefined {
-  const head = gitAnswer(["rev-parse", "HEAD"], dir);
-  const refs = gitAnswer(
-    ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags", "refs/stash"],
-    dir,
-  );
-  return head === undefined || refs === undefined ? undefined : `HEAD ${head}\n${refs}`;
-}
-
-/**
- * What in the clone `dir` would be lost by replacing it, or undefined when nothing would: changed, added or ignored
- * files, or a HEAD, branch, tag or stash other than it was cloned with. A clone that cannot say what it was cloned
- * with is treated as having changes, since replacing it is what cannot be undone.
- */
-function ownChanges(dir: string): string | undefined {
-  const status = gitAnswer(["status", "--porcelain", "--ignored"], dir);
-  if (status === undefined) return "no git checkout in it";
-  if (status !== "") return "changes in its files";
-  const record = join(dir, ".git", CLONED_AS);
-  if (!existsSync(record)) return "no record of what it was cloned with";
-  return refsOf(dir) === readFileSync(record, "utf8") ? undefined : "commits, branches, tags or a stash of its own";
-}
-
-/** The checkout of an untouched clone. */
-function untouched(dir: string): Checkout {
-  const commit = gitAnswer(["rev-parse", "HEAD"], dir);
-  const branch = gitAnswer(["rev-parse", "--abbrev-ref", "HEAD"], dir);
-  if (commit === undefined || branch === undefined) throw new Error(`${dir} is not a git checkout`);
-  return { commit, branch };
-}
-
-/**
- * What a fresh clone at `ref` would check out, asked of the remote: a branch by name, a tag detached at its commit,
- * the default branch when unset. A full commit needs no asking. Undefined when the remote has no such ref; rejects
- * when it cannot be reached.
- */
-async function remoteCheckout(url: string, ref: string | undefined, cwd: string): Promise<Checkout | undefined> {
-  if (ref !== undefined && FULL_COMMIT.test(ref)) return { commit: ref.toLowerCase(), branch: "HEAD" };
-  // `--` before the operands, as for `clone`: nothing declared reaches git as an option.
-  const listed =
-    ref === undefined
-      ? await runGit(["ls-remote", "--symref", "--", url, "HEAD"], cwd, LS_REMOTE_TIMEOUT_MS)
-      : await runGit(["ls-remote", "--", url, `refs/heads/${ref}`, `refs/tags/${ref}`], cwd, LS_REMOTE_TIMEOUT_MS);
-  const refs = new Map<string, string>();
-  let defaultBranch: string | undefined;
-  for (const line of listed.split("\n")) {
-    const [left, name] = line.split("\t");
-    if (left === undefined || name === undefined) continue;
-    if (left.startsWith("ref: refs/heads/")) defaultBranch = left.slice("ref: refs/heads/".length);
-    else refs.set(name, left);
+  if (origin === undefined || githubRepoOf(origin)?.toLowerCase() !== repo.toLowerCase()) {
+    throw new Error(
+      `${dir} is a clone of ${origin ?? "no repository"}, not of github ${repo}: move it away (push what should last ` +
+        `first), then start again`,
+    );
   }
-  if (ref === undefined) {
-    const head = refs.get("HEAD");
-    return head !== undefined && defaultBranch !== undefined ? { commit: head, branch: defaultBranch } : undefined;
+  const kept = (reason: string): CloneOutcome => ({ outcome: "kept", reason });
+  const branch = gitAnswer(["symbolic-ref", "--quiet", "--short", "HEAD"], dir);
+  const declared =
+    ref ?? gitAnswer(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], dir)?.replace(/^origin\//, "");
+  if (branch !== undefined && branch !== declared) {
+    return kept(`it is on branch ${branch}, declared ${ref ?? `the default branch${declared ? `, ${declared}` : ""}`}`);
   }
-  const branch = refs.get(`refs/heads/${ref}`);
-  if (branch !== undefined) return { commit: branch, branch: ref };
-  const tag = refs.get(`refs/tags/${ref}^{}`) ?? refs.get(`refs/tags/${ref}`);
-  return tag !== undefined ? { commit: tag, branch: "HEAD" } : undefined;
+  if (branch === undefined) {
+    if (ref === undefined) return kept("it is on a detached commit, declared the default branch");
+    // Moving a detached HEAD away from commits of its own would leave them held by nothing.
+    if (gitAnswer(["rev-list", "--count", "HEAD", "--not", "--branches", "--tags", "--remotes"], dir) !== "0") {
+      return kept("it has commits no branch or tag holds");
+    }
+  }
+  const before = gitAnswer(["rev-parse", "HEAD"], dir);
+  // Pinned to a commit and on it: nothing a remote says can change that.
+  if (ref !== undefined && FULL_COMMIT.test(ref) && before === ref.toLowerCase()) return { outcome: "current" };
+  try {
+    await runGit([...SLOW_NETWORK, "fetch", "-q", "--end-of-options", "origin", branch ?? (ref as string)], dir);
+  } catch (error) {
+    return kept(`could not reach github ${repo}: ${gitReason(error)}`);
+  }
+  if (gitAnswer(["rev-parse", "FETCH_HEAD^{commit}"], dir) === before) return { outcome: "current" };
+  try {
+    if (branch !== undefined) {
+      await runGit(["merge", "-q", "--ff-only", "FETCH_HEAD"], dir);
+    } else {
+      await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], dir);
+      await runGit(["update-ref", PINNED, "HEAD"], dir);
+    }
+  } catch (error) {
+    return kept(`git would not update it: ${gitReason(error)}`);
+  }
+  return { outcome: "updated" };
+}
+
+/** git's own words for a refusal, without its hints. */
+function gitReason(error: unknown): string {
+  return (error as Error).message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("hint:"))
+    .join(" ");
 }
 
 /**
- * How long a start waits to hear whether the remote moved before it uses the clone there: a network that drops packets
- * silently would otherwise hold it until TCP gives up. Not covered by a test: it takes a remote that never answers.
+ * Clone github `repo` at `ref` into `dir`, which does not exist: built beside it and renamed into place, so another
+ * process reads no clone or a whole one. When another process put its own there first, that one stands and this one
+ * is discarded. Shallow: a starting point to work from; a later fetch brings the history an update needs.
  */
-const LS_REMOTE_TIMEOUT_MS = 15_000;
-
-/**
- * Clone github `repo` at `ref` into `dir`, replacing whatever is there unless `keep` names a reason not to, asked
- * under the lock that replaces it: that reason, when it kept it. The clone is built beside `dir` and renamed into
- * place under a lock in its parent, so another process reads the old clone or the new one, never half of either.
- * Shallow: a starting point to work from, not a history.
- */
-async function cloneInto(
-  repo: string,
-  ref: string | undefined,
-  dir: string,
-  keep: () => string | undefined,
-): Promise<string | undefined> {
+async function cloneInto(repo: string, ref: string | undefined, dir: string): Promise<CloneOutcome> {
   const parent = dirname(dir);
   mkdirSync(parent, { recursive: true });
-  const stamp = `${process.pid}-${Date.now()}`;
-  const next = join(parent, `.${basename(dir)}.next-${stamp}`);
-  const old = join(parent, `.${basename(dir)}.old-${stamp}`);
+  const next = join(parent, `.${basename(dir)}.next-${process.pid}-${Date.now()}`);
   const url = githubUrl(repo);
   try {
     try {
       if (ref !== undefined && FULL_COMMIT.test(ref)) {
         await runGit(["init", "-q", next], parent);
         await runGit(["remote", "add", "origin", url], next);
-        await runGit(["fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref], next);
+        await runGit([...SLOW_NETWORK, "fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref], next);
         await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], next);
+        await runGit(["update-ref", PINNED, "HEAD"], next);
       } else {
         // One token, and `--` before the operands: a declared value never reaches git as an option of its own.
         const branch = ref !== undefined ? [`--branch=${ref}`] : [];
-        await runGit(["clone", "-q", "--depth", "1", ...branch, "--", url, next], parent);
+        await runGit([...SLOW_NETWORK, "clone", "-q", "--depth", "1", ...branch, "--", url, next], parent);
       }
     } catch (error) {
       throw new Error(
@@ -296,37 +227,16 @@ async function cloneInto(
           `git's own credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH)`,
       );
     }
-    writeFileSync(join(next, ".git", CLONED_AS), refsOf(next) ?? "");
-    return await replaceDirectory(next, dir, old, keep);
+    try {
+      renameSync(next, dir);
+    } catch (error) {
+      // Another process's clone got there first (renaming onto a directory that is not empty fails): it stands.
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === "ENOTEMPTY" || code === "EEXIST") && existsSync(dir)) return { outcome: "current" };
+      throw error;
+    }
+    return { outcome: "cloned" };
   } finally {
     rmSync(next, { recursive: true, force: true });
-    rmSync(old, { recursive: true, force: true });
-  }
-}
-
-/**
- * Put the directory `next` where `dir` is, moving what was there to `old`, unless `keep` (asked under the lock) names
- * a reason to keep it: that reason, when it did. Two renames, so another process doing the same between them would
- * find `dir` gone or taken: the lock in their parent makes the pair one step for every process that replaces `dir`
- * this way.
- */
-export async function replaceDirectory(
-  next: string,
-  dir: string,
-  old: string,
-  keep: () => string | undefined = () => undefined,
-): Promise<string | undefined> {
-  const release = await lockfile.lock(dirname(dir), {
-    realpath: false,
-    retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 5_000, randomize: true },
-  });
-  try {
-    const reason = keep();
-    if (reason !== undefined) return reason;
-    if (existsSync(dir)) renameSync(dir, old);
-    renameSync(next, dir);
-    return undefined;
-  } finally {
-    await release();
   }
 }

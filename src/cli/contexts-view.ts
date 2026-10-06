@@ -5,7 +5,7 @@ import type { ResolvedContext } from "../contexts/resolve.ts";
 function contextKind(c: ResolvedContext): string {
   if (c.kind !== "github") return c.kind === "copy" ? "local, copied to a host" : "local, this machine only";
   const github = `github ${c.repo}${c.ref ? `@${c.ref}` : ""}`;
-  return c.clone ? `${github}, a clone kept up to date while unchanged` : `${github}, this checkout`;
+  return c.clone ? `${github}, a clone brought up to date at each start` : `${github}, this checkout`;
 }
 
 /**

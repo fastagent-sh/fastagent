@@ -221,17 +221,16 @@ Attributes:
 
 - **Read-only is an instruction in the first version.** The agent is told not to write a context it only knows;
   nothing stops a shell from writing it. A read-only `github` context is never pushed back.
-- **A repository is the user's checkout when this machine has one, else a clone the instance makes, which is
-  replaced only when that loses nothing.**
+- **A repository is the user's checkout when this machine has one, else a clone the instance makes and brings up
+  to date in place.**
   - A checkout named by `local` is the user's: FastAgent never fetches it and never switches its branch. When it
     is not at the declared `ref`, startup says so.
-  - Without one, the instance clones the repository at its declared `ref` the first time it starts. At each later
-    start a clone that holds nothing of the agent's (no changed, added or ignored file, and no commit, branch, tag
-    or stash since it was cloned) is brought to the remote's `ref` by cloning it again, whether the agent works on
-    it or only knows it, so it matches the definition. A clone with changes of the agent's is kept as it is, and startup says it is not
-    brought up to date: bringing the agent's work and the remote together is git's, the agent's or the user's
-    (synchronization, §8). Nothing the agent did is lost to a restart.
-  - When the remote cannot be reached, the clone there is used, and startup warns that it may be behind.
+  - Without one, the instance clones the repository at its declared `ref` the first time it starts, and at each
+    later start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether the
+    agent works on it or only knows it. git refuses whatever would overwrite the agent's work, and the clone is
+    then kept as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on
+    another branch than declared. Bringing the agent's work and the remote together is git's, the agent's or the
+    user's (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
 - **What a host copies follows from whether the context is writable.** A copy of a context the instance only knows
   is made again every time the instance is deployed: there is nothing local to lose, and it always matches the
   definition. A copy of one it works on is made once and belongs to the instance afterwards; a later deployment

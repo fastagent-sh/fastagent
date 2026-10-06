@@ -262,12 +262,13 @@ function contextKind(c: ResolvedContext): string {
       : "a directory on this machine";
   }
   if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
-  // A clone is brought up to date at each start only while it holds nothing of the agent's; what the agent changes
-  // stays, and reaches anyone else only when pushed.
-  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` at ${c.ref}` : ""} in your own storage`;
+  // Brought up to date in place at each start where git can do so without touching the agent's work; what the agent
+  // changes stays, and reaches anyone else only when pushed. The declared ref is what it follows, not a claim about
+  // where it is: a clone the agent moved elsewhere is left there.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` (declared ${c.ref})` : ""} in your own storage`;
   return c.readonly
     ? `${clone}, brought up to date each time you start`
-    : `${clone}: what you change in it stays, and while you have changed nothing it is brought up to date each time you start; push to share a change`;
+    : `${clone}: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change`;
 }
 
 /**

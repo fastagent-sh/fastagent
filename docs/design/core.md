@@ -72,13 +72,14 @@ all read that one resolution.
 A `github` context whose `local` is the root of a checkout of that repository is that checkout, used as it is: never
 fetched, never moved to its `ref`, only said to be off it. Any other `github` context is a clone in
 `<state root>/contexts/<name>`, which `cloneContext` makes or brings up to date each time a process that runs the
-agent opens it (the opener, before it resolves). A clone is replaced only when that loses nothing: one with changes
-of the agent's (a dirty `status --ignored`, or a HEAD, branch, tag or stash other than recorded in its `.git` when
-it was cloned) is kept with a warning, asked again under the lock that would replace it; an untouched one is kept when `git ls-remote` names its commit and branch, cloned
-again when the remote moved, and kept with a warning when the remote cannot be reached. A new clone is shallow, at
-`ref`, built beside the old one and renamed into place under a lock in that directory (`git.ts`), so another process
-reads one clone or the other. `info`, `context list` and `fastagent tool` resolve without
-cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a directory in a GitHub checkout, any other
+agent opens it (the opener, before it resolves). The first clone is shallow, at `ref`, built beside and renamed into
+place (another process's clone that got there first stands). After that the clone is only ever updated IN PLACE, by
+git's own rules (`git.ts`): `fetch`, then `merge --ff-only` on the branch it is on, or `checkout --detach` for a tag
+or commit. git refuses whatever would overwrite the agent's work, and that refusal, a failed fetch, a clone on
+another branch than declared, or commits no branch or tag holds keep it as it is, with the reason as a startup
+warning. No directory is ever replaced or deleted, so a running agent's writes, branches and stashes are never at
+stake. A clone of another repository under the context's name stops the start, named. `info`, `context list` and `fastagent tool` resolve without
+cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
 directory); `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares
 exactly the intended list. Deploying an agent with contexts is not built yet: the deploy preflight refuses it by

@@ -223,19 +223,16 @@ A `github` context is one of two things on this machine:
 - **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
   as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
 - **Otherwise, a clone** in `.state/contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
-  `start`, `chat`, `invoke`, `routine run`). At each later start it is brought up to date only when that loses
-  nothing:
-  - Untouched (no changed, added or ignored file, and no commit, branch, tag or stash since it was cloned): checked
-    with one `git ls-remote` (none for a `ref` that is a full commit; at most 15 seconds), kept when the remote has
-    not moved, cloned again when it has. Another process that writes to it while the new clone is made keeps it.
-  - With changes of the agent's: kept as it is, and startup warns that it is not brought up to date. Bring it
-    together with the remote with git, or ask the agent to.
-  - When GitHub cannot be reached: the clone there is used, and startup warns that it may be behind.
+  `start`, `chat`, `invoke`, `routine run`). At each later start it is brought up to date in place, by git's own
+  rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it is pinned
+  to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an untracked file
+  it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone is on another
+  branch than declared, or when it holds commits no branch or tag does, it is kept as it is and startup warns with
+  the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does not touch stay.
 
   `info`, `context list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
-  with git's reason. A clone of another repository under the context's name (it was renamed or redeclared) is
-  replaced when it holds nothing of the agent's; when it does, the start stops and names it, so the agent's work is
-  moved by hand rather than lost.
+  with git's reason. A clone of another repository under the context's name (it was renamed or redeclared) stops
+  the start and is named, never removed: move it away yourself.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). git never prompts: a

@@ -19,10 +19,10 @@ export interface SourceOptions {
 }
 
 /**
- * The declaration for `source`, with what to tell the user about how it was read. A directory in a checkout whose
- * `origin` is on GitHub is that repository, with the checkout as its `local`: the whole repository, since a context
- * cannot be narrowed to a subdirectory yet. `copy` applies to a directory only: a host clones a repository. Paths are
- * written absolute.
+ * The declaration for `source`, with what to tell the user about how it was read. The root of a checkout whose
+ * `origin` is on GitHub is that repository, with the checkout as its `local`. Any other directory is itself, `{ local }`,
+ * a subdirectory of such a checkout included (the note names the repository form, which is the whole repository); and
+ * so is a checkout's root under `--copy`, which asks for exactly that. Paths are written absolute.
  */
 export function declarationFor(
   source: string,
@@ -30,30 +30,31 @@ export function declarationFor(
   options: SourceOptions = {},
 ): { declaration: ContextDeclaration; notes: string[] } {
   const treated = {
-    ...(options.ref !== undefined ? { ref: options.ref } : {}),
     ...(options.readonly ? { readonly: true } : {}),
     ...(options.name !== undefined ? { name: options.name } : {}),
   };
-  const cloned = (repo: string) =>
-    options.copy ? [`github ${repo} is cloned on a host, so --copy does not apply`] : [];
+  const ref = options.ref !== undefined ? { ref: options.ref } : {};
   if (source.startsWith("github:")) {
     const repo = source.slice("github:".length);
     if (!isGithubRepo(repo)) throw new Error(`${source} names no repository: write github:owner/repo`);
     const local = options.local === undefined ? {} : { local: resolve(cwd, options.local) };
-    return { declaration: { github: repo, ...local, ...treated }, notes: cloned(repo) };
+    const notes = options.copy ? [`github ${repo} is cloned on a host, so --copy does not apply to it`] : [];
+    return { declaration: { github: repo, ...local, ...ref, ...treated }, notes };
   }
   const dir = resolve(cwd, source);
   if (options.local !== undefined) throw new Error("--local applies to a github:owner/repo source");
   const checkout = checkoutOf(dir);
   const repo = checkout?.origin === undefined ? undefined : githubRepoOf(checkout.origin);
-  if (checkout !== undefined && repo !== undefined) {
-    const whole =
-      realpathSync(dir) === realpathSync(checkout.root)
-        ? []
-        : [`${dir} is inside the checkout ${checkout.root}: the context is the whole repository, github ${repo}`];
-    return { declaration: { github: repo, local: checkout.root, ...treated }, notes: [...whole, ...cloned(repo)] };
+  const atRoot = checkout !== undefined && realpathSync(dir) === realpathSync(checkout.root);
+  if (repo !== undefined && atRoot && !options.copy) {
+    return { declaration: { github: repo, local: (checkout as { root: string }).root, ...ref, ...treated }, notes: [] };
   }
-  if (options.ref !== undefined)
-    throw new Error(`--ref applies to a github context, and ${dir} is not a GitHub checkout`);
-  return { declaration: { local: dir, ...(options.copy ? { copy: true } : {}), ...treated }, notes: [] };
+  if (options.ref !== undefined) {
+    throw new Error(`--ref applies to a repository, and ${dir} is declared as a directory`);
+  }
+  const notes =
+    repo !== undefined && !atRoot
+      ? [`${dir} is in a checkout of github ${repo}: declare github:${repo} for the whole repository`]
+      : [];
+  return { declaration: { local: dir, ...(options.copy ? { copy: true } : {}), ...treated }, notes };
 }

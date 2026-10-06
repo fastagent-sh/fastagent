@@ -31,8 +31,8 @@ Built in stages 2 and 3; [core](core.md) §2 describes it: `src/contexts/` decla
 (`resolve.ts`: the disk and git, never the network, no writes) and clones (`cloneContext`, called by the opener
 only). `ResolvedContext` carries `name`, `readonly`, `location` and `notices`, and for a `github` context its `repo`,
 `ref` and whether it is a clone. A repository is its user's checkout when `local` names one, used as it is;
-otherwise it is a clone, shallow, at `ref`, replaced at each start of a process that runs the agent only when that
-loses nothing (the agent's changes keep it as it is), built beside the old one and renamed into place under a lock. Read-only commands (`info`, `context list`, `fastagent tool`, the
+otherwise it is a clone, shallow, at `ref`, brought up to date in place at each start of a process that runs the
+agent by git's own rules, which never overwrite the agent's work (what git refuses keeps it as it is). Read-only commands (`info`, `context list`, `fastagent tool`, the
 restart check of §3.8) resolve without cloning, so they never touch the network, and `info` keeps its contract of
 creating nothing.
 
@@ -171,7 +171,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 |---|---|---|
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
-| 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone replaced at each start only when that loses nothing; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
+| 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone brought up to date in place at each start; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
 
@@ -190,8 +190,9 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 - **One meaning of "loads".** A tool file that throws on import, and a tool that declares a secret with no value,
   each fail `checkServable`, so the supervisor keeps the old worker; with the check swapped for `info`, the test
   watches the restart happen.
-- **Cloning.** Processes replacing one clone take turns, so each swap is whole; `info` on an agent with a clone
-  not made yet creates nothing.
+- **Cloning.** An update in place never overwrites the agent's work (git refuses, and the clone is kept with the
+  reason); a file written while another process updates the clone stays; `info` on an agent with a clone not made
+  yet creates nothing.
 
 ## 7. Public surface that changes
 

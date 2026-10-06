@@ -134,7 +134,7 @@ Startup says what the agent works on and what it knows:
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
-knows     handbook  ~/agents/reviewer/.state/contexts/handbook (github acme/handbook@main, a clone kept up to date while unchanged)
+knows     handbook  ~/agents/reviewer/.state/contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -161,7 +161,7 @@ would be refused without trying one.
 The definition is shipped to the host. Preflight lists what the host gets for each context:
 
 ```text
-works on  app       github acme/app@main          cloned; kept up to date while the agent has not changed it
+works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
 works on  notes     local ~/notes                 copied once, when the instance is created
 knows     handbook  github acme/handbook@main     cloned; kept up to date
 knows     papers    local ~/papers                copied again on every deployment
@@ -169,7 +169,7 @@ works on  draft     local ~/draft                 refused: not available on a ho
           → add `copy: true`, or move it to a GitHub repository and declare it as github
 ```
 
-- **A repository is a clone the instance makes, replaced at a start only when that loses nothing**, on a host as on
+- **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on
   this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
   clone goes with it, and preflight says what of the agent's work is lost.
 - **A later deploy leaves a copy the instance works on as it is, and refreshes one it only knows.** A copy of a
