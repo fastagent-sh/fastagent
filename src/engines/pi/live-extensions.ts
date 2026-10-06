@@ -10,7 +10,7 @@
  * loads fresh.
  */
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DefaultResourceLoader, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface LiveExtensions {
@@ -24,42 +24,50 @@ export interface LiveExtensions {
   generation(): number;
 }
 
+/** What one agent directory's cached code was loaded from, shared by every reader in the process (pi's cache is). */
+interface Tracked {
+  /** Undefined before the first load, when there is nothing cached yet. */
+  loadedFrom?: string;
+  generation: number;
+  inFlight?: Promise<void>;
+}
+
+/**
+ * PER PROCESS, by directory, because pi's cache is per process: two `agentModels` over one directory (a serve and an
+ * embedder's `availableModelsFromDir`) must not each believe they are the first to load it, or the second would load
+ * the first's stale code without dropping it.
+ */
+const tracked = new Map<string, Tracked>();
+
 /**
  * Track `<agentDir>/extensions/`. `list` is the one discovery of its entry points (through the definition's
  * `ExecutionEnv`); the change check reads Node's filesystem, since it only decides WHEN pi reloads.
  */
-export function liveExtensions(
-  agentDir: string,
-  list: () => Promise<readonly string[]>,
-  /** Told once the code {@link LiveExtensions.paths} hands out has changed (after the cache was dropped). */
-  onChange?: () => void,
-): LiveExtensions {
-  /** What the cached code was loaded from; undefined before the first load, when there is nothing cached yet. */
-  let loadedFrom: string | undefined;
-  let generation = 0;
-  let inFlight: Promise<void> | undefined;
+export function liveExtensions(agentDir: string, list: () => Promise<readonly string[]>): LiveExtensions {
+  const dir = resolve(agentDir);
+  const state = tracked.get(dir) ?? { generation: 0 };
+  tracked.set(dir, state);
 
   const current = async (): Promise<void> => {
-    const now = await fingerprint(join(agentDir, "extensions"));
-    if (now === loadedFrom) return;
-    // Something cached is older than the disk (or nothing is cached yet, when there is nothing to drop).
-    const changed = loadedFrom !== undefined;
-    if (changed) await dropExtensionCache(agentDir);
-    loadedFrom = now;
-    generation++;
-    if (changed) onChange?.();
+    const now = await fingerprint(join(dir, "extensions"));
+    if (now === state.loadedFrom) return;
+    // Something cached is older than the disk (or nothing is cached yet, when there is nothing to drop). The new
+    // fingerprint is committed only once the drop has happened: a failed drop leaves the next call to try again.
+    if (state.loadedFrom !== undefined) await dropExtensionCache(dir);
+    state.loadedFrom = now;
+    state.generation++;
   };
 
   return {
     async paths() {
-      // Single-flight: concurrent binds after an edit wait for one drop instead of each loading in between.
-      inFlight ??= current().finally(() => {
-        inFlight = undefined;
+      // Single-flight: concurrent readers after an edit wait for one drop instead of each loading in between.
+      state.inFlight ??= current().finally(() => {
+        state.inFlight = undefined;
       });
-      await inFlight;
+      await state.inFlight;
       return list();
     },
-    generation: () => generation,
+    generation: () => state.generation,
   };
 }
 

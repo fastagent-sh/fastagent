@@ -532,9 +532,18 @@ describe("definition: an extension can define the model chat runs on", () => {
     expect(await ids()).toEqual(["first"]);
     await writeFile(join(dir, "extensions", "provider.ts"), provider("second"));
     expect(await ids()).toEqual(["second"]);
+    // Another reader over the same directory in this process (an embedder's `availableModelsFromDir`): pi's cache is
+    // per process, so its first load must not take the code cached before the edit either.
+    await writeFile(join(dir, "extensions", "provider.ts"), provider("third"));
+    expect(
+      (await agentModels(dir).runtime())
+        .getProvider("acme")
+        ?.getModels()
+        .map((m) => m.id),
+    ).toEqual(["third"]);
   });
 
-  it("the control plane's allowed models follow it too, from the first read after the edit", async () => {
+  it("the control plane follows it too, from the first read after the edit: models, the default, validation", async () => {
     const provider = (id: string) =>
       `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: ${JSON.stringify(id)}, name: "m", contextWindow: 1000, maxTokens: 100 }] });`;
     const dir = await agentDirWith({
@@ -542,13 +551,17 @@ describe("definition: an extension can define the model chat runs on", () => {
       "extensions/provider.ts": provider("first"),
     });
     const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
-    const allowed = () => JSON.stringify(sessionControl?.capabilities().allowedModels);
-    expect(allowed()).toContain("first");
+    const allowed = async () =>
+      (await sessionControl!.models()).map((m) => m.spec).filter((spec) => spec.startsWith("acme/"));
+    expect(await allowed()).toEqual(["acme/first"]);
+    expect((await sessionControl!.sessions.get("s").state()).model).toBe("acme/first");
     await writeFile(join(dir, "extensions", "provider.ts"), provider("second"));
-    // Any reader that loads the extensions sees the edit first (here the menu); the catalog is rebuilt from it.
-    await sessionControl?.commands();
-    await vi.waitFor(() => expect(allowed()).toContain("second"));
-    expect(allowed()).not.toContain("first");
+    // No turn, no menu read first: the plane resolves through the same function a turn would, at each call.
+    expect(await allowed()).toEqual(["acme/second"]);
+    // The configured default is gone from the registry, so state() reports no model (and a turn would fail on it).
+    expect((await sessionControl!.sessions.get("s").state()).model).toBeUndefined();
+    expect(await sessionControl!.sessions.get("s").update({ model: "acme/second" })).toEqual({ ok: true });
+    expect((await sessionControl!.sessions.get("s").update({ model: "acme/first" })).ok).toBe(false);
   });
 
   it("joins registration refreshes even when the SDK's final refresh finishes first", async () => {

@@ -475,6 +475,7 @@ describe("session control over HTTP", () => {
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
       expect(await remote.commands()).toEqual(await served.localControl.commands());
+      expect(await remote.models()).toEqual(await served.localControl.models());
       expect(await remote.sessions.get("sW").state()).toEqual(await served.localControl.sessions.get("sW").state());
       const [remoteEntries, localEntries] = [
         await remote.sessions.get("sW").entries(),

@@ -99,6 +99,7 @@ implementation lives under `engines/pi/` (`session-control.ts`, exported from `/
 interface SessionControl {
   capabilities(): SessionCapabilities;
   commands(): Promise<AgentCommand[]>;
+  models(): Promise<ModelDescriptor[]>;
   sessions: SessionCollection;
 }
 
@@ -304,16 +305,19 @@ interface SessionCapabilities {
   fork: boolean;
   delete: boolean;
   updatable: ("name" | "model" | "thinkingLevel" | "leafEntryId")[];
-  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
 }
 ```
 
 Clients MUST gate controls on capabilities; calling past a gate fails before acceptance with a stable
-`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session.
-`allowedModels` lives here because the model registry is a deployment fact. Each entry describes a
-model the way a picker shows it, before any session runs on it:
+`unsupported_capability` code. This surface is SESSIONLESS, so nothing on it may depend on a session, and it is
+FIXED for the deployment's life, so a client may read it once.
+
+The models `update({ model })` accepts are not on it: `models()` lists them, asked per call like `commands()`,
+because the registry is a deployment fact the definition can change while it runs (an extension that declares a
+model, edited or added; the pi reference reads the registry as a turn would resolve it now). Empty where `model` is
+not updatable. Each entry describes a model the way a picker shows it, before any session runs on it:
 
 ```ts
 interface ModelDescriptor {
@@ -652,6 +656,7 @@ The embedded contract is semantic-only; wire concerns exist only at the transpor
 ```
 GET    /control/capabilities
 GET    /control/commands
+GET    /control/models
 GET    /control/sessions                       list
 PUT    /control/sessions/{id}                  {from, at} — fork, idempotent
 GET    /control/sessions/{id}                  state
@@ -696,7 +701,7 @@ POST   /invoke                                 the DATA plane (NOT this prefix �
   | in process | on the wire |
   |---|---|
   | `update` / `fork` / `delete` / actions return a `SessionResult` and never throw | **200 either way**, `ok: false` included |
-  | `state` / `entries` / `capabilities` / `commands` return a value | 200 |
+  | `state` / `entries` / `capabilities` / `commands` / `models` return a value | 200 |
   | `image` returns an `ImageRef` or `undefined` | 200 with the raw bytes, or 204 |
   | `list()` throws a store fault (a coded one) | 503 with `{ code, message, retryable }` — not a `SessionResult`, because in process there is no result either; the remote client carries all three on the error it throws |
   | any other read throws — `commands()` on an unreadable definition, `list()` on something that is not a store fault | 500 from the plane's boundary |
@@ -947,7 +952,7 @@ deployment by naming it as a `parentSession` or a fork `from`. `invoke` is doubl
 the DATA plane, so a facade written around "the control routes" may not guard it at all — and it is
 the one that WRITES.
 
-`capabilities` and `commands` are agent-level with no user data and pass through as-is.
+`capabilities`, `commands` and `models` are agent-level with no user data and pass through as-is.
 `GET /control/sessions` must NOT be exposed — it returns every session on the deployment (§5), and a
 facade already holds the per-user mapping a filtered list would return. The deployment's own port must
 not be reachable by end users: nothing behind the facade authenticates anything, so a user who can

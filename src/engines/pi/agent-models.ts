@@ -7,7 +7,6 @@
  */
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
-import { log } from "../../log.ts";
 import { liveExtensions } from "./live-extensions.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { definitionServices } from "./agent-session-factory.ts";
@@ -59,11 +58,6 @@ export interface AgentModels {
    * extension instances.
    */
   runtime(): Promise<ModelRuntime>;
-  /**
-   * The catalog {@link runtime} last finished building, for a reader that cannot wait (the control plane's
-   * `capabilities()`). Throws before the first build has finished: such a reader must await {@link runtime} once.
-   */
-  current(): ModelRuntime;
   /** A session-local registry, before its extensions are loaded. Credentials remain shared. */
   createRuntime(): Promise<ModelRuntime>;
   /**
@@ -141,22 +135,12 @@ export function agentModels(
     });
   // Only a definition has extensions/; the low-level paths (no directory) load none and watch nothing.
   const live = agentDir
-    ? liveExtensions(
-        agentDir,
-        () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}),
-        // The code changed: rebuild the catalog now, so a reader of `current()` sees the new models without having
-        // to be the one that asks first. Its failure is said here, since nobody awaits this build.
-        () =>
-          void runtime().catch((error: unknown) =>
-            log.error(`[fastagent] rebuilding the model catalog after an extensions/ edit failed: ${String(error)}`),
-          ),
-      )
+    ? liveExtensions(agentDir, () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}))
     : undefined;
   const extensionPaths = (): Promise<readonly string[]> => live?.paths() ?? Promise.resolve([]);
   // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
   // plane lists and lets a session select is what a session would load (a model an edited extension declares).
   let registry: { generation: number; runtime: Promise<ModelRuntime> } | undefined;
-  let latest: ModelRuntime | undefined;
   const runtime = async (): Promise<ModelRuntime> => {
     const paths = await extensionPaths();
     const generation = live?.generation() ?? 0;
@@ -169,8 +153,6 @@ export function agentModels(
             definition: { skills: [] },
             extensionPaths: paths,
           });
-        // Only the newest build publishes: an older one finishing late must not replace it.
-        if (registry?.runtime === built) latest = models;
         return models;
       });
       registry = { generation, runtime: built };
@@ -181,10 +163,6 @@ export function agentModels(
     ...(files ? { auth: files } : {}),
     credentials,
     runtime,
-    current() {
-      if (!latest) throw new Error("the model catalog has not been built yet: await runtime() first");
-      return latest;
-    },
     createRuntime,
     extensionPaths,
     async authStatus(provider, modelId) {

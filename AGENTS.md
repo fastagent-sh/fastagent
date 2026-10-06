@@ -242,6 +242,8 @@ src/
     │                       # shipped); the explicit model-catalog refresh
     ├── openai-account-models.ts # a ChatGPT sign-in lists its ACCOUNT's models: catalog read at login/refresh,
     │                       # kept on the credential, applied by wrapping pi's `openai` provider in every registry
+    ├── live-extensions.ts  # whether pi's cached extension code is current: per process and directory, dropped before
+    │                       # any load when extensions/ changed, so every reader loads the code on disk
     ├── agent-models.ts     # an agent's model environment as ONE value (credential store + registry + auth
     │                       # status): every reader builds it through `agentModels`, never from the parts
     └── report.ts           # startup report (auth/model/skills/tools surface)

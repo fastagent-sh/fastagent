@@ -6,9 +6,15 @@ import type { ImageRef, Json, Prompt } from "./agent.ts";
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 export interface SessionControl {
+  /** What this deployment supports. Fixed for its life, so a client may read it once. */
   capabilities(): SessionCapabilities;
   /** The names this agent exposes — what a composer's `/` completion LISTS. */
   commands(): Promise<AgentCommand[]>;
+  /**
+   * The models `update({ model })` accepts now, by `spec`; empty where `model` is not updatable. Asked per call, like
+   * {@link commands}: the definition can change them while it runs (an extension that declares a model).
+   */
+  models(): Promise<ModelDescriptor[]>;
   sessions: SessionCollection;
 }
 
@@ -84,7 +90,7 @@ export interface Session {
 export interface SessionUpdate {
   /** The display name `list()` reports — a label, not an identity: the id stays the Caller's. */
   name?: string;
-  /** A FastAgent model spec, constrained to {@link SessionCapabilities.allowedModels}. */
+  /** A FastAgent model spec, constrained to what {@link SessionControl.models} lists. */
   model?: string;
   /**
    * A string because supported levels are MODEL-dependent — the set for this session's current model is {@link
@@ -130,10 +136,8 @@ export interface SessionCapabilities {
   compaction: boolean;
   fork: boolean;
   delete: boolean;
-  /** Which {@link SessionUpdate} fields this deployment accepts. */
+  /** Which {@link SessionUpdate} fields this deployment accepts; `models()` lists the models `model` takes. */
   updatable: SessionUpdateField[];
-  /** The models `update({ model })` accepts, by `spec` — present iff `model` is updatable. */
-  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
 }

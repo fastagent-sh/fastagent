@@ -7,6 +7,7 @@ import {
   isAddressableSession,
   type AgentCommand,
   type Session,
+  type ModelDescriptor,
   type SessionCapabilities,
   type SessionEntries,
   type SessionEvent,
@@ -338,6 +339,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
         throw error;
       }
     },
+
+    // NOT prefetched either, for the same reason: the definition can change which models it declares.
+    models: () => get<ModelDescriptor[]>("/control/models"),
 
     sessions: {
       // Rejects when the deployment cannot enumerate its store.

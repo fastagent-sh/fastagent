@@ -5,7 +5,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
+import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   AGENT_MODEL_CATALOG_FILE,
   resolveAgentDir,
@@ -399,15 +400,18 @@ export async function createPiAgentFromDir(
   const wantControl = publish || options.serving === true;
   let hub: ReturnType<typeof createPiSessionControl> | undefined;
   if (wantControl) {
-    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
-    // credentials and is not. Resolved only when the boundary is wired, so an ordinary serve does not pay for it.
+    // The plane resolves the registry and the default pair through the SAME function a turn's binding does, at each
+    // use (the definition's extensions can change both). Resolved once here as well, only when the boundary is wired,
+    // so a default model that does not resolve stops the open rather than the first control call.
+    if (publish) await assembly.engine();
     const boundary = publish
-      ? await assembly.engine().then(({ model }) => ({
+      ? {
           lease: assembly.lease,
-          models: () => models.current(),
           sessionFactory: assembly.sessionFactory,
-          defaults: { ...(model ? { model } : {}), thinkingLevel: assembly.thinkingLevel },
-        }))
+          models: assembly.modelRuntime,
+          defaultModel: (registry: Models) => (modelSpec ? resolveModel(registry, modelSpec) : undefined),
+          thinkingLevel: assembly.thinkingLevel,
+        }
       : undefined;
     hub = createPiSessionControl({
       sessions,

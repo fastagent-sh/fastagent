@@ -148,9 +148,12 @@ the dev supervisor instead, and by a restart under `start`. That is also how an 
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
 process every call, its failure in the same turn's output — a tool or command of its own is an extension, and its
 own follow-up work is the `wake` tool, mounted on every serve. Extensions are live: the session factory lists
-`extensions/` again for every bind and, when anything under it changed since pi last loaded it (a fingerprint of
-paths, sizes and modification times), reloads the session's resource loader once more, which is how pi drops its
-per-process module cache; jiti then imports the code afresh, relative imports included. `tools/`, `schedules/` and
+`extensions/` again before every load (a session, the `/` menu, the model catalog, `chat`) and, when anything under
+it changed since pi last loaded it (a fingerprint of paths, sizes and modification times, kept per process and
+directory as pi's cache is), drops pi's per-process module cache first. pi exports no way to drop it; a throwaway
+resource loader that loads nothing does, on its second `reload()` (`live-extensions.ts`). jiti then imports the code
+afresh, relative imports included. The model catalog is rebuilt from it, and session control reads the catalog and
+the default model the way a turn resolves them, at each call (`models()`, `state()`, `update()`). `tools/`, `schedules/` and
 `channels/` are the author's: they change with a restart or a release. (Reloading `tools/` in-process was built and
 removed — the design is #582, why it went is #600: Node's own module cache, which jiti does not share, made it a
 list of limits.) A skill the

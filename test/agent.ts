@@ -121,12 +121,10 @@ export async function fauxControlledAgent(
         ? undefined
         : {
             lease,
-            models: () => modelRuntime,
             sessionFactory,
-            defaults: {
-              ...(options.noDefaultModel ? {} : { model }),
-              thinkingLevel: options.thinkingLevel ?? "medium",
-            },
+            models: async () => modelRuntime,
+            defaultModel: () => (options.noDefaultModel ? undefined : model),
+            thinkingLevel: options.thinkingLevel ?? "medium",
           },
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.tap ? { tap: options.tap } : {}),

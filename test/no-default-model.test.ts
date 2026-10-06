@@ -35,7 +35,7 @@ describe("an agent with no default model", () => {
     const before = await s.state();
     expect(before).not.toHaveProperty("model");
     expect(before).not.toHaveProperty("availableThinkingLevels");
-    expect(control.capabilities().allowedModels?.map((m) => m.spec)).toContain(spec);
+    expect((await control.models()).map((m) => m.spec)).toContain(spec);
 
     const refused = await drain(agent.invoke({ session: "fresh" }, { text: "hi" }));
     expect(refused.at(-1)).toMatchObject({ type: "failed", code: MISSING_MODEL_CODE, retryable: false });

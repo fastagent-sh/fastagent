@@ -269,6 +269,8 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
 
     "GET /control/commands": async () => json(await control.commands()),
 
+    "GET /control/models": async () => json(await control.models()),
+
     // The DEPLOYMENT's conversation list — and the one read that may fail.
     "GET /control/sessions": async () => {
       try {
