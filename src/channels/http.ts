@@ -21,6 +21,12 @@ export const MAX_BODY_BYTES = 1 << 20;
 export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 
 /**
+ * The body a clock outside the agent sends to run a schedule's work (a deploy runbook's scale-to-zero recipe): the
+ * schedule's own session, and a prompt template by name. Here for the same reason as {@link INVOKE_EXAMPLE_BODY}.
+ */
+export const INVOKE_SCHEDULE_BODY = '{"session":"schedule:<name>","text":"/<prompt template>"}';
+
+/**
  * Fetch-shaped invoke handler.
  *
  * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/serve.ts`'s router
@@ -53,7 +59,7 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     if (typeof session !== "string" || typeof promptText !== "string") {
       return text('need { "session": string, "text": string }\n', 400);
     }
-    // INVOKE_EXAMPLE_BODY must keep satisfying this request shape.
+    // INVOKE_EXAMPLE_BODY and INVOKE_SCHEDULE_BODY must keep satisfying this request shape.
     if (parentSession !== undefined && typeof parentSession !== "string") {
       return text('"parentSession" must be a string\n', 400);
     }

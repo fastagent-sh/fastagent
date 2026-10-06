@@ -1,5 +1,6 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
+import { INVOKE_SCHEDULE_BODY } from "../../channels/http.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
@@ -169,9 +170,12 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
           `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
           `#     AGENT_INVOKE=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/invoke`,
           `#     curl --retry 3 -fsS -X POST "$AGENT_INVOKE" -H 'content-type: application/json' \\`,
-          `#       -d '{"scope":{"session":"schedule:<name>"},"prompt":{"text":"/<prompt template>"}}'`,
+          `#       -d '${INVOKE_SCHEDULE_BODY}'`,
           `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
           `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
+          `# This needs \`POST /invoke\` served (\`http.invoke\` not false), and it is anonymous with the agent's full`,
+          `# tools on the PUBLIC domain too: put a gateway in front of that domain, or remove it and keep only the`,
+          `# private network.`,
           `# Asleep, ${WAKEUPS_WHEN_ASLEEP}.`,
         ]
       : []),

@@ -274,8 +274,8 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
  * which is why there is no separate audit file to rotate (what the turn SAID is in its session, not here).
  *
  * THE HISTORY read, and its only caller is the read-only `schedules list --json` — which translates a read fault into a
- * one-line refusal. The serving boot reads `latestFire` instead: it asks about ONE claim, and a window of files kept
- * for an operator to look at has no business deciding whether a service starts.
+ * one-line refusal. Its text mode and the serving boot read `latestFire` instead: each asks about ONE claim, and a
+ * window of files kept for an operator to look at has no business failing either.
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);

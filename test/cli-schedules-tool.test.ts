@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
 
@@ -57,6 +57,22 @@ describe("cli: schedules and tool", () => {
     expect(listed.code).toBe(0);
     expect(listed.stderr).toMatch(/schedules\/broken\.md failed to load, skipping it — it must start with a "---"/);
     expect(listed.stdout).toMatch(/^daily /m);
+
+    // An OLD claim that cannot be read does not fail the text listing, which reads the newest only; the whole history
+    // (`--json`) does say so.
+    const claims = join(dir, ".state", "schedule", "claims", "daily");
+    await mkdir(join(claims, "2026-01-01T09-00-00-000Z"), { recursive: true }); // a directory where a claim file goes
+    await writeFile(
+      join(claims, "2026-01-02T09-00-00-000Z"),
+      JSON.stringify({ firedAt: "2026-01-02T09:00:00.000Z", outcome: "completed", ms: 5 }),
+    );
+    const textOnly = await run(["schedules", "list", dir]);
+    expect(textOnly.code, textOnly.stderr).toBe(0);
+    expect(textOnly.stdout).toMatch(/last 2026-01-02T09:00:00.000Z completed/);
+    const history = await run(["schedules", "list", dir, "--json"]);
+    expect(history.code).toBe(1);
+    expect(history.stderr).toMatch(/the fire history of "daily" is unreadable/);
+    await rm(claims, { recursive: true });
 
     // Unreadable state is the operator's to fix: a read-only command says so in one line rather than printing the
     // Node stack `readFires` throws for the serving boot's benefit.

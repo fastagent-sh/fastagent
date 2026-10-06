@@ -50,6 +50,8 @@ function flyToml(appName: string, port: number, residency: Residency | undefined
     residency?.reason === CRON_CAN_BE_EXTERNAL
       ? `  # …or keep the time somewhere else and set this to 0: a scheduler you own (Fly Cron Manager,\n` +
         `  # supercronic, GitHub Actions) calls \`POST /invoke\` with the prompt (a prompt template's /name works).\n` +
+        `  # That needs \`POST /invoke\` served (\`http.invoke\` not false): anonymous, with the agent's full tools,\n` +
+        `  # on the public URL, so put a gateway in front of it.\n` +
         `  # At 0, ${WAKEUPS_WHEN_ASLEEP}.\n`
       : "";
   // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.

@@ -209,7 +209,7 @@ deploy whose box crashes on boot as failed.
 
 | Definition has | Fly (`min_machines_running`) / Railway (App Sleeping) |
 |---|---|
-| a schedule (`schedules/*.md`) | kept up — unless an external clock calls `POST /invoke` instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job) |
+| a schedule (`schedules/*.md`) | kept up — unless an external clock calls `POST /invoke` instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job). That route must then be served (`http.invoke` not `false`), and it is anonymous with the agent's full tools: put a gateway in front of a public URL |
 | a long-connection channel | kept up; an outbound connection cannot wake a stopped machine |
 | neither | may scale to zero |
 

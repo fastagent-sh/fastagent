@@ -297,7 +297,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `instant).` +
         (wayOut
           ? ` To scale to zero instead, keep the time in a scheduler you own and let it call \`POST /invoke\` ` +
-            `with the prompt (a prompt template's \`/name\` reuses one the definition holds).`
+            `with the prompt (a prompt template's \`/name\` reuses one the definition holds). That needs ` +
+            `\`POST /invoke\` served (\`http.invoke\` not false), anonymous and with the agent's full tools, so ` +
+            `put a gateway in front of it.`
           : ""),
     );
   }

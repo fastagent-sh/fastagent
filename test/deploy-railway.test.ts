@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { INVOKE_SCHEDULE_BODY } from "../src/channels/http.ts";
 import { planRailwayDeploy, toRailwayName } from "../src/deploy/railway/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
@@ -155,6 +156,11 @@ describe("deploy/railway: planRailwayDeploy", () => {
         }),
       ),
     ).toContain("do NOT enable App Sleeping");
+    // …with the way out: an external clock sending the body the invoke route accepts (http.test.ts pins the shape),
+    // and what that route costs.
+    const wayOut = runbook(planRailwayDeploy({ ...base, channels: [], hasCron: true }));
+    expect(wayOut).toContain(`-d '${INVOKE_SCHEDULE_BODY}'`);
+    expect(wayOut).toMatch(/needs `POST \/invoke` served/);
   });
 
   it("toRailwayName survives `railway add --service <name>` — and never yields an empty argument", () => {

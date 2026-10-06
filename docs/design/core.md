@@ -590,7 +590,8 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 ## 8. Schedules and self-scheduling
 
 A **schedule** is `schedules/<name>.md`: a frontmatter holding `cron` and an optional `tz`, over the prompt. It is
-data, like a skill, so an author, a client or the agent writes one without TypeScript; the frontmatter is read
+data, like a skill, so an author or a client writes one without TypeScript (the agent's own follow-up work is a
+wake-up: a schedule is loaded at start and replaced by each release); the frontmatter is read
 strictly (two keys, one line each) rather than as YAML, so a bare `*/5 * * * *` works and anything else is refused
 naming the file. Every fire runs in the stable session `schedule:<name>`. The clock claims a slot before invoking,
 catches up one overdue occurrence after downtime (not every missed slot, and not at all before its first fire —
