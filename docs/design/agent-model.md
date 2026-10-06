@@ -203,7 +203,7 @@ rarely writes one.
 
 | Type | Declared as | Where it lives | On this machine | On a host | Where changes go |
 |---|---|---|---|---|---|
-| **local** | `{ local: "/Users/me/notes" }` | A directory of this machine | That directory, edited in place | Absent: deploying is refused (below) | The directory |
+| **local** | `{ local: "/Users/me/notes" }` | A directory of this machine | That directory, edited in place | Absent, and said to be (below) | The directory |
 | **github** | `{ github: "acme/app" }` | A repository | An existing checkout (`local`), used as it is; otherwise a clone the instance makes | A clone the instance makes | To the repository, when pushed |
 
 **Only data with a home every instance can reach is the same data everywhere.** A local directory lives on one
@@ -252,9 +252,13 @@ Attributes:
   names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either
   rule is refused when the agent is loaded; adding a context whose default name is taken or misspelled asks for an
   explicit one.
-- **A local context refuses to deploy.** The refusal names the two ways out: what the agent only reads goes in the
-  agent directory, which every release carries; what it works on moves to a repository declared as `github`. An
-  instance never starts with a context silently missing.
+- **A local context is absent from an instance elsewhere, and said to be.** It is, by declaration, a directory of
+  the author's machine: another machine does not have it, which is what the type says, not an error. So an author
+  keeps it for local work and still deploys. The instance elsewhere is not told of it, and is never missing it
+  silently: the deployment names it (a warning when the agent works on it, since the deployed agent lacks data it
+  was meant to work on), with the two ways to change that, and the instance's start names it again. What the
+  agent only reads there can be copied into the agent directory, which every release carries; what it works on
+  moves to a repository declared as `github`.
 - **A `github` context needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.

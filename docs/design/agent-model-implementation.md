@@ -70,8 +70,9 @@ baked at `/app/definition`, with every artifact at its root, and the storage hol
 and `.secrets/` (storage laid out with `base/` is refused). Contexts reach a host only by their type: a `github` one
 is cloned there by the same `cloneContext` as on a laptop, the author's `local` not looked for, with `GITHUB_TOKEN`
 from the host's environment through the credential helper in each clone's config; the image installs `git` for it.
-A `local` one is refused by preflight, naming each, with the two ways out (agent model §3): what the agent only
-reads goes in the agent directory, what it works on moves to a repository. Preflight prints what each context
+A `local` one is absent on a host (agent model §3): left out of the resolution there (`contextsAbsentHere`) and named
+at start, and named by preflight, a warning for one the agent works on, with the two ways out: what the agent only
+reads can be copied into the agent directory, what it works on moves to a repository. Preflight prints what each context
 becomes on the host, says on AgentCore that every clone starts over on each deployment, and notes a missing
 `GITHUB_TOKEN`, which a public repository does not need. [core](core.md) §2 and §9 describe it.
 
@@ -139,7 +140,7 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone brought up to date in place at each start; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
 | 4. `github` contexts on a host (landed) | §3.7 for `github`: a clone on the host by the same `cloneContext`, the author's `local` not looked for; `GITHUB_TOKEN` through a credential helper in the clone's config; `git` in the image; preflight prints each context's fate and refuses directory ones | An agent whose contexts are all `github` deploys to every host; AgentCore says what it resets |
-| Removing `copy` | `copy: true`, `--copy` and their reports, now that no host receives a copy (decision above) | A declaration with `copy` is refused at load, naming the two ways out |
+| Removing `copy` | `copy: true`, `--copy` and their reports, now that no host receives a copy (decision above); a `local` context is absent on a host, and said to be, rather than refusing the deploy | A declaration with `copy` is refused at load, naming the two ways out; an agent with a `local` context deploys, and preflight and the host's start name it |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
 
 ## 6. Tests worth naming

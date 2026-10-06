@@ -160,15 +160,18 @@ The definition is shipped to the host. Preflight lists what the host gets for ea
 ```text
 works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
 knows     handbook  github acme/handbook@main     cloned; kept up to date
-works on  draft     local ~/draft                 refused: a directory of this machine, which a host does not have
-          → what the agent only reads goes in the agent directory; what it works on moves to a GitHub repository
+works on  draft     local ~/draft                 stays on this machine; the deployed agent works without it
+          → to work on it from a host, move it to a GitHub repository (warning)
+knows     papers    local ~/papers                stays on this machine; the deployed agent works without it
+          → to ship what the agent reads there, copy it into the agent directory (note)
 ```
 
 - **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on
   this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
   clone goes with it, and preflight says what of the agent's work is lost.
-- **A local directory does not reach a host** ([agent model](agent-model.md) §3); the agent directory does, as the
-  harness each release replaces.
+- **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
+  §3): preflight names it, a warning for one the agent works on, and the host's start names it again. The agent
+  directory does reach a host, as the harness each release replaces.
 - **A `github` context's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 
@@ -187,4 +190,4 @@ Unchanged as commands. What they store goes to the local instance (`.secrets/`),
 | An agent lives inside its project | A declared context never contains the agent directory, nor sits inside it |
 | Contexts do not exist | `fastagent context list/add/remove`, with `--readonly` for what the agent only knows |
 | Startup reports the workspace | Startup reports what the agent works on and what it knows |
-| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, clones repositories on the host and refuses a local context |
+| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, clones repositories on the host, and leaves a local context on this machine, saying so |
