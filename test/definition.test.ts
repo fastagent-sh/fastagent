@@ -703,9 +703,9 @@ describe("create L2: an explicit tools list states its own coding capabilities",
 });
 
 describe("create L2: the agent directory is the working directory", () => {
-  it("roots the tools there, tells the model so, and does not load its own AGENTS.md", async () => {
-    // The agent directory's AGENTS.md is for whoever changes the agent, not a turn's context; a project's AGENTS.md
-    // arrives through a declared context. Driven through the real agent: a tool rooted elsewhere, or a prompt naming
+  it("roots the tools there, tells the model so, and loads its own AGENTS.md but never a parent's", async () => {
+    // The agent directory's AGENTS.md is read like any working directory's; one above it belongs to no declared
+    // context and is not read. Driven through the real agent: a tool rooted elsewhere, or a prompt naming
     // another directory, is invisible to anything but a turn.
     const parent = await mkdtemp(join(tmpdir(), "fa-parent-"));
     const definitionDir = join(parent, "agent");
@@ -735,9 +735,8 @@ describe("create L2: the agent directory is the working directory", () => {
     for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
     expect(JSON.stringify(events)).toContain("READ-FROM-DEFINITION-DIR");
     expect(systemPrompt).toContain(`<cwd>\n${definitionDir}\n</cwd>`);
-    expect(systemPrompt).not.toContain("FROM-OWN-AGENTS");
+    expect(systemPrompt).toContain("FROM-OWN-AGENTS");
     expect(systemPrompt).not.toContain("FROM-PARENT");
-    expect(systemPrompt).not.toContain("<project_context>");
   });
 });
 

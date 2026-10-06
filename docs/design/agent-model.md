@@ -27,7 +27,7 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 |---|---|---|
 | **Agent** | The definition, the way a program is | Its model, harness and contexts, as declared in its directory |
 | Model | What the agent thinks with | The default model and thinking level. Credentials are not part of it |
-| Harness | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
+| Harness | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
@@ -65,14 +65,15 @@ them (§6) and not how widely a change is seen.
   project and it is the same agent working on different data.
 - **Context** is what the agent works on or knows, and what that project tells it. It stays with the project.
 
-`AGENTS.md` is context, and so are skills a project provides. They change how the agent behaves, but they belong
-to the project, not to the agent, the way a repository's `.eslintrc` changes how eslint behaves and is still the
-repository's file. An identity of the agent's own belongs in `SYSTEM.md`; `APPEND_SYSTEM.md` holds standing
-instructions added to pi's default (below). One reading holds everywhere: an `AGENTS.md` is
-written for whoever works in its directory. The one in a project is for the agent working on that project. The
-one in an agent's own directory is for whoever changes the agent: the coding agent that develops it, or the agent
-itself. It is not loaded into every turn, since most turns do not change the agent; the agent is told where it is
-and reads it before changing itself (§4).
+A project's `AGENTS.md` is context, and so are skills a project provides. They change how the agent behaves, but
+they belong to the project, not to the agent, the way a repository's `.eslintrc` changes how eslint behaves and is
+still the repository's file. An identity of the agent's own belongs in `SYSTEM.md`; `APPEND_SYSTEM.md` holds
+standing instructions added to pi's default (below). One reading holds everywhere: an `AGENTS.md` is written for
+whoever works in its directory. The one in a project is for the agent working on that project. The one in an
+agent's own directory is harness: it is for whoever works on the agent, the coding agent that develops it and the
+agent itself, which works in that directory and improves itself there. So it is loaded on every turn, before the
+contexts' ones, the way a harness loads its working directory's `AGENTS.md`. It says how this agent is built and how
+to change it; what the agent does for its users belongs in `APPEND_SYSTEM.md`.
 
 ### Formats, and which one wins
 
@@ -81,7 +82,7 @@ interface or pi's, and the definition says which:
 
 | Files | Format | From |
 |---|---|---|
-| `AGENTS.md` (in a context) | Markdown | Open standard ([agents.md](https://agents.md)) |
+| `AGENTS.md` | Markdown | Open standard ([agents.md](https://agents.md)) |
 | `skills/<name>/SKILL.md` | Markdown with frontmatter | Open standard ([Agent Skills](https://agentskills.io/specification)) |
 | `tools/`, `channels/`, `routines/`, `fastagent.config.ts` | TypeScript modules (`defineTool`, `defineChannel`, `defineRoutine`) | FastAgent |
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, `extensions/`, `.pi/`, `models.json`, `models-store.json` | pi's conventions and APIs | pi, the reference engine: these do not carry over to another engine |
@@ -295,18 +296,17 @@ directory-sharing service would give it another home; only the type in the decla
   agent changing itself writes `skills/…` like any relative path.
 - **The agent is told what it works on and what it knows.** For each context: its name, its location on this
   instance, whether it works on it or only knows it, and whether a change there reaches other instances. It is
-  told that its own directory is itself, where that directory's `AGENTS.md` is for changing it, and that a result
-  worth keeping belongs in a context it works on.
+  told that its own directory is itself, and that a result worth keeping belongs in a context it works on.
   Writing a finding where it does not travel is how knowledge gets lost, so the agent needs to know which is
   which.
 - **Commands run in a context with `cd`.** A shell command that belongs in a project runs as
   `cd <its location> && …`; file tools take the location directly. Measured against an agent whose working
   directory is the project, and against a shell tool with a `cwd` argument, this made no difference: three models,
   180 runs, no command run in the wrong directory. So the shell tool stays as it is.
-- **Project instructions come from the contexts.** Each context's `AGENTS.md` at its root is loaded, marked with
-  the directory it applies to, and so are the skills each context provides from its `.pi/skills/` and
-  `.agents/skills/`, named `<context>/<skill>` (§2).
-  Nothing in the agent's own directory is loaded but its harness.
+- **Project instructions come from its own directory and its contexts.** Its own `AGENTS.md` is loaded first,
+  then each context's at its root, each marked with the directory it applies to, and so are the skills each
+  context provides from its `.pi/skills/` and `.agents/skills/`, named `<context>/<skill>` (§2). No `AGENTS.md`
+  above the agent directory or a context is loaded.
 - **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
   change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
   directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's

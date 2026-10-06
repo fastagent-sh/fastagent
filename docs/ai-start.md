@@ -36,7 +36,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 |---|---|---|
 | Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
 | An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
-| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`; the agent directory's own `AGENTS.md` is for whoever changes the agent. |
+| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`, after the agent directory's own, which says how the agent is built and changed. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |

@@ -246,8 +246,8 @@ command refuses such a declaration at load, and one whose directory does not exi
 
 What each context gives the agent, re-read every turn:
 
-- **Its `AGENTS.md`**, at the context's root, as project context. The agent directory's own `AGENTS.md` is not
-  loaded: it is for whoever changes the agent, and the agent is told so.
+- **Its `AGENTS.md`**, at the context's root, as project context, after the agent directory's own `AGENTS.md`
+  (how the agent is built and changed, loaded first).
 - **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<context>/<skill>`: the `deploy` skill of the
   context `app` is `app/deploy`, so it never collides with the agent's own or another context's.
 - **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
