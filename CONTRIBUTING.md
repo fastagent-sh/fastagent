@@ -33,7 +33,7 @@ Tests use faux models by default, so they validate serving mechanics without net
 3. npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
 5. gh pr create --base main --assignee @me   # drop --assignee without push access
-6. gh pr merge <N>   # a maintainer's call; enqueues the PR (see "Merge strategy")
+6. gh pr merge <N>   # a maintainer's call; enqueues the PR or enables auto-merge (see "Merge strategy")
 7. After the queue merges it: clean up local + remote tracking branches
 ```
 
@@ -62,7 +62,7 @@ A PR whose branch prefix matches no rule in `.github/labeler.yml` gets no label,
 
 ### After a PR merges
 
-The queue merges asynchronously and the merge deletes the remote branch, so a local branch whose upstream shows as `[gone]` in `git branch -vv` has landed. Delete it with `-D`: a squashed branch is never an ancestor of `main`, so `-d` refuses it.
+The queue merges asynchronously, so clean up only once `gh pr view <N> --json state -q .state` prints `MERGED`. A deleted remote branch does not prove that: the branch of a closed PR can be deleted too. Delete the local branch with `-D`: a squashed branch is never an ancestor of `main`, so `-d` refuses it.
 
 ```bash
 git checkout main
@@ -97,7 +97,7 @@ Add or update the smallest relevant tests that prove the change. Reusable SPEC c
 **Squash merge only** — the repository settings enforce it (rebase merges and merge commits are disabled). One PR lands as exactly one commit on `main`, so `main` reads as a sequence of reviewed changes and history stays linear.
 
 - Curate the PR title and description: they become the squash commit's subject and body — the durable record of the change. Branch commits are working state; the PR is the design asset.
-- Merges go through a **merge queue**. `gh pr merge <N>` adds the PR to the queue, or enables auto-merge until its own checks pass. The queue tests it on top of the latest `main` and the PRs ahead of it, then squash-merges it. A PR therefore does not have to be up to date with `main` first, and nobody waits for CI by hand. A PR that fails in the queue or conflicts with `main` leaves the queue and stays open.
+- Merges go through a **merge queue**. `gh pr merge <N>` adds the PR to the queue, or enables auto-merge until its own checks pass. The queue tests it on top of the latest `main` and the PRs ahead of it, then squash-merges it. A PR therefore does not have to be up to date with `main` first, and nobody waits for CI by hand. A PR that fails in the queue or conflicts with `main` leaves the queue and stays open; a PR whose own checks fail never enters it and stays open with auto-merge pending. Whoever runs `gh pr merge` reports which of the two its output shows (queued, or auto-merge enabled).
 
 One branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
 
