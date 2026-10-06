@@ -80,8 +80,8 @@ export async function checkAgentScopes(input: {
   );
   note(
     `[fastagent] the ${kind} app lacks ${missing.map(describe).join(", ")} — the agent cannot hear its group ` +
-      `chats fully without them. Request them, and have a tenant admin approve them if your tenant requires it, ` +
-      `before publishing. Opening ${url}`,
+      `chats fully without them. Tick and enable them on the page that opens, and have a tenant admin approve ` +
+      `them if your tenant requires it, before publishing. Opening ${url}`,
   );
   openUrl(url);
   return { publishReady: false };
@@ -217,7 +217,7 @@ async function createFeishuAppFlow(
       name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
       desc: "Served by fastagent",
       // The agent template alone is not enough to SERVE, nor to hear a group (see feishuAppAddons).
-      addons: feishuAppAddons(),
+      addons: feishuAppAddons(ingress),
       onVerificationUrl: ({ url, expiresInS }) => {
         console.error(
           `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,

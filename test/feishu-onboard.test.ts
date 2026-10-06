@@ -46,6 +46,7 @@ describe("Feishu/Lark agent permission check", () => {
     expect(result).toEqual({ publishReady: false });
     expect(notes).toContain("im:message.group_msg (awaiting approval)");
     expect(notes).toContain("im:chat.members:read (not on the app)");
+    expect(notes).toContain("Tick and enable them on the page that opens");
     expect(opened).toHaveLength(1);
     expect(new URL(opened[0] as string).pathname).toBe("/app/cli_a/auth");
     expect(requested(opened[0])).toEqual(["im:message.group_msg", "im:chat.members:read"]);
@@ -74,16 +75,19 @@ describe("Feishu/Lark agent permission check", () => {
 
 describe("Feishu app creation addons", () => {
   it("asks for every agent scope on the confirm page, so a tenant that grants them needs no console visit", () => {
-    expect(feishuAppAddons().scopes.tenant).toEqual(expect.arrayContaining(AGENT_SCOPES));
+    for (const ingress of ["webhook", "websocket"] as const) {
+      expect(feishuAppAddons(ingress).scopes.tenant).toEqual(expect.arrayContaining(AGENT_SCOPES));
+    }
   });
 
-  it("requests the app-config scope for either ingress — a WebSocket app can still move to webhook", () => {
-    // The scope only webhook USES on day one, requested for both: changing ingress is a migration the
-    // CLI refuses to perform, so an app that was not born with it has to be repaired by hand.
-    expect(feishuAppAddons().scopes.tenant).toContain(FEISHU_APP_CONFIG_SCOPE);
+  it("asks for the app-config scope only for webhook, the one ingress that uses it", () => {
+    // A tenant that reviews it holds the app's whole first version in review: a WebSocket app would wait on an
+    // admin for a scope it never calls.
+    expect(feishuAppAddons("webhook").scopes.tenant).toContain(FEISHU_APP_CONFIG_SCOPE);
+    expect(feishuAppAddons("websocket").scopes.tenant).not.toContain(FEISHU_APP_CONFIG_SCOPE);
   });
 
   it("subscribes the inbound message event — an app that cannot hear one serves nothing", () => {
-    expect(feishuAppAddons().events.items.tenant).toContain(FEISHU_MESSAGE_RECEIVE_EVENT);
+    expect(feishuAppAddons("websocket").events.items.tenant).toContain(FEISHU_MESSAGE_RECEIVE_EVENT);
   });
 });

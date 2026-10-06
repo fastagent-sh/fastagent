@@ -3,7 +3,9 @@ export type FeishuSubscriptionMode = "webhook" | "websocket";
 
 /**
  * Configuring THIS app through the v7 config API: registering a webhook Request URL and switching the subscription
- * mode. Requested with the app; a tenant can still withhold it, and webhook onboarding then says what to set by hand.
+ * mode. Requested for a webhook app only. A tenant may review it, and a scope under review holds the app's whole first
+ * version in review, so a WebSocket app, which never uses it, would wait on an admin for nothing (measured: the same
+ * creation without it came back active).
  */
 export const FEISHU_APP_CONFIG_SCOPE = "application:application:patch";
 
@@ -52,16 +54,16 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
 ];
 
 /**
- * What a created app carries on top of the platform's agent template, for EITHER ingress — the `addons` merged onto
- * the confirm page. A scope that arrives here needs no console visit; one a tenant withholds is reported after
- * creation (`add-feishu.ts`).
+ * What a created app carries on top of the platform's agent template — the `addons` merged onto the confirm page. A
+ * scope that arrives here needs no console visit; one a tenant withholds is reported after creation (`add-feishu.ts`).
  */
-export function feishuAppAddons(): {
+export function feishuAppAddons(ingress: FeishuSubscriptionMode): {
   scopes: { tenant: string[] };
   events: { items: { tenant: string[] } };
 } {
+  const config = ingress === "webhook" ? [FEISHU_APP_CONFIG_SCOPE] : [];
   return {
-    scopes: { tenant: [FEISHU_APP_CONFIG_SCOPE, ...FEISHU_AGENT_SCOPES.map((entry) => entry.request)] },
+    scopes: { tenant: [...config, ...FEISHU_AGENT_SCOPES.map((entry) => entry.request)] },
     events: { items: { tenant: [FEISHU_MESSAGE_RECEIVE_EVENT] } },
   };
 }
