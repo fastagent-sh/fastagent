@@ -48,8 +48,9 @@ import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts
  *
  * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
  * bound session runs on, so the menu cannot offer a name the next prompt would not expand. The same holds for
- * extensions: `served` is what sessions load — the assembly's entry points, discovered once, and the runtime turns run
- * on (asked only when there are extensions) — never a fresh scan of `extensions/`.
+ * extensions: `served` is what sessions load — the entry points `extensions/` holds now, asked through the same
+ * live-extensions check a session's load goes through (live-extensions.ts), and the runtime turns run on (asked only
+ * when there are extensions) — never a listing of its own.
  */
 export async function agentCommands(
   agentDir: string,

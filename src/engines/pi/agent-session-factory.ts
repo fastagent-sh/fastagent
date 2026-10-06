@@ -44,6 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
+import { warnWhenChanged } from "./report.ts";
 import type { ResolvedContext } from "../../contexts/resolve.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
@@ -244,9 +245,6 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
 
 let themeReady = false;
 
-/** Each distinct load diagnostic is said once per process: serving loads the extensions again for every session. */
-const reportedExtensionDiagnostics = new Set<string>();
-
 /**
  * Extension notifications said once per process at their own level, then at debug: every served turn starts the
  * extensions again, so a notification from `session_start` would otherwise log the same line on every message.
@@ -259,22 +257,19 @@ const MAX_REPORTED_NOTIFICATIONS = 1000;
 /**
  * Announce extensions pi failed to load, and what it warned about while loading the rest: among them a definition
  * extension that registers `codemode` or `tool_search`, which keeps pi's built-in of that name from loading. pi
- * collects both into `LoadExtensionsResult` and carries on; only its own TUI shows them.
+ * collects both into `LoadExtensionsResult` and carries on; only its own TUI shows them. Said when the set changes
+ * (every session loads the extensions again), and answered with the failures, which the session's prompt carries.
  */
-function reportExtensionDiagnostics(services: AgentSessionServices): void {
+function reportExtensionDiagnostics(cwd: string, services: AgentSessionServices): string[] {
   for (const diagnostic of services.diagnostics) {
     if (diagnostic.type === "error") throw new Error(diagnostic.message);
   }
   const { errors, warnings = [] } = services.resourceLoader.getExtensions();
-  const said = [
-    ...errors.map(({ path, error }) => `extension ${path} failed to load: ${error}`),
-    ...warnings.map(({ path, warning }) => `extension ${path}: ${warning}`),
-  ];
-  for (const line of said) {
-    if (reportedExtensionDiagnostics.has(line)) continue;
-    reportedExtensionDiagnostics.add(line);
-    log.warn(`[fastagent] ${line}`);
-  }
+  warnWhenChanged(`extensions loaded in ${cwd}`, [
+    ...errors.map(({ path, error }) => `[fastagent] extension ${path} failed to load: ${error}`),
+    ...warnings.map(({ path, warning }) => `[fastagent] extension ${path}: ${warning}`),
+  ]);
+  return errors.map(({ path, error }) => `${path}: ${error}`);
 }
 
 /**
@@ -313,14 +308,22 @@ const nativeExtensions: InlineExtension[] = BUILTIN_EXTENSIONS.map((name) => ({
 /**
  * FastAgent's own prompt sections, added on `before_agent_start`: pi renders custom sections after its own, so they
  * survive a `SYSTEM.md` that replaced pi's default, and they stay out of the slot `APPEND_SYSTEM.md` fills.
+ *
+ * `failedExtensions` is filled once pi has loaded the extensions, which is before any turn starts: an extension that
+ * did not load is said to the agent, which may have written it and is told it can, not only to the server log.
  */
-function fastagentSections(sections: Record<string, string>): InlineExtension {
+function fastagentSections(sections: Record<string, string>, failedExtensions: readonly string[]): InlineExtension {
   return {
     name: "fastagent-sections",
     hidden: true,
     factory: (pi) => {
       pi.on("before_agent_start", (event) => {
         Object.assign(event.systemPromptOptions.sections, sections);
+        if (failedExtensions.length > 0) {
+          event.systemPromptOptions.sections.extension_errors =
+            `These extensions in extensions/ did not load, so this session runs without them: ${failedExtensions.join("; ")}. ` +
+            "Fix the file to load it from the next session on.";
+        }
       });
     },
   };
@@ -332,6 +335,8 @@ export function definitionResourceLoaderOptions(source: {
   /** {@link readMachine} for this agent directory — resolved by the caller, because this function is synchronous. */
   machine: Machine;
   extensionPaths?: readonly string[];
+  /** Filled with the extensions that did not load, once they have been loaded ({@link definitionServices}). */
+  failedExtensions?: readonly string[];
 }): DefinitionLoaderOptions {
   const { definition } = source;
   return {
@@ -340,9 +345,7 @@ export function definitionResourceLoaderOptions(source: {
       compactAdmission,
       recordEndsRun,
       recordAbortedAnswers,
-      ...(definition.sections && Object.keys(definition.sections).length > 0
-        ? [fastagentSections(definition.sections)]
-        : []),
+      fastagentSections(definition.sections ?? {}, source.failedExtensions ?? []),
     ],
     // The machine's extensions are its owner's setup, not this agent's.
     noExtensions: true,
@@ -509,6 +512,7 @@ export async function definitionServices(options: {
 }): Promise<AgentSessionServices> {
   const { cwd, modelRuntime, definition, extensionPaths } = options;
   const machine = await readMachine(cwd);
+  const failedExtensions: string[] = [];
   const services = await withModelRegistration(modelRuntime, () =>
     createAgentSessionServices({
       cwd,
@@ -520,6 +524,7 @@ export async function definitionServices(options: {
           definition,
           machine,
           extensionPaths,
+          failedExtensions,
         }),
         extensionsOverride: admissionFirst,
       },
@@ -529,7 +534,7 @@ export async function definitionServices(options: {
       return services;
     }),
   );
-  reportExtensionDiagnostics(services);
+  failedExtensions.push(...reportExtensionDiagnostics(cwd, services));
   return services;
 }
 

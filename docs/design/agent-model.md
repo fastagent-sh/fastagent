@@ -392,8 +392,9 @@ One risk remains: an agent can write a tool or channel module that does not load
 crash, a host waking a scaled-to-zero instance, a release) fails on it and says why, and the way back is the author's: revert the
 change with version control on this machine, or deploy again on a host, which ships the definition anew. Keeping
 the last definition that loaded, and starting from it with a report, would close this gap; it is not part of this
-model yet. An extension that does not load fails no start: it is reported once, and sessions run without it
-until the agent or the author repairs it.
+model yet. An extension that does not load fails no start: sessions run without it, the log says so when it
+appears (and again if it is repaired and then broken again), and every session's prompt names it with pi's reason
+(`extension_errors`), so an agent that wrote it can repair it.
 
 A change to a context reaches other instances the way that context synchronizes. A change an agent on a host
 makes to its harness lasts until the next deployment ships the definition again: keeping it is a question of

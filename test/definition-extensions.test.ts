@@ -19,7 +19,7 @@ import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
-import { makeFaux, sentTools } from "./faux.ts";
+import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 
 /** An extension registering one tool whose presence proves the module was loaded and bound. */
 const markerExtension = (toolName: string) => `
@@ -50,6 +50,38 @@ async function agentDirWith(files: Record<string, string>): Promise<string> {
 }
 
 describe("definition: one discovery of extensions/ for the catalog and the sessions", () => {
+  it("an extension that does not load is said to the agent in its prompt, and to the log again after a repair", async () => {
+    // The agent may have written it, and the prompt tells it it can: a reason only the server log carried would leave
+    // it with a tool that is simply missing.
+    const broken = "export default 42;\n";
+    const dir = await agentDirWith({ "extensions/notify.ts": broken });
+    const { faux } = makeFaux();
+    const prompts: string[] = [];
+    const reply = (context: Parameters<typeof sentPrompt>[0]) => {
+      prompts.push(sentPrompt(context));
+      return fauxAssistantMessage("ok");
+    };
+    faux.setResponses([reply, reply, reply, reply]);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const failedToLoad = () => warn.mock.calls.filter(([m]) => /notify\.ts failed to load/.test(m)).length;
+    try {
+      const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+      await collect(agent.invoke({ session: "s" }, { text: "1" }));
+      await collect(agent.invoke({ session: "s" }, { text: "2" }));
+      expect(prompts[0]).toMatch(/<extension_errors>\nThese extensions in extensions\/ did not load[^\n]*notify\.ts: /);
+      expect(failedToLoad()).toBe(1); // said when it appears, not by every session that meets it again
+      await writeFile(join(dir, "extensions", "notify.ts"), markerExtension("notify"));
+      await collect(agent.invoke({ session: "s" }, { text: "3" }));
+      expect(prompts[2]).not.toContain("<extension_errors>");
+      await writeFile(join(dir, "extensions", "notify.ts"), broken);
+      await collect(agent.invoke({ session: "s" }, { text: "4" }));
+      expect(prompts[3]).toContain("<extension_errors>");
+      expect(failedToLoad()).toBe(2); // repaired, then broken the same way again: said again
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("sessions load the list the model catalog registered from", async () => {
     // A caller's ExecutionEnv may list a different directory than Node's filesystem: two discoveries could disagree on
     // which extension declared a model. The assembly takes the catalog's list instead of listing again.
