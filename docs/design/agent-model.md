@@ -197,22 +197,33 @@ hidden default.
 
 ### Types
 
-A context's type says how it reaches an instance that runs somewhere else. `init` and `fastagent context` infer
-it from what they are given, and every command prints it (§4), so an author rarely writes one.
+A context's type says where its data lives, and so how an instance anywhere reaches it and where its changes go.
+`init` and `fastagent context` infer it from what they are given, and every command prints it (§4), so an author
+rarely writes one.
 
-| Type | Declared as | On this machine | On a host | Where changes go |
-|---|---|---|---|---|
-| **local** | `{ local: "/Users/me/notes" }` | That directory, edited in place | Absent: deploying is refused (below) | The directory |
-| **local, copied** | `{ local: "/Users/me/notes", copy: true }` | That directory, edited in place | A copy | Each instance keeps its own |
-| **github** | `{ github: "acme/app" }` | An existing checkout (`local`), used as it is; otherwise a clone the instance makes | A clone the instance makes | To the repository, when pushed |
+| Type | Declared as | Where it lives | On this machine | On a host | Where changes go |
+|---|---|---|---|---|---|
+| **local** | `{ local: "/Users/me/notes" }` | A directory of this machine | That directory, edited in place | Absent: deploying is refused (below) | The directory |
+| **github** | `{ github: "acme/app" }` | A repository | An existing checkout (`local`), used as it is; otherwise a clone the instance makes | A clone the instance makes | To the repository, when pushed |
+
+**Only data with a home every instance can reach is the same data everywhere.** A local directory lives on one
+machine, so it is a context of that machine's instance alone. A copy of it on a host would not be the same data:
+each copy would become its own, and nothing would bring them back together. So a context reaches a host only by a
+type whose home the host reaches: a repository today; object storage, or a service that shares directories, are
+further types (§8). The declaration says where the data lives; how each place reaches it (a clone, a sync, a mount)
+is that place's.
+
+**The agent directory is the one local directory that reaches a host, and it does so as the harness.** A release
+carries it; the next replaces it whole, the same on every instance (§2). So what an author wants on every instance,
+read but not kept (reference material, examples), belongs in the agent directory and ships with each release. What
+the agent works on and must keep, on a host, needs a context with a home.
 
 Attributes:
 
 | Attribute | Types | Meaning | First version |
 |---|---|---|---|
 | `readonly` | all | The agent knows it and does not write it, for example a company handbook | yes |
-| `name` | all | The context's identity within the agent: how the agent and the commands refer to it, and what an instance keeps its clone or copy under. Defaults to the repository or folder name | yes |
-| `copy` | local | An instance on a host gets its own copy; when it is made follows from whether the context is writable (below) | yes |
+| `name` | all | The context's identity within the agent: how the agent and the commands refer to it, and what an instance keeps its clone under. Defaults to the repository or folder name | yes |
 | `ref` | github | Branch, tag or commit. Defaults to the default branch | yes |
 | `local` | github | A path to use on a machine where it is a checkout of that repository; otherwise the repository is cloned | yes |
 | `path` | github | Only a subdirectory of the repository (monorepos) | later |
@@ -231,22 +242,19 @@ Attributes:
     then kept as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on
     another branch than declared. Bringing the agent's work and the remote together is git's, the agent's or the
     user's (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
-- **What a host copies follows from whether the context is writable.** A copy of a context the instance only knows
-  is made again every time the instance is deployed: there is nothing local to lose, and it always matches the
-  definition. A copy of one it works on is made once and belongs to the instance afterwards; a later deployment
-  leaves it as it is and says so. That holds only where the instance's storage survives a deployment: a host whose
-  storage a deployment resets (AgentCore, [core](core.md) §9) copies every context again, and what the instance
-  wrote there is lost. Its deployment says so before it runs.
-- **What an instance clones or copies, it keeps in its own storage, under the context's name.** It lives with the
-  instance's runtime state (§5), not in the definition.
+- **A clone lives as long as the instance's storage.** A host whose storage a deployment resets (AgentCore,
+  [core](core.md) §9) clones every repository again, and what the agent did not push is lost; its deployment says
+  so before it runs.
+- **What an instance clones, it keeps in its own storage, under the context's name.** It lives with the instance's
+  runtime state (§5), not in the definition.
 - **A name is one path segment, unique within the agent regardless of case.** It becomes a directory name, so it
   is letters, digits, `-` and `_`, the spelling a release's agent name already has (`isReleaseAgentName`), and two
   names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either
   rule is refused when the agent is loaded; adding a context whose default name is taken or misspelled asks for an
   explicit one.
-- **A local context without `copy` refuses to deploy.** The refusal names the two ways out: add `copy`, or move
-  the directory to a repository and declare it as `github`. An instance never starts with a context silently
-  missing.
+- **A local context refuses to deploy.** The refusal names the two ways out: what the agent only reads goes in the
+  agent directory, which every release carries; what it works on moves to a repository declared as `github`. An
+  instance never starts with a context silently missing.
 - **A `github` context needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.
@@ -264,17 +272,18 @@ they already have. The agent's folder is a context like any other, separate from
 ```ts
 export default {
   contexts: [
-    { local: "/Users/me/Documents/researcher", copy: true },           // works on: its notes and output
-    { local: "/Users/me/Documents/papers", copy: true, readonly: true }, // knows
-    { github: "acme/handbook", readonly: true },                       // knows
+    { local: "/Users/me/Documents/researcher" },            // works on: its notes and output
+    { local: "/Users/me/Documents/papers", readonly: true }, // knows
+    { github: "acme/handbook", readonly: true },            // knows
   ],
 };
 ```
 
-It is a context, not part of the agent's directory, because its content is data the user expects to find on
-every instance of the agent: on a laptop and when a copy runs online. Until a context-sharing service exists, an
-online instance starts from a copy and keeps its own; once one exists, the type changes from a copied local
-directory to a synchronized one, and nothing else in the declaration does.
+It is a context, not part of the agent's directory, because its content is data the user keeps, which a release
+must not replace. On this machine that is all it needs. To run the same agent online as well, the folder needs a
+home both reach: a repository today, so `researcher` becomes `{ github: "me/researcher" }` (with the folder as its
+`local` checkout here) and both instances work on one history. A context type for object storage or a
+directory-sharing service would give it another home; only the type in the declaration changes.
 
 ## 4. How the agent works
 
@@ -411,18 +420,19 @@ implementation.
 These belong to other layers, the way a program does not do its own package management:
 
 - **Collaboration and synchronization.** Recording an agent's changes, branches, conflicts, reverting a
-  self-change, how changes in a `github` context get back to the repository, bringing a clone up to date, and
-  reconciling copies that diverged. Done by external tools (git) or a future context service, not by the agent
-  layer.
+  self-change, how changes in a `github` context get back to the repository, and merging a clone with what the
+  repository gained. Done by external tools (git) or a future context service, not by the agent layer.
 - **Distribution.** Sharing and copying an Agent, and what of its directory goes with it; reusing a harness by
   copying it into another Agent; and where an instance's harness comes from. A context has a source type; a
   harness can have one too: the directory an author points at, a copy shipped with a deployment, or later a clone
   of the agent's own repository, from which a hosted agent's changes to itself survive the next deployment.
-- **Deployment.** Running an instance on a host, and planning each host's storage for each context type: what
-  holds a writable copy (it needs storage that survives a restart), where fetched contexts live, and what a
-  redeploy reports. Separating the program from its contexts is what lets each host plan this per type.
-- **Context sharing.** A service through which several agents and people share and synchronize a context that is
-  not a repository, and sharing conversations as context.
+- **Deployment.** Running an instance on a host, and how each host reaches each context type (a clone, a sync, a
+  mount), where what it fetches lives, and what a redeploy reports. Separating the program from its contexts, and
+  declaring where each context's data lives, is what lets each host decide this per type.
+- **Further context types.** Homes other than a repository, so data that is not code can reach a host too: object
+  storage (S3 and compatible), or a service through which several agents and people share and synchronize a
+  directory. Each is a context type, with its own answer to where changes go; sharing conversations as context
+  waits for one.
 
 ## 9. What changes from today
 

@@ -69,7 +69,7 @@ A hosted instance keeps its state in the host's storage; how is a deployment que
 ## 3. `init`
 
 ```bash
-fastagent init <dir> [--context <source>]... [--copy]
+fastagent init <dir> [--context <source>]...
 ```
 
 `init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per
@@ -78,17 +78,14 @@ with `fastagent context add --readonly`.
 
 | `<source>` | Declared |
 |---|---|
-| A checkout whose remote is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
-| Any other directory | `{ local: "<directory>" }`, with `copy: true` under `--copy` |
+| The root of a checkout whose remote is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
+| Any other directory, a subdirectory of such a checkout included | `{ local: "<directory>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
 | `github:owner/repo` | `{ github: "owner/repo" }` |
 
 - **Paths are written absolute.** They describe this machine, and an absolute path keeps meaning the same
   directory when the agent directory moves.
-- **A directory below a checkout's root means the whole repository**, since narrowing a context to a
-  subdirectory comes later. `init` says so rather than declaring the subdirectory as something else.
-- **`copy` is asked for, never assumed.** It ships the directory's contents off this machine in an image, so
-  `init` and `context add` write it only under `--copy`. Without it, deploying refuses the agent and names the two
-  ways out.
+- **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
+  agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
 - **A context may not contain the agent, or sit inside it.** `init ~/code/app/agent --context ~/code/app` is
   refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --context ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
@@ -115,7 +112,7 @@ use one command:
 
 ```bash
 fastagent context list [agent] [--json]
-fastagent context add <source> [agent] [--readonly] [--name <n>] [--copy] [--ref <r>] [--local <dir>]
+fastagent context add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--local <dir>]
 fastagent context remove <name> [agent]
 ```
 
@@ -162,26 +159,18 @@ The definition is shipped to the host. Preflight lists what the host gets for ea
 
 ```text
 works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
-works on  notes     local ~/notes                 copied once, when the instance is created
 knows     handbook  github acme/handbook@main     cloned; kept up to date
-knows     papers    local ~/papers                copied again on every deployment
-works on  draft     local ~/draft                 refused: not available on a host
-          → add `copy: true`, or move it to a GitHub repository and declare it as github
+works on  draft     local ~/draft                 refused: a directory of this machine, which a host does not have
+          → what the agent only reads goes in the agent directory; what it works on moves to a GitHub repository
 ```
 
 - **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on
   this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
   clone goes with it, and preflight says what of the agent's work is lost.
-- **A later deploy leaves a copy the instance works on as it is, and refreshes one it only knows.** A copy of a
-  context the agent works on is the instance's own, so it is kept, and the deploy says so. A copy of one it only
-  knows is made again.
-- **Kept only where the host's storage survives a deployment.** On AgentCore a deployment resets the storage, so
-  preflight says so for every copy the agent works on:
-
-  ```text
-  works on  notes     local ~/notes                 copied on every deployment; changes are lost
-  ```
-- **A `github` context's credential is a host secret.** The runbook lists it with the instance's other secrets.
+- **A local directory does not reach a host** ([agent model](agent-model.md) §3); the agent directory does, as the
+  harness each release replaces.
+- **A `github` context's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
+  only a private repository, or an agent that pushes, needs it.
 
 ## 8. `login` and `add <channel>`
 
@@ -198,4 +187,4 @@ Unchanged as commands. What they store goes to the local instance (`.secrets/`),
 | An agent lives inside its project | A declared context never contains the agent directory, nor sits inside it |
 | Contexts do not exist | `fastagent context list/add/remove`, with `--readonly` for what the agent only knows |
 | Startup reports the workspace | Startup reports what the agent works on and what it knows |
-| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, refuses a local context without `copy`, keeps what the instance works on and refreshes what it only knows |
+| `deploy` copies the workspace once and replaces the definition on later deploys | `deploy` ships the definition, shows each context's fate, clones repositories on the host and refuses a local context |
