@@ -3,12 +3,13 @@
  * nesting, the literal-list rewrite) are tested where they live and through the CLI; this file owns what only the API
  * promises: an agent it creates runs as created, and its refusals are thrown, a name problem as its own class.
  */
-import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import { ContextNameError, addContext, createAgent, listContexts, removeContext } from "../src/engines/pi/authoring.ts";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -26,7 +27,10 @@ function createAndOpen(dir: string, exampleTool: boolean): Promise<string> {
     await createPiAgentFromDir(${JSON.stringify(dir)}).then(() => console.log("opened"), (e) => console.log(e.message));
   `;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: tmpdir() });
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: tmpdir(),
+      env: withGitIdentity,
+    });
     let out = "";
     let err = "";
     child.stdout.on("data", (d) => (out += String(d)));
@@ -40,12 +44,39 @@ function createAndOpen(dir: string, exampleTool: boolean): Promise<string> {
 }
 
 describe("authoring API", () => {
+  // createAgent commits the scaffold.
+  beforeEach(() => {
+    useGitIdentity(vi.stubEnv);
+    return () => vi.unstubAllEnvs();
+  });
+
   it("an agent createAgent makes opens without npm install; the example tool is what needs it", async () => {
     const base = await mkdtemp(join(tmpdir(), "fa-authoring-"));
     expect(await createAndOpen(join(base, "plain"), false)).toBe("opened");
     expect(await createAndOpen(join(base, "example"), true)).toMatch(
       /tools\/fetch-url\.ts \(Cannot find package '@fastagent-sh\/fastagent'/,
     );
+  });
+
+  it("install runs before the first commit; a rejected install removes the scaffold", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-install-")));
+    // What an install writes (a lockfile) is in the first commit, so the history starts from what runs.
+    const installed = join(base, "installed");
+    await createAgent(installed, { install: async (dir) => writeFile(join(dir, "package-lock.json"), "{}\n") });
+    const tracked = execFileSync("git", ["ls-files"], { cwd: installed, env: withGitIdentity, encoding: "utf8" });
+    expect(tracked.split("\n")).toContain("package-lock.json");
+
+    // A rejection is a failed create, like a context write that fails: nothing is left, and a retry starts clean.
+    const failed = join(base, "failed");
+    await expect(
+      createAgent(failed, {
+        install: async () => {
+          throw new Error("registry unreachable");
+        },
+      }),
+    ).rejects.toThrow("registry unreachable");
+    expect(await readdir(failed).catch(() => [])).toEqual([]);
+    await expect(createAgent(failed)).resolves.toMatchObject({ dir: failed });
   });
 
   it("creates with contexts, edits them, and throws a name refusal as ContextNameError", async () => {
@@ -56,6 +87,9 @@ describe("authoring API", () => {
 
     const created = await createAgent(agentDir, { contexts: [{ local: app }] });
     expect(created.created).not.toContain(join("tools", "fetch-url.ts"));
+    // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
+    expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
+    await access(join(agentDir, ".git"));
     expect(created.contexts.map((c) => c.name)).toEqual(["app"]);
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
       `{ local: ${JSON.stringify(app)} }`,

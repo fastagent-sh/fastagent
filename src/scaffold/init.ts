@@ -119,11 +119,12 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
 const git = gitFor("no repository was created");
 
 /**
- * Make the new agent a git repository whose first commit is what init wrote. An agent changes itself, and version
- * control is how its author goes back to a version that worked; the scaffolded `.gitignore` already keeps its
- * instance (`.state`, `.secrets`, `.contexts`) out. Returns the line init prints: when there is no repository of its
- * own or no first commit, it says which and why. The catches are init's boundary: the agent is created either way, so
- * a git that is missing or refuses becomes that line rather than a failed init.
+ * Make the new agent a git repository whose first commit is what creating it wrote (`createAgent`, which `init` and a
+ * client both run). An agent changes itself, and version control is how its author goes back to a version that worked;
+ * the scaffolded `.gitignore` already keeps its instance (`.state`, `.secrets`, `.contexts`) out. Returns a sentence to
+ * show: when there is no repository of its own or no first commit, it says which and why. The catches are this
+ * step's boundary: the agent is created either way, so a git that is missing or refuses becomes that sentence rather
+ * than a failed create.
  */
 export async function initRepository(dir: string): Promise<string> {
   const reason = (error: unknown) => (error as Error).message.split("\n")[0];
@@ -142,7 +143,7 @@ export async function initRepository(dir: string): Promise<string> {
     return `git could not create a repository: ${reason(error)}`;
   }
   try {
-    await git.run(["commit", "--quiet", "--message", "Create the agent with fastagent init"], dir);
+    await git.run(["commit", "--quiet", "--message", "Create the agent with fastagent"], dir);
   } catch (error) {
     return `created a git repository, but its first commit failed (${reason(error)}): commit the scaffold yourself`;
   }

@@ -5,7 +5,7 @@
  */
 import { resolve } from "node:path";
 import { resolveAgentDir } from "../../paths.ts";
-import { type ScaffoldOptions, scaffoldAgent } from "../../scaffold/init.ts";
+import { type ScaffoldOptions, initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import { type ContextDeclaration, declareContexts, defaultContextName, isContextName } from "../../contexts/declare.ts";
 import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
 import { editContexts, loadConfig, writeContexts } from "./config.ts";
@@ -21,6 +21,14 @@ export class ContextNameError extends Error {
 export interface CreateAgentOptions extends ScaffoldOptions {
   /** What the agent works on and knows, written into `fastagent.config.ts`. */
   contexts?: ContextDeclaration[];
+  /**
+   * Install the agent's dependencies, after the scaffold and before its first commit, so the lockfile is in that
+   * commit. The CLI passes `npm install` (its scaffold carries the example tool); without `exampleTool` nothing needs
+   * installing. A rejection is a failed create: the scaffold is removed again and the error thrown, as when writing
+   * the contexts fails, so the directory is empty for a retry. One that reports its failure some other way (the CLI's
+   * resolves, and says the install failed) leaves the agent created.
+   */
+  install?: (dir: string) => Promise<void>;
 }
 
 export interface CreatedAgent {
@@ -30,12 +38,18 @@ export interface CreatedAgent {
   created: string[];
   /** The contexts, resolved for this instance. */
   contexts: ResolvedContext[];
+  /**
+   * What became of the agent's git repository, as a sentence to show: created with the scaffold as its first commit,
+   * or why not (inside a repository that tracks it, git missing, no commit identity).
+   */
+  repository: string;
 }
 
 /**
  * Create an agent in `dir`, which must be new or empty. Every context is checked before anything is written, and the
  * scaffold is removed again when writing the contexts fails. Without `exampleTool` the agent imports nothing at run
- * time, so it runs without `npm install`.
+ * time, so it runs without `npm install`. The agent is then a git repository whose first commit is what was written:
+ * it changes itself, and version control is how its author goes back to a version that worked.
  */
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
   const agentDir = resolve(dir);
@@ -51,7 +65,14 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
       throw error;
     });
   }
-  return { dir: agentDir, created, contexts };
+  if (options.install) {
+    const install = options.install;
+    await install(agentDir).catch(async (error: unknown) => {
+      await undo();
+      throw error;
+    });
+  }
+  return { dir: agentDir, created, contexts, repository: await initRepository(agentDir) };
 }
 
 /** The agent's contexts, resolved for this instance (what `fastagent context list` shows). */
