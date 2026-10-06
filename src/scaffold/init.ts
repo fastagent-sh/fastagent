@@ -1,4 +1,5 @@
-/** Init: scaffold a runnable fastagent agent, offline. */
+/** Init: scaffold a runnable fastagent agent, offline, and make it a git repository of its own. */
+import { execFileSync } from "node:child_process";
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
@@ -103,4 +104,39 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
     throw error;
   }
   return { dir, created, undo };
+}
+
+/**
+ * Make the new agent a git repository whose first commit is what init wrote. An agent changes itself, and version
+ * control is how its author goes back to a version that worked; the scaffolded `.gitignore` already keeps its
+ * instance (`.state`, `.secrets`, `.contexts`) out. Returns the line init prints: when there is no repository of its
+ * own or no first commit, it says which and why.
+ */
+export function initRepository(dir: string): string {
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const reason = (error: unknown) =>
+    String((error as { stderr?: unknown }).stderr ?? "")
+      .trim()
+      .split("\n")[0] || (error as Error).message;
+  try {
+    // A directory inside another repository is that repository's to track: a second one inside it would hide the
+    // agent's files from the first.
+    return `inside the git repository ${git(["rev-parse", "--show-toplevel"])}: it tracks the agent, so none was created`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "git is not installed: no repository was created";
+    if (typeof (error as { status?: unknown }).status !== "number") throw error;
+  }
+  try {
+    git(["init", "--quiet"]);
+    git(["add", "--all"]);
+  } catch (error) {
+    return `git could not create a repository: ${reason(error)}`;
+  }
+  try {
+    git(["commit", "--quiet", "--message", "Create the agent with fastagent init"]);
+  } catch (error) {
+    return `created a git repository, but its first commit failed (${reason(error)}): commit the scaffold yourself`;
+  }
+  return "created a git repository, with the scaffold as its first commit";
 }

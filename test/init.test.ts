@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
@@ -35,9 +36,9 @@ async function exists(p: string): Promise<boolean> {
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
-function cliInit(args: string[], cwd: string): Promise<string> {
+function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd });
+    const child = spawn(process.execPath, [CLI, ...args], { cwd, env });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += String(d)));
     child.on("close", () => resolve(stderr));
@@ -239,6 +240,58 @@ describe("init: scaffoldAgent", () => {
     // Run in a project, init says how to have an agent work on it.
     await writeFile(join(app, "README.md"), "the project\n");
     expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --context \./);
+  });
+
+  it("makes the agent a git repository with the scaffold as its first commit, and says when it does not", async () => {
+    // No machine config: the commit identity comes from the environment, and nothing of the developer's (hooks,
+    // signing) runs.
+    const machine = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const env = {
+      ...machine,
+      GIT_AUTHOR_NAME: "a",
+      GIT_AUTHOR_EMAIL: "a@example.com",
+      GIT_COMMITTER_NAME: "a",
+      GIT_COMMITTER_EMAIL: "a@example.com",
+    };
+    const git = (args: string[], cwd: string) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+    const base = await realpath(await freshDir());
+
+    expect(await cliInit(["init", "mine", "--no-install"], base, env)).toContain(
+      "git: created a git repository, with the scaffold as its first commit",
+    );
+    const mine = join(base, "mine");
+    expect(git(["rev-parse", "--show-toplevel"], mine)).toBe(mine);
+    expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent init");
+    expect(git(["status", "--porcelain"], mine)).toBe(""); // all of it committed
+    expect(git(["ls-files"], mine).split("\n")).toEqual(
+      expect.arrayContaining(["fastagent.config.ts", "APPEND_SYSTEM.md", ".gitignore", ".secrets/.env.example"]),
+    );
+
+    // Inside a repository already: that one tracks the agent, and no second one hides its files from it.
+    const outer = join(base, "agents");
+    await mkdir(outer);
+    git(["init", "--quiet"], outer);
+    expect(await cliInit(["init", "inner", "--no-install"], outer, env)).toContain(
+      `git: inside the git repository ${outer}: it tracks the agent, so none was created`,
+    );
+    expect(await exists(join(outer, "inner", ".git"))).toBe(false);
+
+    // No identity to commit with: the repository stays, and the author is told to commit.
+    const noIdentity = {
+      ...machine,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "user.useConfigOnly",
+      GIT_CONFIG_VALUE_0: "true",
+    };
+    expect(await cliInit(["init", "anon", "--no-install"], base, noIdentity)).toMatch(
+      /git: created a git repository, but its first commit failed \(.+\): commit the scaffold yourself/,
+    );
+    expect(await exists(join(base, "anon", ".git"))).toBe(true);
+
+    // No git at all: said, and the agent is created anyway.
+    const out = await cliInit(["init", "plain", "--no-install"], base, { ...env, PATH: "/nonexistent" });
+    expect(out).toContain("git: git is not installed: no repository was created");
+    expect(await exists(join(base, "plain", "fastagent.config.ts"))).toBe(true);
   });
 
   it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {
