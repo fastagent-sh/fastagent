@@ -372,8 +372,8 @@ const deploy: CommandSpec = {
   description:
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
     "docker: fastagent.compose.yml, loopback port, persistent state volume. fly: fly.toml " +
-    "(autostop=suspend, state→volume). railway: railway.json (healthcheck /health); its " +
-    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. agentcore: one " +
+    "(autostop=suspend, state→volume). railway: no config file; its volume/variables/App-Sleeping " +
+    "are dashboard/CLI steps the runbook states. agentcore: one " +
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",

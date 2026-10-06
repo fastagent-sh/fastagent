@@ -114,11 +114,15 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     }
     host = opts.deployment as DeployHost;
   } else {
-    const found = DEPLOY_HOSTS.filter((h) => existsSync(join(agentDir, HOSTS[h].artifact)));
+    const found = DEPLOY_HOSTS.filter((h) => {
+      const artifact = HOSTS[h].artifact;
+      return artifact !== undefined && existsSync(join(agentDir, artifact));
+    });
     if (found.length !== 1) {
       failUsage(
         found.length === 0
-          ? `no deployment artifacts in ${agentDir} — name the host: --deployment <${DEPLOY_HOSTS.join("|")}>`
+          ? `no deployment artifacts in ${agentDir} (a railway deploy leaves none) — name the host: ` +
+              `--deployment <${DEPLOY_HOSTS.join("|")}>`
           : `this agent deploys to ${found.join(" and ")} — name one: --deployment <${found.join("|")}>`,
       );
     }

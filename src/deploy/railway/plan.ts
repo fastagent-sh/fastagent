@@ -7,8 +7,8 @@ import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
-  // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's internal_port) —
-  // the server binds $PORT at runtime.
+  // No `port`: Railway injects PORT and the container CMD never names one (unlike Fly's internal_port) — the server
+  // binds $PORT at runtime.
   /** The service name to create (`railway add --service`). */
   serviceName: string;
   /**
@@ -32,7 +32,12 @@ export interface RailwayPlanInput extends ContainerInput {
 }
 
 export interface RailwayPlan {
-  /** railway.json / Dockerfile / .dockerignore — written by the CLI (skipped if present unless --force). */
+  /**
+   * Dockerfile / .dockerignore — written by the CLI (skipped if present unless --force). No Railway config file: Railway
+   * builds from a root `Dockerfile` and restarts on failure by default, and the `/health` check that `railway.json`
+   * carried is the `--run` driver's own public probe now (Railway retires `railway.json`, and its replacement,
+   * `.railway/railway.ts`, would make every agent install Railway's SDK).
+   */
   artifacts: Artifact[];
   /** The ordered, values-resolved deploy runbook — printed to stdout for the coding agent to execute. */
   runbook: string[];
@@ -46,47 +51,17 @@ export function toRailwayName(basename: string): string {
   return basename.replace(/[^a-zA-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }
 
-/** railway.json is JSON, so its ownership marker is a KEY rather than a comment line. */
-const GENERATED_RAILWAY_KEY = "x-generated-by";
-const GENERATED_RAILWAY_VALUE = "fastagent deploy railway";
-
-export function isGeneratedRailwayJson(content: string): boolean {
-  try {
-    return (JSON.parse(content) as Record<string, unknown>)[GENERATED_RAILWAY_KEY] === GENERATED_RAILWAY_VALUE;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * railway.json — build/deploy only (Railway's config-as-code scope). It sits at the root of `railway up`'s upload
- * context, the agent directory, where Railway reads it, and so does the Dockerfile it names.
- */
-function railwayJson(): string {
-  return `${JSON.stringify(
-    {
-      $schema: "https://railway.com/railway.schema.json",
-      [GENERATED_RAILWAY_KEY]: GENERATED_RAILWAY_VALUE,
-      build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-      deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
-    },
-    null,
-    2,
-  )}\n`;
-}
-
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  const configPath = "railway.json";
-  const artifacts: Artifact[] = [{ path: configPath, content: railwayJson() }, ...containerArtifacts(input)];
+  const artifacts: Artifact[] = containerArtifacts(input);
 
   const secrets = input.secrets ?? [];
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and variables are
   // service-scoped and `railway up` deploys THE service.
   const runbook: string[] = [
-    `# Deploy to Railway. ${configPath} / Dockerfile(.dockerignore) are generated above.`,
+    `# Deploy to Railway. Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
@@ -119,8 +94,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   runbook.push(
     ``,
     `# Before a new definition release, run \`fastagent deploy railway\` to refresh the release manifest.`,
-    `# Upload the agent directory and build on Railway (no local Docker needed). Railway reads`,
-    `# ${configPath} at its root: the Dockerfile, and the /health check that marks a boot-crashing deploy FAILED.`,
+    `# Upload the agent directory and build on Railway (no local Docker needed): Railway builds the`,
+    `# Dockerfile at its root. It marks the deploy live once the container starts, without waiting for`,
+    `# /health: \`railway logs\` shows a box that crashes on boot.`,
     `railway up`,
   );
   // The credential is created on the box, never carried: the box is then the only holder of its grant.

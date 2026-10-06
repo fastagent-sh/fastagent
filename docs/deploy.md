@@ -42,7 +42,7 @@ A model with no API key in `.secrets/.env` (an OAuth subscription such as `opena
 with `fastagent login`) authenticates on the deployment itself:
 
 ```bash
-fastagent login --deployment            # the one host this agent dir has deploy artifacts for
+fastagent login --deployment            # the one host this agent dir has deploy artifacts for (railway: name it)
 fastagent login openai-codex --deployment fly
 ```
 
@@ -187,7 +187,7 @@ Requires the [Railway CLI](https://docs.railway.com/guides/cli) and `railway log
 fastagent deploy railway
 ```
 
-Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.dockerignore`, and prints the runbook:
+Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
 
 1. `railway init` (or `railway link`).
 2. `railway add --service <name>`.
@@ -201,9 +201,12 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.do
 fastagent deploy railway --run   # provisions an unlinked dir end to end
 ```
 
-`--run` refuses a dir already linked to a project unless `--into-linked`. `railway.json` and the `Dockerfile` sit at
-the root of the upload, where Railway reads both: the build uses the Dockerfile, and the `/health` check marks a
-deploy whose box crashes on boot as failed.
+`--run` refuses a dir already linked to a project unless `--into-linked`. No Railway config file is generated:
+Railway retires `railway.json` on 2026-12-01, and its replacement (`.railway/railway.ts`) would make every agent
+install Railway's SDK. Railway builds the `Dockerfile` at the root of the upload and restarts a crashed service by
+default. It does not wait for `/health`, so it marks a deploy live once the container starts; `--run` probes the
+public `/health` itself before it logs the box in or points a webhook at it, and `railway logs` shows a box that
+crashes on boot.
 
 ## Scale to zero
 
@@ -331,8 +334,8 @@ excludes. Each start publishes it onto persistent storage:
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
-rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` / `railway.json` /
-`agentcore.template.yaml`. The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
+rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
+`agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
 `**/.state`, `**/.contexts`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
