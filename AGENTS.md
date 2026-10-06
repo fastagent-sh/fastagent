@@ -235,6 +235,7 @@ src/
     │                       # included — never installed by us), engine settings and which Pi built-in extensions
     │                       # (codemode, tool-search; never mcp) stay enabled, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
+    ├── authoring.ts        # creating an agent + editing its contexts as an API; `init`/`context` are thin wrappers
     ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
     ├── locked-file.ts      # the cross-process locked read-modify-write that REPLACES a file (credentials, model
     │                       # catalogs), pi's lock included, so every reader of those files reads without one
