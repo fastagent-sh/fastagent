@@ -377,7 +377,7 @@ running serve is one whose session can be spoken to.
 | Execution posture | Clock and persistence requirements |
 |---|---|
 | Resident `dev` / `start` or embedded `createAgentService` | The process runs the scheduler. Keep one active scheduler with durable state; a sleeping/stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
-| AgentCore webhook/schedule ingress | The container mirrors schedules and wake-ups into one-shot EventBridge alarms that wake it. Scale-to-zero is supported on this path; no resident timer is required. |
+| AgentCore webhook/schedule ingress | The container mirrors each schedule into a recurring EventBridge schedule and each wake-up into a one-shot, which wake it. Scale-to-zero is supported on this path; no resident timer is required. |
 | Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and

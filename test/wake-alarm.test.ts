@@ -16,6 +16,7 @@ import {
   readWakeAlarmUrl,
   rememberWakeAlarmUrl,
   toAlarms,
+  toRecurring,
 } from "../src/schedule/wake-alarm.ts";
 import { type Wakeup, addWakeup, removeWakeup, setWakeupsSink, takeFirstDueWakeup } from "../src/schedule/wakeups.ts";
 
@@ -105,7 +106,7 @@ describe("schedule/wake-alarm: the URL store", () => {
 });
 
 describe("schedule/wake-alarm: the sink", () => {
-  it("uses its captured clock for retry pacing and expires alarms during backoff", async () => {
+  it("uses its captured clock for retry pacing; a retry sends the set as it is NOW, without an alarm due meanwhile", async () => {
     const root = await freshRoot();
     const now = new Date("2026-07-28T09:00:00Z");
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
@@ -123,12 +124,12 @@ describe("schedule/wake-alarm: the sink", () => {
         yield* TestClock.adjust(2_000);
         expect(calls).toHaveLength(2);
         yield* TestClock.adjust(4_000);
-        expect(calls).toHaveLength(2);
-        expect(activeWork()).toBe(base);
+        expect(calls).toHaveLength(3);
+        expect(calls[2]!.body.alarms).toEqual([]);
       }).pipe(Effect.provide(TestClock.layer())),
     );
   });
-  it("POSTs the pending set (declarative reconcile) to the reserved path with the secret", async () => {
+  it("POSTs the wake-ups' alarms and every schedule (declarative reconcile) to the reserved path with the secret", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws/");
     const { impl, calls } = fakeFetch();
@@ -136,6 +137,7 @@ describe("schedule/wake-alarm: the sink", () => {
       secret: "s3cret",
       fetchImpl: impl,
       now: () => new Date("2026-07-28T09:00:00Z"),
+      schedules: () => [{ name: "digest", cron: "0 9 * * *", prompt: "p" }],
     });
     seed(root, [
       { id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" },
@@ -150,10 +152,11 @@ describe("schedule/wake-alarm: the sink", () => {
         { id: "a@2026-07-28T10:00:00.000Z", at: "2026-07-28T10:00:00.000Z" },
         { id: "b@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" },
       ],
+      schedules: [{ name: "digest", expression: "cron(0 9 * * ? *)", tz: "UTC" }],
     });
   });
 
-  it("filters already-due alarms (the awake box handles those) and skips an all-due/empty set", async () => {
+  it("filters already-due alarms (the awake box handles those), and still sends an empty set", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
     const { impl, calls } = fakeFetch();
@@ -167,8 +170,9 @@ describe("schedule/wake-alarm: the sink", () => {
     expect(calls[0]!.body.alarms).toEqual([{ id: "future@2026-07-28T10:30:00.000Z", at: "2026-07-28T10:30:00.000Z" }]);
     seed(root, [{ id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T09:59:00.000Z" }]); // nothing future
     sink(root);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(calls).toHaveLength(1); // no empty POST — deletion is lazy by design
+    // Sent all the same: the schedules are the WHOLE set, so an empty one is how a removed schedule is deleted.
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]!.body).toMatchObject({ alarms: [], schedules: [] });
   });
 
   it("re-reads the store between attempts — a mutation mid-retry redirects the loop to the new set", async () => {
@@ -209,7 +213,7 @@ describe("schedule/wake-alarm: the sink", () => {
     expect(posted).toHaveLength(2);
   });
 
-  it("a cancel mid-retry converges silently — the abandoned set is never re-POSTed", async () => {
+  it("a cancel mid-retry sends the set as it is now — the abandoned one is never re-POSTed", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
     seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
@@ -222,10 +226,10 @@ describe("schedule/wake-alarm: the sink", () => {
     sink(root);
     release();
 
-    // "It must not re-post" is a negative, so the wait is bounded by event-loop TURNS, not wall
-    // clock: the parked loop needs one to resume, re-read, and find nothing to mirror.
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1]!.alarms).toEqual([]); // the cancelled alarm is not set again (it fires, finds nothing, deletes)
     for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
-    expect(posted).toHaveLength(1); // no empty POST either — deletion is lazy by design
+    expect(posted).toHaveLength(2);
   });
 
   it("retries a failed sync with backoff (counted as in-flight work), gives up loudly, then heals while alive", async () => {
@@ -256,35 +260,33 @@ describe("schedule/wake-alarm: the sink", () => {
     await vi.waitFor(() => expect(activeWork()).toBe(base));
     expect(attempts.length).toBe(MAX_SYNC_ATTEMPTS);
     expect(heals).toHaveLength(1);
-    heals[0]!();
-    // One failed sync does not end the chain while the process lives: the whole sync runs again.
+    // A second sync that gives up while one retry is pending adds no second retry chain.
+    sink(root);
     await vi.waitFor(() => expect(attempts.length).toBe(2 * MAX_SYNC_ATTEMPTS));
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
+    expect(heals).toHaveLength(1);
+    heals[0]!();
+    // While the process lives, the whole sync is tried again.
+    await vi.waitFor(() => expect(attempts.length).toBe(3 * MAX_SYNC_ATTEMPTS));
   });
 
-  it("mirrors the whole set again after a sync that SUCCEEDED too — an alarm lost where no sync sees is set again", async () => {
+  it("a sync that succeeded schedules no retry: the recurring schedules need nothing more until the next change", async () => {
     const root = await freshRoot();
     rememberWakeAlarmUrl(root, "https://fn.on.aws");
     const { impl, calls } = fakeFetch();
-    const heals: (() => void)[] = [];
+    const waits: number[] = [];
     const sink = createWakeAlarmSink({
       secret: "x",
       fetchImpl: impl,
       now: () => new Date("2026-07-28T09:00:00Z"),
-      delay: (ms) => (ms === HEAL_MS ? new Promise<void>((resolve) => heals.push(resolve)) : Promise.resolve()),
+      schedules: () => [{ name: "digest", cron: "0 9 * * *", prompt: "p" }],
+      delay: async (ms) => void waits.push(ms),
     });
-    seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
     sink(root);
-    await vi.waitFor(() => expect(heals).toHaveLength(1));
-    expect(calls).toHaveLength(1);
-    // A second sync while one re-mirror is pending adds no second chain: one per process, however many syncs ran.
-    sink(root);
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
-    expect(heals).toHaveLength(1);
-    heals[0]!();
-    await vi.waitFor(() => expect(calls).toHaveLength(3));
-    expect(calls[2]!.body).toEqual(calls[0]!.body); // the same ids: idempotent
-    await vi.waitFor(() => expect(heals).toHaveLength(2)); // and it keeps going while the process lives
+    expect(waits).toEqual([]);
+    expect(calls).toHaveLength(1);
   });
 
   it("a store mutating faster than the backoff cannot renew the retry budget", async () => {
@@ -417,47 +419,26 @@ describe("schedule/wake-alarm: boot reconcile", () => {
 });
 
 describe("schedule/wake-alarm: helpers", () => {
-  it("toAlarms mirrors id + fireAt for FUTURE entries only", () => {
+  it("toAlarms mirrors id + fireAt for FUTURE entries only, one id per instant", () => {
     const now = new Date("2026-07-28T10:00:00Z");
     const entries: Wakeup[] = [
       { id: "future", session: "s", prompt: "p", fireAt: "2026-07-28T11:00:00.000Z" },
       { id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:01.000Z" }, // inside the due margin
     ];
-    expect(toAlarms(entries, [], now)).toEqual([
-      { id: "future@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" },
-    ]);
+    expect(toAlarms(entries, now)).toEqual([{ id: "future@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" }]);
   });
 
-  it("a schedule's instant too near to set is set just past the margin, still naming its instant", () => {
-    // The alarm is the only thing that fires a schedule there: leaving one out because it is close would lose it.
-    const now = new Date("2026-07-28T10:00:58Z");
-    expect(toAlarms([], [{ name: "tick", cron: "* * * * *", prompt: "p" }], now)).toEqual([
-      {
-        id: "schedule:tick@2026-07-28T10:01:00.000Z",
-        at: "2026-07-28T10:01:04.000Z",
-        fire: { name: "tick", occurrence: "2026-07-28T10:01:00.000Z" },
-      },
+  it("toRecurring gives each schedule its EventBridge cron, in its zone (UTC by default)", () => {
+    expect(
+      toRecurring([
+        { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai", prompt: "p" },
+        { name: "hourly", cron: "0 * * * *", prompt: "p" },
+      ]),
+    ).toEqual([
+      { name: "digest", expression: "cron(0 9 ? * 2-6 *)", tz: "Asia/Shanghai" },
+      { name: "hourly", expression: "cron(0 * * * ? *)", tz: "UTC" },
     ]);
-  });
-
-  it("toAlarms adds each schedule's NEXT instant, carrying the fire it delivers, one id per instant", () => {
-    const now = new Date("2026-07-28T10:00:00Z");
-    const schedules = [
-      { name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai", prompt: "p" }, // 09:00 Shanghai = 01:00 UTC
-      { name: "soon", cron: "0 10 * * *", prompt: "p" }, // due right now: the awake container's clock fires it
-    ];
-    expect(toAlarms([], schedules, now)).toEqual([
-      {
-        id: "schedule:digest@2026-07-29T01:00:00.000Z",
-        at: "2026-07-29T01:00:00.000Z",
-        fire: { name: "digest", occurrence: "2026-07-29T01:00:00.000Z" },
-      },
-      // `soon`'s next instant after now is tomorrow's 10:00, far outside the margin.
-      {
-        id: "schedule:soon@2026-07-29T10:00:00.000Z",
-        at: "2026-07-29T10:00:00.000Z",
-        fire: { name: "soon", occurrence: "2026-07-29T10:00:00.000Z" },
-      },
-    ]);
+    // Discovery admits only a cron that translates, so one that does not here is a defect.
+    expect(() => toRecurring([{ name: "or", cron: "0 9 15 * WED", prompt: "p" }])).toThrow(/no EventBridge form/);
   });
 });

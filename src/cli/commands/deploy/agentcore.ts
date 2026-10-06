@@ -1,6 +1,6 @@
 /**
- * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda behind a Function URL + EventBridge
- * schedules); no resident process.
+ * `deploy agentcore`: one CloudFormation stack (runtime + forwarder Lambda behind a Function URL); the container
+ * sets its EventBridge schedules itself; no resident process.
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -80,7 +80,7 @@ export const agentcoreHost: HostDeploy = {
       );
     }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
-    // mirrors them into one-shot EventBridge schedules itself (schedule/wake-alarm.ts). A file that is not a valid
+    // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A file that is not a valid
     // schedule is the pre-flight's to report.
     const acName = agentcoreName(basename(agentDir));
     // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name

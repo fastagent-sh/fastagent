@@ -18,8 +18,16 @@ interface HarnessOptions {
   env?: Record<string, string | undefined>;
   /** What the container's /invocations returns for a given envelope (transport status + JSON body). */
   containerReply?: (envelope: Envelope) => { statusCode?: number; body: unknown };
-  /** Scheduler behavior per call — throw to simulate an API error. */
-  onSchedule?: (type: "create" | "update", input: Record<string, unknown>) => void;
+  /** Scheduler behavior per mutating call — throw to simulate an API error. */
+  onSchedule?: (type: ScheduleCall["type"], input: Record<string, unknown>) => void;
+  /** Schedules EventBridge already holds, by name (what ListSchedules and GetSchedule answer from). */
+  held?: Record<string, Record<string, unknown>>;
+}
+
+/** A call that changes what EventBridge holds; reads (list, get) are answered, not recorded. */
+interface ScheduleCall {
+  type: "create" | "update" | "delete";
+  input: Record<string, unknown>;
 }
 
 function awsError(name: string): Error {
@@ -36,7 +44,8 @@ function loadForwarder(options: HarnessOptions = {}) {
     ...options.env,
   };
   const envelopes: Envelope[] = [];
-  const scheduleCalls: { type: "create" | "update"; input: Record<string, unknown> }[] = [];
+  const scheduleCalls: ScheduleCall[] = [];
+  const held = new Map(Object.entries(options.held ?? {}));
   let urlLookups = 0;
 
   const reply: (envelope: Envelope) => { statusCode?: number; body: unknown } =
@@ -60,6 +69,15 @@ function loadForwarder(options: HarnessOptions = {}) {
   }
   class UpdateScheduleCommand {
     constructor(public input: Record<string, unknown>) {}
+  }
+  class DeleteScheduleCommand {
+    constructor(public input: Record<string, unknown>) {}
+  }
+  class GetScheduleCommand {
+    constructor(public input: { Name: string }) {}
+  }
+  class ListSchedulesCommand {
+    constructor(public input: { NamePrefix: string; NextToken?: string }) {}
   }
   class GetFunctionUrlConfigCommand {
     constructor(public input: Record<string, unknown>) {}
@@ -91,11 +109,43 @@ function loadForwarder(options: HarnessOptions = {}) {
     "@aws-sdk/client-scheduler": {
       CreateScheduleCommand,
       UpdateScheduleCommand,
+      DeleteScheduleCommand,
+      GetScheduleCommand,
+      ListSchedulesCommand,
       SchedulerClient: class {
-        async send(cmd: CreateScheduleCommand | UpdateScheduleCommand) {
-          const type = cmd instanceof CreateScheduleCommand ? "create" : "update";
+        async send(
+          cmd:
+            | CreateScheduleCommand
+            | UpdateScheduleCommand
+            | DeleteScheduleCommand
+            | GetScheduleCommand
+            | ListSchedulesCommand,
+        ) {
+          if (cmd instanceof ListSchedulesCommand) {
+            // Two pages, so the forwarder has to follow NextToken to see the whole set.
+            const names = [...held.keys()].filter((name) => name.startsWith(cmd.input.NamePrefix));
+            const page = cmd.input.NextToken ? names.slice(1) : names.slice(0, 1);
+            return {
+              Schedules: page.map((Name) => ({ Name })),
+              ...(!cmd.input.NextToken && names.length > 1 ? { NextToken: "2" } : {}),
+            };
+          }
+          if (cmd instanceof GetScheduleCommand) {
+            const found = held.get(cmd.input.Name);
+            if (!found) throw awsError("ResourceNotFoundException");
+            return found;
+          }
+          const type =
+            cmd instanceof CreateScheduleCommand
+              ? "create"
+              : cmd instanceof UpdateScheduleCommand
+                ? "update"
+                : "delete";
           scheduleCalls.push({ type, input: cmd.input });
           options.onSchedule?.(type, cmd.input);
+          const name = cmd.input.Name as string;
+          if (type === "delete") held.delete(name);
+          else held.set(name, cmd.input);
           return {};
         }
       },
@@ -339,9 +389,14 @@ describe("agentcore forwarder (executed)", () => {
   });
 
   describe("wake alarms", () => {
-    const env = { WAKE_SECRET: "s3cret", WAKE_ROLE_ARN: "arn:role", WAKE_PREFIX: "fa-x-wk-" };
-    const alarmEvent = (secret: string, alarms: unknown[]) =>
-      webhookEvent({ rawPath: "/__fastagent/wake-alarm", body: JSON.stringify({ secret, alarms }) });
+    const env = {
+      WAKE_SECRET: "s3cret",
+      WAKE_ROLE_ARN: "arn:role",
+      WAKE_PREFIX: "fa-x-wk-",
+      SCHEDULE_PREFIX: "fa-x-sc-",
+    };
+    const alarmEvent = (secret: string, alarms: unknown[], schedules: unknown[] = []) =>
+      webhookEvent({ rawPath: "/__fastagent/wake-alarm", body: JSON.stringify({ secret, alarms, schedules }) });
     const alarm = { id: "abcd1234-rest-of-uuid", at: "2026-07-28T10:30:00.000Z" };
 
     it("gates on the shared secret — wrong or unconfigured is 403, never forwarded", async () => {
@@ -373,22 +428,92 @@ describe("agentcore forwarder (executed)", () => {
       ]);
     });
 
-    it("a schedule's alarm delivers its fire, naming the instant it is for", async () => {
+    const digest = { name: "digest", expression: "cron(0 9 ? * 2-6 *)", tz: "Asia/Shanghai" };
+    const digestInput = JSON.stringify({
+      scheduleFire: { name: "digest", occurrence: "<aws.scheduler.scheduled-time>" },
+    });
+
+    it("a schedule becomes a RECURRING cron schedule whose fire names the instant EventBridge scheduled", async () => {
       const f = loadForwarder({ env });
-      const fire = { name: "digest", occurrence: "2026-07-28T10:30:00.000Z" };
-      await f.handler(alarmEvent("s3cret", [{ id: "schedule:digest", at: fire.occurrence, fire }]));
+      expect((await f.handler(alarmEvent("s3cret", [], [digest]))).statusCode).toBe(200);
       expect(f.scheduleCalls).toEqual([
         {
           type: "create",
-          input: expect.objectContaining({
-            ScheduleExpression: "at(2026-07-28T10:30:00)",
-            Target: expect.objectContaining({ Input: JSON.stringify({ scheduleFire: fire }) }),
-          }),
+          input: {
+            Name: expect.stringMatching(/^fa-x-sc-[0-9a-f]{16}$/),
+            ScheduleExpression: "cron(0 9 ? * 2-6 *)",
+            ScheduleExpressionTimezone: "Asia/Shanghai",
+            FlexibleTimeWindow: { Mode: "OFF" },
+            State: "ENABLED",
+            // Never deleted after it fires: it is the schedule, not one instant of it.
+            Target: { Arn: "arn:aws:lambda:us-east-1:1:function:fwd", RoleArn: "arn:role", Input: digestInput },
+          },
         },
       ]);
-      // …and that event is the one the forwarder relays as a `schedule-fire` envelope.
+      // EventBridge fills in the instant; that event is the one the forwarder relays as a `schedule-fire` envelope.
+      const fire = { name: "digest", occurrence: "2026-07-28T01:00:00Z" };
       await f.handler({ scheduleFire: fire });
       expect(f.envelopes.at(-1)).toMatchObject({ kind: "schedule-fire", ...fire });
+    });
+
+    it("keeps EventBridge equal to the set: unchanged is left alone, changed is updated, gone is deleted", async () => {
+      const f = loadForwarder({ env });
+      await f.handler(
+        alarmEvent("s3cret", [], [digest, { name: "hourly", expression: "cron(0 * * * ? *)", tz: "UTC" }]),
+      );
+      const [digestName, hourlyName] = f.scheduleCalls.map((c) => c.input.Name as string);
+      f.scheduleCalls.length = 0;
+      // The same set again (a sync follows every wake-up too): nothing is written.
+      await f.handler(
+        alarmEvent("s3cret", [], [digest, { name: "hourly", expression: "cron(0 * * * ? *)", tz: "UTC" }]),
+      );
+      expect(f.scheduleCalls).toEqual([]);
+      // `digest` edited, `hourly` removed.
+      const edited = { ...digest, expression: "cron(30 8 ? * 2-6 *)" };
+      expect((await f.handler(alarmEvent("s3cret", [], [edited]))).statusCode).toBe(200);
+      expect(f.scheduleCalls).toEqual([
+        {
+          type: "update",
+          input: expect.objectContaining({ Name: digestName, ScheduleExpression: "cron(30 8 ? * 2-6 *)" }),
+        },
+        { type: "delete", input: { Name: hourlyName } },
+      ]);
+    });
+
+    it("deletes only names it mints — never a sibling agent's that shares the prefix — and not the wake alarms", async () => {
+      const sibling = "fa-x-sc-abc-sc-0123456789abcdef"; // the agent named `x-sc-abc`
+      const f = loadForwarder({ env, held: { [sibling]: {}, "fa-x-wk-0123456789abcdef": {} } });
+      expect((await f.handler(alarmEvent("s3cret", [], []))).statusCode).toBe(200);
+      expect(f.scheduleCalls).toEqual([]);
+    });
+
+    it("refuses a sync without the schedule set: deleting every schedule is not the answer to a missing field", async () => {
+      const f = loadForwarder({ env, held: { "fa-x-sc-0123456789abcdef": {} } });
+      const res = await f.handler(
+        webhookEvent({ rawPath: "/__fastagent/wake-alarm", body: JSON.stringify({ secret: "s3cret", alarms: [] }) }),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(f.scheduleCalls).toEqual([]);
+    });
+
+    it("a schedule that could not be set or deleted fails the sync, so the container tries again", async () => {
+      const failing = loadForwarder({
+        env,
+        held: { "fa-x-sc-0123456789abcdef": {} },
+        onSchedule: (type) => {
+          if (type === "delete") throw awsError("AccessDeniedException");
+        },
+      });
+      expect((await failing.handler(alarmEvent("s3cret", [], []))).statusCode).toBe(500);
+      // Already gone is the goal state, not a failure.
+      const gone = loadForwarder({
+        env,
+        held: { "fa-x-sc-0123456789abcdef": {} },
+        onSchedule: (type) => {
+          if (type === "delete") throw awsError("ResourceNotFoundException");
+        },
+      });
+      expect((await gone.handler(alarmEvent("s3cret", [], []))).statusCode).toBe(200);
     });
 
     it("upserts: an existing schedule (Conflict) is updated in place", async () => {
@@ -449,7 +574,7 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
   });
 
   it("names an alarm by a hash of the WHOLE wake id — a shared prefix must not steal another's fire time", async () => {
-    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-" };
+    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-", SCHEDULE_PREFIX: "fa-x-sc-" };
     const shared = "abcd1234";
     const f = loadForwarder({ env });
     const res = await f.handler(
@@ -461,6 +586,7 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
             { id: `${shared}-first-wake`, at: "2026-07-28T10:30:00.000Z" },
             { id: `${shared}-second-wake`, at: "2026-07-28T22:00:00.000Z" },
           ],
+          schedules: [],
         }),
       }),
     );
@@ -474,7 +600,7 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
   });
 
   it("a genuine name collision is a FAILURE, not a silent update", async () => {
-    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-" };
+    const env = { WAKE_SECRET: "s", WAKE_ROLE_ARN: "r", WAKE_PREFIX: "fa-x-wk-", SCHEDULE_PREFIX: "fa-x-sc-" };
     const f = loadForwarder({ env });
     const res = await f.handler(
       webhookEvent({
@@ -485,6 +611,7 @@ describe("agentcore forwarder: envelope authentication + alarm identity", () => 
             { id: "same-id", at: "2026-07-28T10:30:00.000Z" },
             { id: "same-id", at: "2026-07-28T22:00:00.000Z" },
           ],
+          schedules: [],
         }),
       }),
     );
