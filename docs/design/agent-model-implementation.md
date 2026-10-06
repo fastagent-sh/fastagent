@@ -31,8 +31,9 @@ Built in stages 2 and 3; [core](core.md) §2 describes it: `src/contexts/` decla
 (`resolve.ts`: the disk and git, never the network, no writes) and clones (`cloneContext`, called by the opener
 only). `ResolvedContext` carries `name`, `readonly`, `location` and `notices`, and for a `github` context its `repo`,
 `ref` and whether it is a clone. A repository is its user's checkout when `local` names one, used as it is;
-otherwise it is cloned afresh, shallow, at `ref`, every time a process that runs the agent starts, built beside the
-last clone and renamed into place under a lock. Read-only commands (`info`, `context list`, `fastagent tool`, the
+otherwise it is a fresh clone, shallow, at `ref`, every time a process that runs the agent starts, built beside the
+last clone and renamed into place under a lock; a last clone identical to a fresh one is kept, and an untouched one
+is kept with a warning when the remote cannot be reached. Read-only commands (`info`, `context list`, `fastagent tool`, the
 restart check of §3.8) resolve without cloning, so they never touch the network, and `info` keeps its contract of
 creating nothing.
 

@@ -2,7 +2,7 @@
  * GitHub contexts against a local stand-in for GitHub (github-standin.ts): a checkout of the user's is used as it is,
  * and a repository with no checkout here is cloned afresh each time the agent starts.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { declarationFor } from "../src/contexts/source.ts";
 import { githubRepoOf } from "../src/contexts/git.ts";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { git, githubStandIn } from "./github-standin.ts";
+import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -110,6 +111,57 @@ describe("github contexts: a clone is made afresh each time", () => {
     expect(readdirSync(join(agentDir, ".state", "contexts")).filter((entry) => !entry.endsWith(".lock"))).toEqual([
       "app",
     ]);
+  });
+
+  it("keeps a clone identical to a fresh one; any change in it, or on the remote, means a new clone", async () => {
+    const github = githubStandIn();
+    const app = github.repo("acme/app");
+    app.commit({ "README.md": "one\n", ".gitignore": "build/\n" });
+    const { agentDir } = await agent();
+    const context = resolveOne(agentDir, { github: "acme/app" });
+    const inode = () => statSync(context.location).ino;
+
+    expect(await cloneContext(context)).toEqual({ cloned: true });
+    let before = inode();
+    expect(await cloneContext(context)).toEqual({ cloned: false });
+    expect(inode()).toBe(before);
+    for (const change of [
+      () => writeFileSync(join(context.location, "README.md"), "edited\n"),
+      () => {
+        mkdirSync(join(context.location, "build"));
+        writeFileSync(join(context.location, "build", "out"), "ignored, still a change\n");
+      },
+      () => git(context.location, "checkout", "-q", "-b", "elsewhere"),
+      () => app.commit({ "README.md": "two\n" }),
+    ]) {
+      before = inode();
+      change();
+      expect(await cloneContext(context)).toEqual({ cloned: true });
+      expect(inode()).not.toBe(before);
+      expect(git(context.location, "status", "--porcelain", "--ignored")).toBe("");
+    }
+    expect(readFileSync(join(context.location, "README.md"), "utf8")).toBe("two\n");
+  });
+
+  it("offline, an untouched clone is used and said to be; a changed one stops the start", async () => {
+    const github = githubStandIn();
+    const app = github.repo("acme/app");
+    const first = app.commit({ "README.md": "one\n" });
+    const { agentDir } = await agent();
+    const context = resolveOne(agentDir, { github: "acme/app" });
+    const pinned = resolveOne(agentDir, { github: "acme/app", ref: first, name: "pinned" });
+    await cloneContext(context);
+    await cloneContext(pinned);
+    github.offline();
+
+    const kept = await cloneContext(context);
+    expect(kept.cloned).toBe(false);
+    expect(kept.warning).toMatch(/^could not reach github acme\/app \(.+\); using the clone made at \d{4}-/);
+    // A clone pinned to a commit needs no remote to know it is what a fresh one would be.
+    expect(await cloneContext(pinned)).toEqual({ cloned: false });
+    writeFileSync(join(context.location, "notes.md"), "the agent's\n");
+    await expect(cloneContext(context)).rejects.toThrow(/context "app": could not clone github acme\/app/);
+    expect(readFileSync(join(context.location, "notes.md"), "utf8")).toBe("the agent's\n");
   });
 
   it("clones at the declared ref: a branch, a tag or a commit", async () => {
@@ -210,7 +262,8 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     });
 
   it("`info` reports a clone not made yet and creates nothing; the opener clones it", async () => {
-    githubStandIn().repo("acme/handbook").commit({ "AGENTS.md": "HANDBOOK: be brief.\n" });
+    const github = githubStandIn();
+    github.repo("acme/handbook").commit({ "AGENTS.md": "HANDBOOK: be brief.\n" });
     const { agentDir } = await agent();
     await writeFile(
       join(agentDir, "fastagent.config.ts"),
@@ -229,6 +282,18 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     ]);
     expect(opened.contexts[0]?.notices).toEqual([]);
     expect(opened.definition.contextFiles.map((file) => file.content)).toContain("HANDBOOK: be brief.\n");
+
+    // Offline, the next start runs on that clone and says so.
+    github.offline();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await createPiAgentFromDir(agentDir);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[fastagent\] context "handbook": could not reach github acme\/handbook \(/),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("the agent is told a clone does not outlast a start, and a checkout is the user's", async () => {

@@ -38,10 +38,10 @@ function gitAnswer(args: string[], cwd: string): string | undefined {
 
 const execGit = promisify(execFile);
 
-/** Run git in `cwd`; its stderr is the error. */
-async function runGit(args: string[], cwd: string): Promise<void> {
+/** Run git in `cwd`: its output, or its stderr as the error. */
+async function runGit(args: string[], cwd: string): Promise<string> {
   try {
-    await execGit("git", args, { cwd, env: gitEnv() });
+    return (await execGit("git", args, { cwd, env: gitEnv() })).stdout;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(NO_GIT);
     const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
@@ -111,12 +111,80 @@ export function refNotice(dir: string, ref: string): string | undefined {
 /** A commit named in full: fetched by its hash, since `clone --branch` takes only a branch or a tag. */
 const FULL_COMMIT = /^[0-9a-f]{40}$/i;
 
+/** What a clone holds that a fresh clone would show: the commit checked out, and the branch (`HEAD` when detached). */
+type Checkout = { commit: string; branch: string };
+
 /**
- * Clone github `repo` at `ref` (its default branch when unset) into `dir`, replacing whatever is there. The clone is
- * built beside `dir` and renamed into place under a lock in its parent, so another process reads the old clone or the
- * new one, never half of either. Shallow, since it is made afresh every time.
+ * Give `dir` what a fresh clone of github `repo` at `ref` (its default branch when unset) holds. The clone already
+ * there is kept when it is exactly that: on the commit and branch the remote names now, nothing in its files changed,
+ * added or ignored. Otherwise a new clone replaces it. When the remote cannot be reached, an untouched clone is kept
+ * and the warning says so; a changed one cannot stand for a fresh clone, so the new clone is attempted and its failure
+ * stops the start.
  */
-export async function cloneAfresh(repo: string, ref: string | undefined, dir: string): Promise<void> {
+export async function freshClone(
+  repo: string,
+  ref: string | undefined,
+  dir: string,
+): Promise<{ cloned: boolean; warning?: string }> {
+  const current = existsSync(dir) ? untouched(dir) : undefined;
+  if (current !== undefined) {
+    let remote: Checkout | undefined;
+    try {
+      remote = await remoteCheckout(githubUrl(repo), ref, dirname(dir));
+    } catch (error) {
+      const reason = (error as Error).message.split("\n")[0];
+      const made = statSync(dir).mtime.toISOString();
+      return { cloned: false, warning: `could not reach github ${repo} (${reason}); using the clone made at ${made}` };
+    }
+    if (remote?.commit === current.commit && remote.branch === current.branch) return { cloned: false };
+  }
+  await cloneInto(repo, ref, dir);
+  return { cloned: true };
+}
+
+/** The clone in `dir` as a fresh one would show it, or undefined when anything in its files differs from its commit. */
+function untouched(dir: string): Checkout | undefined {
+  if (gitAnswer(["status", "--porcelain", "--ignored"], dir) !== "") return undefined;
+  const commit = gitAnswer(["rev-parse", "HEAD"], dir);
+  const branch = gitAnswer(["rev-parse", "--abbrev-ref", "HEAD"], dir);
+  return commit !== undefined && branch !== undefined ? { commit, branch } : undefined;
+}
+
+/**
+ * What a fresh clone at `ref` would check out, asked of the remote: a branch by name, a tag detached at its commit,
+ * the default branch when unset. A full commit needs no asking. Undefined when the remote has no such ref; rejects
+ * when it cannot be reached.
+ */
+async function remoteCheckout(url: string, ref: string | undefined, cwd: string): Promise<Checkout | undefined> {
+  if (ref !== undefined && FULL_COMMIT.test(ref)) return { commit: ref.toLowerCase(), branch: "HEAD" };
+  const asked =
+    ref === undefined
+      ? ["--symref", "--end-of-options", url, "HEAD"]
+      : ["--end-of-options", url, `refs/heads/${ref}`, `refs/tags/${ref}`];
+  const refs = new Map<string, string>();
+  let defaultBranch: string | undefined;
+  for (const line of (await runGit(["ls-remote", ...asked], cwd)).split("\n")) {
+    const [left, name] = line.split("\t");
+    if (left === undefined || name === undefined) continue;
+    if (left.startsWith("ref: refs/heads/")) defaultBranch = left.slice("ref: refs/heads/".length);
+    else refs.set(name, left);
+  }
+  if (ref === undefined) {
+    const head = refs.get("HEAD");
+    return head !== undefined && defaultBranch !== undefined ? { commit: head, branch: defaultBranch } : undefined;
+  }
+  const branch = refs.get(`refs/heads/${ref}`);
+  if (branch !== undefined) return { commit: branch, branch: ref };
+  const tag = refs.get(`refs/tags/${ref}^{}`) ?? refs.get(`refs/tags/${ref}`);
+  return tag !== undefined ? { commit: tag, branch: "HEAD" } : undefined;
+}
+
+/**
+ * Clone github `repo` at `ref` into `dir`, replacing whatever is there. The clone is built beside `dir` and renamed
+ * into place under a lock in its parent, so another process reads the old clone or the new one, never half of either.
+ * Shallow: it is made afresh, not kept up to date.
+ */
+async function cloneInto(repo: string, ref: string | undefined, dir: string): Promise<void> {
   const parent = dirname(dir);
   mkdirSync(parent, { recursive: true });
   const stamp = `${process.pid}-${Date.now()}`;

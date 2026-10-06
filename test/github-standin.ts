@@ -4,7 +4,7 @@
  * GitHub. The machine's own git configuration is shut out, so neither its rewrites nor its hooks reach a test.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { vi } from "vitest";
@@ -29,7 +29,7 @@ export interface StandInRepo {
 }
 
 /** Stand GitHub in for the rest of the test (env stubbed: restore with `vi.unstubAllEnvs`). */
-export function githubStandIn(): { repo(name: string): StandInRepo } {
+export function githubStandIn(): { repo(name: string): StandInRepo; offline(): void } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fa-github-")));
   vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
@@ -37,6 +37,10 @@ export function githubStandIn(): { repo(name: string): StandInRepo } {
   vi.stubEnv("GIT_CONFIG_KEY_0", `url.file://${root}/remote/.insteadOf`);
   vi.stubEnv("GIT_CONFIG_VALUE_0", "https://github.com/");
   return {
+    /** Every repository becomes unreachable, as with no network. */
+    offline() {
+      renameSync(join(root, "remote"), join(root, "remote.offline"));
+    },
     repo(name) {
       const bare = join(root, "remote", `${name}.git`);
       mkdirSync(dirname(bare), { recursive: true });

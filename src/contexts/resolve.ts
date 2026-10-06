@@ -8,7 +8,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isDeployedWorkspace, resolveStateRoot } from "../paths.ts";
 import { type DeclaredContext, declareContexts, nestingError } from "./declare.ts";
-import { checkoutProblem, cloneAfresh, refNotice } from "./git.ts";
+import { checkoutProblem, freshClone, refNotice } from "./git.ts";
 
 /** A declared context, resolved for this instance. */
 export type ResolvedContext = {
@@ -91,13 +91,16 @@ function refuseNesting(agentDir: string, location: string, name: string): void {
 }
 
 /**
- * Make a clone real: cloned afresh at its `ref`, replacing the clone the last start made, so what the agent did there
- * and did not push is gone (it is told so). Only a process that runs the agent calls this. The user's own checkout is
- * never cloned over.
+ * Make a clone real, as a fresh clone at its `ref`: what the agent did in the last one and did not push is gone (it is
+ * told so). A clone already identical to a fresh one is kept rather than cloned again; one that cannot be checked,
+ * for want of the remote, is kept with a `warning` saying so. Only a process that runs the agent calls this. The
+ * user's own checkout is never cloned over.
  */
-export async function cloneContext(context: Extract<ResolvedContext, { kind: "github" }>): Promise<void> {
+export async function cloneContext(
+  context: Extract<ResolvedContext, { kind: "github" }>,
+): Promise<{ cloned: boolean; warning?: string }> {
   if (!context.clone) throw new Error(`context "${context.name}" is the checkout at ${context.location}, not a clone`);
-  await cloneAfresh(context.repo, context.ref, context.location).catch((error: unknown) => {
+  return freshClone(context.repo, context.ref, context.location).catch((error: unknown) => {
     throw new Error(`context "${context.name}": ${(error as Error).message}`);
   });
 }

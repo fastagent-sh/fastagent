@@ -229,6 +229,9 @@ Attributes:
     nothing has to be reconciled with what an earlier process left. The price is that a clone the agent works on is
     its own for one process: what it changed there and did not push is gone at the next start, and the agent is
     told so. Work that must outlast a start is pushed, or done in a checkout.
+  - A last clone identical to a fresh one (the remote's commit and branch, nothing changed) is kept rather than
+    cloned again: it is what a new clone would hold. When the remote cannot be reached, an untouched clone is used
+    and startup warns that it may be behind; a changed one stops the start.
 - **What a host copies follows from whether the context is writable.** A copy of a context the instance only knows
   is made again every time the instance is deployed: there is nothing local to lose, and it always matches the
   definition. A copy of one it works on is made once and belongs to the instance afterwards; a later deployment

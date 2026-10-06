@@ -71,10 +71,12 @@ all read that one resolution.
 
 A `github` context whose `local` is the root of a checkout of that repository is that checkout, used as it is: never
 fetched, never moved to its `ref`, only said to be off it. Any other `github` context is a clone in
-`<state root>/contexts/<name>`, made afresh by `cloneContext` each time a process that runs the agent opens it (the
+`<state root>/contexts/<name>`, made fresh by `cloneContext` each time a process that runs the agent opens it (the
 opener, before it resolves): shallow, at `ref`, built beside the last clone and renamed into place under a lock in
 that directory (`git.ts`), so another process reads one clone or the other. What the agent did in the last clone and
-did not push is gone, and the prompt tells it so. `info`, `context list` and `fastagent tool` resolve without
+did not push is gone, and the prompt tells it so. The last clone is kept when it is identical to a fresh one (the
+commit and branch `git ls-remote` names, a clean `status --ignored`), and kept with a warning when the remote cannot
+be reached and it is untouched. `info`, `context list` and `fastagent tool` resolve without
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a directory in a GitHub checkout, any other
 directory); `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares

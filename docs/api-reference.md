@@ -238,7 +238,7 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be th
 ```ts
 // From `@fastagent-sh/fastagent/node`.
 function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
-function cloneContext(context: ResolvedContext & { kind: "github" }): Promise<void>;
+function cloneContext(context: ResolvedContext & { kind: "github" }): Promise<{ cloned: boolean; warning?: string }>;
 
 type ContextDeclaration =
   | { local: string; copy?: boolean; readonly?: boolean; name?: string }
@@ -259,7 +259,8 @@ The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fa
 naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
 directory or sits inside it ([Configuration](configuration.md#contexts)). It reads the disk and git, never the
 network, and writes nothing: a `github` context with no checkout here resolves to its clone's location, which
-`cloneContext` makes, afresh, replacing the last one. `createPiAgentFromDir` clones before it resolves; a caller that
+`cloneContext` makes a fresh clone: it replaces the last one, or keeps it when it is identical to a fresh one
+(`cloned: false`), or keeps an untouched one when the remote cannot be reached (`warning` says so). `createPiAgentFromDir` clones before it resolves; a caller that
 resolves for `createPiAgentFromDefinition` calls `cloneContext` for each context with `clone: true`, then resolves
 again.
 
