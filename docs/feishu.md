@@ -58,9 +58,11 @@ then checks what the app actually holds and names any scope your tenant withheld
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
 credentials.
 
-WebSocket is the default ingress. Choose webhook (`--ingress webhook`) to deploy to AgentCore, which has no
-resident process, or to let a Fly/Railway machine scale to zero. An agent with a schedule keeps its machine up
-anyway (see [deploy](deploy.md)), so WebSocket costs it nothing more. The choice is persisted in
+WebSocket is the default ingress. Choose webhook (`--ingress webhook`) when you plan to deploy to AgentCore,
+which has no resident process, or to let a Fly/Railway machine scale to zero. An agent with a schedule keeps its
+machine up anyway (see [deploy](deploy.md)), so WebSocket costs it nothing more. Choose at `add` time: `deploy`
+does not switch it (`deploy agentcore --run` refuses a WebSocket channel), and switching later is a migration
+in which a WebSocket app also lacks the app-config permission that automates the webhook steps. The choice is persisted in
 `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding
 `*WebSocketChannel` factory):
 
@@ -81,7 +83,9 @@ together, then publish a version; changing only one side makes the bot deaf.
 other's messages, in either mode: two WebSocket clients split the events between them rather than each
 receiving all of them, and a webhook `dev --tunnel` re-registers the Request URL to itself, so the deployment
 stops receiving any. `dev` and `deploy` read the same `.secrets/.env` unless `FASTAGENT_SECRETS_DIR` points one
-of them at another directory; put the second app's App ID and Secret there.
+of them at another directory; put the second app's App ID and Secret there. Both apps use the ingress
+`channels/<kind>.ts` names, so a WebSocket app on your laptop and a webhook app in the cloud cannot yet share
+one agent directory.
 
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work.
