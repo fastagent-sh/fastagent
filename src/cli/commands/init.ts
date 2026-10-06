@@ -48,7 +48,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
       console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
   }
   // After the install, so the lockfile it wrote is in the first commit.
-  console.error(`[fastagent] git: ${initRepository(dir)}`);
+  console.error(`[fastagent] git: ${await initRepository(dir)}`);
 
   console.error(`  next steps:`);
   const cdTarget = displayPath(process.cwd(), dir);

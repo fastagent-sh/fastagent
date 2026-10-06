@@ -1,10 +1,10 @@
 /** Init: scaffold a runnable fastagent agent, offline, and make it a git repository of its own. */
-import { execFileSync } from "node:child_process";
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
+import { GitNotInstalled, gitFor } from "../git.ts";
 
 interface ScaffoldFile {
   rel: string;
@@ -106,35 +106,33 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
   return { dir, created, undo };
 }
 
+const git = gitFor("no repository was created");
+
 /**
  * Make the new agent a git repository whose first commit is what init wrote. An agent changes itself, and version
  * control is how its author goes back to a version that worked; the scaffolded `.gitignore` already keeps its
  * instance (`.state`, `.secrets`, `.contexts`) out. Returns the line init prints: when there is no repository of its
- * own or no first commit, it says which and why.
+ * own or no first commit, it says which and why. The catches are init's boundary: the agent is created either way, so
+ * a git that is missing or refuses becomes that line rather than a failed init.
  */
-export function initRepository(dir: string): string {
-  const git = (args: string[]) =>
-    execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const reason = (error: unknown) =>
-    String((error as { stderr?: unknown }).stderr ?? "")
-      .trim()
-      .split("\n")[0] || (error as Error).message;
+export async function initRepository(dir: string): Promise<string> {
+  const reason = (error: unknown) => (error as Error).message.split("\n")[0];
   try {
-    // A directory inside another repository is that repository's to track: a second one inside it would hide the
-    // agent's files from the first.
-    return `inside the git repository ${git(["rev-parse", "--show-toplevel"])}: it tracks the agent, so none was created`;
+    // A directory another repository TRACKS is that repository's: a second one inside it would hide the agent's files
+    // from the first. One it ignores (a home directory kept in git with `*` ignored) tracks nothing, so the agent gets
+    // its own.
+    const enclosing = git.answer(["rev-parse", "--show-toplevel"], dir);
+    if (enclosing !== undefined && git.answer(["check-ignore", "-q", "."], dir) === undefined) {
+      return `inside the git repository ${enclosing}: it tracks the agent, so none was created`;
+    }
+    await git.run(["init", "--quiet"], dir);
+    await git.run(["add", "--all"], dir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "git is not installed: no repository was created";
-    if (typeof (error as { status?: unknown }).status !== "number") throw error;
-  }
-  try {
-    git(["init", "--quiet"]);
-    git(["add", "--all"]);
-  } catch (error) {
+    if (error instanceof GitNotInstalled) return error.message;
     return `git could not create a repository: ${reason(error)}`;
   }
   try {
-    git(["commit", "--quiet", "--message", "Create the agent with fastagent init"]);
+    await git.run(["commit", "--quiet", "--message", "Create the agent with fastagent init"], dir);
   } catch (error) {
     return `created a git repository, but its first commit failed (${reason(error)}): commit the scaffold yourself`;
   }

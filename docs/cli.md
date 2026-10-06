@@ -54,8 +54,10 @@ Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.
 example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
 `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
 repository whose first commit is the scaffold, so a change the agent makes to itself can be reviewed and undone. It
-says when it does not: the directory is already inside a git repository (which then tracks the agent), git is not
-installed, or the commit failed for lack of a `user.name`/`user.email` (the repository is kept; commit yourself).
+says when it does not: the directory is already inside a git repository that tracks it (one that ignores it, such as
+a home directory kept in git with `*` ignored, does not count), git is not installed, or the commit failed for lack of
+a `user.name`/`user.email` (the repository is kept; commit yourself). A deploy then ships the agent's `.git` with
+it and installs `git` in the image ([what deploy bakes](deploy.md#what-deploy-bakes)).
 
 Each `--context <source>` declares something the agent works on in the config's `contexts` list (see
 [contexts](configuration.md#contexts)), read the way `context add` reads it:

@@ -35,8 +35,25 @@ async function exists(p: string): Promise<boolean> {
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
+/**
+ * `init` commits, so every run here gets a git that reads none of the developer's configuration (identity, hooks,
+ * signing, an exported GIT_DIR): only what a test sets.
+ */
+const hermeticGit: NodeJS.ProcessEnv = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+const withIdentity: NodeJS.ProcessEnv = {
+  ...hermeticGit,
+  GIT_AUTHOR_NAME: "a",
+  GIT_AUTHOR_EMAIL: "a@example.com",
+  GIT_COMMITTER_NAME: "a",
+  GIT_COMMITTER_EMAIL: "a@example.com",
+};
+
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
-function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], { cwd, env });
     let stderr = "";
@@ -243,16 +260,7 @@ describe("init: scaffoldAgent", () => {
   });
 
   it("makes the agent a git repository with the scaffold as its first commit, and says when it does not", async () => {
-    // No machine config: the commit identity comes from the environment, and nothing of the developer's (hooks,
-    // signing) runs.
-    const machine = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
-    const env = {
-      ...machine,
-      GIT_AUTHOR_NAME: "a",
-      GIT_AUTHOR_EMAIL: "a@example.com",
-      GIT_COMMITTER_NAME: "a",
-      GIT_COMMITTER_EMAIL: "a@example.com",
-    };
+    const env = withIdentity;
     const git = (args: string[], cwd: string) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
     const base = await realpath(await freshDir());
 
@@ -275,10 +283,17 @@ describe("init: scaffoldAgent", () => {
       `git: inside the git repository ${outer}: it tracks the agent, so none was created`,
     );
     expect(await exists(join(outer, "inner", ".git"))).toBe(false);
+    // …unless it IGNORES the directory (a home directory kept in git with `*` ignored): then nothing tracks the
+    // agent, so it gets its own.
+    await writeFile(join(outer, ".gitignore"), "*\n");
+    expect(await cliInit(["init", "ignored", "--no-install"], outer, env)).toContain(
+      "git: created a git repository, with the scaffold as its first commit",
+    );
+    expect(git(["rev-parse", "--show-toplevel"], join(outer, "ignored"))).toBe(join(outer, "ignored"));
 
     // No identity to commit with: the repository stays, and the author is told to commit.
     const noIdentity = {
-      ...machine,
+      ...hermeticGit,
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "user.useConfigOnly",
       GIT_CONFIG_VALUE_0: "true",

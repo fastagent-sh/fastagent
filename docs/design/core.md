@@ -113,8 +113,8 @@ container).
 **`init` makes the agent a git repository; after that, git is the author's, with one exception.** An agent
 changes itself, and version control is how its author goes back to a version that worked, so `init` runs `git init`
 and commits the scaffold, after `npm install` so the lockfile is in it. It does not when the directory is already
-inside a repository (that one tracks the agent, and a second would hide the agent's files from it) or git is
-missing, and a failed first commit (no identity configured) keeps the repository; each case is printed. Nothing
+inside a repository that tracks it (a second would hide the agent's files from the first; one that ignores the
+directory tracks nothing, so the agent gets its own) or git is missing, and a failed first commit (no identity configured) keeps the repository; each case is printed. Nothing
 commits for the agent afterwards: when to commit is the author's (agent model §8). `init` also scaffolds two ignore
 files: the agent's own, which keeps the instance (`.state`, `.secrets`, `.contexts`) out, and `.secrets/.gitignore`
 (`*` minus the template). No command reads, verifies or rewrites an ignore file. The exception: **the directory fastagent writes secrets into carries its own
