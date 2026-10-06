@@ -142,7 +142,7 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context has no checkout here | `cloning github acme/app into .state/contexts/app` at every start; when its `local` path is missing or is not a checkout of that repository, the reason too |
+| A `github` context has no checkout here | `cloned github acme/app into .state/contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |

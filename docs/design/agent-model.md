@@ -226,9 +226,9 @@ Attributes:
   - A checkout named by `local` is the user's: FastAgent never fetches it and never switches its branch. When it
     is not at the declared `ref`, startup says so.
   - Without one, the instance clones the repository at its declared `ref` the first time it starts. At each later
-    start a clone that holds nothing of the agent's (no changed, added or ignored file, no commit since it was
-    cloned) is brought to the remote's `ref` by cloning it again, whether the agent works on it or only knows it,
-    so it matches the definition. A clone with changes of the agent's is kept as it is, and startup says it is not
+    start a clone that holds nothing of the agent's (no changed, added or ignored file, and no commit, branch, tag
+    or stash since it was cloned) is brought to the remote's `ref` by cloning it again, whether the agent works on
+    it or only knows it, so it matches the definition. A clone with changes of the agent's is kept as it is, and startup says it is not
     brought up to date: bringing the agent's work and the remote together is git's, the agent's or the user's
     (synchronization, §8). Nothing the agent did is lost to a restart.
   - When the remote cannot be reached, the clone there is used, and startup warns that it may be behind.

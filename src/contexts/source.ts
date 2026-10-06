@@ -4,7 +4,7 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ContextDeclaration } from "./declare.ts";
+import { type ContextDeclaration, isGithubRepo } from "./declare.ts";
 import { checkoutOf, githubRepoOf } from "./git.ts";
 
 export interface SourceOptions {
@@ -38,6 +38,7 @@ export function declarationFor(
     options.copy ? [`github ${repo} is cloned on a host, so --copy does not apply`] : [];
   if (source.startsWith("github:")) {
     const repo = source.slice("github:".length);
+    if (!isGithubRepo(repo)) throw new Error(`${source} names no repository: write github:owner/repo`);
     const local = options.local === undefined ? {} : { local: resolve(cwd, options.local) };
     return { declaration: { github: repo, ...local, ...treated }, notes: cloned(repo) };
   }

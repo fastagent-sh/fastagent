@@ -34,6 +34,11 @@ export function defaultContextName(declaration: ContextDeclaration): string {
 
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+/** Whether `repo` names a GitHub repository, `owner/repo`. */
+export function isGithubRepo(repo: string): boolean {
+  return GITHUB_REPO.test(repo);
+}
+
 /**
  * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
  * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
@@ -84,7 +89,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
   let defaultName: string;
   if (e.github !== undefined) {
     const repo = e.github as string;
-    if (!GITHUB_REPO.test(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
+    if (!isGithubRepo(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
     if (e.copy !== undefined) throw new Error(`${at}: "copy" applies to a local context; a github one is cloned`);
     // git reads a leading "-" as an option, and no branch, tag or commit name has one.
     if (e.ref !== undefined && (e.ref as string).startsWith("-")) {

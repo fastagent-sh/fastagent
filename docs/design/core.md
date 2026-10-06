@@ -73,8 +73,8 @@ A `github` context whose `local` is the root of a checkout of that repository is
 fetched, never moved to its `ref`, only said to be off it. Any other `github` context is a clone in
 `<state root>/contexts/<name>`, which `cloneContext` makes or brings up to date each time a process that runs the
 agent opens it (the opener, before it resolves). A clone is replaced only when that loses nothing: one with changes
-of the agent's (a dirty `status --ignored`, or a HEAD other than the commit recorded in its `.git` when it was
-cloned) is kept with a warning; an untouched one is kept when `git ls-remote` names its commit and branch, cloned
+of the agent's (a dirty `status --ignored`, or a HEAD, branch, tag or stash other than recorded in its `.git` when
+it was cloned) is kept with a warning, asked again under the lock that would replace it; an untouched one is kept when `git ls-remote` names its commit and branch, cloned
 again when the remote moved, and kept with a warning when the remote cannot be reached. A new clone is shallow, at
 `ref`, built beside the old one and renamed into place under a lock in that directory (`git.ts`), so another process
 reads one clone or the other. `info`, `context list` and `fastagent tool` resolve without

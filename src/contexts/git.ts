@@ -47,12 +47,13 @@ function gitAnswer(args: string[], cwd: string): string | undefined {
 
 const execGit = promisify(execFile);
 
-/** Run git in `cwd`: its output, or its stderr as the error. */
-async function runGit(args: string[], cwd: string): Promise<string> {
+/** Run git in `cwd`: its output, or its stderr as the error. A `timeoutMs` that runs out is an error too. */
+async function runGit(args: string[], cwd: string, timeoutMs?: number): Promise<string> {
   try {
-    return (await execGit("git", args, { cwd, env: gitEnv() })).stdout;
+    return (await execGit("git", args, { cwd, env: gitEnv(), ...(timeoutMs ? { timeout: timeoutMs } : {}) })).stdout;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(NO_GIT);
+    if ((error as { killed?: boolean }).killed) throw new Error(`no answer within ${(timeoutMs ?? 0) / 1000}s`);
     const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
     throw new Error(stderr || (error as Error).message);
   }
@@ -127,10 +128,14 @@ type Checkout = { commit: string; branch: string };
  * Bring the clone of github `repo` at `ref` (its default branch when unset) in `dir` up to date, without ever losing
  * what was done in it: a clone is replaced only when replacing it loses nothing.
  * - None yet: cloned. A failure stops the start.
- * - Changes of its own (files changed, added or ignored, or commits since it was cloned): kept as it is, and the
- *   warning says it is not brought up to date. Merging it with the remote is git's, the agent's or the user's.
+ * - A clone of another repository (the context was renamed or redeclared): replaced when it holds nothing of the
+ *   agent's, refused, naming it, when it does.
+ * - Changes of its own (files changed, added or ignored, a commit, branch, tag or stash since it was cloned): kept as
+ *   it is, and the warning says it is not brought up to date. Merging it with the remote is git's, the agent's or the
+ *   user's.
  * - Untouched: kept when it is on the commit and branch the remote names now, cloned again when the remote moved, and
- *   kept with a warning when the remote cannot be reached.
+ *   kept with a warning when the remote cannot be reached. Asked again under the lock that replaces it, since the
+ *   agent of another process may have written to it while the new clone was made.
  */
 export async function refreshClone(
   repo: string,
@@ -142,14 +147,13 @@ export async function refreshClone(
   if (repo.startsWith("-") || ref?.startsWith("-")) {
     throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
   }
-  if (existsSync(dir)) {
+  const kept = (own: string) => ({
+    cloned: false,
+    warning: `the clone has ${own}: kept as it is, not brought up to date with github ${repo}`,
+  });
+  if (existsSync(dir) && isCloneOf(dir, repo)) {
     const own = ownChanges(dir);
-    if (own !== undefined) {
-      return {
-        cloned: false,
-        warning: `the clone has ${own}: kept as it is, not brought up to date with github ${repo}`,
-      };
-    }
+    if (own !== undefined) return kept(own);
     const current = untouched(dir);
     let remote: Checkout | undefined;
     try {
@@ -160,28 +164,56 @@ export async function refreshClone(
       return { cloned: false, warning: `could not reach github ${repo} (${reason}); using the clone made at ${made}` };
     }
     if (remote?.commit === current.commit && remote.branch === current.branch) return { cloned: false };
+  } else if (existsSync(dir)) {
+    // Its name now stands for another repository. Replaced only when nothing in it is the agent's: the agent was told
+    // it is a clone of the repository it came from, and its work there must not vanish under another name.
+    const own = ownChanges(dir);
+    if (own !== undefined) {
+      const origin = gitAnswer(["config", "--get", "remote.origin.url"], dir) ?? "no repository";
+      throw new Error(
+        `${dir} is a clone of ${origin}, not of github ${repo}, and has ${own}: move it away (push what should last ` +
+          `first), then start again`,
+      );
+    }
   }
-  await cloneInto(repo, ref, dir);
-  return { cloned: true };
+  const unreplaced = await cloneInto(repo, ref, dir, () => (existsSync(dir) ? ownChanges(dir) : undefined));
+  return unreplaced === undefined ? { cloned: true } : kept(unreplaced);
 }
 
-/** Where a clone records the commit it was made at, inside its own `.git`: what tells a commit of the agent's apart. */
-const CLONED_AT = "fastagent-cloned-at";
+/** Whether `dir` is a clone of github `repo`, by its `origin`. */
+function isCloneOf(dir: string, repo: string): boolean {
+  const origin = gitAnswer(["config", "--get", "remote.origin.url"], dir);
+  return origin !== undefined && githubRepoOf(origin)?.toLowerCase() === repo.toLowerCase();
+}
+
+/**
+ * Where a clone records what it held when it was made, inside its own `.git`: HEAD and every branch, tag and stash.
+ * What differs from it later is the agent's.
+ */
+const CLONED_AS = "fastagent-cloned-as";
+
+/** HEAD and the refs a replacement would drop with the directory: branches, tags, the stash. */
+function refsOf(dir: string): string | undefined {
+  const head = gitAnswer(["rev-parse", "HEAD"], dir);
+  const refs = gitAnswer(
+    ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags", "refs/stash"],
+    dir,
+  );
+  return head === undefined || refs === undefined ? undefined : `HEAD ${head}\n${refs}`;
+}
 
 /**
  * What in the clone `dir` would be lost by replacing it, or undefined when nothing would: changed, added or ignored
- * files, or a commit other than the one it was cloned at. A clone that cannot say what it was cloned at is treated as
- * having changes, since replacing it is what cannot be undone.
+ * files, or a HEAD, branch, tag or stash other than it was cloned with. A clone that cannot say what it was cloned
+ * with is treated as having changes, since replacing it is what cannot be undone.
  */
 function ownChanges(dir: string): string | undefined {
   const status = gitAnswer(["status", "--porcelain", "--ignored"], dir);
   if (status === undefined) return "no git checkout in it";
   if (status !== "") return "changes in its files";
-  const clonedAt = join(dir, ".git", CLONED_AT);
-  if (!existsSync(clonedAt)) return "no record of the commit it was cloned at";
-  return gitAnswer(["rev-parse", "HEAD"], dir) === readFileSync(clonedAt, "utf8").trim()
-    ? undefined
-    : "commits of its own";
+  const record = join(dir, ".git", CLONED_AS);
+  if (!existsSync(record)) return "no record of what it was cloned with";
+  return refsOf(dir) === readFileSync(record, "utf8") ? undefined : "commits, branches, tags or a stash of its own";
 }
 
 /** The checkout of an untouched clone. */
@@ -202,8 +234,8 @@ async function remoteCheckout(url: string, ref: string | undefined, cwd: string)
   // `--` before the operands, as for `clone`: nothing declared reaches git as an option.
   const listed =
     ref === undefined
-      ? await runGit(["ls-remote", "--symref", "--", url, "HEAD"], cwd)
-      : await runGit(["ls-remote", "--", url, `refs/heads/${ref}`, `refs/tags/${ref}`], cwd);
+      ? await runGit(["ls-remote", "--symref", "--", url, "HEAD"], cwd, LS_REMOTE_TIMEOUT_MS)
+      : await runGit(["ls-remote", "--", url, `refs/heads/${ref}`, `refs/tags/${ref}`], cwd, LS_REMOTE_TIMEOUT_MS);
   const refs = new Map<string, string>();
   let defaultBranch: string | undefined;
   for (const line of listed.split("\n")) {
@@ -223,11 +255,23 @@ async function remoteCheckout(url: string, ref: string | undefined, cwd: string)
 }
 
 /**
- * Clone github `repo` at `ref` into `dir`, replacing whatever is there. The clone is built beside `dir` and renamed
- * into place under a lock in its parent, so another process reads the old clone or the new one, never half of either.
+ * How long a start waits to hear whether the remote moved before it uses the clone there: a network that drops packets
+ * silently would otherwise hold it until TCP gives up. Not covered by a test: it takes a remote that never answers.
+ */
+const LS_REMOTE_TIMEOUT_MS = 15_000;
+
+/**
+ * Clone github `repo` at `ref` into `dir`, replacing whatever is there unless `keep` names a reason not to, asked
+ * under the lock that replaces it: that reason, when it kept it. The clone is built beside `dir` and renamed into
+ * place under a lock in its parent, so another process reads the old clone or the new one, never half of either.
  * Shallow: a starting point to work from, not a history.
  */
-async function cloneInto(repo: string, ref: string | undefined, dir: string): Promise<void> {
+async function cloneInto(
+  repo: string,
+  ref: string | undefined,
+  dir: string,
+  keep: () => string | undefined,
+): Promise<string | undefined> {
   const parent = dirname(dir);
   mkdirSync(parent, { recursive: true });
   const stamp = `${process.pid}-${Date.now()}`;
@@ -252,8 +296,8 @@ async function cloneInto(repo: string, ref: string | undefined, dir: string): Pr
           `git's own credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH)`,
       );
     }
-    writeFileSync(join(next, ".git", CLONED_AT), await runGit(["rev-parse", "HEAD"], next));
-    await replaceDirectory(next, dir, old);
+    writeFileSync(join(next, ".git", CLONED_AS), refsOf(next) ?? "");
+    return await replaceDirectory(next, dir, old, keep);
   } finally {
     rmSync(next, { recursive: true, force: true });
     rmSync(old, { recursive: true, force: true });
@@ -261,18 +305,27 @@ async function cloneInto(repo: string, ref: string | undefined, dir: string): Pr
 }
 
 /**
- * Put the directory `next` where `dir` is, moving what was there to `old`. Two renames, so another process doing the
- * same between them would find `dir` gone or taken: the lock in their parent makes the pair one step for every
- * process that replaces `dir` this way.
+ * Put the directory `next` where `dir` is, moving what was there to `old`, unless `keep` (asked under the lock) names
+ * a reason to keep it: that reason, when it did. Two renames, so another process doing the same between them would
+ * find `dir` gone or taken: the lock in their parent makes the pair one step for every process that replaces `dir`
+ * this way.
  */
-export async function replaceDirectory(next: string, dir: string, old: string): Promise<void> {
+export async function replaceDirectory(
+  next: string,
+  dir: string,
+  old: string,
+  keep: () => string | undefined = () => undefined,
+): Promise<string | undefined> {
   const release = await lockfile.lock(dirname(dir), {
     realpath: false,
     retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 5_000, randomize: true },
   });
   try {
+    const reason = keep();
+    if (reason !== undefined) return reason;
     if (existsSync(dir)) renameSync(dir, old);
     renameSync(next, dir);
+    return undefined;
   } finally {
     await release();
   }

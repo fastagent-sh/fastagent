@@ -103,23 +103,18 @@ describe("github contexts: a clone is replaced only when that loses nothing", ()
     const readme = () => readFileSync(join(context.location, "README.md"), "utf8");
 
     expect(await cloneContext(context)).toEqual({ cloned: true });
-    let before = inode();
+    const before = inode();
     expect(await cloneContext(context)).toEqual({ cloned: false });
     expect(inode()).toBe(before);
-    // Untouched: a new commit on the remote, or a branch switched with nothing on it, is a new clone.
-    for (const change of [
-      () => app.commit({ "README.md": "two\n" }),
-      () => git(context.location, "checkout", "-q", "-b", "elsewhere"),
-    ]) {
-      before = inode();
-      change();
-      expect(await cloneContext(context)).toEqual({ cloned: true });
-      expect(inode()).not.toBe(before);
-    }
+    // Untouched: a new commit on the remote is a new clone.
+    app.commit({ "README.md": "two\n" });
+    expect(await cloneContext(context)).toEqual({ cloned: true });
+    expect(inode()).not.toBe(before);
     expect(readme()).toBe("two\n");
 
     // The agent's changes stay, and the clone stays behind the remote until they are gone.
-    const kept = /^the clone has (changes in its files|commits of its own): kept as it is, not brought up to date/;
+    const kept =
+      /^the clone has (changes in its files|commits, branches, tags or a stash of its own): kept as it is, not brought up to date/;
     writeFileSync(join(context.location, "README.md"), "edited\n");
     app.commit({ "README.md": "three\n" });
     expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
@@ -134,15 +129,58 @@ describe("github contexts: a clone is replaced only when that loses nothing", ()
     writeFileSync(join(context.location, "notes.md"), "committed, not pushed\n");
     git(context.location, "add", "-A");
     git(context.location, "commit", "-q", "-m", "notes");
-    expect(await cloneContext(context)).toEqual({
-      cloned: false,
-      warning: expect.stringMatching(/^the clone has commits of its own/),
-    });
+    expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
     expect(readFileSync(join(context.location, "notes.md"), "utf8")).toBe("committed, not pushed\n");
+    // Work on a branch it left, or in a stash, with HEAD back where it was cloned and nothing in the files: still kept.
+    git(context.location, "branch", "-q", "fix");
+    git(context.location, "reset", "-q", "--hard", "HEAD~1");
+    expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
+    git(context.location, "branch", "-q", "-D", "fix");
+    writeFileSync(join(context.location, "README.md"), "stashed\n");
+    git(context.location, "stash", "-q");
+    expect(git(context.location, "status", "--porcelain", "--ignored")).toBe("");
+    expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
     // Nothing is left beside it: no half-built clone, no replaced one.
     expect(readdirSync(join(agentDir, ".state", "contexts")).filter((entry) => !entry.endsWith(".lock"))).toEqual([
       "app",
     ]);
+  });
+
+  it("a clone the agent writes to while another process makes its replacement is kept", async () => {
+    // `invoke` started beside a running `dev`: the check passes, the remote has moved, and while the new clone is made
+    // the agent of the other process writes. The swap asks again under its lock.
+    const github = githubStandIn();
+    const app = github.repo("acme/app");
+    app.commit({ "README.md": "one\n" });
+    const { agentDir } = await agent();
+    const context = resolveOne(agentDir, { github: "acme/app" });
+    await cloneContext(context);
+    app.commit({ "README.md": "two\n" });
+    const refreshing = cloneContext(context);
+    writeFileSync(join(context.location, "late.md"), "written mid-clone\n");
+    expect(await refreshing).toEqual({ cloned: false, warning: expect.stringMatching(/^the clone has changes/) });
+    expect(readFileSync(join(context.location, "late.md"), "utf8")).toBe("written mid-clone\n");
+    expect(readdirSync(join(agentDir, ".state", "contexts")).filter((entry) => !entry.endsWith(".lock"))).toEqual([
+      "app",
+    ]);
+  });
+
+  it("a clone of another repository under the context's name is replaced, or refused when it holds the agent's work", async () => {
+    const github = githubStandIn();
+    github.repo("acme/app").commit({ "README.md": "app\n" });
+    github.repo("acme/other").commit({ "README.md": "other\n" });
+    const { agentDir } = await agent();
+    await cloneContext(resolveOne(agentDir, { github: "acme/app", name: "work" }));
+    const redeclared = resolveOne(agentDir, { github: "acme/other", name: "work" });
+    expect(await cloneContext(redeclared)).toEqual({ cloned: true });
+    expect(readFileSync(join(redeclared.location, "README.md"), "utf8")).toBe("other\n");
+
+    const back = resolveOne(agentDir, { github: "acme/app", name: "work" });
+    writeFileSync(join(back.location, "notes.md"), "the agent's, in acme/other\n");
+    await expect(cloneContext(back)).rejects.toThrow(
+      /context "work": .* is a clone of https:\/\/github\.com\/acme\/other\.git, not of github acme\/app, and has changes in its files: move it away/,
+    );
+    expect(readFileSync(join(back.location, "notes.md"), "utf8")).toBe("the agent's, in acme/other\n");
   });
 
   it("offline, the clone there is used and said to be", async () => {
@@ -306,7 +344,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     }
   });
 
-  it("the agent is told a clone does not outlast a start, and a checkout is the user's", async () => {
+  it("the agent is told what it changes in a clone stays, and that a checkout is the user's", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "README.md": "app\n" });
     github.repo("acme/docs").commit({ "README.md": "docs\n" });
@@ -381,6 +419,9 @@ describe("github contexts: what a command's <source> declares", () => {
       notes: [],
     });
     expect(() => declarationFor(root, root, { ref: "main" })).toThrow(/--ref applies to a github context/);
+    expect(() => declarationFor("github:https://github.com/acme/app", root)).toThrow(
+      "github:https://github.com/acme/app names no repository: write github:owner/repo",
+    );
     expect(() => declarationFor(checkout, root, { local: "x" })).toThrow(/--local applies to a github:owner\/repo/);
   });
 });
