@@ -216,7 +216,6 @@ describe("every host's runbook reads the same answer", () => {
       releaseId: "release-one",
       name: "bot",
       channels,
-      schedules: [],
       hasPackageJson: true,
       runtime: "node",
       hasLockfile: true,

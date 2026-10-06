@@ -276,10 +276,8 @@ describe("mountAgentcoreService", () => {
   });
 
   it("OCCURRENCE SEMANTICS live here, on the authenticated envelope — a redelivery claims nothing twice", async () => {
-    // A slot, a claim, a fire history and the overlap policy live here:
-    // `deploy` wrote the EventBridge rule and injected `<aws.scheduler.scheduled-time>`, the forwarder
-    // relays it behind the ingress secret, so the instant IS a grid point of that schedule and the
-    // claim means something.
+    // A slot, a claim, a fire history and the overlap policy live here: the container set the alarm for this instant
+    // and the forwarder relays it behind the ingress secret, so the claim means something.
     const dir = await agentDir({ "schedules/digest.md": `---\ncron: "0 9 * * *"\n---\nhi\n` });
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
     const service = await mountAgentcoreService(await open(dir));
@@ -305,7 +303,7 @@ describe("mountAgentcoreService", () => {
       const { resolveStateRoot } = await import("../src/paths.ts");
       expect(readFires(resolveStateRoot(dir), "digest").map((f) => f.slot)).toEqual([occurrence]);
 
-      // A name no schedule declares is the deploy-drift case: answered, never crashed.
+      // An alarm for a schedule since removed: answered as skipped, never as an error EventBridge would retry.
       const unknown = await service.handler(
         new Request("http://h/invocations", {
           method: "POST",
@@ -313,7 +311,8 @@ describe("mountAgentcoreService", () => {
           body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "gone", occurrence }),
         }),
       );
-      expect(unknown.status).toBe(404);
+      expect(unknown.status).toBe(200);
+      expect(await unknown.json()).toMatchObject({ fired: false, skippedReason: "no such schedule any more" });
     } finally {
       process.env.FASTAGENT_INGRESS_SECRET = undefined;
       await service.close();
@@ -326,7 +325,7 @@ describe("mountAgentcoreService", () => {
       `{ model: "openai-codex/gpt-5.5" }`,
     );
     const service = await mountAgentcoreService(await open(dir));
-    expect(service.schedules.map((s) => s.name)).toEqual(["digest"]);
+    expect(service.schedules().map((s) => s.name)).toEqual(["digest"]);
 
     await service.close();
     // Both the shutdown hook and an explicit close can run.

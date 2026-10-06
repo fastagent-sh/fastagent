@@ -54,7 +54,7 @@ describe("createAgentService", () => {
     const dir = await agentDir({ "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\nsummarise the day\n` });
     const service = await createAgentService(dir);
     try {
-      expect(service.schedules).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
+      expect(service.schedules()).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
       // Work a caller starts itself is `POST /invoke`: there is no by-name route beside it.
       expect([...service.unverifiedRoutes].sort()).toEqual(["GET /health", "POST /invoke"]);
       expect((await service.handler(new Request("http://h/run", { method: "POST" }))).status).toBe(404);
@@ -238,15 +238,15 @@ describe("createAgentService", () => {
     }
   });
 
-  it("every serve polls the agent's own wake-ups — no schedule, no switch — and close() stops the poll", async () => {
+  it("every serve polls the agent's own wake-ups and re-reads schedules/ — no switch — and close() stops both", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
     const service = await createAgentService(await agentDir({}, `{ model: "openai-codex/gpt-5.5" }`));
     try {
       const polls = timers.mock.calls.flatMap((args, i) => (args[1] === 30_000 ? [timers.mock.results[i]?.value] : []));
-      expect(polls).toHaveLength(1);
+      expect(polls).toHaveLength(2);
       await service.close();
-      expect(cleared).toHaveBeenCalledWith(polls[0]);
+      for (const poll of polls) expect(cleared).toHaveBeenCalledWith(poll);
     } finally {
       await service.close();
       timers.mockRestore();
@@ -532,22 +532,39 @@ describe("createAgentService", () => {
     await expect(createAgentService(dir)).rejects.toThrow(/failed to load: channels\/bad\.mjs \(boom at import/);
   });
 
-  it("an enabled tool or schedule that cannot load refuses the service, like a channel does", async () => {
+  it("an enabled tool that cannot load refuses the service, like a channel does", async () => {
     // The same declaration used to get a different guarantee per directory: a broken channel stopped the boot, a
-    // broken tool or schedule became one warning and a service that reported itself ready — with the cron never
-    // firing and the model never seeing the tool. Absent directories stay valid; `*.disabled` is the opt-out.
-    for (const [file, content, why] of [
-      ["tools/broken.mjs", `throw new Error("missing target");`, "missing target"],
-      ["schedules/digest.md", "no frontmatter\n", "it must start with"],
-    ] as const) {
-      const dir = await agentDir({ [file]: content });
-      await expect(createAgentService(dir)).rejects.toThrow(
-        new RegExp(`failed to load: ${file.replace(".", "\\.")} \\(${why}`),
-      );
-      // Renaming it to the disabled form is how an author says they meant it.
-      await rename(join(dir, file), join(dir, `${file}.disabled`));
+    // broken tool became one warning and a service that reported itself ready, with the model never seeing the tool.
+    // Absent directories stay valid; `*.disabled` is the opt-out.
+    const dir = await agentDir({ "tools/broken.mjs": `throw new Error("missing target");` });
+    await expect(createAgentService(dir)).rejects.toThrow(/failed to load: tools\/broken\.mjs \(missing target/);
+    // Renaming it to the disabled form is how an author says they meant it.
+    await rename(join(dir, "tools/broken.mjs"), join(dir, "tools/broken.mjs.disabled"));
+    const service = await createAgentService(dir);
+    await service.close();
+  });
+
+  it("a schedule that is not valid is said and left unarmed, and the service starts", async () => {
+    // The agent writes schedules/ too: one it got wrong must not keep the next start from serving, when nobody is
+    // talking to it to fix it. The author's own are held to the stricter rule by deploy's pre-flight.
+    const said: string[] = [];
+    const error = vi.spyOn(log, "error").mockImplementation((message: string) => void said.push(message));
+    try {
+      const dir = await agentDir({
+        "schedules/broken.md": "name: digest\nno frontmatter\n",
+        "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\ngo\n`,
+      });
       const service = await createAgentService(dir);
-      await service.close();
+      try {
+        expect(service.schedules().map((s) => s.name)).toEqual(["daily"]);
+        expect(said.join("\n")).toMatch(
+          /schedules\/broken\.md is not a valid schedule \(it must start with .*\) — not armed/,
+        );
+      } finally {
+        await service.close();
+      }
+    } finally {
+      error.mockRestore();
     }
   });
 });

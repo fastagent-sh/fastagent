@@ -4,7 +4,7 @@
  *
  * The read-only probe next door checks that the CLI still prints what the driver parses. This checks
  * the half no parser assertion reaches: that the sequence provisions something that WORKS — the build
- * accepts our generated Dockerfile via `railway.json`, the volume mounts where FASTAGENT_STATE_DIR
+ * picks up our generated root Dockerfile with no Railway config file, the volume mounts where FASTAGENT_STATE_DIR
  * expects it, the model credential arrives, and the minted domain actually serves.
  *
  * It also covers a step with no read-only equivalent: `railway domain` is the driver's getter AND its

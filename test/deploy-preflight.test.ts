@@ -601,6 +601,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.level).toBe("note");
     }
+    // Past the cap, a valid file would never fire on the box: refused here like a broken one.
+    for (let i = 0; i < 20; i++)
+      await wf(join(dir, "schedules", `s${String(i).padStart(2, "0")}.md`), `---\ncron: "0 9 * * *"\n---\ngo\n`);
+    const over = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(over.ok).toBe(true);
+    if (over.ok) {
+      const issues = over.messages.filter((m) => /past the first 20 schedules/.test(m.text)).map((m) => m.text);
+      expect(issues).toEqual([expect.stringMatching(/^schedules\/s19\.md is past the first 20/)]);
+    }
   });
 
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {

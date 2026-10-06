@@ -11,7 +11,7 @@ import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
-import { createScheduler } from "./schedule/scheduler.ts";
+import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
@@ -217,39 +217,42 @@ export function mountSessionControl(
 }
 
 /**
- * Load the agent's `schedules/`, refusing a file that is not a valid schedule: it is a declaration, so serving without
- * it would announce a ready service whose schedule never fires. Separate from {@link startSchedules} so the refusal
- * happens with the rest of the definition's, before anything is served; the clock starts later, inside the service's
- * scope.
+ * Load the agent's `schedules/` for the clock. A file that is not a valid schedule does NOT refuse the serve, unlike a
+ * broken tool or channel: the agent writes these files too (they are armed while it runs), and one it got wrong must
+ * not stop the next start, when nobody is talking to it to fix it. The clock says what is wrong with it and leaves it
+ * unarmed; `fastagent info` reports it, and `deploy --run` refuses the author's own.
  */
-export async function loadServingSchedules(agentDir: string): Promise<Schedule[]> {
-  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
-  // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
-  const { schedules, failures } = await loadSchedules(agentDir);
-  refuseBrokenDeclarations(failures);
-  return schedules;
+export async function loadServingSchedules(agentDir: string): Promise<ScheduleLoad> {
+  return loadSchedules(agentDir);
 }
 
 /**
  * Start the clock over the schedules {@link loadServingSchedules} loaded — on every serve, schedules or not: the
- * agent's own wake-ups are a default capability, and this is what fires them.
+ * agent's own wake-ups are a default capability, and this is what fires them. It re-reads `<agentDir>/schedules/`
+ * while it runs, so a schedule written or edited then is armed without a restart; `onChange` hears each change.
  */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
-  schedules: readonly Schedule[],
-  options: { externalClock?: boolean } = {},
-): { schedules: readonly Schedule[]; stop: () => void } {
+  agentDir: string,
+  loaded: ScheduleLoad,
+  options: { onChange?: () => void; localClock?: boolean } = {},
+): Pick<Scheduler, "current" | "stop"> {
+  const { schedules, failures } = loaded;
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
+    createScheduler({
+      agent,
+      stateRoot,
+      schedules,
+      failures,
+      ...(options.localClock === false ? { localClock: false } : {}),
+      reload: () => loadSchedules(agentDir),
+      ...(options.onChange ? { onChange: options.onChange } : {}),
+    }),
   );
   scheduler.start();
-  if (schedules.length > 0) {
-    log.info(
-      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
-    );
-  }
-  return { schedules, stop: () => scheduler.stop() };
+  if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
+  return scheduler;
 }
 
 export interface AgentService {
@@ -275,7 +278,8 @@ export interface AgentService {
    * about this surface must come from what was actually assembled, not from re-deriving it.
    */
   corsOrigins?: readonly string[];
-  schedules: readonly Schedule[];
+  /** The schedules armed now: `schedules/` is re-read while the service runs, so this follows its edits. */
+  schedules: () => readonly Schedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
   /** The control plane's prefix, when `sessionControl` is on. */
@@ -338,7 +342,7 @@ export async function mountAgentService(
   const corsOrigins = opened.http?.cors;
   if (corsOrigins) assertCorsOrigins(corsOrigins, "mountAgentService: http.cors");
 
-  // Loaded with the rest of the definition, so a broken schedule refuses the serve before anything is published.
+  // A schedule that is not valid is the clock's to report (it never refuses the serve: see loadServingSchedules).
   const schedules = await loadServingSchedules(agentDir);
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
@@ -394,7 +398,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, schedules),
+            try: () => startSchedules(agent, stateRoot, agentDir, schedules),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),
@@ -482,7 +486,7 @@ export async function mountAgentService(
           },
           unverifiedRoutes: Object.keys(routed.unverified),
           ...(corsOrigins ? { corsOrigins } : {}),
-          schedules: scheduled.schedules,
+          schedules: () => scheduled.current(),
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,

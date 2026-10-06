@@ -365,22 +365,22 @@ When a change takes effect:
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
 | `extensions/` | On the next session: it is listed again, and changed code is loaded afresh |
-| What a process loads once: `tools/`, `channels/`, `schedules/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the alarms itself) |
+| What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
-through `bash`, its prompt files and `AGENTS.md`, an extension when it needs a tool or a command of its own, and
-`wake` for its own follow-up work. `tools/`, `channels/` and configuration are the author's to put into service, with
-a restart or a release: the rule #600 set, which [core](core.md) §2 and the deployed prompt give. Extensions are the
-code an agent can add for itself, because pi reloads them (jiti, with its module cache off) where Node's own loader,
-which `tools/` and `channels/` use, cannot.
+through `bash`, its prompt files and `AGENTS.md`, an extension when it needs a tool or a command of its own, a
+schedule for recurring work, and `wake` for its own follow-up work. `tools/`, `channels/` and configuration are the
+author's to put into service, with a restart or a release: the rule #600 set, which [core](core.md) §2 and the
+deployed prompt give. Extensions are the code an agent can add for itself, because pi reloads them (jiti, with its
+module cache off) where Node's own loader, which `tools/` and `channels/` use, cannot.
 
 An earlier version of this note reversed that rule: every process would restart onto a changed definition by
-itself once idle, after checking that it loads, and every schedule would be held to `wake`'s 10-minute floor. It
-was not built:
+itself once idle, after checking that it loads. It was not built:
 
 - **No observed need.** What a script cannot be is a tool with a typed interface, a channel or an extension, and
   nothing so far has needed one written by the agent and put into service within the same run.
-- **Its cost.** A supervisor for `start`, draining every way a turn starts (`/invoke`, `/run`, chat channels, the
+- **Its cost.** A supervisor for `start`, draining every way a turn starts (`/invoke`, chat channels, the
   scheduler, AgentCore) on four hosts, and a retry on AgentCore whose behavior is unknown.
 - **Nothing worse without it.** The agent is told that code changes take effect at a restart, so it does not count
   on one it has not had.

@@ -110,11 +110,11 @@ The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel thr
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
 container).
 
-**`init` makes the agent a git repository; after that, git is the author's, with one exception.** An agent
-changes itself, and version control is how its author goes back to a version that worked, so `init` runs `git init`
-and commits the scaffold, after `npm install` so the lockfile is in it. It does not when the directory is already
+**Creating an agent makes it a git repository (`init` and `createAgent` alike); after that, git is the author's, with one exception.** An agent
+changes itself, and version control is how its author goes back to a version that worked, so `createAgent` runs
+`git init` and commits the scaffold, after `init`'s `npm install` so the lockfile is in it. It does not when the directory is already
 inside a repository that tracks it (a second would hide the agent's files from the first; one that ignores the
-directory tracks nothing, so the agent gets its own) or git is missing, and a failed first commit (no identity configured) keeps the repository; each case is printed. Nothing
+directory tracks nothing, so the agent gets its own) or git is missing, and a failed first commit (no identity configured) keeps the repository; each case is said (`init` prints it, `createAgent` returns it). Nothing
 commits for the agent afterwards: when to commit is the author's (agent model §8). `init` also scaffolds two ignore
 files: the agent's own, which keeps the instance (`.state`, `.secrets`, `.contexts`) out, and `.secrets/.gitignore`
 (`*` minus the template). No command reads, verifies or rewrites an ignore file. The exception: **the directory fastagent writes secrets into carries its own
@@ -153,10 +153,12 @@ it changed since pi last loaded it (a fingerprint of paths, sizes and modificati
 directory as pi's cache is), drops pi's per-process module cache first. pi exports no way to drop it; a throwaway
 resource loader that loads nothing does, on its second `reload()` (`live-extensions.ts`). jiti then imports the code
 afresh, relative imports included. The model catalog is rebuilt from it, and session control reads the catalog and
-the default model the way a turn resolves them, at each call (`models()`, `state()`, `update()`). `tools/`, `schedules/` and
+the default model the way a turn resolves them, at each call (`models()`, `state()`, `update()`). `tools/` and
 `channels/` are the author's: they change with a restart or a release. (Reloading `tools/` in-process was built and
 removed — the design is #582, why it went is #600: Node's own module cache, which jiti does not share, made it a
-list of limits.) A skill the
+list of limits.) `schedules/` is live (§8): #600 also refused live `routines/` because they duplicated `wake` while
+bypassing its frequency floor; a schedule now passes that same guard (`recurringCronError`, at most every 10
+minutes, at most 20 armed), so an agent that writes one gets no more than a recurring wake-up would give it. A skill the
 agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
 and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
@@ -298,7 +300,8 @@ capability is one thing, inheriting an identity would be the agent becoming some
 A directory agent's tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
 `tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
-refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `schedules/`. The coding set is fixed for directory agents: isolation belongs around the whole
+refuses the run — an enabled file is a declaration, and the same rule covers `channels/` (a `schedules/` file that is
+not valid is logged and left unarmed instead, §8). The coding set is fixed for directory agents: isolation belongs around the whole
 agent process, where it also covers authored tools and channel code. Pi's codemode and tool-search
 extensions load by default (`BUILTIN_EXTENSIONS`, machine.ts); Pi's MCP extension is not loaded, because its server
 connections live as long as a session and a served session lives one turn; self-scheduling `wake` remains serving-only. Reusable
@@ -603,13 +606,20 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 ## 8. Schedules and self-scheduling
 
 A **schedule** is `schedules/<name>.md`: a frontmatter holding `cron` and an optional `tz`, over the prompt. It is
-data, like a skill, so an author or a client writes one without TypeScript (the agent's own follow-up work is a
-wake-up: a schedule is loaded at start and replaced by each release); the frontmatter is read
-strictly (two keys, one line each) rather than as YAML, so a bare `*/5 * * * *` works and anything else is refused
+data, like a skill, so an author, a client or the agent writes one without TypeScript; the frontmatter is read
+strictly (two keys, one line each) rather than as YAML, so a bare `*/15 * * * *` works and anything else is refused
 naming the file. Every fire runs in the stable session `schedule:<name>`. The clock claims a slot before invoking,
 catches up one overdue occurrence after downtime (not every missed slot, and not at all before its first fire —
 nothing recorded that it was armed then), writes the outcome back into that claim, and leaves delivery to agent
 tools.
+
+**Edits are armed while the agent runs.** The clock re-reads `schedules/` every 30 seconds: an added or changed
+schedule is armed from its next instant (an edit is not a missed run to catch up), a removed one is disarmed, and a
+file that stops being valid keeps the definition it last had, said once in the log. At start an invalid file is
+logged and not armed, unlike a broken tool or channel, which refuses the serve: the agent writes schedules, and one it
+got wrong must not keep the next start (a crash, a scaled-to-zero host waking, AgentCore reclaiming idle compute) from
+serving at all, when nobody is talking to it to fix it. The deploy pre-flight still refuses the author's. So an agent can schedule work in its definition and have it run without a restart; a release
+replaces the file like anything else the agent wrote there. `dev` does not restart on `schedules/`.
 
 **Nothing runs a schedule by name.** Work a caller starts is `POST /invoke`, and a prompt it reuses is a prompt
 template (`/<name>`), which pi expands on every invoke. An earlier design had a named unit of work with an optional
@@ -775,7 +785,7 @@ existence alone cannot authorize reuse.
 is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute is per-session microVMs,
 reclaimed when idle). The generated CloudFormation stack therefore carries a forwarder Lambda (public
 Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`) fronting the webhooks,
-and EventBridge Scheduler rules delivering each cron slot. Inside the container,
+and no per-schedule resource: the container sets its own alarms (below). Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
@@ -855,11 +865,22 @@ claim notification and the scheduler's execution admission. A persisted alarm UR
 missing file reads as "not configured yet".
 
 A live session keeps its old compute (and the old image) until reclaimed, so `--run` stops the ingress
-session after a successful deploy. Self-scheduled wake-ups are EventBridge-backed: every wakeups-store
-mutation notifies a sink (`schedule/wake-alarm.ts`) that POSTs the pending set to the forwarder's
-reserved path (shared secret), and the forwarder mirrors each into a self-deleting one-shot EventBridge
-schedule that pokes it at the instant — waking the container, whose ordinary wake pump fires the due
-entry. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+session after a successful deploy. Wake-ups and schedules are EventBridge-backed the same way: every wakeups-store
+mutation, every change the schedule clock sees and every fire notifies a sink (`schedule/wake-alarm.ts`) that POSTs
+the pending wake-ups and each schedule's next instant to the forwarder's reserved path (shared secret), and the
+forwarder mirrors each into a self-deleting one-shot EventBridge schedule. A wake-up's pokes the container, whose
+ordinary wake pump fires the due entry; a schedule's carries `{scheduleFire: {name, occurrence}}`, which the
+container claims and runs. The container runs no resident timer for schedules, so the alarm is the one path that
+fires an instant and its reply is the record of what happened. Every alarm is keyed by its INSTANT, never by the
+schedule or wake-up: an alarm deletes itself once it has fired, and mirroring runs right after a fire, so an id
+reused for the next instant would update the alarm EventBridge is about to delete. Mirroring again is therefore
+idempotent, and it runs after every delivery however it ended (fired, skipped, failed) and every 5 minutes for as
+long as the container lives, which also repairs a sync that gave up and an alarm lost where no sync sees. An alarm
+that outlived an edit (a schedule removed, an instant its cron no longer has) is answered as skipped. Because the
+container sets the alarms, a schedule written on the runtime is armed without a deploy. The costs: the alarms exist
+only once an envelope has reached the container through the forwarder (`--run` probes it; the manual runbook prints
+the probe), and only a living container repairs them. A deployment whose alarms were lost after its container was
+reclaimed, with nothing else to wake it, sleeps until something does. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
 template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
 callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
 run, because nothing can restore their ingress when compute is reclaimed.

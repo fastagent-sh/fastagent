@@ -47,22 +47,22 @@ describe("schedules: a cron fire reaches the agent, its session, and its claim",
     await writeFile(join(dir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
     await mkdir(join(dir, "schedules"), { recursive: true });
-    await writeFile(join(dir, "schedules", `${SCHEDULE}.md`), `---\ncron: "* * * * *"\n---\n${PROMPT}\n`);
+    await writeFile(join(dir, "schedules", `${SCHEDULE}.md`), `---\ncron: "*/10 * * * *"\n---\n${PROMPT}\n`);
 
     const { agent, stateRoot } = await createPiAgentFromDir(dir, { serving: true });
 
-    // Two minutes back, seeded before the scheduler starts: the next 1-minute slot after it is already
-    // in the past, so start() catches up instead of arming a timer.
-    // A claim two minutes old: the catch-up start point, without pretending a slot was fired since.
-    const seededAt = new Date(Date.now() - 120_000);
+    // Twenty minutes back, seeded before the scheduler starts: the next 10-minute slot after it is already in the past
+    // (10 minutes is the recurring floor), so start() catches up instead of arming a timer. A claim twenty minutes
+    // old: the catch-up start point, without pretending a slot was fired since.
+    const seededAt = new Date(Date.now() - 20 * 60_000);
     claimSlot(stateRoot, SCHEDULE, seededAt, seededAt);
 
     // The entry `dev`/`start` take — discovery, failure reporting, createScheduler, start() — rather
     // than those four steps rebuilt here, which would measure the rebuild.
-    const { schedules, stop } = startSchedules(agent, stateRoot, await loadServingSchedules(dir));
+    const { current, stop } = startSchedules(agent, stateRoot, dir, await loadServingSchedules(dir));
     cleanups.push(stop);
     expect(
-      schedules.map((s) => s.name),
+      current().map((s) => s.name),
       "the schedules/ file did not load",
     ).toEqual([SCHEDULE]);
 

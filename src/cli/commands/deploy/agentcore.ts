@@ -22,7 +22,6 @@ import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
 import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { loadSchedules } from "../../../schedule/discover.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { isInteractive } from "../../shared.ts";
@@ -36,7 +35,6 @@ function shellArg(value: string): string {
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
-  artifact: TEMPLATE_FILE,
   async shell(agentDir) {
     const name = agentcoreName(basename(agentDir));
     const stack = agentcoreStackName(name);
@@ -81,17 +79,9 @@ export const agentcoreHost: HostDeploy = {
           `host that serves it behind your own auth (docs/design/session-control.md §14).`,
       );
     }
-    // Wake-ups are a default capability here as everywhere: pending ones are mirrored into one-shot EventBridge
-    // schedules via the forwarder (the wake-alarm mechanism — see deploy/agentcore/plan.ts), which is why every stack
-    // has one.
-    const loaded = await loadSchedules(agentDir).catch(failStartup);
-    if (loaded.failures.length > 0) {
-      failStartup(
-        new Error(
-          `deploy stopped: cannot load schedules: ${loaded.failures.map((x) => `${x.label}: ${x.message}`).join("; ")}`,
-        ),
-      );
-    }
+    // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
+    // mirrors them into one-shot EventBridge schedules itself (schedule/wake-alarm.ts). A file that is not a valid
+    // schedule is the pre-flight's to report.
     const acName = agentcoreName(basename(agentDir));
     // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
     // (`fastagent-<name>-forwarder` ≤ 64 chars).
@@ -108,22 +98,10 @@ export const agentcoreHost: HostDeploy = {
       boxLogin,
       channels,
       secrets: pre.secrets,
-      schedules: loaded.schedules.map((s) => ({
-        name: s.name,
-        cron: s.cron,
-        ...(s.tz !== undefined ? { tz: s.tz } : {}),
-      })),
       idleTimeoutSeconds: config.deploy?.agentcore?.idleTimeoutSeconds,
       ...container,
     });
-    for (const u of plan.untranslatableSchedules) {
-      // Same discipline as Fly's kept-toml time-trigger gate: a deploy whose schedule silently never fires is worse
-      // than a stopped deploy.
-      const msg = `schedule "${u.name}" cannot be expressed as an EventBridge rule — ${u.reason}`;
-      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
-      console.error(`[fastagent] warn: ${msg} — it will NOT fire on this deployment`);
-    }
-    // The template IS the topology (EventBridge rules, wake wiring, secrets).
+    // The template IS the topology (forwarder, alarm wiring, secrets).
     const templateArtifact = plan.artifacts.find((a) => a.path.endsWith(TEMPLATE_FILE));
     const templateHome = join(agentDir, templateArtifact?.path ?? TEMPLATE_FILE);
     if (!opts.force && templateArtifact && (await exists(templateHome))) {
@@ -135,7 +113,7 @@ export const agentcoreHost: HostDeploy = {
         // wordings drift apart.
         console.error(
           `[fastagent] warn: ${templateArtifact.path} no longer matches this definition ` +
-            `(channels/schedules or a deploy.agentcore setting changed) — the kept template would ` +
+            `(channels or a deploy.agentcore setting changed) — the kept template would ` +
             `silently drop the difference.`,
         );
       }

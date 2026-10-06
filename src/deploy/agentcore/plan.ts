@@ -1,21 +1,12 @@
 /** `fastagent deploy agentcore` — the AWS Bedrock AgentCore deploy PLAN, computed from the resolved definition. */
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
-import type { ScheduleFireEvent } from "../../channels/agentcore-protocol.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
-
-/** The one schedule fact the plan needs (from loadSchedules) — name + cron + tz. */
-export interface ScheduleFact {
-  name: string;
-  cron: string;
-  tz?: string;
-}
 
 export interface AgentcorePlanInput extends ContainerInput {
   /** Base name (dir basename) — shapes the runtime name, stack name, ECR repo, session id. */
@@ -30,8 +21,6 @@ export interface AgentcorePlanInput extends ContainerInput {
    * carries.
    */
   secrets?: readonly DeploymentSecret[];
-  /** Static schedules — each becomes an EventBridge Scheduler rule targeting the forwarder. */
-  schedules: ScheduleFact[];
   /**
    * How long an idle session keeps its microVM (config `deploy.agentcore.idleTimeoutSeconds`). The workload decides:
    * a chat agent talked to in bursts wants a longer tail than a schedule-only one. Defaults to
@@ -51,8 +40,6 @@ export interface AgentcorePlan {
   artifacts: Artifact[];
   /** The ordered, values-resolved deploy runbook — printed to stdout. */
   runbook: string[];
-  /** Cron expressions EventBridge cannot express — surfaced as runbook warnings, not silent drops. */
-  untranslatableSchedules: { name: string; reason: string }[];
   /** What the stack contains — the ONE reading the template, the runbook and the `--run` driver share. */
   topology: AgentcoreTopology;
 }
@@ -188,81 +175,6 @@ export function ingressSessionId(name: string): string {
   return `fastagent-ingress-${name}`.padEnd(33, "0").slice(0, 128);
 }
 
-/** Remap ONE day-of-week field from standard cron numbering (0–7, 0/7 = Sunday) to EventBridge's (1–7, 1 = Sunday). */
-function mapDowField(dow: string): { value: string } | { error: string } {
-  const items: string[] = [];
-  for (const item of dow.split(",")) {
-    const slash = item.split("/");
-    if (slash.length > 2 || slash.some((part) => part === "")) {
-      return { error: `malformed day-of-week token "${item}"` };
-    }
-    const [body, step] = slash as [string, string?];
-    if (step !== undefined && !/^\d+$/.test(step)) return { error: `malformed day-of-week step "${item}"` };
-    let mapped: string;
-    if (body === "*") {
-      mapped = "*";
-    } else {
-      const endpoints = body.split("-");
-      if (endpoints.length > 2 || endpoints.some((part) => part === "")) {
-        return { error: `malformed day-of-week token "${item}"` };
-      }
-      const remapped = endpoints.map((p) => (/^\d+$/.test(p) ? String((Number(p) % 7) + 1) : p));
-      if (
-        remapped.length === 2 &&
-        remapped.every((p) => /^\d+$/.test(p)) &&
-        Number(remapped[0]) > Number(remapped[1])
-      ) {
-        return {
-          error:
-            `day-of-week range "${body}" wraps across the week under EventBridge numbering (1 = Sunday) — ` +
-            `split it into an explicit list`,
-        };
-      }
-      mapped = remapped.join("-");
-    }
-    items.push(step !== undefined ? `${mapped}/${step}` : mapped);
-  }
-  return { value: items.join(",") };
-}
-
-/** Translate a 5-field cron into EventBridge Scheduler's `cron(m h dom mon dow *)`, or say why it can't be. */
-export function toEventBridgeCron(cron: string): { expression: string } | { error: string } {
-  const fields = cron.trim().split(/\s+/);
-  if (fields.length !== 5) {
-    return { error: `EventBridge supports 5-field cron only (got ${fields.length} fields)` };
-  }
-  const [min, hour, dom, mon, dow] = fields as [string, string, string, string, string];
-  if (/[L#]/i.test(dow) || /[L#]/i.test(dom)) {
-    return { error: "L/# day forms don't translate to EventBridge numbering — set this schedule up manually" };
-  }
-  // `?` FIRST, and not as a synonym for `*`.
-  if (dom === "?" || dow === "?") {
-    return { expression: `cron(${min} ${hour} * ${mon} ? *)` };
-  }
-  if (dom !== "*" && dow !== "*") {
-    return {
-      error: "restricting BOTH day-of-month and day-of-week (cron OR semantics) is not expressible in EventBridge",
-    };
-  }
-  if (dow === "*") {
-    return { expression: `cron(${min} ${hour} ${dom} ${mon} ? *)` };
-  }
-  const mapped = mapDowField(dow);
-  if ("error" in mapped) return mapped;
-  return { expression: `cron(${min} ${hour} ? ${mon} ${mapped.value} *)` };
-}
-
-/** CFN logical id fragment from a schedule name (alphanumeric only, capitalized). */
-function logicalId(name: string): string {
-  const slug = name.replace(/[^a-zA-Z0-9]+/g, "");
-  return slug.charAt(0).toUpperCase() + slug.slice(1) || "Schedule";
-}
-
-/** YAML single-quoted scalar (the one escape: `'` doubles). */
-function yamlSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
 /**
  * The forwarder Lambda source — `forwarder.js` beside this file, the ONE text both the deployment package and the
  * readable `lambda/index.js` artifact are generated from.
@@ -271,21 +183,8 @@ export function forwarderSource(): string {
   return readFileSync(new URL("./forwarder.js", import.meta.url), "utf8");
 }
 
-/** The EventBridge physical name for a schedule. */
-export function scheduleResourceName(agent: string, schedule: string): string {
-  const prefix = `fa-${agent}-`;
-  const hash = createHash("sha256").update(schedule).digest("hex").slice(0, 8);
-  const safe = schedule.replace(/[^0-9A-Za-z\-_.]+/g, "-").replace(/^-+|-+$/g, "");
-  const room = Math.max(0, 64 - prefix.length - hash.length - 1);
-  return `${prefix}${safe.slice(0, room)}-${hash}`;
-}
-
 /** The CloudFormation template — the whole topology in one stack. */
-function template(
-  input: AgentcorePlanInput,
-  translated: { fact: ScheduleFact; expression: string }[],
-  topology: AgentcoreTopology,
-): string {
+function template(input: AgentcorePlanInput, topology: AgentcoreTopology): string {
   const runtimeName = toRuntimeName(input.name);
   const idleTimeout = input.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
   const forwarderFnArn = `!Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:fastagent-${input.name}-forwarder`;
@@ -433,7 +332,7 @@ function template(
     `                Resource:`,
     `                  - !GetAtt Runtime.AgentRuntimeArn`,
     `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
-    `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
+    `              - Effect: Allow # alarms: mirror pending wake-ups and schedules' next instants into one-shot schedules`,
     `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
     `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
     `              - Effect: Allow # hand the poke schedules their invoke role`,
@@ -527,53 +426,6 @@ function template(
     `                Resource: ${forwarderFnArn}`,
   );
 
-  if (translated.length > 0) {
-    lines.push(
-      ``,
-      `  SchedulerRole:`,
-      `    Type: AWS::IAM::Role`,
-      `    Properties:`,
-      `      AssumeRolePolicyDocument:`,
-      `        Version: "2012-10-17"`,
-      `        Statement:`,
-      `          - Effect: Allow`,
-      `            Principal: { Service: scheduler.amazonaws.com }`,
-      `            Action: sts:AssumeRole`,
-      `            Condition:`,
-      `              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }`,
-      `      Policies:`,
-      `        - PolicyName: fire-forwarder`,
-      `          PolicyDocument:`,
-      `            Version: "2012-10-17"`,
-      `            Statement:`,
-      `              - Effect: Allow`,
-      `                Action: lambda:InvokeFunction`,
-      `                Resource: !GetAtt Forwarder.Arn`,
-    );
-    for (const { fact, expression } of translated) {
-      lines.push(
-        ``,
-        `  Schedule${logicalId(fact.name)}:`,
-        `    Type: AWS::Scheduler::Schedule`,
-        `    Properties:`,
-        `      Name: ${scheduleResourceName(input.name, fact.name)}`,
-        `      ScheduleExpression: ${expression}`,
-        `      ScheduleExpressionTimezone: ${fact.tz ?? "Etc/UTC"}`,
-        `      FlexibleTimeWindow: { Mode: "OFF" }`,
-        `      Target:`,
-        `        Arn: !GetAtt Forwarder.Arn`,
-        `        RoleArn: !GetAtt SchedulerRole.Arn`,
-        `        # <aws.scheduler.scheduled-time> is the clock's NAME for this occurrence: EventBridge repeats it`,
-        `        # byte-identical on every redelivery, which is what makes the container's dedup work.`,
-        `        Input: ${yamlSingleQuote(
-          JSON.stringify({
-            scheduleFire: { name: fact.name, occurrence: "<aws.scheduler.scheduled-time>" },
-          } satisfies ScheduleFireEvent),
-        )}`,
-      );
-    }
-  }
-
   lines.push(``, `Outputs:`, `  RuntimeArn:`, `    Value: !GetAtt Runtime.AgentRuntimeArn`);
   lines.push(`  ForwarderUrl:`, `    Value: !GetAtt ForwarderUrl.FunctionUrl`);
   return `${lines.join("\n")}\n`;
@@ -585,33 +437,9 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   const stack = agentcoreStackName(name);
   const repo = agentcoreRepoName(name);
 
-  // Translate every schedule; the ones EventBridge cannot express become explicit runbook warnings.
-  const translated: { fact: ScheduleFact; expression: string }[] = [];
-  const untranslatable: { name: string; reason: string }[] = [];
-  for (const fact of input.schedules) {
-    const result = toEventBridgeCron(fact.cron);
-    if ("expression" in result) translated.push({ fact, expression: result.expression });
-    else untranslatable.push({ name: fact.name, reason: result.error });
-  }
-
-  // Identifier collisions: the author-side → AWS-side name mappings are lossy (logical ids strip punctuation;
-  // parameter names collapse underscores), so two DISTINCT legal inputs can land on one CloudFormation key — which
-  // would generate a silently wrong stack.
-  const logicalIds = new Map<string, string>();
-  for (const { fact } of translated) {
-    const id = `Schedule${logicalId(fact.name)}`;
-    const clash = logicalIds.get(id);
-    if (clash !== undefined) {
-      throw new Error(
-        `schedules "${clash}" and "${fact.name}" collapse to the same CloudFormation logical id (${id}) — rename one`,
-      );
-    }
-    logicalIds.set(id, fact.name);
-  }
-
   const topology = agentcoreTopology(input);
   const artifacts: Artifact[] = [
-    { path: TEMPLATE_FILE, content: template(input, translated, topology) },
+    { path: TEMPLATE_FILE, content: template(input, topology) },
     { path: FORWARDER_FILE, content: forwarderSource() },
     ...containerArtifacts(input),
   ];
@@ -643,7 +471,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`,
     `docker buildx build --platform linux/arm64 -f Dockerfile -t ${image} --push .`,
     ``,
-    `# 3. Deploy the stack (runtime + ingress + schedules in one template).`,
+    `# 3. Deploy the stack (runtime + ingress in one template).`,
   ];
   if (secrets.length > 0) {
     runbook.push(
@@ -652,8 +480,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
     );
   }
-  const wakeSecretHint = " FastagentWakeSecret=<any random string>";
+  const wakeSecretHint = " FastagentWakeSecret=<any random string> FastagentIngressSecret=<another random string>";
   runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
+  runbook.push(
+    `#      FastagentIngressSecret: what proves an envelope came from the forwarder — another random string, kept for the activation below`,
+  );
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
@@ -701,20 +532,16 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
   }
   if (post.length > 0) runbook.push(``, ...post);
 
-  for (const u of untranslatable) {
-    runbook.push(
-      ``,
-      `# WARNING: schedule "${u.name}" has NO EventBridge rule — ${u.reason}.`,
-      `#   It will NOT fire on this deployment until you create an equivalent trigger yourself.`,
-    );
-  }
   runbook.push(
     ``,
-    `# Wake-ups: the agent's own follow-up turns (the wake tool) are EventBridge-backed — each pending wake-up is mirrored`,
-    `#   (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
-    `#   schedule (fa-${name}-wk-*) that wakes the container at the right instant. Reliable even when`,
-    `#   the compute is reclaimed. The forwarder supplies the callback URL; use the deployment's`,
-    `#   fixed runtime session id for programmatic calls too.`,
+    `# Schedules and wake-ups are EventBridge-backed: the container mirrors each pending wake-up and each schedule's`,
+    `#   next instant (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
+    `#   schedule (fa-${name}-wk-*) that wakes it at the right instant, even when the compute is reclaimed. So a`,
+    `#   schedule written or edited on the runtime gets its alarm without a deploy. The container sets them only`,
+    `#   once an envelope has reached it THROUGH THE FORWARDER, which tells it where the forwarder is; an`,
+    `#   invoke-agent-runtime call does not (that door is IAM's, and does not carry it). \`--run\` does this with its`,
+    `#   probe. After a manual deploy, do it once, or no schedule fires until a webhook arrives:`,
+    `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
   );
 
   runbook.push(
@@ -743,5 +570,5 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Keep one runtime writer per agent; use the fixed runtime session id printed above for every entry point.`,
   );
 
-  return { artifacts, runbook, untranslatableSchedules: untranslatable, topology };
+  return { artifacts, runbook, topology };
 }

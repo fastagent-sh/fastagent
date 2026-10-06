@@ -195,7 +195,7 @@ function createAgentService(
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
                                           // took over or `http.invoke: false` withheld
-  schedules: readonly Schedule[];         // schedules/*.md: { name, cron, tz?, prompt }
+  schedules: () => readonly Schedule[];   // schedules/*.md as armed now ({ name, cron, tz?, prompt }); follows edits
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   controlPrefix?: string;                // "/control", when sessionControl is on
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
@@ -276,8 +276,8 @@ for the user.
 // From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent context` run.
 function createAgent(
   dir: string,
-  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean },
-): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[] }>;
+  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean; install?: (dir: string) => Promise<void> },
+): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[]; repository: string }>;
 function listContexts(agentDir: string): Promise<ResolvedContext[]>;
 function addContext(agentDir: string, declaration: ContextDeclaration): Promise<{ name: string; contexts: ResolvedContext[] }>;
 function removeContext(agentDir: string, name: string): Promise<{ name: string; contexts: ResolvedContext[] }>;
@@ -287,7 +287,11 @@ class ContextNameError extends Error {}
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
 every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
 removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
-`init` adds) the agent imports nothing at run time and runs without `npm install`. `addContext` names the context
+`init` adds) the agent imports nothing at run time and runs without `npm install`; `install`, when given, runs after
+the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
+failed context write. The agent is then a git repository whose first commit is the
+scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
+no commit identity), as a sentence to show. `addContext` names the context
 after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.
 Both rewrite only the literal `contexts` list, under the config file's lock, so concurrent edits apply one after the
 other; each returns the name it acted on with the contexts after the edit. A name that cannot name a context, is
@@ -545,8 +549,9 @@ is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
 
-A serve refuses to start if an enabled file under `tools/`, `channels/` or `schedules/` cannot load, and names
-every file that failed. An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
+A serve refuses to start if an enabled file under `tools/` or `channels/` cannot load, and names every file that
+failed. A file under `schedules/` that is not a valid schedule is logged and left unarmed instead, since the agent
+writes those too ([Schedules](configuration.md#schedules)). An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
 report the rest.
 
 Channel adapters can also use:
@@ -562,8 +567,8 @@ See [Channel development](channel-development.md).
 ## Schedules
 
 A schedule is `schedules/<name>.md`: a cron in the frontmatter over a prompt ([Configuration](configuration.md#schedules)).
-It has no API of its own: `AgentService.schedules` lists what a serve loaded, and work a caller starts itself is
-`POST /invoke`.
+It has no API of its own: `AgentService.schedules()` lists what the clock has armed now (it follows edits to
+`schedules/`), and work a caller starts itself is `POST /invoke`.
 
 ### Self-scheduling
 

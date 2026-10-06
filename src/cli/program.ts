@@ -372,10 +372,10 @@ const deploy: CommandSpec = {
   description:
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
     "docker: fastagent.compose.yml, loopback port, persistent state volume. fly: fly.toml " +
-    "(autostop=suspend, state→volume). railway: railway.json (healthcheck /health); its " +
-    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. agentcore: one " +
+    "(autostop=suspend, state→volume). railway: no config file; its volume/variables/App-Sleeping " +
+    "are dashboard/CLI steps the runbook states. agentcore: one " +
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
-    "EventBridge rules for schedules; linux/arm64 image built locally). Durable ingress " +
+    "the alarms the container sets for schedules and wake-ups; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
@@ -583,10 +583,9 @@ const login: CommandSpec = {
       description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for a provider it has no other credential for`,
     },
     {
-      flags: "--deployment [host]",
+      flags: "--deployment <host>",
       description:
-        "log in this agent's deployment instead, on the box itself (docker, fly, railway, agentcore); the host may be left out " +
-        "when the agent dir holds one host's deploy artifacts",
+        "log in this agent's deployment on <host> instead, on the box itself (docker, fly, railway, agentcore)",
     },
     { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
     { flags: "--if-missing", description: "with --stdio: keep a stored credential for the provider", hidden: true },
@@ -608,7 +607,7 @@ const login: CommandSpec = {
     (await import("./commands/login.ts")).runLogin(args[0], {
       global: f.global === true,
       input: f.input !== false,
-      ...(f.deployment !== undefined ? { deployment: f.deployment as string | boolean } : {}),
+      ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,
     }),

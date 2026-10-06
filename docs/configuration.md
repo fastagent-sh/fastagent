@@ -549,9 +549,13 @@ Generate today's digest and send it with slack-send to channel C0123456789.
 ```
 
 - **The frontmatter** holds `cron` (5 fields, required) and `tz` (an IANA timezone, default UTC), one `key: value`
-  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file, and
-  a serve refuses to start over a file that is not a valid schedule (`fastagent info` reports it first). Only `*.md`
-  files are schedules; rename one to `<name>.md.disabled` to turn it off.
+  line each, quoted or not: a cron starting with `*` may be written bare. Any other key or line refuses the file.
+  Only `*.md` files are schedules; rename one to `<name>.md.disabled` to turn it off.
+- **The same guard as a recurring wake-up**, since the agent can write these files too: no two instants of a
+  schedule may be under 10 minutes apart, which also refuses the six-field per-second form and a year field. This is
+  judged on the expression alone, so `0,5 9 * * *` is refused at any hour. At most 20 schedules are armed, the first
+  20 by name, counting an old definition kept for a file that broke. A file refused for any reason is logged and not
+  armed; it never stops a serve, and `deploy --run` refuses to ship one.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.
@@ -560,13 +564,18 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   `<stateRoot>/schedule/claims/<name>/` is taken before the turn. After downtime one overdue run is caught up, not
   one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
   next instant arrives makes that one `skipped`.
-- **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore, `deploy` turns each schedule into
-  an EventBridge rule. A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
+- **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each
+  schedule's next instant into a one-shot EventBridge alarm that wakes it, once it has run after a deploy (`deploy
+  --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
   ([Deploy](deploy.md#scale-to-zero)).
 - **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
   prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body
   can be that same `/<name>`.
-- **Edits take effect when the process starts** (`dev` restarts on them).
+- **Edits take effect within 30 seconds, without a restart**: the clock re-reads `schedules/`, arming an added or
+  changed schedule from its next instant and disarming a removed one. A file that stops being valid keeps its last
+  definition and is logged; at start, it is logged and not armed. It never stops the serve, since the agent writes
+  schedules too and one it got wrong must not take the agent down at its next start; `fastagent info` reports it, and
+  `deploy --run` refuses to ship one. A release replaces an agent-written schedule like any file in the definition.
 
 `fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
 agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve

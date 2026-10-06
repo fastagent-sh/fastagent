@@ -21,7 +21,6 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const flyHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith("fly.toml") && isGeneratedFlyToml(content),
-  artifact: "fly.toml",
   async shell(agentDir) {
     const flyToml = await readTextIfExists(join(agentDir, "fly.toml"));
     return flyShell((flyToml && parseFlyAppName(flyToml)) ?? toFlyAppName(basename(agentDir)), agentDir);

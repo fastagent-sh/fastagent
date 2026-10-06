@@ -1,6 +1,8 @@
 /**
- * Wake ALARMS for the AgentCore deployment: the piece that makes the agent's self-scheduled wake-ups (`wake`) reliable
- * on a host with NO resident process.
+ * Wake ALARMS for the AgentCore deployment: what makes the agent's self-scheduled wake-ups (`wake`) and its schedules
+ * fire on a host with NO resident process. Each is mirrored into a one-shot EventBridge schedule the forwarder sets;
+ * a schedule's alarm carries the instant it is for, and after each fire the next one is mirrored. Because the
+ * container sets them, a schedule written or edited while it runs gets its alarm without a deploy.
  */
 import { readFileSync } from "node:fs";
 import * as Clock from "effect/Clock";
@@ -11,6 +13,8 @@ import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { scheduleFile, writeScheduleFile } from "./state.ts";
 import { type Wakeup, listWakeups } from "./wakeups.ts";
+import { nextRun } from "./cron.ts";
+import type { Schedule } from "./schedule.ts";
 
 const URL_FILE = "wake-alarm-url";
 
@@ -41,15 +45,41 @@ export function readWakeAlarmUrl(stateRoot: string): string | undefined {
  */
 export const MAX_SYNC_ATTEMPTS = 5;
 const RETRY_BASE_MS = 2_000;
+/**
+ * How long after every sync, however it ended, the whole set is mirrored again, for as long as this process lives. An
+ * alarm can be lost in ways no sync sees (a sync that gave up, a schedule deleted by hand), and with no timer of its
+ * own in the container a lost schedule alarm is a schedule that has stopped; mirroring again is idempotent (one id per
+ * instant). Outside the busy count, so a container that is only waiting for it can still be reclaimed; its next start
+ * mirrors again.
+ */
+export const HEAL_MS = 5 * 60_000;
 const SYNC_TIMEOUT_MS = 10_000;
 /** Alarms due within this margin are NOT mirrored. */
 const DUE_MARGIN_MS = 5_000;
 
-/** Pending wake-ups → the desired alarm set, minus already-due entries (see {@link DUE_MARGIN_MS}). */
-export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
-  return pending
-    .filter((w) => Date.parse(w.fireAt) > now.getTime() + DUE_MARGIN_MS)
-    .map((w) => ({ id: w.id, at: w.fireAt }));
+/**
+ * Pending wake-ups and each schedule's next instant → the desired alarm set. A wake-up already due is left out (see
+ * {@link DUE_MARGIN_MS}): the container is awake for it, and its wake pump fires it. A schedule's alarm is the ONLY
+ * thing that fires its instant (the container runs no timer of its own there), so one too near to set is set just
+ * past the margin, still naming its instant.
+ *
+ * ONE ID PER INSTANT, never per schedule or wake-up. An alarm deletes itself once it has fired, and mirroring runs right
+ * after a fire: an id reused for the next instant would update the alarm EventBridge is about to delete, and the next
+ * instant would be deleted with it. With one id per instant, mirroring again is idempotent, and an alarm that outlived
+ * an edit fires once and is answered as skipped (a schedule) or finds nothing due (a wake-up).
+ */
+export function toAlarms(pending: Wakeup[], schedules: readonly Schedule[], now: Date): WakeAlarm[] {
+  const earliest = now.getTime() + DUE_MARGIN_MS;
+  return [
+    ...pending.filter((w) => Date.parse(w.fireAt) > earliest).map((w) => ({ id: `${w.id}@${w.fireAt}`, at: w.fireAt })),
+    ...schedules.flatMap((s) => {
+      const next = nextRun(s.cron, s.tz, now);
+      if (!next) return [];
+      const occurrence = next.toISOString();
+      const at = next.getTime() > earliest ? occurrence : new Date(earliest + 1000).toISOString();
+      return [{ id: `schedule:${s.name}@${occurrence}`, at, fire: { name: s.name, occurrence } }];
+    }),
+  ];
 }
 
 /**
@@ -58,6 +88,8 @@ export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
  */
 export function createWakeAlarmSink(options: {
   secret: string;
+  /** The schedules armed now, whose next instants are mirrored with the wake-ups. */
+  schedules?: () => readonly Schedule[];
   fetchImpl?: typeof fetch;
   /** Injectable clock (tests); defaults to the wall clock. */
   now?: () => Date;
@@ -67,7 +99,13 @@ export function createWakeAlarmSink(options: {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const fork = Effect.runForkWith(yield* Effect.context<never>());
-    const { secret, fetchImpl = fetch, now = () => new Date(clock.currentTimeMillisUnsafe()), delay: pause } = options;
+    const {
+      secret,
+      schedules = () => [],
+      fetchImpl = fetch,
+      now = () => new Date(clock.currentTimeMillisUnsafe()),
+      delay: pause,
+    } = options;
     const delay = (ms: number) => (pause ? portJoin(() => pause(ms)) : Effect.sleep(ms));
     let running = false;
     let dirty = false;
@@ -76,7 +114,7 @@ export function createWakeAlarmSink(options: {
     const attemptOnce = (stateRoot: string, attempt: number) =>
       Effect.gen(function* () {
         const alarms = yield* Effect.try({
-          try: () => toAlarms(listWakeups(stateRoot), now()),
+          try: () => toAlarms(listWakeups(stateRoot), schedules(), now()),
           catch: (cause) => new PortFailure(cause),
         });
         // Nothing future to mirror: converged.
@@ -134,17 +172,20 @@ export function createWakeAlarmSink(options: {
             if (dirty) break;
           }
         }
-        if (failures >= MAX_SYNC_ATTEMPTS) {
-          log.error(
-            `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
-              `external alarm until the next store change or boot re-mirrors them`,
-          );
-        }
+        if (failures < MAX_SYNC_ATTEMPTS) return;
+        log.error(
+          `[schedule] alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups and the schedules' ` +
+            `next instants have no alarm. It is tried again every ${HEAL_MS / 60_000} minutes while this container ` +
+            `runs; if the container is reclaimed first, they are set again when something next wakes it, and a ` +
+            `deployment with nothing else to wake it sleeps through every instant until then`,
+        );
       });
 
+    /** One re-mirror pending at a time, however many syncs ended meanwhile. */
+    let healing = false;
     // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces into one more pass
     // instead of one concurrent loop each.
-    return (stateRoot) => {
+    const sink = (stateRoot: string): void => {
       dirty = true;
       if (running) return;
       running = true;
@@ -157,9 +198,10 @@ export function createWakeAlarmSink(options: {
               Effect.andThen(reconcile(stateRoot)),
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
-                  // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.
+                  // Store/clock faults are not retried here; the re-mirror below, or a new mutation, tries again.
                   log.error(
-                    `[schedule] wake alarm reconcile failed (alarms are stale until the next store change): ${String(portError(cause))}`,
+                    `[schedule] alarm reconcile failed (tried again within ${HEAL_MS / 60_000} minutes while this ` +
+                      `container runs): ${String(portError(cause))}`,
                   );
                 }),
               ),
@@ -169,8 +211,25 @@ export function createWakeAlarmSink(options: {
               running = false;
               done();
             }),
+        ).pipe(
+          Effect.flatMap(() =>
+            healing
+              ? Effect.void
+              : Effect.sync(() => {
+                  healing = true;
+                }).pipe(
+                  Effect.andThen(delay(HEAL_MS)),
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      healing = false;
+                      sink(stateRoot);
+                    }),
+                  ),
+                ),
+          ),
         ),
       );
     };
+    return sink;
   });
 }

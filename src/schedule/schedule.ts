@@ -1,9 +1,10 @@
 /**
  * A schedule: a prompt the definition runs on a cron, written as `schedules/<name>.md` — the cron and its timezone in
- * the frontmatter, the prompt as the body. Plain data, like a skill or a prompt template, so an author or a client
- * writes one without touching TypeScript. A process loads them once (AgentCore turns them into rules at deploy), so
- * one the agent writes while running fires only after a restart or a release, and a release replaces it; the agent's
- * own follow-up work is a wake-up.
+ * the frontmatter, the prompt as the body. Plain data, like a skill or a prompt template, so an author, a client or the
+ * agent itself writes one without touching TypeScript. The running clock re-reads `schedules/` (scheduler.ts), and on
+ * AgentCore the container sets each one's alarm itself (wake-alarm.ts), so a schedule written or edited while the
+ * agent runs is armed within half a minute, with no restart and no deploy. Like any file in the definition, a release
+ * replaces it.
  *
  * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts). A
  * schedule is written in the DEFINITION (versioned, shipped with each release, named by its file) and a wake-up into the

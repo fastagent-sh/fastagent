@@ -42,9 +42,12 @@ A model with no API key in `.secrets/.env` (an OAuth subscription such as `opena
 with `fastagent login`) authenticates on the deployment itself:
 
 ```bash
-fastagent login --deployment            # the one host this agent dir has deploy artifacts for
+fastagent login --deployment railway    # the host is always named
 fastagent login openai-codex --deployment fly
 ```
+
+The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one
+directory can hold several hosts' files.
 
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
 `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` signed with your AWS CLI credentials). This terminal
@@ -58,7 +61,7 @@ side can log the other out. Logging in again replaces it.
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
-the provider's error: run `fastagent login --deployment` to replace it. Without a terminal (CI), `--run` stops at
+the provider's error: run `fastagent login --deployment <host>` to replace it. Without a terminal (CI), `--run` stops at
 the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point, so when
 the agent has any, the message also says what to re-run once the box is logged in.
 
@@ -79,7 +82,8 @@ and schedules fire, and each turn they start fails for want of a model credentia
 the login. For an unattended first deploy of such an agent, use an API key.
 
 When the credential is missing or rejected later (revoked, volume lost), the box's startup log names
-`fastagent login --deployment`.
+`fastagent login --deployment <host>`, with its host filled in on Fly, Railway and AgentCore (read from what each
+platform sets in the box's environment). A Docker box cannot tell, and leaves `<host>` for you to fill in.
 
 - **Railway** needs Railway CLI 5.x on `PATH`: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a
   signup URL instead of opening the shell (`railway --version`; an old Homebrew copy can shadow the installer's).
@@ -187,7 +191,7 @@ Requires the [Railway CLI](https://docs.railway.com/guides/cli) and `railway log
 fastagent deploy railway
 ```
 
-Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.dockerignore`, and prints the runbook:
+Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
 
 1. `railway init` (or `railway link`).
 2. `railway add --service <name>`.
@@ -201,9 +205,12 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile` and `.do
 fastagent deploy railway --run   # provisions an unlinked dir end to end
 ```
 
-`--run` refuses a dir already linked to a project unless `--into-linked`. `railway.json` and the `Dockerfile` sit at
-the root of the upload, where Railway reads both: the build uses the Dockerfile, and the `/health` check marks a
-deploy whose box crashes on boot as failed.
+`--run` refuses a dir already linked to a project unless `--into-linked`. No Railway config file is generated:
+Railway retires `railway.json` on 2026-12-01, and its replacement (`.railway/railway.ts`) would make every agent
+install Railway's SDK. Railway builds the `Dockerfile` at the root of the upload and restarts a crashed service by
+default. It does not wait for `/health`, so it marks a deploy live once the container starts; `--run` probes the
+public `/health` itself before it logs the box in or points a webhook at it, and `railway logs` shows a box that
+crashes on boot.
 
 ## Scale to zero
 
@@ -245,8 +252,11 @@ The stack carries:
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
   verify signatures as on every host) and manages wake alarms;
-- **EventBridge Scheduler rules** for each schedule's `cron`. A cron EventBridge cannot express stops the deploy;
-- **wake alarms**: pending wake-ups become one-shot EventBridge schedules that wake the container on time.
+- **alarms**: pending wake-ups and each schedule's next instant become one-shot EventBridge schedules that wake the
+  container on time, so a schedule edited on the runtime needs no deploy. The container sets them once an envelope has
+  reached it through the forwarder, which tells it where the forwarder is: `--run` does this with its probe; after a
+  manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
+  prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.
 
 Variables from `.secrets/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
 change the template.
@@ -270,7 +280,7 @@ What to know:
 - **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
   `session` selects the conversation.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).
-- **A kept template that no longer matches the definition** (a new schedule or channel) stops `--run` until
+- **A kept template that no longer matches the definition** (a new channel) stops `--run` until
   `--force`. A template without the marker line is never regenerated.
 
 ### Logs
@@ -331,8 +341,8 @@ excludes. Each start publishes it onto persistent storage:
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
-rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` / `railway.json` /
-`agentcore.template.yaml`. The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
+rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
+`agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
 `**/.state`, `**/.contexts`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is

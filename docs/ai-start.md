@@ -281,7 +281,7 @@ fastagent dev
 `dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md`, skills and prompt
 templates are
 read on the next turn.
-With watching enabled, changes under the agent's `tools/`, `channels/` and `schedules/`
+With watching enabled, changes under the agent's `tools/` and `channels/`
 restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory). The restart waits for the turns running in the worker
 to finish (at most 10 minutes), so editing your own `tools/` does not cut off the turn that made the edit; the
@@ -377,7 +377,7 @@ running serve is one whose session can be spoken to.
 | Execution posture | Clock and persistence requirements |
 |---|---|
 | Resident `dev` / `start` or embedded `createAgentService` | The process runs the scheduler. Keep one active scheduler with durable state; a sleeping/stopped process cannot fire timers. Fly/Railway deployment gates account for time triggers. |
-| AgentCore webhook/schedule ingress | EventBridge delivers cron slots and external wake alarms. Scale-to-zero is supported on this path; no resident timer is required. |
+| AgentCore webhook/schedule ingress | The container mirrors schedules and wake-ups into one-shot EventBridge alarms that wake it. Scale-to-zero is supported on this path; no resident timer is required. |
 | Direct `InvokeAgentRuntime` calls | Reuse the deployment's fixed `runtimeSessionId`; the envelope's `session` selects the conversation. A direct invocation does not verify channel activation or future wake delivery. All entry points share storage that resets on deploy. |
 
 See [AgentCore execution and persistence](deploy.md#aws-bedrock-agentcore) and
@@ -425,7 +425,7 @@ and verifies it. Review [Deploy](deploy.md) before authorizing resource creation
 
 Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
-`--run` starts `fastagent login --deployment` once the box is up, and without a terminal it stops and names that
+`--run` starts `fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names that
 command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that

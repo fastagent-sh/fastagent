@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { hermeticGit, withGitIdentity } from "./git-env.ts";
 import { describe, expect, it } from "vitest";
 import ignore from "ignore";
 import { spawn } from "node:child_process";
@@ -35,22 +36,7 @@ async function exists(p: string): Promise<boolean> {
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
-/**
- * `init` commits, so every run here gets a git that reads none of the developer's configuration (identity, hooks,
- * signing, an exported GIT_DIR): only what a test sets.
- */
-const hermeticGit: NodeJS.ProcessEnv = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_NOSYSTEM: "1",
-};
-const withIdentity: NodeJS.ProcessEnv = {
-  ...hermeticGit,
-  GIT_AUTHOR_NAME: "a",
-  GIT_AUTHOR_EMAIL: "a@example.com",
-  GIT_COMMITTER_NAME: "a",
-  GIT_COMMITTER_EMAIL: "a@example.com",
-};
+const withIdentity = withGitIdentity;
 
 /** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
 function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
@@ -269,7 +255,7 @@ describe("init: scaffoldAgent", () => {
     );
     const mine = join(base, "mine");
     expect(git(["rev-parse", "--show-toplevel"], mine)).toBe(mine);
-    expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent init");
+    expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent");
     expect(git(["status", "--porcelain"], mine)).toBe(""); // all of it committed
     expect(git(["ls-files"], mine).split("\n")).toEqual(
       expect.arrayContaining(["fastagent.config.ts", "APPEND_SYSTEM.md", ".gitignore", ".secrets/.env.example"]),

@@ -13,7 +13,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
     expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
-    expect(ignored(join(root, "schedules", "daily.md"))).toBe(false); // loaded once per worker — restart is the re-read
+    // The running clock re-reads schedules/ itself, so an edit there restarts nothing (and cuts off no turn).
+    expect(ignored(join(root, "schedules", "daily.md"))).toBe(true);
     // The next session lists extensions/ again and reloads changed code, so an edit there restarts nothing.
     expect(ignored(join(root, "extensions", "notify.ts"))).toBe(true);
     expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
