@@ -264,8 +264,8 @@ Cron schedules fire only while a serving process is up:
   scheduler,
 - a run missed while the process was down is caught up once on the next start, not once per missed
   slot,
-- a scaled-to-zero deployment sleeps through cron instants; keep one machine running — or keep the time in a scheduler you own and let it call `POST /invoke` (see
-  [Deploy](deploy.md)).
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running, or replace the schedule with a clock of your own (see
+  [Deploy](deploy.md#scale-to-zero)).
 
 Diagnose with `fastagent schedules list`: every schedule's next instant and how its last run ended (`--json` for the
 retained history). A `schedules/<name>.md` that is not a valid schedule is reported by `fastagent info` before it ever

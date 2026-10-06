@@ -575,15 +575,14 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("a declared cron keeps a machine up and names its way out; the agent's own wake-ups do not", async () => {
+  it("a declared schedule keeps a machine up; the agent's own wake-ups do not", async () => {
     // Nothing → false, no note. Every serve mounts `wake`, so a wake-up is NOT a reason to stay up: a box that slept
     // fires what is due when a request next wakes it.
     const none = await call(await agent(), { model: "openai/gpt-4o-mini" });
     expect(none.ok && !none.hasCron).toBe(true);
     if (none.ok) expect(none.messages.find((m) => /keeps one machine running/.test(m.text))).toBeUndefined();
 
-    // A schedules/ file → hasCron, and the note names `POST /invoke`: a cron is a time, and a time can be kept
-    // elsewhere, so an operator paying for an idle box has a real option and should be told it exists.
+    // A schedules/ file → hasCron: the schedule is the agent's own clock, so nothing wakes a sleeping box for it.
     const { mkdir, writeFile: wf } = await import("node:fs/promises");
     const dir = await agent();
     await mkdir(join(dir, "schedules"), { recursive: true });
@@ -601,18 +600,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (withCron.ok) {
       const note = withCron.messages.find((m) => /keeps one machine running/.test(m.text));
       expect(note?.level).toBe("note");
-      expect(note?.text).toContain("POST /invoke");
     }
-  });
-
-  it("does not offer the cron's way out when a long connection also pins the machine", async () => {
-    const dir = await agent({
-      "schedules/daily.md": `---\ncron: "0 9 * * *"\n---\ngo\n`,
-      "channels/socket.mjs": `export default { name: "socket", connect() {} };\n`,
-    });
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(pre.ok && pre.hasCron).toBe(true);
-    if (pre.ok) expect(pre.messages.map((m) => m.text).join("\n")).not.toContain("To scale to zero instead");
   });
 
   it("warns a code agent with no lockfile and no @fastagent-sh/fastagent dep", async () => {

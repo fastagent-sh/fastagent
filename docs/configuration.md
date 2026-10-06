@@ -554,9 +554,8 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
   next instant arrives makes that one `skipped`.
 - **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore, `deploy` turns each schedule into
-  an EventBridge rule. A schedule keeps one Fly or Railway machine running; to scale to zero, keep the time in a
-  scheduler you own and let it call `POST /invoke`. That route must then be served (`http.invoke` not `false`), and it
-  runs any prompt with the agent's full tools for whoever reaches it, so put a gateway in front of a public URL.
+  an EventBridge rule. A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
+  ([Deploy](deploy.md#scale-to-zero)).
 - **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
   prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body
   can be that same `/<name>`.

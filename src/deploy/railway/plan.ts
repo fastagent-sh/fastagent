@@ -1,10 +1,9 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import { INVOKE_SCHEDULE_BODY } from "../../channels/http.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
-import { CRON_CAN_BE_EXTERNAL, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
+import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
@@ -162,23 +161,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     residency
       ? `# Scale-to-zero: do NOT enable App Sleeping — ${residency.why}.`
       : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping —\n# ${WAKEUPS_WHEN_ASLEEP}.`,
-    ...(residency?.reason === CRON_CAN_BE_EXTERNAL
-      ? [
-          `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
-          `# calls this service's \`POST /invoke\` over the private network — traffic from another service in the`,
-          `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
-          `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
-          `#     AGENT_INVOKE=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/invoke`,
-          `#     curl --retry 3 -fsS -X POST "$AGENT_INVOKE" -H 'content-type: application/json' \\`,
-          `#       -d '${INVOKE_SCHEDULE_BODY}'`,
-          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
-          `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
-          `# This needs \`POST /invoke\` served (\`http.invoke\` not false), and it is anonymous with the agent's full`,
-          `# tools on the PUBLIC domain too: put a gateway in front of that domain, or remove it and keep only the`,
-          `# private network.`,
-          `# Asleep, ${WAKEUPS_WHEN_ASLEEP}.`,
-        ]
-      : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
   );
 

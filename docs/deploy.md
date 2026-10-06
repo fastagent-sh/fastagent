@@ -209,9 +209,15 @@ deploy whose box crashes on boot as failed.
 
 | Definition has | Fly (`min_machines_running`) / Railway (App Sleeping) |
 |---|---|
-| a schedule (`schedules/*.md`) | kept up — unless an external clock calls `POST /invoke` instead (Fly Cron Manager or supercronic, a Railway cron service over the private network, a CI job). That route must then be served (`http.invoke` not `false`), and it is anonymous with the agent's full tools: put a gateway in front of a public URL |
+| a schedule (`schedules/*.md`) | kept up: the schedule is the agent's own clock, and nothing wakes a stopped machine at its instant |
 | a long-connection channel | kept up; an outbound connection cannot wake a stopped machine |
 | neither | may scale to zero |
+
+Timed work on a deployment that scales to zero is a clock of your own (Fly Cron Manager, a Railway cron service, a
+CI job) calling `POST /invoke`, **in place of** the schedule: keep the prompt as `prompts/<name>.md` and send
+`/<name>`, and delete `schedules/<name>.md`. Both at once would run the work twice, or race for one session. The
+route must then be served (`http.invoke` not `false`); it runs any prompt with the agent's full tools for whoever
+reaches it, so put a gateway in front of a public URL.
 
 The generated `fly.toml` and the Railway runbook follow this table. If a kept `fly.toml` scales to zero where it
 should not, `deploy` warns and `--run` refuses until you raise it.
