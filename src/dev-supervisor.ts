@@ -54,7 +54,7 @@ const DEV_RESTART_WAIT_MS = 10 * 60_000;
 
 /**
  * In the dev worker: on the supervisor's `restart`, wait until no turn runs (`activeWork`, which every leased session
- * counts), then `stop`. Bounded by `limitMs`, after which it stops anyway and says how many turns it cut: a chat that
+ * counts), then `stop`. Bounded by `limitMs`, after which it stops anyway and says it cut work off: a chat that
  * keeps the worker busy must not hold an edit back forever. A second `restart` while waiting is the same restart.
  */
 export function listenForRestart(
@@ -67,13 +67,12 @@ export function listenForRestart(
     if ((message as { type?: unknown } | null)?.type !== "restart" || restarting) return;
     restarting = true;
     void (async () => {
-      const running = busy();
-      if (running > 0) log.info(`[fastagent] restarting once ${running} running turn(s) finish`);
+      // `busy` counts pieces of work (a channel turn is counted queued and again leased), not turns, so no number.
+      if (busy() > 0) log.info("[fastagent] restarting once the turns running now finish");
       const deadline = Date.now() + limitMs;
       while (busy() > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
-      const cut = busy();
-      if (cut > 0) {
-        log.warn(`[fastagent] restarting with ${cut} turn(s) still running after ${limitMs / 60_000} minutes`);
+      if (busy() > 0) {
+        log.warn(`[fastagent] restarting with work still running after ${limitMs / 60_000} minutes: it is cut off`);
       }
       stop();
     })();
@@ -136,9 +135,10 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     log.info(`[fastagent] change detected — restarting…`);
     if (worker) {
       reloadPending = true;
-      // The worker stops once its running turns finish (restartWhenIdle); the exit handler respawns it then. A turn
-      // that wrote the very file that changed is not cut off by its own edit.
-      worker.send({ type: "restart" });
+      // The worker stops once its running turns finish (listenForRestart); the exit handler respawns it then. A turn
+      // that wrote the very file that changed is not cut off by its own edit. A worker whose channel is already
+      // closed is exiting: its exit handler respawns it, and `send` would throw ERR_IPC_CHANNEL_CLOSED.
+      if (worker.connected) worker.send({ type: "restart" });
     } else {
       spawnWorker(); // worker was down (broken edit) — retry now
     }

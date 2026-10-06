@@ -10,7 +10,6 @@ import {
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
 import type { AnswerOutcome, PromptDisposition, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
-import { beginWork } from "../../channels/busy.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
 //
@@ -29,15 +28,11 @@ export function inProcessLease(): Lease {
     tryAcquire(session: string): Release | null {
       if (busy.has(session)) return null;
       busy.add(session);
-      // A session held is a turn or a compaction running, whatever started it (a channel, `/invoke`, a routine), so
-      // it counts as the process's work in flight: what a restart waits for (dev-supervisor.ts).
-      const workDone = beginWork();
       let released = false;
       return () => {
         if (released) return;
         released = true;
         busy.delete(session);
-        workDone();
       };
     },
   };
