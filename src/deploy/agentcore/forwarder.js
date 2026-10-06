@@ -7,9 +7,10 @@
 // Webhooks (Function URL) and EventBridge Scheduler fires are forwarded as envelopes to the
 // AgentCore Runtime over SigV4 InvokeAgentRuntime, all on ONE fixed ingress session (fastagent
 // channel state is single-writer; one session = at most one microVM). This
-// Lambda also OWNS the wake alarms: the container POSTs its pending wake-ups to /__fastagent/
-// wake-alarm (shared secret) and each becomes a self-deleting one-shot EventBridge schedule that
-// pokes this Lambda — which wakes the container, whose wake pump fires the due entry.
+// Lambda also OWNS the alarms: the container POSTs its pending wake-ups and each schedule's next
+// instant to /__fastagent/wake-alarm (shared secret), and each becomes a self-deleting one-shot
+// EventBridge schedule that calls this Lambda back — a wake-up's pokes the container, whose wake pump
+// fires the due entry; a schedule's delivers that instant's fire.
 // CommonJS on purpose: the deployment package's entry lands as index.js, where ESM import is invalid.
 "use strict";
 const crypto = require("node:crypto");
@@ -52,8 +53,9 @@ async function invoke(envelope) {
   return { status: res.statusCode ?? 200, body };
 }
 
-// Mirror the container's pending wake-ups into one-shot schedules: at(fireAt), poke me, delete
-// after firing. Upsert (create → conflict → update). The container pre-filters DUE alarms (it is
+// Mirror the container's pending wake-ups and its schedules' next instants into one-shot schedules: at(fireAt),
+// poke me (or deliver the schedule's fire), delete after firing. Upsert (create → conflict → update): an id names one
+// instant, so the update is the same alarm mirrored again, never a spent one moved. The container pre-filters DUE alarms (it is
 // awake handling those), so every failure here is REAL — counted and propagated: a swallowed error
 // would leave a pending wake with no alarm, exactly the reliability hole this mechanism closes.
 // Cancelled wakes are NOT deleted here: their poke fires, finds nothing due, and the schedule
@@ -62,9 +64,9 @@ async function syncAlarms(alarms, ctx) {
   const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = require("@aws-sdk/client-scheduler");
   const sch = new SchedulerClient({});
   let failed = 0;
-  // Alarm name = a stable hash of the WHOLE wake id. A prefix of the id would collide (two wakes
-  // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-arm below:
-  // the second wake would "update" the first's alarm and silently steal its fire time.
+  // Alarm name = a stable hash of the WHOLE alarm id. A prefix of the id would collide (two alarms
+  // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-mirror below:
+  // the second alarm would "update" the first and silently steal its fire time.
   const names = new Map();
   for (const a of alarms) {
     const name = process.env.WAKE_PREFIX + crypto.createHash("sha256").update(a.id).digest("hex").slice(0, 16);
@@ -80,7 +82,12 @@ async function syncAlarms(alarms, ctx) {
       ScheduleExpressionTimezone: "UTC",
       FlexibleTimeWindow: { Mode: "OFF" },
       ActionAfterCompletion: "DELETE",
-      Target: { Arn: ctx.invokedFunctionArn, RoleArn: process.env.WAKE_ROLE_ARN, Input: '{"wakePoke":true}' },
+      // A schedule's alarm delivers its fire; a wake-up's only wakes the container, whose pump fires what is due.
+      Target: {
+        Arn: ctx.invokedFunctionArn,
+        RoleArn: process.env.WAKE_ROLE_ARN,
+        Input: a.fire ? JSON.stringify({ scheduleFire: a.fire }) : '{"wakePoke":true}',
+      },
     };
     try {
       await sch.send(new CreateScheduleCommand(p));

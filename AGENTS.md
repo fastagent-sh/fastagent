@@ -188,7 +188,7 @@ src/
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
 │   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
-│                             # runtime + forwarder Lambda (webhooks) + EventBridge rules (schedules). No public
+│                             # runtime + forwarder Lambda (webhooks, and the alarms the container sets). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.
 │                             # destroy.ts is the other direction, and it exists because three of the four
 │                             # resources cannot be stack resources. aws-cli.ts owns what ONE AWS CLI result

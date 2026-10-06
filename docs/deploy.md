@@ -252,8 +252,11 @@ The stack carries:
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
   verify signatures as on every host) and manages wake alarms;
-- **EventBridge Scheduler rules** for each schedule's `cron`. A cron EventBridge cannot express stops the deploy;
-- **wake alarms**: pending wake-ups become one-shot EventBridge schedules that wake the container on time.
+- **alarms**: pending wake-ups and each schedule's next instant become one-shot EventBridge schedules that wake the
+  container on time, so a schedule edited on the runtime needs no deploy. The container sets them once an envelope has
+  reached it through the forwarder, which tells it where the forwarder is: `--run` does this with its probe; after a
+  manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
+  prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.
 
 Variables from `.secrets/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
 change the template.
@@ -277,7 +280,7 @@ What to know:
 - **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
   `session` selects the conversation.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).
-- **A kept template that no longer matches the definition** (a new schedule or channel) stops `--run` until
+- **A kept template that no longer matches the definition** (a new channel) stops `--run` until
   `--force`. A template without the marker line is never regenerated.
 
 ### Logs

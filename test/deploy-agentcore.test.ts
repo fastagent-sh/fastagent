@@ -1,14 +1,11 @@
 import { Buffer } from "node:buffer";
 import { crc32 } from "node:zlib";
-import { Cron } from "croner";
 import { declaredChannels } from "../src/channels/discover.ts";
-import { cronError } from "../src/schedule/cron.ts";
 import { describe, expect, it } from "vitest";
 import {
   type AgentcorePlanInput,
   MOUNT,
   SECRETS_DIR,
-  type ScheduleFact,
   TEMPLATE_FILE,
   GENERATED_TEMPLATE_MARKER,
   FORWARDER_FILE,
@@ -19,8 +16,6 @@ import {
   isGeneratedAgentcoreTemplate,
   ingressSessionId,
   planAgentcoreDeploy,
-  scheduleResourceName,
-  toEventBridgeCron,
   toRuntimeName,
 } from "../src/deploy/agentcore/plan.ts";
 import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
@@ -29,7 +24,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   releaseId: "release-one",
   name: "my-agent",
   channels: [],
-  schedules: [],
   hasPackageJson: false,
   runtime: "node",
   hasLockfile: false,
@@ -60,52 +54,6 @@ describe("deploy agentcore: name/id helpers", () => {
   });
 });
 
-describe("deploy agentcore: cron translation", () => {
-  const expression = (cron: string): string => {
-    const r = toEventBridgeCron(cron);
-    if ("error" in r) throw new Error(r.error);
-    return r.expression;
-  };
-  const error = (cron: string): string => {
-    const r = toEventBridgeCron(cron);
-    if ("expression" in r) throw new Error(`unexpectedly translated: ${r.expression}`);
-    return r.error;
-  };
-
-  // One pure translation, its whole mapping table: dow renumbering, dom/dow exclusivity, names,
-  // steps, lists, and the `?` field croner reads as unrestricted.
-  it("translates every 5-field cron shape into the Quartz-flavoured EventBridge form", () => {
-    expect(expression("0 * * * *")).toBe("cron(0 * * * ? *)"); // both wildcards → dow becomes ?
-    expect(expression("30 6 1 * *")).toBe("cron(30 6 1 * ? *)"); // a dom restriction keeps dom
-    // Standard 0/7 = Sunday, EventBridge 1 = Sunday.
-    expect(expression("0 9 * * 1")).toBe("cron(0 9 ? * 2 *)");
-    expect(expression("0 9 * * 0")).toBe("cron(0 9 ? * 1 *)");
-    expect(expression("0 9 * * 7")).toBe("cron(0 9 ? * 1 *)");
-    expect(expression("0 9 * * 1-5")).toBe("cron(0 9 ? * 2-6 *)");
-    expect(expression("0 9 * * MON")).toBe("cron(0 9 ? * MON *)"); // names pass through unmapped
-    // Steps are COUNTS, not weekdays: preserved verbatim while values/endpoints remap.
-    expect(expression("0 9 * * */2")).toBe("cron(0 9 ? * */2 *)");
-    expect(expression("0 9 * * 1-5/2")).toBe("cron(0 9 ? * 2-6/2 *)");
-    expect(expression("0 9 * * 1,3,5")).toBe("cron(0 9 ? * 2,4,6 *)"); // lists remap per element
-    expect(expression("0 9 * * MON,3")).toBe("cron(0 9 ? * MON,4 *)");
-    // A `?` field is UNRESTRICTED — croner reads it as daily, so the deployed rule must say daily.
-    // Carrying MON/1 across would deploy a schedule the workspace never runs.
-    expect(expression("0 9 ? * MON")).toBe("cron(0 9 * * ? *)");
-    expect(expression("0 9 1 * ?")).toBe("cron(0 9 * * ? *)");
-    expect(expression("0 9 * * ?")).toBe("cron(0 9 * * ? *)");
-    expect(expression("0 9 ? * *")).toBe("cron(0 9 * * ? *)");
-  });
-
-  it("refuses what EventBridge cannot express, with the reason", () => {
-    expect(error("0 9 1 * 1")).toMatch(/BOTH day-of-month and day-of-week/);
-    expect(error("0 0 9 * * 1")).toMatch(/5-field/);
-    expect(error("0 9 * * 5L")).toMatch(/L\/#/);
-    expect(error("0 9 * * 5-7")).toMatch(/wraps across the week/); // Fri–Sun → 6-1: not a valid range
-    expect(error("0 9 * * 1-")).toMatch(/malformed/);
-    expect(error("0 9 * * 1/")).toMatch(/malformed/);
-  });
-});
-
 describe("deploy agentcore: the plan", () => {
   it("minimal shape (no channel, no schedule): the forwarder is still there — it carries the wake alarms", () => {
     const plan = planAgentcoreDeploy(baseInput());
@@ -129,8 +77,13 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
-    expect(plan.untranslatableSchedules).toEqual([]);
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    // A manual deploy passes the ingress secret, and activates the container THROUGH THE FORWARDER: that is what
+    // tells it where to set its alarms (an invoke-agent-runtime call goes through IAM and carries no address).
+    expect(plan.runbook.join("\n")).toContain("FastagentIngressSecret=<another random string>");
+    expect(plan.runbook.join("\n")).toContain(
+      `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
+    );
     expect(plan.runbook.join("\n")).toContain("fastagent deploy agentcore");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
     expect(plan.runbook.join("\n")).toContain("--source forwarder");
@@ -181,49 +134,6 @@ describe("deploy agentcore: the plan", () => {
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
   });
 
-  it("schedules become EventBridge rules carrying the clock's own name for each fire; untranslatable ones warn", () => {
-    const schedules: ScheduleFact[] = [
-      { name: "digest", cron: "0 9 * * 1-5", tz: "Asia/Shanghai" },
-      { name: "impossible", cron: "0 9 1 * 1" },
-    ];
-    const plan = planAgentcoreDeploy(baseInput({ schedules }));
-    const template = plan.artifacts[0]!.content;
-    expect(template).toContain("ScheduleDigest:");
-    expect(template).toContain("ScheduleExpression: cron(0 9 ? * 2-6 *)");
-    expect(template).toContain("ScheduleExpressionTimezone: Asia/Shanghai");
-    // THE CLOCK NAMES THE FIRE. `<aws.scheduler.scheduled-time>` is what EventBridge repeats
-    // byte-identically on every redelivery (measured: 3 attempts, one payload), which is the only thing
-    // that lets the container tell a retry from a new occurrence (schedule/run.ts).
-    expect(template).toContain('\'{"scheduleFire":{"name":"digest","occurrence":"<aws.scheduler.scheduled-time>"}}\'');
-    expect(template).not.toContain("impossible");
-    expect(plan.untranslatableSchedules).toEqual([
-      { name: "impossible", reason: expect.stringMatching(/BOTH day-of-month/) },
-    ]);
-    expect(plan.runbook.join("\n")).toContain('schedule "impossible" has NO EventBridge rule');
-    expect(plan.topology).toEqual({ webhooks: false });
-  });
-
-  it("identifier collisions fail the plan visibly (a silently wrong stack is worse)", () => {
-    expect(() =>
-      planAgentcoreDeploy(
-        baseInput({
-          schedules: [
-            { name: "foo-bar", cron: "0 * * * *" },
-            { name: "foobar", cron: "30 * * * *" },
-          ],
-        }),
-      ),
-    ).toThrow(/same CloudFormation logical id/);
-  });
-
-  it("a schedule name with a quote cannot break the EventBridge Input YAML/JSON", () => {
-    const plan = planAgentcoreDeploy(baseInput({ schedules: [{ name: "it's-daily", cron: "0 9 * * *" }] }));
-    const template = plan.artifacts[0]!.content;
-    expect(template).toContain(
-      `'{"scheduleFire":{"name":"it''s-daily","occurrence":"<aws.scheduler.scheduled-time>"}}'`,
-    );
-  });
-
   it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {
     const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
     expect(template).toContain("Timeout: 900");
@@ -256,66 +166,6 @@ describe("deploy agentcore: the plan", () => {
     expect(template.startsWith(GENERATED_TEMPLATE_MARKER)).toBe(true);
     expect(isGeneratedAgentcoreTemplate(template)).toBe(true);
     expect(isGeneratedAgentcoreTemplate("# my hand-written template\n")).toBe(false);
-  });
-
-  describe("cron translation vs the Croner dialect the workspace actually accepts", () => {
-    /**
-     * The property that matters is not "the string looks right" but "the DEPLOYED rule fires on the
-     * same days the workspace's own scheduler fires on". So: expand both sides and compare.
-     * EventBridge's cron is Quartz-flavoured 6-field — day-of-week names, exactly one of DOM/DOW as
-     * `?` — which for the day-selection question this checks maps onto croner once the trailing year
-     * field is dropped and the `?` field is read as `*` (EventBridge has no OR semantics: the `?`
-     * field is genuinely unrestricted).
-     */
-    const firingDays = (cron: string, count: number): string[] => {
-      const c = new Cron(cron, { timezone: "UTC" });
-      const out: string[] = [];
-      let prev: Date | null = null;
-      for (let i = 0; i < count; i++) {
-        prev = c.nextRun(prev ?? new Date("2026-07-29T00:00:00Z"));
-        if (!prev) break;
-        out.push(prev.toISOString().slice(0, 16));
-      }
-      return out;
-    };
-    const eventBridgeDays = (expression: string, count: number): string[] => {
-      const [min, hour, dom, mon, dowRaw] = expression.slice(5, -1).split(" ") as [
-        string,
-        string,
-        string,
-        string,
-        string,
-      ];
-      // `?` = unrestricted; croner reads `*` for that, without the OR quirk (only one can be `?`).
-      const dow = dowRaw === "?" ? "*" : dowRaw;
-      return firingDays(`${min} ${hour} ${dom === "?" ? "*" : dom} ${mon} ${dow}`, count);
-    };
-
-    it.each([
-      "0 9 * * MON", // the plain weekly form
-      "0 9 1 * *", // day-of-month
-      "*/5 * * * *", // the every-N form a deploy test actually uses
-      "0 9 ? * MON", // `?` is NOT `*` in croner: this fires DAILY, whatever MON suggests
-      "0 9 1 * ?", // …and here too, whatever the 1st suggests
-      "0 9 * * ?",
-      "0 9 ? * *",
-    ])("%s fires on the same days locally and on EventBridge", (cron) => {
-      expect(cronError(cron, undefined)).toBeUndefined();
-      const out = toEventBridgeCron(cron);
-      expect("expression" in out).toBe(true);
-      const expression = (out as { expression: string }).expression;
-      // 10 occurrences is enough to separate daily / weekly / monthly patterns.
-      expect(eventBridgeDays(expression, 10)).toEqual(firingDays(cron, 10));
-      // EventBridge rejects both day fields wildcarded, and both restricted: exactly one `?`.
-      const fields = expression.slice(5, -1).split(" ");
-      expect([fields[2], fields[4]].filter((f) => f === "?")).toHaveLength(1);
-    });
-
-    it("refuses what EventBridge genuinely cannot express, rather than deploying a different schedule", () => {
-      // Cron ORs two RESTRICTED day fields (the 15th OR any Wednesday); EventBridge has no such form.
-      expect(cronError("0 9 15 * WED", undefined)).toBeUndefined();
-      expect(toEventBridgeCron("0 9 15 * WED")).toMatchObject({ error: expect.stringContaining("BOTH") });
-    });
   });
 
   it("says in the artifact itself that it is a mirror, not an input", () => {
@@ -404,11 +254,9 @@ describe("deploy agentcore: the plan", () => {
   });
 
   describe("the public attack surface", () => {
-    it("a schedule-only deployment exposes the authenticated probe without public webhooks", () => {
-      const template = planAgentcoreDeploy(baseInput({ schedules: [{ name: "digest", cron: "0 9 * * *" }] }))
-        .artifacts[0]!.content;
+    it("a deployment without a webhook channel exposes the authenticated probe without public webhooks", () => {
+      const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
       expect(template).toContain("AWS::Lambda::Function");
-      expect(template).toContain("AWS::Scheduler::Schedule");
       expect(template).toContain("AWS::Lambda::Url");
       expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret");
       expect(template).not.toContain('WEBHOOKS_ENABLED: "1"');
@@ -432,23 +280,6 @@ describe("deploy agentcore: the plan", () => {
       expect(template).toContain("FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret"); // runtime
       expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret"); // forwarder
       expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain("FastagentIngressSecret:");
-    });
-  });
-
-  describe("EventBridge physical names", () => {
-    it("sanitizes, bounds and disambiguates a schedule's module name", () => {
-      const names = (n: string) => scheduleResourceName("agentcore-test", n);
-      expect(names("digest")).toMatch(/^fa-agentcore-test-digest-[0-9a-f]{8}$/);
-      // AWS requires [0-9A-Za-z-_.] within 64 chars; a module file name guarantees neither.
-      for (const raw of ["晨报", "deploy check", "a".repeat(120), "x/y"]) {
-        const out = names(raw);
-        expect(out).toMatch(/^[0-9A-Za-z\-_.]+$/);
-        expect(out.length).toBeLessThanOrEqual(64);
-      }
-      // Names that sanitize or truncate to the same readable part stay distinct — otherwise one rule
-      // would silently serve two schedules.
-      expect(names("deploy check")).not.toBe(names("deploy-check"));
-      expect(names(`${"a".repeat(120)}1`)).not.toBe(names(`${"a".repeat(120)}2`));
     });
   });
 });

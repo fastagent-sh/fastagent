@@ -87,9 +87,9 @@ export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[])
 }
 
 /**
- * THE REFUSAL every path that is about to RUN the agent shares: an enabled file under `tools/`, `channels/` or
- * `schedules/` is a declaration, so one that cannot load means the agent is missing something its author said it
- * has. Starting anyway announces a ready service over an absent capability — a schedule that never fires, a tool the
+ * THE REFUSAL every path that is about to RUN the agent shares: an enabled file under `tools/` or `channels/` is a
+ * declaration, so one that cannot load means the agent is missing something its author said it
+ * has. Starting anyway announces a ready service over an absent capability — a channel that never answers, a tool the
  * model simply never gets — with nothing but one warning to find it by. Every failure is reported before this
  * throws, so a boot fixes all of them at once rather than one per restart.
  *

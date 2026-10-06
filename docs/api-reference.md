@@ -195,7 +195,7 @@ function createAgentService(
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
                                           // took over or `http.invoke: false` withheld
-  schedules: readonly Schedule[];         // schedules/*.md: { name, cron, tz?, prompt }
+  schedules: () => readonly Schedule[];   // schedules/*.md as armed now ({ name, cron, tz?, prompt }); follows edits
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   controlPrefix?: string;                // "/control", when sessionControl is on
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
@@ -549,8 +549,9 @@ is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
 
-A serve refuses to start if an enabled file under `tools/`, `channels/` or `schedules/` cannot load, and names
-every file that failed. An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
+A serve refuses to start if an enabled file under `tools/` or `channels/` cannot load, and names every file that
+failed. A file under `schedules/` that is not a valid schedule is logged and left unarmed instead, since the agent
+writes those too ([Schedules](configuration.md#schedules)). An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
 report the rest.
 
 Channel adapters can also use:
@@ -566,8 +567,8 @@ See [Channel development](channel-development.md).
 ## Schedules
 
 A schedule is `schedules/<name>.md`: a cron in the frontmatter over a prompt ([Configuration](configuration.md#schedules)).
-It has no API of its own: `AgentService.schedules` lists what a serve loaded, and work a caller starts itself is
-`POST /invoke`.
+It has no API of its own: `AgentService.schedules()` lists what the clock has armed now (it follows edits to
+`schedules/`), and work a caller starts itself is `POST /invoke`.
 
 ### Self-scheduling
 

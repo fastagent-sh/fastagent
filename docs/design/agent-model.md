@@ -364,10 +364,11 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
-| What a process loads once: `tools/`, `channels/`, `schedules/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the alarms itself) |
+| What a process loads once: `tools/`, `channels/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
-through `bash`, its prompt files and `AGENTS.md`, and `wake` for its own follow-up work. Code modules and
+through `bash`, its prompt files and `AGENTS.md`, a schedule for recurring work, and `wake` for its own follow-up work. Code modules and
 configuration are the author's to put into service, with a restart or a release: the rule #600 set, which
 [core](core.md) §2 and the deployed prompt give.
 

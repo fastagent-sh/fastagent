@@ -18,14 +18,14 @@ describe("schedule/discover", () => {
     const dir = await ws({
       "daily.md": md('cron: "0 9 * * 1-5"\ntz: Asia/Shanghai', "Summarize yesterday.\n\nPost it to #team."),
       // A bare cron starting with `*` is what an author types; YAML would read it as an alias.
-      "often.md": md("# every five minutes\ncron: */5 * * * *"),
+      "often.md": md("# every fifteen minutes\ncron: */15 * * * *"),
       "notes.txt": "not a schedule", // only *.md files are schedules
     });
     const { schedules, failures } = await loadSchedules(dir);
     expect(failures).toEqual([]);
     expect(schedules).toEqual([
       { name: "daily", cron: "0 9 * * 1-5", tz: "Asia/Shanghai", prompt: "Summarize yesterday.\n\nPost it to #team." },
-      { name: "often", cron: "*/5 * * * *", prompt: "go" },
+      { name: "often", cron: "*/15 * * * *", prompt: "go" },
     ]);
   });
 
@@ -36,6 +36,9 @@ describe("schedule/discover", () => {
       "unclosed.md": '---\ncron: "0 * * * *"\nprompt\n',
       "no-cron.md": md("tz: UTC"),
       "bad-cron.md": md("cron: not a cron"),
+      // The floor a recurring wake-up is held to: the agent writes these files too.
+      "frequent.md": md('cron: "*/5 * * * *"'),
+      "per-second.md": md('cron: "* * * * * *"'),
       "bad-tz.md": md('cron: "0 * * * *"\ntz: Mars/Olympus'),
       "unknown-key.md": md('cron: "0 * * * *"\nsession: mine'),
       "twice.md": md('cron: "0 * * * *"\ncron: "0 1 * * *"'),
@@ -49,6 +52,8 @@ describe("schedule/discover", () => {
       "schedules/bad-cron.md": expect.stringMatching(/^invalid cron\/tz/),
       "schedules/bad-tz.md": expect.stringMatching(/unknown timezone "Mars\/Olympus"/),
       "schedules/empty.md": expect.stringMatching(/has no prompt/),
+      "schedules/frequent.md": expect.stringMatching(/too frequent — it must fire at most every 10 minutes/),
+      "schedules/per-second.md": expect.stringMatching(/too frequent/),
       "schedules/no-cron.md": expect.stringMatching(/needs a "cron"/),
       "schedules/no-front.md": expect.stringMatching(/must start with a "---" frontmatter/),
       "schedules/not-kv.md": expect.stringMatching(/is not "key: value"/),

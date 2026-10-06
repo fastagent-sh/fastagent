@@ -1,6 +1,7 @@
 /**
- * A cron on a host with NO resident clock: EventBridge holds the timer, and the fire arrives as an
- * envelope the container has to accept.
+ * A cron on a host with NO resident clock: the container mirrors each schedule's next instant into a one-shot
+ * EventBridge alarm (schedule/wake-alarm.ts), and the fire arrives as an envelope the container has to accept. The
+ * container runs no timer of its own there, so the delivery's reply is the one record of whether the instant ran.
  *
  * WHY THIS NEEDS A LIVE PROBE. Offline, everything about this delivery is ours — a fake clock, a
  * faked EventBridge, a handler called directly. Here the timer, the forwarder and the container are
@@ -10,22 +11,22 @@
  *   model turn and the forwarder's own timeout all happen inside one invocation, and a non-200 would
  *   be invisible from inside an agent that simply never ran.
  *
- * WHAT IT NO LONGER HAS TO PROVE, and why. The design's other load-bearing fact — that EventBridge
- * repeats `<aws.scheduler.scheduled-time>` byte-identically across a redelivery, which is what lets
- * the container tell a retry from a new occurrence — was measured directly by a standalone spike
- * (EventBridge Scheduler → a Lambda that failed on purpose): 17 deliveries over 7 occurrences, up to 3
- * per occurrence, every redelivery carrying an identical payload, backoff at +60s and +186s. That is a
- * property of the SERVICE, not of this deployment, so it does not belong in a probe that also builds
- * a container. The numbers are recorded in schedule/run.ts, where the design reads them.
+ * WHAT IT NO LONGER HAS TO PROVE, and why. That EventBridge repeats a schedule's input byte-identically across a
+ * redelivery, which is what lets the container claim an instant once, was measured by a standalone spike
+ * (EventBridge Scheduler → a Lambda that failed on purpose): 17 deliveries over 7 occurrences, up to 3 per
+ * occurrence, every redelivery carrying an identical payload, backoff at +60s and +186s. That is a property of the
+ * SERVICE, not of this deployment. The alarm's input names the instant the container computed, so the same holds.
  *
  * WHAT IT OBSERVES, and from where. The forwarder logs one line per delivery —
  * `schedule-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
  * whole point of reading CloudWatch rather than the container.
  *
- * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
+ * The cron is every ten minutes, the floor every recurring schedule is held to (schedule/cron.ts), so the wait is
+ * bounded by that.
  *
- * WHAT IT MEASURED, ap-southeast-1, 2026-09-21 — recorded so the next reader does not have to deploy
- * to learn it. Seven consecutive deliveries of a `* * * * *` schedule, read from the forwarder's log:
+ * WHAT IT MEASURED, ap-southeast-1, 2026-09-21, under the earlier deploy-time RULE (the alarm path has not been
+ * measured live yet) — recorded so the next reader does not have to deploy to learn it. Seven consecutive deliveries
+ * of a `* * * * *` schedule, read from the forwarder's log:
  *
  *     occurrence (clock)     container slot             status     lag     turn
  *     2026-09-21T07:39:00Z   2026-09-21T07:39:00.000Z   200      49.9s   3224ms   fired=true
@@ -37,11 +38,11 @@
  * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what a claim-keeping
  * clock has to account for.
  *
- * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
- * design's whole claim: the clock names the occurrence and the container does not recompute it.
+ * Every `slot` in the reply equals the occurrence the delivery named, which is the design's whole claim: the clock
+ * names the occurrence and the container does not recompute it.
  *
- * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
- * rule) and one real model turn per minute it is up. Teardown is the shared
+ * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and the alarms it sets) and one real
+ * model turn per minute it is up. Teardown is the shared
  * {@link destroyAgentcoreDeployment}.
  *
  * Needs the same IAM as `agentcore-deploy`, plus `logs:FilterLogEvents` on the forwarder group.
@@ -70,7 +71,7 @@ const NAME = agentcoreName(`live-probe-${randomUUID().slice(0, 8)}`);
 const STACK = `fastagent-${NAME}`;
 const SCHEDULE = "tick";
 /** Every minute: EventBridge Scheduler's own floor, and what bounds this probe's wait. */
-const CRON = "* * * * *";
+const CRON = "*/10 * * * *";
 
 let agentDir = "";
 
@@ -84,8 +85,8 @@ beforeAll(async () => {
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
-  // The ONE line that decides this deployment's topology: a schedule puts a forwarder, a Function URL
-  // and an EventBridge rule into the template (plan.ts agentcoreTopology).
+  // The schedule: armed by the alarm the container sets once the deploy's probe has reached it through the forwarder
+  // (every stack has one, for the alarms).
   await writeFile(join(agentDir, "schedules", `${SCHEDULE}.md`), `---\ncron: "${CRON}"\n---\nReply with just: tick\n`);
   await writeFile(
     join(agentDir, "package.json"),
@@ -197,10 +198,9 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
       `a schedule should have put a forwarder in the stack:\n${outputs.stdout.slice(0, 500)}`,
     ).toBeTruthy();
 
-    // SIX MINUTES, on the numbers in this file's header. The schedule runs from the minute after the stack
-    // is created, so the first delivery's instant is within 60s of this point; the cold invocation then
-    // took 49.9s end to end (container start, definition open, model turn), and the poll interval is 10s
-    // — about 120s to the first match, against a 360s budget. Roughly 3x headroom.
+    // FIFTEEN MINUTES. The first instant is within 10 minutes of this point (the recurring floor); the cold invocation
+    // then took 49.9s end to end in the measurements above (container start, definition open, model turn), and the
+    // poll interval is 10s — at most ~11 minutes to the first match, against a 900s budget.
     //
     // THE JITTER IS THE REASON TO STATE THAT RATIO RATHER THAN A MARGIN IN SECONDS: between the
     // 2026-09-20 and 2026-09-21 runs the steady-state latency DOUBLED, 23.5-24.5s to 43.6-45.0s, with no
@@ -212,7 +212,7 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
     // `--filter-pattern`, not the clock. The budget is a cost ceiling — one real model turn per minute of
     // it — so it stays at the measured number until something is observed to exceed it. It also has to
     // fit inside this test's own timeout alongside the deploy (~7 minutes measured).
-    const fire = await waitForFire(deployedAt, 360_000);
+    const fire = await waitForFire(deployedAt, 900_000);
 
     // (1) THE assertion this probe exists for. A non-200 is a cold start, an opened definition, a model
     // turn or the forwarder's timeout failing — invisible from inside an agent that would never run.
@@ -225,5 +225,5 @@ describe("agentcore schedules: EventBridge holds the clock and names each fire",
     expect(new Date(reply.slot as string).toISOString(), `container ran a different occurrence: ${fire.raw}`).toBe(
       new Date(fire.occurrence).toISOString(),
     );
-  }, 1_800_000);
+  }, 2_400_000);
 });

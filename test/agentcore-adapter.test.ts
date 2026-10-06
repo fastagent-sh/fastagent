@@ -45,7 +45,8 @@ const adapter = (over: AdapterOverrides = {}): Routes =>
     agent: over.agent ?? scriptedAgent(),
     stateRoot,
     isBusy: over.isBusy ?? (() => false),
-    fireSchedule: over.fireSchedule,
+    // Unused by most cases: a schedule fire is the handler's to answer, which these do not reach.
+    fireSchedule: over.fireSchedule ?? (async () => Response.json({ fired: false, skippedReason: "test" })),
     ingressSecret: "ingressSecret" in over ? over.ingressSecret : SECRET,
     onStateReady: over.onStateReady,
   });
@@ -61,7 +62,7 @@ const postEnvelope = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Resp
 const postUntrusted = (routes: Routes, envelope: AgentcoreEnvelope): Promise<Response> | Response =>
   post(routes, JSON.stringify(envelope));
 
-/** What `<aws.scheduler.scheduled-time>` expands to: the clock's name for one fire. */
+/** The instant an alarm names: the clock's name for one fire. */
 const OCCURRENCE = "2026-07-07T10:00:00Z";
 
 describe("agentcore adapter: lazy channel construction", () => {
@@ -310,10 +311,9 @@ describe("agentcore adapter: schedule-fire envelope", () => {
   const fireEnvelope: AgentcoreEnvelope = { kind: "schedule-fire", name: "job", occurrence: OCCURRENCE };
 
   it("hands the envelope's name and INSTANT to the occurrence path", async () => {
-    // THIS host's clock is ours: `deploy` wrote the rule and injected `<aws.scheduler.scheduled-time>`,
-    // and the forwarder relays it behind the ingress secret. So the instant really is a grid point and
-    // a claim means something — dedup across EventBridge's redeliveries, a fire history, the overlap
-    // policy.
+    // THIS host's clock is ours: the container set the alarm naming this instant, and the forwarder relays it behind
+    // the ingress secret. So a claim means something — dedup across EventBridge's redeliveries, a fire history, the
+    // overlap policy.
     const seen: { name: string; occurrence: string }[] = [];
     const routes = adapter({
       fireSchedule: async (name, occurrence) => {
@@ -325,15 +325,6 @@ describe("agentcore adapter: schedule-fire envelope", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ fired: true, ms: 5 });
     expect(seen).toEqual([{ name: "job", occurrence: new Date(OCCURRENCE).toISOString() }]);
-  });
-
-  it("no schedules in this deployment is a 404 the adapter answers itself", async () => {
-    // The only verdict left here: with no schedules there is no trigger handler and no route either,
-    // so an EventBridge rule outliving its schedule gets an answer instead of a crash. Every other
-    // verdict (unknown name, claim fault, the outcome shape) belongs to the handler this relays to.
-    const res = await postEnvelope(adapter(), fireEnvelope);
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain("no schedules in this deployment");
   });
 
   it("a running schedule turn counts as in-flight work (/ping must hold the session)", async () => {
@@ -373,6 +364,7 @@ describe("agentcore adapter: wake-poke envelope + wake-url capture", () => {
       channels: () => ({ routes: {} }),
       agent: scriptedAgent(),
       stateRoot: root,
+      fireSchedule: async () => Response.json({}),
       isBusy: () => false,
       ingressSecret: SECRET,
     });
@@ -525,6 +517,7 @@ describe("agentcore adapter: activation hooks", () => {
       channels: () => ({ routes: {} }),
       agent: scriptedAgent(),
       stateRoot: notADir,
+      fireSchedule: async () => Response.json({}),
       isBusy: () => false,
       ingressSecret: SECRET,
     });

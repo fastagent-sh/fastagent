@@ -12,13 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "yaml";
 import { declaredChannels } from "../src/channels/discover.ts";
-import {
-  type AgentcorePlanInput,
-  type ScheduleFact,
-  MOUNT,
-  planAgentcoreDeploy,
-  scheduleResourceName,
-} from "../src/deploy/agentcore/plan.ts";
+import { type AgentcorePlanInput, MOUNT, planAgentcoreDeploy } from "../src/deploy/agentcore/plan.ts";
 
 /**
  * CloudFormation's short tags are not standard YAML — resolve them to their long forms.
@@ -45,7 +39,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   releaseId: "release-one",
   name: "my-agent",
   channels: [],
-  schedules: [],
   hasPackageJson: false,
   runtime: "node",
   hasLockfile: false,
@@ -83,7 +76,6 @@ function references(node: unknown, path = "$"): { path: string; target: string; 
 }
 
 const WEBHOOK_CHANNELS = { channels: declaredChannels(["telegram"]) };
-const SCHEDULES: ScheduleFact[] = [{ name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai" }];
 
 describe("the agentcore template (parsed)", () => {
   it("is valid YAML in every topology, not just the default one", () => {
@@ -92,8 +84,6 @@ describe("the agentcore template (parsed)", () => {
     for (const over of [
       {},
       WEBHOOK_CHANNELS,
-      { schedules: SCHEDULES },
-      { ...WEBHOOK_CHANNELS, schedules: SCHEDULES },
       { ...WEBHOOK_CHANNELS, secrets: [{ name: "TELEGRAM_BOT_TOKEN", hint: "required by channels/telegram.ts" }] },
     ]) {
       const t = parseTemplate(over);
@@ -106,7 +96,7 @@ describe("the agentcore template (parsed)", () => {
   });
 
   it("resolves every reference — a typo would only surface at deploy time", () => {
-    const t = parseTemplate({ ...WEBHOOK_CHANNELS, schedules: SCHEDULES });
+    const t = parseTemplate(WEBHOOK_CHANNELS);
     const known = new Set([
       ...Object.keys(t.Resources),
       ...Object.keys(t.Parameters ?? {}),
@@ -148,28 +138,6 @@ describe("the agentcore template (parsed)", () => {
     const template = parseTemplate();
     expect(JSON.stringify(template.Resources.ExecutionRole)).not.toContain("elasticfilesystem");
     expect(JSON.stringify(template)).not.toContain("NetworkModeConfig");
-  });
-
-  it("gives every schedule its own rule targeting the forwarder", () => {
-    const t = parseTemplate({
-      ...WEBHOOK_CHANNELS,
-      schedules: [
-        { name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai" },
-        { name: "nightly", cron: "0 2 * * *" },
-      ],
-    });
-    const rules = Object.entries(t.Resources).filter(([, r]) => r.Type === "AWS::Scheduler::Schedule");
-    expect(rules).toHaveLength(2);
-
-    const forwarderId = Object.entries(t.Resources).find(([, r]) => r.Type === "AWS::Lambda::Function")![0];
-    for (const [, rule] of rules) {
-      const target = (rule.Properties as { Target: { Arn: { "Fn::GetAtt"?: string } } }).Target;
-      expect(target.Arn["Fn::GetAtt"]).toBe(`${forwarderId}.Arn`);
-    }
-    // Distinct physical names, or one rule silently fires for both.
-    const names = rules.map(([, r]) => (r.Properties as { Name: string }).Name);
-    expect(new Set(names).size).toBe(2);
-    expect(names).toContain(scheduleResourceName("my-agent", "digest"));
   });
 
   it("carries the variables through FIXED NoEcho parameters, whatever names the value file holds", () => {

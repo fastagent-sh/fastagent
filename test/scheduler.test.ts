@@ -6,7 +6,11 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
-import { createScheduler as scheduler, fireScheduleOnce as fire } from "../src/schedule/scheduler.ts";
+import {
+  type ScheduleLoad,
+  createScheduler as scheduler,
+  fireScheduleOnce as fire,
+} from "../src/schedule/scheduler.ts";
 import { scheduleSession } from "../src/schedule/schedule.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
@@ -728,31 +732,153 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
   });
 });
 
-describe("schedule/scheduler: externalClock mode", () => {
-  it("arms NO cron timers and does NO boot catch-up — but still pumps wake-ups", async () => {
+describe("schedule/scheduler: schedules/ re-read while running", () => {
+  it("arms an added schedule, re-arms a changed one, disarms a removed one, and keeps a broken one's last definition", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
     const root = await freshRoot();
-    // An overdue slot the resident scheduler WOULD catch up: lastFired 09:00, now 10:30 (10:00 missed).
-    seedClaim(root, "job", "2026-07-07T09:00:00Z");
-    mkdirSync(join(root, "schedule"), { recursive: true });
-    writeFileSync(
-      join(root, "schedule", "wakeups.json"),
-      JSON.stringify([{ id: "w1", session: "s", prompt: "wake!", fireAt: "2026-07-07T10:00:00Z" }]),
-    );
     const { agent, calls } = recordingAgent();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    let loaded: ScheduleLoad = { schedules: [hourly()], failures: [] };
+    const changes = vi.fn();
     const s = createScheduler({
       agent,
       stateRoot: root,
       schedules: [hourly()],
-      now: () => new Date("2026-07-07T10:30:00Z"),
-      externalClock: true,
+      reload: async () => loaded,
+      onChange: changes,
     });
     s.start();
-    // The due wake-up fires (the pump runs); the overdue CRON slot does not (the external clock owns it).
-    await vi.waitFor(() => expect(calls.length).toBe(1));
-    expect(calls[0]!.text).toContain("wake!");
-    await new Promise((r) => setTimeout(r, 30));
-    expect(calls).toHaveLength(1);
-    expect(lastFire(root, "job")).toBe("2026-07-07T09:00:00Z"); // untouched — no resident claim
+    const names = () => s.current().map((x) => `${x.name} ${x.cron}`);
+    expect(names()).toEqual(["job 0 * * * *"]);
+
+    // Added and changed: armed from the NEXT instant after now — an edit is not a missed run to catch up.
+    loaded = { schedules: [hourly({ cron: "*/5 * * * *" }), hourly({ name: "other", prompt: "o" })], failures: [] };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(names()).toEqual(["job */5 * * * *", "other 0 * * * *"]);
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
+    // The changed cron fires on its new grid (10:05), the old one (11:00) is gone.
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
+    expect(changes).toHaveBeenCalledTimes(2); // a fire moves the next instant, which AgentCore mirrors
+
+    // A file that breaks keeps what it last was, said once — not on every re-read.
+    loaded = {
+      schedules: [hourly({ name: "other", prompt: "o" })],
+      failures: [{ label: "schedules/job.md", file: "/x/schedules/job.md", message: "invalid cron/tz — nope" }],
+    };
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(names()).toEqual(["job */5 * * * *", "other 0 * * * *"]);
+    expect(logs.filter((l) => /schedules\/job\.md is not a valid schedule/.test(l))).toHaveLength(1);
+    expect(logs.join("\n")).toMatch(/it keeps its previous definition/);
+
+    // Removed: no longer armed, and its next instant does not fire.
+    loaded = { schedules: [hourly({ name: "other", prompt: "o" })], failures: [] };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(names()).toEqual(["other 0 * * * *"]);
+    const before = calls.length;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls.filter((c) => c.session === scheduleSession("job"))).toHaveLength(before);
+    s.stop();
+  });
+
+  it("a file not valid at start is said once, at start, and not again by a re-read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const failure = { label: "schedules/bad.md", file: "/x/schedules/bad.md", message: "no closing ---" };
+    const s = createScheduler({
+      agent: recordingAgent().agent,
+      stateRoot: await freshRoot(),
+      schedules: [hourly()],
+      failures: [failure],
+      reload: async () => ({ schedules: [hourly()], failures: [failure] }),
+    });
+    s.start();
+    const said = () => logs.filter((l) => /schedules\/bad\.md is not a valid schedule .* — not armed/.test(l));
+    expect(said()).toHaveLength(1); // at start, before any re-read
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(said()).toHaveLength(1);
+    s.stop();
+  });
+
+  it("caps the armed SET at 20: an old definition kept for a broken file counts, so breaking files adds nothing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const named = (n: number) => hourly({ name: `s${String(n).padStart(2, "0")}` });
+    const broken = (n: number) => ({
+      label: `schedules/s${String(n).padStart(2, "0")}.md`,
+      file: "/x",
+      message: "no closing ---",
+    });
+    const first20 = Array.from({ length: 20 }, (_, i) => named(i));
+    let loaded: ScheduleLoad = { schedules: [...first20, named(20)], failures: [] };
+    const s = createScheduler({
+      agent: recordingAgent().agent,
+      stateRoot: await freshRoot(),
+      schedules: loaded.schedules,
+      localClock: false,
+      reload: async () => loaded,
+    });
+    s.start();
+    const names = () => s.current().map((x) => x.name);
+    expect(names()).toEqual(first20.map((x) => x.name)); // at start, too
+    expect(logs.join("\n")).toMatch(/schedules\/s20\.md is not armed — at most 20 schedules are/);
+    // Break five armed files (each keeps its old definition) and add five valid ones: still 20, the first by name.
+    loaded = {
+      schedules: [...first20.slice(5), ...Array.from({ length: 5 }, (_, i) => named(30 + i))],
+      failures: [0, 1, 2, 3, 4].map(broken),
+    };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(names()).toHaveLength(20);
+    expect(names()).toEqual(first20.map((x) => x.name));
+    s.stop();
+  });
+
+  it("without a local clock (AgentCore's alarms deliver each instant) it arms no timer, and still re-reads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:59:30Z"));
+    const { agent, calls } = recordingAgent();
+    let loaded: ScheduleLoad = { schedules: [hourly()], failures: [] };
+    const s = createScheduler({
+      agent,
+      stateRoot: await freshRoot(),
+      schedules: [hourly()],
+      localClock: false,
+      reload: async () => loaded,
+    });
+    s.start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000); // past 11:00
+    expect(calls).toEqual([]);
+    loaded = { schedules: [hourly({ name: "other" })], failures: [] };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(s.current().map((x) => x.name)).toEqual(["other"]);
+    s.stop();
+  });
+
+  it("a re-read that fails keeps everything armed, and says so", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
+    const root = await freshRoot();
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const s = createScheduler({
+      agent: recordingAgent().agent,
+      stateRoot: root,
+      schedules: [hourly()],
+      reload: async () => {
+        throw new Error("EACCES");
+      },
+    });
+    s.start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(s.current().map((x) => x.name)).toEqual(["job"]);
+    expect(logs.join("\n")).toMatch(/re-reading schedules\/ failed \(keeping what is armed\): .*EACCES/);
     s.stop();
   });
 });

@@ -3,7 +3,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import * as Effect from "effect/Effect";
 import { applyCarriedEnv } from "../../deploy/secrets.ts";
 import {
   applyReleaseEnv,
@@ -17,8 +16,6 @@ import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
-import { createWakeAlarmSink } from "../../schedule/wake-alarm.ts";
-import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { failStartup } from "../fail.ts";
 import {
   announceControl,
@@ -192,28 +189,12 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     );
   }
   const traced = logAgentLoop(agent);
-  const onStateReady = isAgentcoreRuntime() ? armWakeAlarms(stateRoot) : undefined;
   const mountable = withRunOverrides(opened, opts);
   const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(mountable, { wrapAgent: () => traced, onStateReady })
+    ? mountAgentcoreService(mountable, { wrapAgent: () => traced })
     : mountAgentService(
         mountable,
         cliMountOptions(() => traced),
       ));
   return { ...service, stateRoot, port: config.http?.port ?? DEFAULT_HTTP_PORT };
-}
-
-/**
- * Install the wake-ALARM sink before the scheduler starts: the first wake poll may advance a recurring entry, and that
- * save must already re-arm its alarm.
- */
-function armWakeAlarms(stateRoot: string): (() => void) | undefined {
-  const secret = process.env.FASTAGENT_WAKE_SECRET;
-  if (!secret) {
-    log.warn("[fastagent] FASTAGENT_WAKE_SECRET is missing; external wake alarms cannot be registered");
-    return undefined;
-  }
-  const sink = Effect.runSync(createWakeAlarmSink({ secret }));
-  setWakeupsSink(sink);
-  return () => sink(stateRoot);
 }
