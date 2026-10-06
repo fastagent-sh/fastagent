@@ -365,7 +365,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     }
   });
 
-  it("a deployed start clones a repository, whatever checkout its author named", async () => {
+  it("a deployed start clones a repository, whatever checkout its author named, and goes without a directory", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "AGENTS.md": "APP: ship it.\n" });
     const { root, agentDir } = await agent();
@@ -373,13 +373,20 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
     await writeFile(
       join(agentDir, "fastagent.config.ts"),
-      `export default {\n  contexts: [{ github: "acme/app", local: ${JSON.stringify(checkout)} }],\n};\n`,
+      `export default {\n  contexts: [{ github: "acme/app", local: ${JSON.stringify(checkout)} }, { local: "/Users/me/notes" }],\n};\n`,
     );
     // What marks a process as the deployed one (paths.ts isDeployedWorkspace).
     vi.stubEnv("FASTAGENT_RELEASE_FILE", join(agentDir, "fastagent.release.json"));
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
     const opened = await createPiAgentFromDir(agentDir);
+    const said = info.mock.calls.map(([line]) => line);
+    info.mockRestore();
     const clone = join(agentDir, ".state", "contexts", "app");
+    // The author's directory is not on the host: absent from what the agent is given, and said at start.
     expect(opened.contexts).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
+    expect(said).toContain(
+      `[fastagent] context "notes" is a directory of the author's machine (/Users/me/notes): not on this host, and the agent is not told of it`,
+    );
     expect(readFileSync(join(clone, "AGENTS.md"), "utf8")).toBe("APP: ship it.\n");
   });
 

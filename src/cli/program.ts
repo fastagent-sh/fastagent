@@ -461,7 +461,7 @@ const context: CommandSpec = {
         "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
         "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
         "place at each start where git can do so without touching the agent's work. Any other directory is " +
-        "declared `{ local }`: it stays on this machine, and deploying refuses it. A context may not contain " +
+        "declared `{ local }`: it stays on this machine, and a deployed instance works without it. A context may not contain " +
         "the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {

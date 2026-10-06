@@ -36,7 +36,7 @@ import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
-import { type ResolvedContext, cloneContext, resolveContexts } from "../../contexts/resolve.ts";
+import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts } from "../../contexts/resolve.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
@@ -173,6 +173,12 @@ export async function resolveAgentAssembly(
     }
   }
   const contexts = resolveContexts(agentDir, config.contexts);
+  for (const absent of contextsAbsentHere(agentDir, config.contexts)) {
+    log.info(
+      `[fastagent] context "${absent.name}" is a directory of the author's machine (${absent.path}): not on this ` +
+        `host, and the agent is not told of it`,
+    );
+  }
   const modelSpec = resolveModelSpec(options.model, config);
   const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
     config,

@@ -33,7 +33,7 @@ export function defaultContextName(declaration: ContextDeclaration): string {
 }
 
 /** The two ways a directory's data reaches a host, said wherever one is refused there. */
-export const WAYS_TO_A_HOST =
+const WAYS_TO_A_HOST =
   "what the agent only reads goes in the agent directory, which every release carries; what it works on moves to " +
   "a repository declared as github";
 

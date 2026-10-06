@@ -48,15 +48,30 @@ export function resolveContexts(
   declaration: unknown,
   place: Place = isDeployedWorkspace() ? "host" : "local",
 ): ResolvedContext[] {
-  return declareContexts(declaration, agentDir).map((context) => resolveOne(agentDir, context, place));
+  return declareContexts(declaration, agentDir)
+    .filter((context) => !absentFrom(place, context))
+    .map((context) => resolveOne(agentDir, context, place));
+}
+
+/**
+ * The contexts declared that this instance does not have, by their type: a `local` one is a directory of the
+ * author's machine, so a host has none (agent-model.md §3). Not an error: the declaration says where the data lives.
+ * Whoever opens the agent says which they are, since the agent is not told of them.
+ */
+export function contextsAbsentHere(
+  agentDir: string,
+  declaration: unknown,
+  place: Place = isDeployedWorkspace() ? "host" : "local",
+): Extract<DeclaredContext, { kind: "local" }>[] {
+  return declareContexts(declaration, agentDir).filter((context) => absentFrom(place, context));
+}
+
+function absentFrom(place: Place, context: DeclaredContext): context is Extract<DeclaredContext, { kind: "local" }> {
+  return place === "host" && context.kind === "local";
 }
 
 function resolveOne(agentDir: string, context: DeclaredContext, place: Place): ResolvedContext {
   const { name, readonly } = context;
-  if (place === "host" && context.kind !== "github") {
-    // `deploy` refuses it before anything ships (preflight.ts); a host that has one anyway says so, by name.
-    throw new Error(`context "${name}": a deployment carries only github contexts yet, and this one is a directory`);
-  }
   if (context.kind === "github") {
     const { repo, ref } = context;
     // A host has no checkout of the user's: the `local` a declaration names is a path on the author's machine.

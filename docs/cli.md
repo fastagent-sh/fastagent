@@ -63,8 +63,8 @@ Each `--context <source>` declares something the agent works on in the config's 
 | The root of a checkout whose `origin` is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
 | Any other directory, a subdirectory of such a checkout included | `{ local: "<absolute path>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
 
-A directory stays on this machine, and deploying refuses an agent that declares one; a repository is cloned on a
-host. Every context is checked before anything is written: a directory must exist,
+A directory stays on this machine: a deployed instance works without it, and `deploy` says so. A repository is cloned
+on a host. Every context is checked before anything is written: a directory must exist,
 and no declared location may contain the agent directory or sit inside it. Without `--context` the agent has none
 and works only in its own directory.
 

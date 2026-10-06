@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { declareContexts } from "../src/contexts/declare.ts";
 import { declarationFor } from "../src/contexts/source.ts";
-import { resolveContexts } from "../src/contexts/resolve.ts";
+import { contextsAbsentHere, resolveContexts } from "../src/contexts/resolve.ts";
 import { rewriteContexts } from "../src/contexts/config-text.ts";
 import { writeContexts } from "../src/engines/pi/config.ts";
 
@@ -100,16 +100,21 @@ describe("contexts: resolved for this instance", () => {
     ]);
   });
 
-  it("refuses what is not there to work on, and a host, naming the context", async () => {
+  it("refuses what is not there to work on; on a host a directory is absent, and said to be", async () => {
     const { root, agentDir } = await layout();
     await writeFile(join(root, "file"), "");
     expect(() => resolveContexts(agentDir, [{ local: "../missing" }], "local")).toThrow(
       /context "missing": .*missing does not exist/,
     );
     expect(() => resolveContexts(agentDir, [{ local: "../file" }], "local")).toThrow(/is not a directory/);
-    expect(() => resolveContexts(agentDir, [{ local: "../app" }], "host")).toThrow(
-      /context "app": a deployment carries only github contexts yet, and this one is a directory/,
-    );
+    // A directory of the author's machine is not on a host: not resolved, not refused, and named for whoever opens it.
+    expect(resolveContexts(agentDir, [{ local: "../missing" }, { github: "acme/app", name: "repo" }], "host")).toEqual([
+      expect.objectContaining({ name: "repo", kind: "github" }),
+    ]);
+    expect(contextsAbsentHere(agentDir, [{ local: "../missing" }, { github: "acme/app" }], "host")).toEqual([
+      expect.objectContaining({ name: "missing", kind: "local" }),
+    ]);
+    expect(contextsAbsentHere(agentDir, [{ local: "../app" }], "local")).toEqual([]);
     // A repository is cloned on a host, wherever the author's checkout is: no `local` of theirs is looked for there.
     expect(resolveContexts(agentDir, [{ github: "acme/app", local: join(root, "app") }], "host")).toEqual([
       expect.objectContaining({

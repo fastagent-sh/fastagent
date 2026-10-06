@@ -15,7 +15,7 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
-import { type DeclaredContext, WAYS_TO_A_HOST, declareContexts } from "../contexts/declare.ts";
+import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -99,12 +99,12 @@ export interface DeployReport {
 }
 
 /**
- * What each context becomes on the host, one line each, and the refusal of every one that cannot reach it: an
- * instance never starts with a context silently missing (agent-model.md §3). A repository is cloned there, as on this
- * machine without a checkout; a directory of this machine does not reach one (agent-model.md §3).
+ * What each context becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
+ * repository is cloned there, as on this machine without a checkout. A directory of this machine stays here: the
+ * deployed agent works without it, which the line says and says how to change. One the agent works on is a warning,
+ * since the deployed agent lacks data it was meant to work on; one it only knows, a note.
  */
 function checkContexts(contexts: readonly DeclaredContext[], storageResets: boolean, report: DeployReport): void {
-  const refused: string[] = [];
   for (const context of contexts) {
     const role = context.readonly ? "knows" : "works on";
     if (context.kind === "github") {
@@ -112,14 +112,18 @@ function checkContexts(contexts: readonly DeclaredContext[], storageResets: bool
         ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
         : "cloned on the host, and brought up to date in place at each start";
       report.note(`${role} ${context.name}: github ${context.repo}${context.ref ? `@${context.ref}` : ""}, ${fate}`);
+    } else if (context.readonly) {
+      report.note(
+        `${role} ${context.name}: local ${context.path}, stays on this machine, and the deployed agent works without ` +
+          `it; to ship what the agent reads there, copy it into the agent directory, which every release carries`,
+      );
     } else {
-      refused.push(
-        `context "${context.name}" (${context.path}) is a directory on this machine, which a host does not have: ` +
-          WAYS_TO_A_HOST,
+      report.warn(
+        `${role} ${context.name}: local ${context.path}, stays on this machine, and the deployed agent works without ` +
+          `it; to work on it from a host, move it to a GitHub repository and declare it as github`,
       );
     }
   }
-  if (refused.length > 0) throw new DeployGate(refused.join("; "));
 }
 
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */

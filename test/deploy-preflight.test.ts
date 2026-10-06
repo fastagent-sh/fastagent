@@ -383,19 +383,30 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
-  it("refuses every directory context, naming each — a host would start without them", async () => {
+  it("deploys without a directory context, saying so: a warning for one it works on, a note for one it knows", async () => {
     const dir = await agent();
-    const pre = await call(dir, {
-      model: "openai/gpt-4o-mini",
-      contexts: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
+    const pre = await call(
+      dir,
+      {
+        model: "openai/gpt-4o-mini",
+        contexts: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
+      },
+      { run: true },
+    );
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    expect(pre.messages).toContainEqual({
+      level: "warn",
+      text:
+        "works on app: local /srv/app, stays on this machine, and the deployed agent works without it; to work on " +
+        "it from a host, move it to a GitHub repository and declare it as github",
     });
-    expect(pre.ok).toBe(false);
-    if (!pre.ok) {
-      expect(pre.gate).toMatch(
-        /context "app" \(\/srv\/app\) is a directory on this machine, which a host does not have: what the agent only reads goes in the agent directory, which every release carries; what it works on moves to a repository declared as github; context "docs" /,
-      );
-      expect(pre.gate).not.toContain("handbook");
-    }
+    expect(pre.messages).toContainEqual({
+      level: "note",
+      text:
+        "knows docs: local /srv/docs, stays on this machine, and the deployed agent works without it; to ship what " +
+        "the agent reads there, copy it into the agent directory, which every release carries",
+    });
   });
 
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {

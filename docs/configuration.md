@@ -256,9 +256,10 @@ What each context gives the agent, re-read every turn:
 
 The locations are resolved when a process starts; editing `contexts` restarts `dev`. On a deployed host a `github`
 context is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)). A
-`local` context is a directory of this machine, which a host does not have, so `deploy` refuses it by name: what
-the agent only reads belongs in the agent directory, which every release ships; what it works on and must keep
-belongs in a repository, declared as `github`.
+`local` context is a directory of this machine, which a host does not have: the deployed agent works without it,
+and `deploy` and the host's startup say so by name. To give a host what the agent only reads there, copy it into the
+agent directory, which every release ships; to have the agent work on it from a host, move it to a repository and
+declare it as `github`.
 
 ## The system prompt
 
