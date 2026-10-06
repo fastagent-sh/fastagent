@@ -16,6 +16,7 @@ import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
+import { activeWork } from "./channels/busy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
@@ -45,6 +46,37 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // The `.env` restarts too (credentials are process-bound).
     if (segments.length <= envRel.length && segments.every((seg, i) => seg === envRel[i])) return false;
     return true;
+  };
+}
+
+/** How long a dev worker waits for its running turns before it restarts anyway. */
+const DEV_RESTART_WAIT_MS = 10 * 60_000;
+
+/**
+ * In the dev worker: on the supervisor's `restart`, wait until no turn runs (`activeWork`, which every leased session
+ * counts), then `stop`. Bounded by `limitMs`, after which it stops anyway and says how many turns it cut: a chat that
+ * keeps the worker busy must not hold an edit back forever. A second `restart` while waiting is the same restart.
+ */
+export function listenForRestart(
+  stop: () => void,
+  options: { busy?: () => number; limitMs?: number; pollMs?: number } = {},
+): (message: unknown) => void {
+  const { busy = activeWork, limitMs = DEV_RESTART_WAIT_MS, pollMs = 100 } = options;
+  let restarting = false;
+  return (message) => {
+    if ((message as { type?: unknown } | null)?.type !== "restart" || restarting) return;
+    restarting = true;
+    void (async () => {
+      const running = busy();
+      if (running > 0) log.info(`[fastagent] restarting once ${running} running turn(s) finish`);
+      const deadline = Date.now() + limitMs;
+      while (busy() > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
+      const cut = busy();
+      if (cut > 0) {
+        log.warn(`[fastagent] restarting with ${cut} turn(s) still running after ${limitMs / 60_000} minutes`);
+      }
+      stop();
+    })();
   };
 }
 
@@ -104,7 +136,9 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     log.info(`[fastagent] change detected — restarting…`);
     if (worker) {
       reloadPending = true;
-      worker.kill("SIGTERM"); // the exit handler respawns once the port is released
+      // The worker stops once its running turns finish (restartWhenIdle); the exit handler respawns it then. A turn
+      // that wrote the very file that changed is not cut off by its own edit.
+      worker.send({ type: "restart" });
     } else {
       spawnWorker(); // worker was down (broken edit) — retry now
     }

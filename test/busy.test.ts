@@ -3,6 +3,7 @@ import { activeWork, beginWork } from "../src/channels/busy.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
+import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
 const until = async (cond: () => boolean): Promise<void> => {
@@ -10,6 +11,15 @@ const until = async (cond: () => boolean): Promise<void> => {
 };
 
 describe("channels/busy: the process-wide in-flight signal", () => {
+  it("a session the lease holds counts, whatever started its turn, until it is released", () => {
+    const base = activeWork();
+    const release = inProcessLease().tryAcquire("s");
+    expect(activeWork()).toBe(base + 1);
+    release?.();
+    release?.();
+    expect(activeWork()).toBe(base);
+  });
+
   it("counts begin → done, and done is idempotent", () => {
     const base = activeWork();
     const done = beginWork();

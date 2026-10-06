@@ -2,7 +2,7 @@
  * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to assemble + serve,
  * restarting it on agent edits.
  */
-import { runDevSupervisor } from "../../dev-supervisor.ts";
+import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
@@ -33,6 +33,12 @@ export interface DevOptions {
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
+  // First, so a restart asked for while the worker is still assembling is heard: with nothing running it stops at once.
+  if (isWorker)
+    process.on(
+      "message",
+      listenForRestart(() => process.kill(process.pid, "SIGTERM")),
+    );
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
