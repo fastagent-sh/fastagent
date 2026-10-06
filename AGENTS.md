@@ -281,16 +281,16 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 Full version: `CONTRIBUTING.md`. The essentials:
 
-1. **Local-first.** Verify locally before opening a PR; do not push to discover bugs in CI.
+1. **Local-first.** While iterating, run the test files for the code you changed (`npx vitest run test/<file>.test.ts`); run the full gate once before pushing. Do not push to discover bugs in CI.
    ```bash
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`. The prefix is also what labels the PR (`.github/labeler.yml`), and CODEOWNERS requests the reviewer — so `gh pr create --base main --assignee @me` is enough. `gh issue create` is the exception: it cannot read the issue forms (`--template` only sees Markdown templates), so pass the fields it would have set — `--type Bug --label bug` (or `Feature`/`enhancement`, `Task`/`chore`).
-3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
-4. **Review policy.** Merging is a maintainer's decision, never an agent's. Green CI makes a PR eligible; report "ready to merge" and stop — merge only when told to. External-contributor PRs are reviewed and merged by a maintainer.
-5. **After merge:**
+3. **Squash merge through the merge queue** (repo settings enforce both): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
+4. **Review policy.** Merging is a maintainer's decision, never an agent's. After opening a PR, report it with the local gate result and stop; do not wait for CI. When told to merge, run `gh pr merge <N>` and return without waiting. It does one of two things, and the report names which one its output shows: it enqueues the PR (its own checks have passed; the queue reruns them on top of the latest `main` and merges only if they pass), or it enables auto-merge (its checks are still running; it enqueues itself once they pass, and stays open if they fail). External-contributor PRs are reviewed and merged by a maintainer.
+5. **After merge.** The queue merges later, so clean up only once `gh pr view <N> --json state -q .state` prints `MERGED`. A deleted remote branch is not that proof: a closed PR's branch can be deleted too. Use `-D`, because a squashed branch is never an ancestor of `main`:
    ```bash
-   git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
+   git checkout main && git pull --ff-only && git fetch --prune origin && git branch -D <branch>
    ```
 6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** The npm package
    must keep its `publish` trusted-publisher binding to `fastagent-sh/fastagent` / `publish.yml` /
