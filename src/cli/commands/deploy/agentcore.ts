@@ -36,7 +36,6 @@ function shellArg(value: string): string {
 
 export const agentcoreHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(TEMPLATE_FILE) && isGeneratedAgentcoreTemplate(content),
-  artifact: TEMPLATE_FILE,
   async shell(agentDir) {
     const name = agentcoreName(basename(agentDir));
     const stack = agentcoreStackName(name);

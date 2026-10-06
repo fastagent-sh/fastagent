@@ -1,10 +1,10 @@
 /**
- * `deploy railway`: a thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
+ * `deploy railway`: no config file of its own, scale-to-zero is a manual dashboard step, the URL is minted (see
  * planRailwayDeploy).
  */
 import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
-import { isGeneratedRailwayJson, planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
+import { planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
@@ -15,8 +15,8 @@ import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
-  isOurs: (path, content) => path.endsWith("railway.json") && isGeneratedRailwayJson(content),
-  artifact: "railway.json",
+  // Railway's only artifacts are the container's, which planArtifacts owns for every host.
+  isOurs: () => false,
   shell: async (agentDir) => railwayShell(toRailwayName(basename(agentDir)), agentDir),
   async deploy(ctx) {
     const { opts, agentDir, pre, channels, write } = ctx;

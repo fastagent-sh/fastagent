@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { planRailwayDeploy, toRailwayName } from "../src/deploy/railway/plan.ts";
 import { declaredChannels } from "../src/channels/discover.ts";
 
-const json = (p: ReturnType<typeof planRailwayDeploy>) => p.artifacts.find((a) => a.path === "railway.json")!.content;
 const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code agent with a lockfile). */
@@ -18,40 +17,21 @@ const base = {
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
-  it("the railway.json marker is a KEY (JSON cannot carry a comment) — that is what --force keys on", async () => {
-    const { isGeneratedRailwayJson } = await import("../src/deploy/railway/plan.ts");
-    const generated = json(planRailwayDeploy({ ...base, channels: [] }));
-    expect(isGeneratedRailwayJson(generated)).toBe(true);
-    expect(JSON.parse(generated)["x-generated-by"]).toBe("fastagent deploy railway"); // Railway ignores it
-    expect(isGeneratedRailwayJson('{"build":{"builder":"DOCKERFILE"}}')).toBe(false); // the author's
-    expect(isGeneratedRailwayJson("not json")).toBe(false); // unparseable reads as theirs, never as ours
-  });
-
-  it("generates a thin railway.json — build from Dockerfile, healthcheck /health (no boot-race routing)", () => {
-    const j = JSON.parse(json(planRailwayDeploy({ ...base, channels: [] })));
-    expect(j.build.builder).toBe("DOCKERFILE");
-    expect(j.deploy.healthcheckPath).toBe("/health");
-    expect(j.deploy.restartPolicyType).toBe("ON_FAILURE");
-    // Thin on purpose: no env/volume/sleeping in the file — those are CLI/dashboard service settings.
-    expect(json(planRailwayDeploy({ ...base, channels: [] }))).not.toContain("FASTAGENT");
-  });
-
-  it("railway.json and the Dockerfile sit at the root of the upload, where Railway reads both", () => {
+  it("generates no Railway config file: Railway builds the root Dockerfile, and the runbook says /health is not waited for", () => {
     const p = planRailwayDeploy({ ...base, channels: [] });
-    const cfg = JSON.parse(json(p));
-    expect(cfg.build.dockerfilePath).toBe("Dockerfile"); // relative to the upload context, the agent directory
-    // Nothing to point Railway at by hand any more: no service variable, no dashboard step.
+    expect(p.artifacts.map((a) => a.path)).not.toContain("railway.json");
+    expect(runbook(p)).not.toMatch(/railway\.json|RAILWAY_DOCKERFILE_PATH|Config-as-code/);
+    expect(runbook(p)).toContain("Railway builds the\n# Dockerfile at its root");
+    expect(runbook(p)).toContain("without waiting for\n# /health");
     expect(runbook(p)).toContain(
       "railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets\n",
     );
-    expect(runbook(p)).not.toMatch(/RAILWAY_DOCKERFILE_PATH|Config-as-code/);
     expect(runbook(p)).toContain("each release replaces /data/definition");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
-      "railway.json",
       "fastagent.release.json",
       "Dockerfile",
       ".dockerignore",

@@ -32,7 +32,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
-| `deploy railway [agent]` | Generate `railway.json`, `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
+| `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
 | `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -139,7 +139,7 @@ fails, naming the provider, when the refresh does, and when no provider has a us
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [-g|--global] [--deployment [host]] [--no-input]
+fastagent login [provider] [-g|--global] [--deployment <host>] [--no-input]
 ```
 
 Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). `-g`, or
@@ -151,7 +151,7 @@ refuses and says where to `cd`.
   serves every agent on the machine that has nothing else for that provider. A refresh is written back to the file
   it was read from. `login` warns when an env variable already authenticates the provider, because the global login
   is then not used.
-- `--deployment [host]` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
+- `--deployment <host>` logs this agent's deployment in instead: the login runs on the box (Docker, Fly, Railway,
   AgentCore) and the credential stays there. `deploy` never carries `auth.json`. See
   [Logging a deployment in](deploy.md#logging-a-deployment-in).
 - Several processes can share one `auth.json` safely (OAuth refresh is locked). Do not copy an OAuth `auth.json`:

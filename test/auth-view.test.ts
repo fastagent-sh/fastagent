@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatAuthReport } from "../src/cli/auth-view.ts";
+import { deployedHost } from "../src/paths.ts";
 
 // The #5 fix: an expired/revoked login must NOT report the contradictory "(none found)". This pins the
 // three-branch decision so flipping stored/none (or a probe/store contract change) can't silently regress.
@@ -37,13 +38,29 @@ describe("auth-view: formatAuthReport", () => {
       source: "OAuth",
       stored: "oauth",
       shadowed: "ANTHROPIC_API_KEY",
-      deployed: true,
+      deployed: { host: "railway" },
     });
     expect(box.line).toBe("auth:   OAuth (anthropic) — /data/.secrets/auth.json");
     expect(box.warn).toBe(
       "ANTHROPIC_API_KEY is set but unused: the stored anthropic oauth credential in /data/.secrets/auth.json " +
-        "outranks it. To run on ANTHROPIC_API_KEY, log in with it instead: `fastagent login anthropic --deployment` " +
+        "outranks it. To run on ANTHROPIC_API_KEY, log in with it instead: `fastagent login anthropic --deployment railway` " +
         'from the agent directory this was deployed from, choosing "API key"',
     );
+  });
+
+  it("a box that cannot tell its host leaves <host> in the command, never a guess", () => {
+    const box = formatAuthReport({ provider: P, path: PATH, deployed: { host: undefined } });
+    expect(box.warn).toContain(
+      "run `fastagent login --deployment <host>` from the agent directory this was deployed from",
+    );
+  });
+});
+
+describe("deployedHost: which host a box runs on, from its own environment", () => {
+  it("reads each platform's own variable, and answers nothing where nothing says", () => {
+    expect(deployedHost({ FASTAGENT_AGENTCORE: "1" })).toBe("agentcore");
+    expect(deployedHost({ FLY_APP_NAME: "bot" })).toBe("fly");
+    expect(deployedHost({ RAILWAY_SERVICE_ID: "f120224a" })).toBe("railway");
+    expect(deployedHost({})).toBeUndefined();
   });
 });
