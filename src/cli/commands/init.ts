@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
-import { scaffoldAgent } from "../../scaffold/init.ts";
+import { initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import { writeContexts } from "../../engines/pi/config.ts";
 import { declarationFor } from "../../contexts/source.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
@@ -47,6 +47,8 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     if (installFailed)
       console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
   }
+  // After the install, so the lockfile it wrote is in the first commit.
+  console.error(`[fastagent] git: ${await initRepository(dir)}`);
 
   console.error(`  next steps:`);
   const cdTarget = displayPath(process.cwd(), dir);
