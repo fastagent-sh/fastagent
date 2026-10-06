@@ -46,11 +46,8 @@ describe("contexts: the declaration", () => {
     ["no source", [{ name: "x" }], /contexts\[0\]: declare where it comes from/],
     ["an unknown key", [{ local: "/x", copyy: true }], /contexts\[0\]: unknown key "copyy"/],
     ["a subdirectory (later)", [{ github: "a/b", path: "docs" }], /"path" .* is not supported yet/],
-    [
-      "a copy for a host",
-      [{ local: "/x", copy: true }],
-      /contexts\[0\]: "copy" is gone, since a copy on a host is not the same data: what the agent only reads goes in the agent directory/,
-    ],
+    // Never released, so refused like any key a declaration does not have.
+    ["a copy for a host", [{ local: "/x", copy: true }], /contexts\[0\]: unknown key "copy"/],
     ["ref on a directory", [{ local: "/x", ref: "main" }], /"ref" applies to a github context/],
     ["a repository not owner/repo", [{ github: "acme" }], /"github" must be "owner\/repo"/],
     ["a ref git would read as an option", [{ github: "a/b", ref: "--upload-pack=x" }], /"ref" must name a branch/],

@@ -32,11 +32,6 @@ export function defaultContextName(declaration: ContextDeclaration): string {
     : basename(declaration.local);
 }
 
-/** The two ways a directory's data reaches a host, said wherever one is refused there. */
-const WAYS_TO_A_HOST =
-  "what the agent only reads goes in the agent directory, which every release carries; what it works on moves to " +
-  "a repository declared as github";
-
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 /** Whether `repo` names a GitHub repository, `owner/repo`. */
@@ -75,10 +70,6 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${at} must be an object`);
   const e = entry as Record<string, unknown>;
   if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
-  // A copy on a host would not be the same data (agent-model.md §3), so a host never receives one.
-  if (e.copy !== undefined) {
-    throw new Error(`${at}: "copy" is gone, since a copy on a host is not the same data: ${WAYS_TO_A_HOST}`);
-  }
   for (const key of Object.keys(e)) {
     if (!(CONTEXT_KEYS as readonly string[]).includes(key)) {
       throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTEXT_KEYS.join(", ")})`);
