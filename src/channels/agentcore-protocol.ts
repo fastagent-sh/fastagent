@@ -89,6 +89,7 @@ export interface WebhookReply {
 
 /** One desired alarm: mirror of a pending wake-up (id names the EventBridge schedule; at = fireAt). */
 export interface WakeAlarm {
+  /** One per INSTANT (`<wake id or schedule:name>@<instant>`), so mirroring again never rewrites a spent alarm. */
   id: string;
   at: string;
   /** A schedule's alarm: the fire it delivers when it goes off (a wake-up's only pokes). */

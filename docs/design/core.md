@@ -864,14 +864,16 @@ the pending wake-ups and each schedule's next instant to the forwarder's reserve
 forwarder mirrors each into a self-deleting one-shot EventBridge schedule. A wake-up's pokes the container, whose
 ordinary wake pump fires the due entry; a schedule's carries `{scheduleFire: {name, occurrence}}`, which the
 container claims and runs. The container runs no resident timer for schedules, so the alarm is the one path that
-fires an instant and its reply is the record of what happened. A schedule's alarm is keyed by the schedule, so
-mirroring again moves it, and every delivery mirrors again however it ended (fired, skipped, failed), so a fault
-does not end the chain. An alarm that outlived an edit (a schedule removed, an instant its cron no longer has) is
-answered as skipped. Because the container sets the alarms, a schedule written on the runtime is armed without a
-deploy. The costs: the alarms exist only once an envelope has reached the container through the forwarder (`--run`
-probes it; the manual runbook prints the probe), and a mirror that fails every retry is tried again every 5 minutes
-only while the container lives. A deployment that is reclaimed before that, with nothing else to wake it, sleeps
-until something does. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+fires an instant and its reply is the record of what happened. Every alarm is keyed by its INSTANT, never by the
+schedule or wake-up: an alarm deletes itself once it has fired, and mirroring runs right after a fire, so an id
+reused for the next instant would update the alarm EventBridge is about to delete. Mirroring again is therefore
+idempotent, and it runs after every delivery however it ended (fired, skipped, failed) and every 5 minutes for as
+long as the container lives, which also repairs a sync that gave up and an alarm lost where no sync sees. An alarm
+that outlived an edit (a schedule removed, an instant its cron no longer has) is answered as skipped. Because the
+container sets the alarms, a schedule written on the runtime is armed without a deploy. The costs: the alarms exist
+only once an envelope has reached the container through the forwarder (`--run` probes it; the manual runbook prints
+the probe), and only a living container repairs them. A deployment whose alarms were lost after its container was
+reclaimed, with nothing else to wake it, sleeps until something does. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
 template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
 callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
 run, because nothing can restore their ingress when compute is reclaimed.

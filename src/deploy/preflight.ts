@@ -12,7 +12,7 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
-import { loadSchedules } from "../schedule/discover.ts";
+import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
 import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
@@ -432,6 +432,12 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     report.issue(
       `${failure.label} is not a valid schedule (${failure.message}) — the deployed box would leave it unarmed, so ` +
         `it would never fire there`,
+    );
+  }
+  for (const over of capSchedules(loadedSchedules.schedules).over) {
+    report.issue(
+      `schedules/${over.name}.md is past the first ${MAX_SCHEDULES} schedules by name — the deployed box would leave ` +
+        `it unarmed, so it would never fire there`,
     );
   }
   const declaredSecrets: DeclaredSecret[] = [

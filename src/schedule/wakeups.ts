@@ -98,11 +98,13 @@ export function addWakeup(
   let fireAtDate: Date;
   if (input.cron !== undefined) {
     // A recurring wake runs FOREVER — gated harder than a one-shot, by the rule every recurring producer shares.
-    const err = recurringCronError(input.cron, input.tz, now);
+    const err = recurringCronError(input.cron, input.tz);
     if (err)
       return { ok: false, error: `${err}${err.startsWith("this cron never") ? " — use `in` for a one-shot" : ""}.` };
     // DERIVED from the cron — a caller-passed fireAt can't disagree with the schedule.
-    fireAtDate = nextRun(input.cron, input.tz, now) as Date;
+    const first = nextRun(input.cron, input.tz, now);
+    if (!first) return { ok: false, error: "this cron never fires again — use `in` for a one-shot." };
+    fireAtDate = first;
   } else {
     if (!input.fireAt) return { ok: false, error: "a one-shot wake needs its fire time (`in`)." };
     if (input.fireAt.getTime() < now.getTime() + MIN_WAKE_MS) {

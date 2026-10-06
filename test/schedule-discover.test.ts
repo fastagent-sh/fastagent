@@ -77,20 +77,6 @@ describe("schedule/discover", () => {
     expect(failures[0]?.message).toMatch(/cannot be empty, "\.", "\.\." or contain a path separator/);
   });
 
-  it("arms at most 20, the first by name, and names each one left out", async () => {
-    const files = Object.fromEntries(
-      Array.from({ length: 22 }, (_, i) => [`s${String(i).padStart(2, "0")}.md`, md('cron: "0 * * * *"')]),
-    );
-    const { schedules, failures } = await loadSchedules(await ws(files));
-    expect(schedules.map((s) => s.name)).toEqual(
-      Array.from({ length: 20 }, (_, i) => `s${String(i).padStart(2, "0")}`),
-    );
-    expect(failures.map((f) => [f.label, f.message])).toEqual([
-      ["schedules/s20.md", expect.stringMatching(/^more than 20 schedules/)],
-      ["schedules/s21.md", expect.stringMatching(/^more than 20 schedules/)],
-    ]);
-  });
-
   it("a missing schedules/ dir yields none (no schedules is normal)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sd-empty-"));
     expect(await loadSchedules(dir)).toEqual({ schedules: [], failures: [] });

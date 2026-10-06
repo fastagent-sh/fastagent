@@ -54,7 +54,8 @@ async function invoke(envelope) {
 }
 
 // Mirror the container's pending wake-ups and its schedules' next instants into one-shot schedules: at(fireAt),
-// poke me (or deliver the schedule's fire), delete after firing. Upsert (create → conflict → update). The container pre-filters DUE alarms (it is
+// poke me (or deliver the schedule's fire), delete after firing. Upsert (create → conflict → update): an id names one
+// instant, so the update is the same alarm mirrored again, never a spent one moved. The container pre-filters DUE alarms (it is
 // awake handling those), so every failure here is REAL — counted and propagated: a swallowed error
 // would leave a pending wake with no alarm, exactly the reliability hole this mechanism closes.
 // Cancelled wakes are NOT deleted here: their poke fires, finds nothing due, and the schedule
@@ -63,9 +64,9 @@ async function syncAlarms(alarms, ctx) {
   const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = require("@aws-sdk/client-scheduler");
   const sch = new SchedulerClient({});
   let failed = 0;
-  // Alarm name = a stable hash of the WHOLE wake id. A prefix of the id would collide (two wakes
-  // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-arm below:
-  // the second wake would "update" the first's alarm and silently steal its fire time.
+  // Alarm name = a stable hash of the WHOLE alarm id. A prefix of the id would collide (two alarms
+  // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-mirror below:
+  // the second alarm would "update" the first and silently steal its fire time.
   const names = new Map();
   for (const a of alarms) {
     const name = process.env.WAKE_PREFIX + crypto.createHash("sha256").update(a.id).digest("hex").slice(0, 16);

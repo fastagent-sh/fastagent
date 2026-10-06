@@ -11,12 +11,22 @@ import { join } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { recurringCronError } from "./cron.ts";
+import type { Schedule } from "./schedule.ts";
+import { isSafeScheduleName } from "./state.ts";
 import { MAX_PENDING_WAKEUPS } from "./wakeups.ts";
 
 /** As many schedules as one conversation may have pending wake-ups: the same bound on what the agent can set going. */
-const MAX_SCHEDULES = MAX_PENDING_WAKEUPS;
-import type { Schedule } from "./schedule.ts";
-import { isSafeScheduleName } from "./state.ts";
+export const MAX_SCHEDULES = MAX_PENDING_WAKEUPS;
+
+/**
+ * THE cap on what is armed: at most {@link MAX_SCHEDULES}, the first by name; `over` is the rest. It applies to the
+ * armed SET (the scheduler passes the valid files and the old definitions it keeps for broken ones, together), not to
+ * the files that loaded: a cap counted over valid files alone is passed by every file that breaks and is kept.
+ */
+export function capSchedules(schedules: readonly Schedule[]): { within: Schedule[]; over: Schedule[] } {
+  const sorted = [...schedules].sort((a, b) => a.name.localeCompare(b.name));
+  return { within: sorted.slice(0, MAX_SCHEDULES), over: sorted.slice(MAX_SCHEDULES) };
+}
 
 const KEYS = new Set(["cron", "tz"]);
 
@@ -88,17 +98,13 @@ export async function loadSchedules(dir: string): Promise<{ schedules: Schedule[
       continue;
     }
     // The same guard a recurring wake-up passes: the agent writes these files too.
-    const invalid = recurringCronError(cron, tz, new Date());
+    const invalid = recurringCronError(cron, tz);
     if (invalid) {
       fail(invalid);
       continue;
     }
     if (parsed.body === "") {
       fail("it has no prompt: write what the agent should do under the frontmatter");
-      continue;
-    }
-    if (schedules.length >= MAX_SCHEDULES) {
-      fail(`more than ${MAX_SCHEDULES} schedules — the ones after the first ${MAX_SCHEDULES} by name are not armed`);
       continue;
     }
     schedules.push({ name, cron, ...(tz !== undefined ? { tz } : {}), prompt: parsed.body });

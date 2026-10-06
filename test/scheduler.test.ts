@@ -805,6 +805,41 @@ describe("schedule/scheduler: schedules/ re-read while running", () => {
     s.stop();
   });
 
+  it("caps the armed SET at 20: an old definition kept for a broken file counts, so breaking files adds nothing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const named = (n: number) => hourly({ name: `s${String(n).padStart(2, "0")}` });
+    const broken = (n: number) => ({
+      label: `schedules/s${String(n).padStart(2, "0")}.md`,
+      file: "/x",
+      message: "no closing ---",
+    });
+    const first20 = Array.from({ length: 20 }, (_, i) => named(i));
+    let loaded: ScheduleLoad = { schedules: [...first20, named(20)], failures: [] };
+    const s = createScheduler({
+      agent: recordingAgent().agent,
+      stateRoot: await freshRoot(),
+      schedules: loaded.schedules,
+      localClock: false,
+      reload: async () => loaded,
+    });
+    s.start();
+    const names = () => s.current().map((x) => x.name);
+    expect(names()).toEqual(first20.map((x) => x.name)); // at start, too
+    expect(logs.join("\n")).toMatch(/schedules\/s20\.md is not armed — at most 20 schedules are/);
+    // Break five armed files (each keeps its old definition) and add five valid ones: still 20, the first by name.
+    loaded = {
+      schedules: [...first20.slice(5), ...Array.from({ length: 5 }, (_, i) => named(30 + i))],
+      failures: [0, 1, 2, 3, 4].map(broken),
+    };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(names()).toHaveLength(20);
+    expect(names()).toEqual(first20.map((x) => x.name));
+    s.stop();
+  });
+
   it("without a local clock (AgentCore's alarms deliver each instant) it arms no timer, and still re-reads", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(new Date("2026-07-07T10:59:30Z"));

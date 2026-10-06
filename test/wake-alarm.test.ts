@@ -44,7 +44,8 @@ function retryingSink(now = new Date("2026-07-28T09:00:00Z")) {
     secret: "x",
     fetchImpl: impl as unknown as typeof fetch,
     now: () => now,
-    delay: () => gate,
+    // The re-mirror after a pass never comes here: these cases are about the retries inside one.
+    delay: (ms) => (ms === HEAL_MS ? new Promise<void>(() => {}) : gate),
   });
   return {
     sink,
@@ -146,8 +147,8 @@ describe("schedule/wake-alarm: the sink", () => {
     expect(calls[0]!.body).toEqual({
       secret: "s3cret",
       alarms: [
-        { id: "a", at: "2026-07-28T10:00:00.000Z" },
-        { id: "b", at: "2026-07-28T11:00:00.000Z" },
+        { id: "a@2026-07-28T10:00:00.000Z", at: "2026-07-28T10:00:00.000Z" },
+        { id: "b@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" },
       ],
     });
   });
@@ -163,7 +164,7 @@ describe("schedule/wake-alarm: the sink", () => {
     ]);
     sink(root);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]!.body.alarms).toEqual([{ id: "future", at: "2026-07-28T10:30:00.000Z" }]);
+    expect(calls[0]!.body.alarms).toEqual([{ id: "future@2026-07-28T10:30:00.000Z", at: "2026-07-28T10:30:00.000Z" }]);
     seed(root, [{ id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T09:59:00.000Z" }]); // nothing future
     sink(root);
     await new Promise((r) => setTimeout(r, 20));
@@ -179,7 +180,7 @@ describe("schedule/wake-alarm: the sink", () => {
     const { sink, posted, succeed, release } = retryingSink();
     sink(root);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]!.alarms).toEqual([{ id: "a", at: "2026-07-28T10:00:00.000Z" }]);
+    expect(posted[0]!.alarms).toEqual([{ id: "a@2026-07-28T10:00:00.000Z", at: "2026-07-28T10:00:00.000Z" }]);
 
     seed(root, [{ id: "b", session: "s", prompt: "p", fireAt: "2026-07-28T11:00:00.000Z" }]);
     succeed();
@@ -187,7 +188,7 @@ describe("schedule/wake-alarm: the sink", () => {
     release();
 
     await vi.waitFor(() => expect(posted).toHaveLength(2));
-    expect(posted[1]!.alarms).toEqual([{ id: "b", at: "2026-07-28T11:00:00.000Z" }]); // `a` is gone
+    expect(posted[1]!.alarms).toEqual([{ id: "b@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" }]); // `a` is gone
   });
 
   it("single-flight: a burst of mutations coalesces into ONE more pass, not one loop each", async () => {
@@ -260,6 +261,32 @@ describe("schedule/wake-alarm: the sink", () => {
     await vi.waitFor(() => expect(attempts.length).toBe(2 * MAX_SYNC_ATTEMPTS));
   });
 
+  it("mirrors the whole set again after a sync that SUCCEEDED too — an alarm lost where no sync sees is set again", async () => {
+    const root = await freshRoot();
+    rememberWakeAlarmUrl(root, "https://fn.on.aws");
+    const { impl, calls } = fakeFetch();
+    const heals: (() => void)[] = [];
+    const sink = createWakeAlarmSink({
+      secret: "x",
+      fetchImpl: impl,
+      now: () => new Date("2026-07-28T09:00:00Z"),
+      delay: (ms) => (ms === HEAL_MS ? new Promise<void>((resolve) => heals.push(resolve)) : Promise.resolve()),
+    });
+    seed(root, [{ id: "a", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:00.000Z" }]);
+    sink(root);
+    await vi.waitFor(() => expect(heals).toHaveLength(1));
+    expect(calls).toHaveLength(1);
+    // A second sync while one re-mirror is pending adds no second chain: one per process, however many syncs ran.
+    sink(root);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
+    expect(heals).toHaveLength(1);
+    heals[0]!();
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]!.body).toEqual(calls[0]!.body); // the same ids: idempotent
+    await vi.waitFor(() => expect(heals).toHaveLength(2)); // and it keeps going while the process lives
+  });
+
   it("a store mutating faster than the backoff cannot renew the retry budget", async () => {
     // Each mutation restarts the attempt SEQUENCE against the new desired set, but not the budget:
     // counting failures only within a pass, a save landing inside every backoff would keep the loop
@@ -312,14 +339,18 @@ describe("schedule/wake-alarm: the sink", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.body.alarms).toHaveLength(1);
 
-    // A recurring wake's CLAIM advances fireAt in place — the save re-arms its alarm for the next slot.
+    // A recurring wake's CLAIM advances fireAt in place — the save arms an alarm for the next slot, under a NEW id: the
+    // one that just fired is EventBridge's to delete, and reusing its id would have that delete take the next slot too.
     const rec = addWakeup(root, { session: "s", prompt: "r", cron: "0 * * * *", tz: "UTC" }, now);
     expect(rec.ok).toBe(true);
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     takeFirstDueWakeup(root, new Date("2026-07-28T11:00:01Z")); // claims the recurring occurrence
     await vi.waitFor(() => expect(calls).toHaveLength(3));
-    const rearmed = calls[2]!.body.alarms.find((a) => a.id === (rec as { id: string }).id);
-    expect(rearmed?.at).toBe("2026-07-28T12:00:00.000Z"); // advanced to the NEXT cron instant
+    const recId = (rec as { id: string }).id;
+    const before = calls[1]!.body.alarms.find((a) => a.id.startsWith(`${recId}@`));
+    const rearmed = calls[2]!.body.alarms.find((a) => a.id.startsWith(`${recId}@`));
+    expect(rearmed).toEqual({ id: `${recId}@2026-07-28T12:00:00.000Z`, at: "2026-07-28T12:00:00.000Z" });
+    expect(before?.id).not.toBe(rearmed?.id);
 
     // unwake mirrors too (the cancelled alarm goes stray and self-deletes on fire — lazy by design).
     removeWakeup(root, (added as { id: string }).id, "s");
@@ -392,7 +423,9 @@ describe("schedule/wake-alarm: helpers", () => {
       { id: "future", session: "s", prompt: "p", fireAt: "2026-07-28T11:00:00.000Z" },
       { id: "due", session: "s", prompt: "p", fireAt: "2026-07-28T10:00:01.000Z" }, // inside the due margin
     ];
-    expect(toAlarms(entries, [], now)).toEqual([{ id: "future", at: "2026-07-28T11:00:00.000Z" }]);
+    expect(toAlarms(entries, [], now)).toEqual([
+      { id: "future@2026-07-28T11:00:00.000Z", at: "2026-07-28T11:00:00.000Z" },
+    ]);
   });
 
   it("a schedule's instant too near to set is set just past the margin, still naming its instant", () => {
@@ -400,14 +433,14 @@ describe("schedule/wake-alarm: helpers", () => {
     const now = new Date("2026-07-28T10:00:58Z");
     expect(toAlarms([], [{ name: "tick", cron: "* * * * *", prompt: "p" }], now)).toEqual([
       {
-        id: "schedule:tick",
+        id: "schedule:tick@2026-07-28T10:01:00.000Z",
         at: "2026-07-28T10:01:04.000Z",
         fire: { name: "tick", occurrence: "2026-07-28T10:01:00.000Z" },
       },
     ]);
   });
 
-  it("toAlarms adds each schedule's NEXT instant, carrying the fire it delivers, keyed by the schedule", () => {
+  it("toAlarms adds each schedule's NEXT instant, carrying the fire it delivers, one id per instant", () => {
     const now = new Date("2026-07-28T10:00:00Z");
     const schedules = [
       { name: "digest", cron: "0 9 * * *", tz: "Asia/Shanghai", prompt: "p" }, // 09:00 Shanghai = 01:00 UTC
@@ -415,13 +448,13 @@ describe("schedule/wake-alarm: helpers", () => {
     ];
     expect(toAlarms([], schedules, now)).toEqual([
       {
-        id: "schedule:digest",
+        id: "schedule:digest@2026-07-29T01:00:00.000Z",
         at: "2026-07-29T01:00:00.000Z",
         fire: { name: "digest", occurrence: "2026-07-29T01:00:00.000Z" },
       },
       // `soon`'s next instant after now is tomorrow's 10:00, far outside the margin.
       {
-        id: "schedule:soon",
+        id: "schedule:soon@2026-07-29T10:00:00.000Z",
         at: "2026-07-29T10:00:00.000Z",
         fire: { name: "soon", occurrence: "2026-07-29T10:00:00.000Z" },
       },

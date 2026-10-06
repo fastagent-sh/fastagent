@@ -46,9 +46,11 @@ export function readWakeAlarmUrl(stateRoot: string): string | undefined {
 export const MAX_SYNC_ATTEMPTS = 5;
 const RETRY_BASE_MS = 2_000;
 /**
- * After a whole sync gives up, how long until it is tried again, for as long as this process lives: one failed sync
- * must not leave a schedule's chain of alarms broken while the container is still up to repair it. Outside the busy
- * count, so a container that is only waiting to retry can still be reclaimed; its next start sets the alarms again.
+ * How long after every sync, however it ended, the whole set is mirrored again, for as long as this process lives. An
+ * alarm can be lost in ways no sync sees (a sync that gave up, a schedule deleted by hand), and with no timer of its
+ * own in the container a lost schedule alarm is a schedule that has stopped; mirroring again is idempotent (one id per
+ * instant). Outside the busy count, so a container that is only waiting for it can still be reclaimed; its next start
+ * mirrors again.
  */
 export const HEAL_MS = 5 * 60_000;
 const SYNC_TIMEOUT_MS = 10_000;
@@ -59,18 +61,23 @@ const DUE_MARGIN_MS = 5_000;
  * Pending wake-ups and each schedule's next instant → the desired alarm set. A wake-up already due is left out (see
  * {@link DUE_MARGIN_MS}): the container is awake for it, and its wake pump fires it. A schedule's alarm is the ONLY
  * thing that fires its instant (the container runs no timer of its own there), so one too near to set is set just
- * past the margin, still naming its instant. Keyed by the schedule, so mirroring again moves it rather than adding one.
+ * past the margin, still naming its instant.
+ *
+ * ONE ID PER INSTANT, never per schedule or wake-up. An alarm deletes itself once it has fired, and mirroring runs right
+ * after a fire: an id reused for the next instant would update the alarm EventBridge is about to delete, and the next
+ * instant would be deleted with it. With one id per instant, mirroring again is idempotent, and an alarm that outlived
+ * an edit fires once and is answered as skipped (a schedule) or finds nothing due (a wake-up).
  */
 export function toAlarms(pending: Wakeup[], schedules: readonly Schedule[], now: Date): WakeAlarm[] {
   const earliest = now.getTime() + DUE_MARGIN_MS;
   return [
-    ...pending.filter((w) => Date.parse(w.fireAt) > earliest).map((w) => ({ id: w.id, at: w.fireAt })),
+    ...pending.filter((w) => Date.parse(w.fireAt) > earliest).map((w) => ({ id: `${w.id}@${w.fireAt}`, at: w.fireAt })),
     ...schedules.flatMap((s) => {
       const next = nextRun(s.cron, s.tz, now);
       if (!next) return [];
       const occurrence = next.toISOString();
       const at = next.getTime() > earliest ? occurrence : new Date(earliest + 1000).toISOString();
-      return [{ id: `schedule:${s.name}`, at, fire: { name: s.name, occurrence } }];
+      return [{ id: `schedule:${s.name}@${occurrence}`, at, fire: { name: s.name, occurrence } }];
     }),
   ];
 }
@@ -165,17 +172,16 @@ export function createWakeAlarmSink(options: {
             if (dirty) break;
           }
         }
-        if (failures < MAX_SYNC_ATTEMPTS) return true;
+        if (failures < MAX_SYNC_ATTEMPTS) return;
         log.error(
           `[schedule] alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups and the schedules' ` +
             `next instants have no alarm. It is tried again every ${HEAL_MS / 60_000} minutes while this container ` +
             `runs; if the container is reclaimed first, they are set again when something next wakes it, and a ` +
             `deployment with nothing else to wake it sleeps through every instant until then`,
         );
-        return false;
       });
 
-    /** One retry pending at a time, however many syncs gave up meanwhile. */
+    /** One re-mirror pending at a time, however many syncs ended meanwhile. */
     let healing = false;
     // Single-flight: a save arriving while the loop runs only marks it dirty, so a burst coalesces into one more pass
     // instead of one concurrent loop each.
@@ -192,11 +198,11 @@ export function createWakeAlarmSink(options: {
               Effect.andThen(reconcile(stateRoot)),
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
-                  // Store/clock faults cannot be repaired by another POST. A new mutation may retry the mirror.
+                  // Store/clock faults are not retried here; the re-mirror below, or a new mutation, tries again.
                   log.error(
-                    `[schedule] alarm reconcile failed (alarms are stale until the next store change or fire): ${String(portError(cause))}`,
+                    `[schedule] alarm reconcile failed (tried again within ${HEAL_MS / 60_000} minutes while this ` +
+                      `container runs): ${String(portError(cause))}`,
                   );
-                  return true;
                 }),
               ),
             ),
@@ -206,8 +212,8 @@ export function createWakeAlarmSink(options: {
               done();
             }),
         ).pipe(
-          Effect.flatMap((converged) =>
-            converged || healing
+          Effect.flatMap(() =>
+            healing
               ? Effect.void
               : Effect.sync(() => {
                   healing = true;

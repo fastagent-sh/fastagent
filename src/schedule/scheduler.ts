@@ -8,6 +8,7 @@ import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
+import { capSchedules, MAX_SCHEDULES } from "./discover.ts";
 import { basename } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { type Schedule, scheduleSession } from "./schedule.ts";
@@ -389,30 +390,36 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       armed.set(s.name, { schedule: s, loop: launch(s.name, cronLoop(s, due)) });
     };
 
-    /** The failures last reported, so a broken file is said when it breaks, not on every re-read. */
+    /** The problems last said, so a broken file is said when it breaks, not on every re-read. */
     let reported = new Set<string>();
     /**
-     * Say what is wrong with each file in `failures` that was not already said, and return the names the armed set
-     * keeps: a file that stops being valid keeps the definition it last had.
+     * What should be armed, from what loaded: the valid schedules, plus the definition each broken file last had (a
+     * file that stops being valid keeps it), capped as ONE set (`capSchedules`). Says each problem not already said.
      */
-    const report = (failures: readonly ModuleLoadFailure[]): Map<string, Schedule> => {
-      const kept = new Map<string, Schedule>();
-      const said = new Set<string>();
+    const settle = (valid: readonly Schedule[], failures: readonly ModuleLoadFailure[]): Schedule[] => {
+      const candidates = new Map(valid.map((s) => [s.name, s] as const));
       for (const f of failures) {
-        const name = scheduleNameOf(f.label);
-        const before = armed.get(name)?.schedule;
-        if (before) kept.set(name, before);
-        const line = `${f.label}: ${f.message}`;
+        const before = armed.get(scheduleNameOf(f.label))?.schedule;
+        if (before) candidates.set(before.name, before);
+      }
+      const { within, over } = capSchedules([...candidates.values()]);
+      const armedNames = new Set(within.map((s) => s.name));
+      const said = new Set<string>();
+      const say = (line: string) => {
         said.add(line);
-        if (!reported.has(line)) {
-          log.error(
-            `[schedule] ${f.label} is not a valid schedule (${f.message}) — ` +
-              (before ? "it keeps its previous definition" : "not armed"),
-          );
-        }
+        if (!reported.has(line)) log.error(`[schedule] ${line}`);
+      };
+      for (const f of failures) {
+        const keeps = armedNames.has(scheduleNameOf(f.label));
+        say(
+          `${f.label} is not a valid schedule (${f.message}) — ${keeps ? "it keeps its previous definition" : "not armed"}`,
+        );
+      }
+      for (const s of over) {
+        say(`schedules/${s.name}.md is not armed — at most ${MAX_SCHEDULES} schedules are, the first by name`);
       }
       reported = said;
-      return kept;
+      return within;
     };
     /**
      * One re-read of `schedules/`. An edit takes effect from the NEXT instant after now: catching up is for what was
@@ -422,8 +429,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const reloadOnce = (load: () => Promise<ScheduleLoad>) =>
       Effect.gen(function* () {
         const loaded = yield* Effect.tryPromise({ try: load, catch: (cause) => new PortFailure(cause) });
-        const next = new Map(loaded.schedules.map((s) => [s.name, s] as const));
-        for (const [name, kept] of report(loaded.failures)) next.set(name, kept);
+        const next = new Map(settle(loaded.schedules, loaded.failures).map((s) => [s.name, s] as const));
         let changed = false;
         for (const [name, { loop }] of armed) {
           if (next.has(name)) continue;
@@ -471,9 +477,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
           markInterruptedFire(stateRoot, s.name, fire);
         }
-        report(failures);
         const current = now();
-        for (const s of schedules) {
+        for (const s of settle(schedules, failures)) {
           if (stopped) break;
           // FROM THE LAST FIRE, or from now when there was none. A schedule that has never fired does not catch
           // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
