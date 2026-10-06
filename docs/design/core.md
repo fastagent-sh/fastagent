@@ -82,8 +82,10 @@ stake. A clone of another repository under the context's name stops the start, n
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
 directory); `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares
-exactly the intended list. Deploying an agent with contexts is not built yet: the deploy preflight refuses it by
-name.
+exactly the intended list. On a host (`place: "host"`) a `github` context is always a clone, its author's `local`
+not looked for; a directory context is refused there and by the deploy preflight, by name, until copies are built.
+Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
+no credential of its own, so the token reaches git, and the agent's push, without being stored.
 
 A command names its agent by path (`[agent]`, default `.`): a directory holding `fastagent.config.ts` is the agent;
 inside one, the command refuses naming its root; anything else refuses with `fastagent init`. Nothing is searched
@@ -696,9 +698,10 @@ ingress stays operator-owned. `--run` alone causes host side effects; for a tunn
 reads the Quick Tunnel URL and registers webhooks.
 
 The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its
-root, and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. An agent
-that declares contexts is refused: nothing carries them to a host yet. Git history ships when the host packer
-permits it, and the image installs Git when the agent directory contains `.git`.
+root, and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight
+says what each context becomes on the host: a `github` one is cloned there (afresh on every deployment on AgentCore,
+whose storage starts over); a directory one is refused, nothing carrying it yet. Git history ships when the host
+packer permits it, and the image installs Git when the agent directory contains `.git` or a context is `github`.
 
 `deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
 `.secrets/` and `.deployment/`; the release manifest names the agent the storage belongs to. A process-lifetime

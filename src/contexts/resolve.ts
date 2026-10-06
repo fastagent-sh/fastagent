@@ -52,12 +52,15 @@ export function resolveContexts(
 }
 
 function resolveOne(agentDir: string, context: DeclaredContext, place: Place): ResolvedContext {
-  if (place === "host") {
-    throw new Error(`context "${context.name}": a deployment does not carry contexts yet`);
-  }
   const { name, readonly } = context;
+  if (place === "host" && context.kind !== "github") {
+    // `deploy` refuses it before anything ships (preflight.ts); a host that has one anyway says so, by name.
+    throw new Error(`context "${name}": a deployment carries only github contexts yet, and this one is a directory`);
+  }
   if (context.kind === "github") {
-    const { repo, ref, checkout } = context;
+    const { repo, ref } = context;
+    // A host has no checkout of the user's: the `local` a declaration names is a path on the author's machine.
+    const checkout = place === "host" ? undefined : context.checkout;
     const github = { kind: "github" as const, repo, ...(ref !== undefined ? { ref } : {}) };
     // The user's own checkout, used as it is: never fetched, never moved to `ref`, only said to be off it.
     const problem = checkout === undefined ? undefined : checkoutProblem(checkout, repo);

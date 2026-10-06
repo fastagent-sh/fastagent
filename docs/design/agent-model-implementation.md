@@ -100,13 +100,14 @@ adds:
 
 - the definition: replaced from the image on every release, as `base/<agent>` is today, so a hosted agent's own
   harness changes last until the next release (distribution, per the model);
-- each copied context: seeded by `materializeContexts` from `/app/contexts/<name>` into `.state/contexts/<name>`
-  when absent (writable) or on every release (read-only), with the decision written to the log;
-- each `github` context: cloned by `materializeContexts`, with `GITHUB_TOKEN` from the host's secrets.
+- each copied context (4b): seeded from `/app/contexts/<name>` into `.state/contexts/<name>` when absent (writable)
+  or on every release (read-only), with the decision written to the log;
+- each `github` context: cloned by `cloneContext` (built in 4a), with `GITHUB_TOKEN` from the host's environment.
 
-Preflight (`deploy/preflight.ts`) prints one line per context from the same `declare.ts` data, refuses a `local`
-context without `copy` and a context naming `path`, and on AgentCore states that every context is fetched again on
-each deployment. `deploy/secrets.ts` lists `GITHUB_TOKEN` when any context is `github`.
+Preflight (`deploy/preflight.ts`) prints one line per context from the same `declare.ts` data (built in 4a), refuses
+a `local` context without `copy` (and, until 4b, one with it), and on AgentCore states that every clone starts over
+on each deployment. `GITHUB_TOKEN` is a value like any other in `.secrets/.env`, so it travels and the runbook lists
+it; preflight notes its absence, since a public repository needs none.
 
 ### 3.8 Restart when idle (`dev-supervisor.ts`, `start`)
 
@@ -172,7 +173,8 @@ release is cut between stage 2 and stage 4: in between, `deploy` refuses an agen
 | 1. Prompt and resources (landed) | §3.3 and §3.4, except where `AGENTS.md` comes from and context skills; §3.5 `promptSnippet`; `init` scaffolds `APPEND_SYSTEM.md`. Placement unchanged: `agentsFilesOverride` returns today's `contextFiles` (the workspace walk), which `LoadedDefinition` keeps until stage 2 | The served prompt is pi's default plus FastAgent's sections, with the same `AGENTS.md` as before; `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, the three skill locations and every refusal and report above have tests; `persona.md` is refused |
 | 2. Agent directory and local contexts (landed) | §2 for `local` and `copy`, §3.1, §3.2, §3.3 and §3.4 for `AGENTS.md` and context skills, §3.5, §3.6, §3.10, and the part of §3.7 that locates the agent: the image holds the definition at `/app/definition`, `applyDeploymentRelease` replaces only the definition, and the deployed `start` opens it without `FASTAGENT_AGENT` | `resolvePlacement` is gone; every command takes `[agent]`; contexts are in the prompt, `AGENTS.md`, skills and `ToolContext`; an agent without contexts still deploys to every host; `deploy` refuses an agent with contexts, by name |
 | 3. GitHub contexts (landed) | §2 for `github` on this machine: a checkout used as it is, otherwise a clone brought up to date in place at each start; git's own credentials; `github:` sources, `--ref`, `--local` | Clones, `ref` notices and checkout detection are tested against a local bare repository standing in for GitHub |
-| 4. Deploy with contexts | The rest of §3.7: the staged build directory, copied and `github` contexts on a host, `GITHUB_TOKEN` | Every host deploys an agent with each context type; preflight prints each fate; AgentCore says what it resets |
+| 4a. `github` contexts on a host (landed) | §3.7 for `github`: a clone on the host by the same `cloneContext`, the author's `local` not looked for; `GITHUB_TOKEN` through a credential helper in the clone's config; `git` in the image; preflight prints each context's fate and refuses directory ones | An agent whose contexts are all `github` deploys to every host; AgentCore says what it resets |
+| 4b. Copied contexts on a host | The rest of §3.7: the staged build directory, `local` + `copy` seeded on the host | Every host deploys an agent with each context type |
 | 5. Self-change runtime | §3.8, §3.9; `core.md` §2 and the "changing itself" section | `dev` and `start` restart only when idle and only onto a definition that loads; a too-frequent routine is refused |
 
 ## 6. Tests worth naming

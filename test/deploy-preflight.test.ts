@@ -383,14 +383,52 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
-  it("refuses an agent that declares contexts, naming them — a host would start without them", async () => {
+  it("refuses every directory context, naming each — a host would start without them", async () => {
     const dir = await agent();
     const pre = await call(dir, {
       model: "openai/gpt-4o-mini",
-      contexts: [{ local: "/srv/app" }, { local: "/srv/docs" }],
+      contexts: [{ local: "/srv/app" }, { local: "/srv/docs", copy: true }, { github: "acme/handbook" }],
     });
     expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/declares contexts \(app, docs\), and deploying an agent with contexts/);
+    if (!pre.ok) {
+      expect(pre.gate).toMatch(
+        /context "app" \(\/srv\/app\) is a directory on this machine, which a host does not have: declare it as a github repository, or remove it; context "docs" \(\/srv\/docs\) is to be copied to the host, which deploy does not do yet/,
+      );
+      expect(pre.gate).not.toContain("handbook");
+    }
+  });
+
+  it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {
+    const dir = await agent();
+    const config = {
+      model: "openai/gpt-4o-mini",
+      contexts: [{ github: "acme/app" }, { github: "acme/handbook", ref: "main", readonly: true }],
+    };
+    const pre = await call(dir, config);
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) return;
+    const notes = pre.messages.filter((m) => m.level === "note").map((m) => m.text);
+    expect(notes).toContain(
+      "works on app: github acme/app, cloned on the host, and brought up to date in place at each start",
+    );
+    expect(notes).toContain(
+      "knows handbook: github acme/handbook@main, cloned on the host, and brought up to date in place at each start",
+    );
+    expect(notes).toContainEqual(
+      expect.stringMatching(/^no GITHUB_TOKEN in \.secrets\/\.env: the host clones without a credential/),
+    );
+    expect(pre.container.apt).toEqual(["git"]);
+
+    // Where a deployment starts the storage over, a clone does not outlive a release, and that is said.
+    await writeFile(join(dir, ".secrets", ".env"), "K=v\nGITHUB_TOKEN=ghp_x\n");
+    const reset = await call(dir, config, { storageResets: true });
+    expect(reset.ok).toBe(true);
+    if (!reset.ok) return;
+    const said = reset.messages.map((m) => m.text);
+    expect(said).toContain(
+      "works on app: github acme/app, cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost",
+    );
+    expect(said.some((text) => text.startsWith("no GITHUB_TOKEN"))).toBe(false);
   });
 
   it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {

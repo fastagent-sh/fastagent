@@ -124,6 +124,16 @@ const SLOW_NETWORK = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=
 const PINNED = "refs/remotes/origin/pinned";
 
 /**
+ * The credential a clone of fastagent's reaches GitHub with when git has none of its own: `GITHUB_TOKEN`, read from
+ * the environment each time git asks, so the token is never written to disk. Set in the clone's own config, so the
+ * agent's `git push` there uses it too. git asks its own helpers first (a credential manager on a laptop), then this
+ * one, which answers nothing when the variable is unset.
+ */
+const TOKEN_HELPER =
+  '!f() { test "$1" = get && test -n "$GITHUB_TOKEN" && printf "username=x-access-token\\npassword=%s\\n" "$GITHUB_TOKEN"; }; f';
+const HELPER_KEY = "credential.https://github.com.helper";
+
+/**
  * What a start did with a clone: made it, moved it to what the remote has now, found it there already, or kept it as
  * it is, for the `reason` given (git refused to touch the agent's work, or the remote could not be reached).
  */
@@ -167,6 +177,8 @@ export async function refreshClone(repo: string, ref: string | undefined, dir: s
       return kept("it has commits no branch or tag holds");
     }
   }
+  // A clone made before the helper existed, or whose config was edited, gets it back.
+  await runGit(["config", HELPER_KEY, TOKEN_HELPER], dir);
   const before = gitAnswer(["rev-parse", "HEAD"], dir);
   // Pinned to a commit and on it: nothing a remote says can change that.
   if (ref !== undefined && FULL_COMMIT.test(ref) && before === ref.toLowerCase()) return { outcome: "current" };
@@ -212,6 +224,7 @@ async function cloneInto(repo: string, ref: string | undefined, dir: string): Pr
     try {
       if (ref !== undefined && FULL_COMMIT.test(ref)) {
         await runGit(["init", "-q", next], parent);
+        await runGit(["config", HELPER_KEY, TOKEN_HELPER], next);
         await runGit(["remote", "add", "origin", url], next);
         await runGit([...SLOW_NETWORK, "fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref], next);
         await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], next);
@@ -219,7 +232,22 @@ async function cloneInto(repo: string, ref: string | undefined, dir: string): Pr
       } else {
         // One token, and `--` before the operands: a declared value never reaches git as an option of its own.
         const branch = ref !== undefined ? [`--branch=${ref}`] : [];
-        await runGit([...SLOW_NETWORK, "clone", "-q", "--depth", "1", ...branch, "--", url, next], parent);
+        await runGit(
+          [
+            ...SLOW_NETWORK,
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--config",
+            `${HELPER_KEY}=${TOKEN_HELPER}`,
+            ...branch,
+            "--",
+            url,
+            next,
+          ],
+          parent,
+        );
       }
     } catch (error) {
       throw new Error(

@@ -145,8 +145,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   runbook.push(
     ``,
     `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
-    input.shipsGit
-      ? `# Git is installed because the definition ships its .git.`
+    input.apt?.includes("git")
+      ? `# Git is installed (the definition ships its .git, a github context is cloned here, or deploy.apt names it).`
       : `# To give the agent git, add deploy: { apt: ["git"] }.`,
   );
 
