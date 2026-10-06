@@ -8,34 +8,41 @@ status: current
 
 **Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, expose it as an API endpoint, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own (`fastagent init`): grow it with `APPEND_SYSTEM.md`, `skills/`, `tools/`, channels, and markdown context, declare the projects it works on as contexts, and FastAgent serves it as a live service.
+It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `tools/`, channels and schedules, declare the projects it works on and knows as contexts, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next turn.
 
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
-reviewer/                   # the agent, and its working directory
+reviewer/                   # the agent, its working directory, and a git repository
 ├── fastagent.config.ts     # the marker, its contexts, plus deployment choices
 ├── APPEND_SYSTEM.md        # optional standing instructions (SYSTEM.md replaces pi's default prompt)
-├── skills/                 # optional reusable markdown expertise
+├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
+├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
 ├── tools/                  # optional code tools
 ├── channels/               # optional webhook/bot adapters
 ├── schedules/              # optional prompts run on a cron (<name>.md)
 ├── extensions/             # optional pi extension modules (see configuration.md)
-└── reference.md            # optional markdown context (any file layout)
+├── reference.md            # optional reference material the agent reads (any file layout)
+└── .state/ .secrets/ .contexts/   # this machine's instance: sessions, credentials, clones (never committed)
 
 app/                        # a context it works on, declared in fastagent.config.ts
 ├── AGENTS.md               # optional project context, loaded with the agent
 └── .agents/skills/         # optional skills the project provides, named app/<skill>
 ```
 
+A context is a directory on this machine (`{ local }`) or a GitHub repository (`{ github }`). A repository reaches every
+place the agent runs: it is the user's checkout here, and a clone elsewhere. A local directory stays on this machine,
+and a deployment says so.
+
 ## What FastAgent provides
 
-1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`), `skills/`, `tools/`, `channels/`, and markdown context as files you can inspect, edit, and commit. What it works on and knows is declared as [contexts](configuration.md#contexts), each with its `AGENTS.md` as project context.
+1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as [contexts](configuration.md#contexts), each with its `AGENTS.md` as project context.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
+4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
+6. **Clients** — a session control plane (`/control/*`: state, history, live events, steer and stop) and an authoring API (`createAgent`, `addContext`, `removeContext`) a desktop app uses to create agents and edit their contexts under the same rules as the CLI.
+7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
 
@@ -124,7 +131,9 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
-- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
+- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each context's `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
+- Contexts: local directories and GitHub repositories (a checkout used as it is, otherwise a clone brought up to date in place at each start, on this machine and on a host).
+- Session control (`/control/*`) and the authoring API for clients.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Schedules (`schedules/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
