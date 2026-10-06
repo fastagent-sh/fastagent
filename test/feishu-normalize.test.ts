@@ -56,10 +56,10 @@ describe("Feishu/Lark normalized webhook model", () => {
   });
 });
 
-describe("card (interactive) decoding — the shape the agent's OWN answers come back as", () => {
-  // What a query API hands back for a card: `title` + `elements` paragraphs of the same tagged nodes
-  // as `post`. NOT what we sent (an entity reference holding only a card_id) — the platform renders it
-  // down on the way out, which is why this needs no cardkit read.
+describe("card (interactive) decoding — a card 1.0 as the platform renders it down", () => {
+  // What a query API hands back for a card 1.0: `title` + `elements` paragraphs of the same tagged
+  // nodes as `post`. A Card 2.0 (every answer this channel streams) comes back as an "upgrade your
+  // client" placeholder in this shape unless the read asks for `user_card_content` — see below.
   const card = {
     title: "需要先确认两项",
     elements: [
@@ -132,5 +132,53 @@ describe("card (interactive) decoding — the shape the agent's OWN answers come
     const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(labelled) });
     expect(decoded.text).toContain("批准");
     expect(decoded.text).toContain("选一个");
+  });
+});
+
+describe("Card 2.0 decoding — a card as it was SENT (`card_msg_content_type=user_card_content`)", () => {
+  it("reads the agent's streamed answer, as the platform returned it for a real one", () => {
+    // Verbatim from `GET /im/v1/messages/:id?card_msg_content_type=user_card_content` on a streamed answer card.
+    const answer = {
+      body: { elements: [{ content: "Hello! 👋 How can I help?", element_id: "answer", tag: "markdown" }] },
+      config: {
+        enable_forward_interaction: false,
+        streaming_mode: false,
+        summary: { content: "Hello! 👋 How can I help?" },
+      },
+      schema: "2.0",
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(answer) }).text).toBe(
+      "Hello! 👋 How can I help?",
+    );
+  });
+
+  it("reads a header title and text nested in containers, in reading order, with button labels", () => {
+    const card = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "Daily digest" } },
+      body: {
+        elements: [
+          { tag: "markdown", content: "1. deploys" },
+          {
+            tag: "column_set",
+            columns: [
+              { tag: "column", elements: [{ tag: "div", text: { tag: "plain_text", content: "2. incidents" } }] },
+            ],
+          },
+          { tag: "img", img_key: "img_1" },
+          { tag: "button", text: { tag: "plain_text", content: "Open report" } },
+        ],
+      },
+    };
+    const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) });
+    expect(decoded.text).toBe("Daily digest\n1. deploys\n2. incidents\n[image]\nOpen report");
+    expect(decoded.resources).toEqual([]); // a card's resources cannot be downloaded (see above)
+  });
+
+  it("keeps the marker when a Card 2.0 renders to nothing", () => {
+    const controlsOnly = { schema: "2.0", body: { elements: [{ tag: "button" }] } };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(controlsOnly) }).text).toBe(
+      "[interactive message]",
+    );
   });
 });

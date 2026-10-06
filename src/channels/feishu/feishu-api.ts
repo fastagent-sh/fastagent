@@ -408,8 +408,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         "getMessage",
         "GET",
         // Pin the id type: callers match mentions/sender against open_ids, so the response's id shape
-        // must not depend on the platform's default staying open_id.
-        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id`,
+        // must not depend on the platform's default staying open_id. And ask for a card as it was SENT:
+        // by default a Card 2.0 message (every answer this channel streams) comes back as the
+        // placeholder "please upgrade the client to view this", so a quoted answer was unreadable.
+        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id&card_msg_content_type=user_card_content`,
       );
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
     },
