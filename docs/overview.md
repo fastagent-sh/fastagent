@@ -31,7 +31,7 @@ app/                        # a context it works on, declared in fastagent.confi
 ```
 
 A context is a directory on this machine (`{ local }`) or a GitHub repository (`{ github }`). A repository reaches every
-place the agent runs: your checkout here when `local` names one, otherwise a clone, here and on a host. A local
+place the agent runs: here, your checkout when `local` names one, otherwise a clone; on a host, always a clone. A local
 directory stays on this machine, and a deployment says so.
 
 ## What FastAgent provides
@@ -132,7 +132,7 @@ Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
 - Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each context's `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
-- Contexts: local directories and GitHub repositories (a checkout used as it is, otherwise a clone brought up to date in place at each start, on this machine and on a host).
+- Contexts: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
 - Session control (`/control/*`) and the authoring API for clients.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
