@@ -1,4 +1,5 @@
 /** Telegram's half of the shared context buffer (mechanics + consume protocol: ../kit/context-buffer.ts). */
+import { truncateCodePointPrefix } from "../kit/text.ts";
 import {
   capBufferedRefs,
   type ContextBuffer as GenericContextBuffer,
@@ -59,6 +60,25 @@ export function collectAttachments(
   const files = capBufferedRefs(refs((e) => e.fileIds, primary.files));
   const images = capBufferedRefs(refs((e) => e.imageIds, primary.images));
   return { files: files.kept, images: images.kept, skipped: files.skipped + images.skipped };
+}
+
+/**
+ * How much of a message the agent sent itself a place keeps. A digest runs to thousands of characters, and the
+ * per-line bound a human message gets would keep its title only; this stays inside the buffer's budget, so later
+ * discussion still evicts it oldest-first.
+ */
+const OWN_POST_MAX_CHARS = 2000;
+
+/**
+ * A message the agent sent with the send tool, as the place's discussion: the agent never receives its own messages
+ * as updates (and the Bot API has no history read), so this is the only way the chat's next turn knows it was said.
+ */
+export function ownPostEntry(body: string, messageId: number | undefined): BufferEntry {
+  return {
+    sender: "you (sent with telegram-send)",
+    body: truncateCodePointPrefix(body.replace(/\s+/g, " ").trim(), OWN_POST_MAX_CHARS, " … (truncated)"),
+    messageId,
+  };
 }
 
 export type ContextBuffer = GenericContextBuffer<BufferEntry>;

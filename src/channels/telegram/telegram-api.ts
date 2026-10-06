@@ -29,7 +29,7 @@ const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
 /** Per-attempt timeout for a JSON Bot API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
 
-/** Timeout for downloading file bytes (up to the 20 MB cap) — sized for a slow link, not a JSON call. */
+/** Timeout for moving file bytes, down or up (up to the 20 MB cap) — sized for a slow link, not a JSON call. */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** Longest flood wait (seconds) honoured PER ATTEMPT before failing visibly instead. Telegram's
@@ -62,8 +62,17 @@ export interface DownloadedFile {
 /** The methods this channel speaks and their result shapes — a hand-written slice of the Bot API
  *  schema. Adding a method = adding a row here, not writing a function. (If this table ever needs to
  *  grow past roughly ten rows, or entity-based formatting, adopt gramIO instead of growing it.) */
+/** The part of a sent Message this channel reads: where it landed. */
+interface SentMessage {
+  message_id?: number;
+  chat?: { id?: number };
+  message_thread_id?: number;
+}
+
 interface Api {
-  sendMessage: { message_id?: number };
+  sendMessage: SentMessage;
+  sendDocument: SentMessage;
+  sendPhoto: SentMessage;
   editMessageText: unknown;
   deleteMessage: unknown;
   getMe: { username?: string; can_read_all_group_messages?: boolean };
@@ -108,19 +117,22 @@ export async function callApi<M extends keyof Api>(
   api: string,
   botToken: string,
   method: M,
-  params: Record<string, unknown>,
+  /** JSON params, or a multipart form for an upload (a file's bytes; its own, longer timeout). */
+  params: Record<string, unknown> | FormData,
   opts: CallOptions = {},
 ): Promise<Api[M]> {
   const retries = opts.retries ?? RETRIES;
+  const upload = params instanceof FormData;
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     let raw: string;
     try {
       res = await fetch(`${api}/bot${botToken}/${method}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
-        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+        ...(upload
+          ? { body: params }
+          : { headers: { "content-type": "application/json" }, body: JSON.stringify(params) }),
+        signal: AbortSignal.timeout(upload ? DOWNLOAD_TIMEOUT_MS : API_TIMEOUT_MS),
       });
       raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
     } catch (e) {

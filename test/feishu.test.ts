@@ -271,7 +271,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
     expect(calls).toHaveLength(1);
     // …and "delayed, never lost" is a claim about the BUFFER, so prove it: the eaten mention rides
     // the next answered turn as context. Asserting only "not answered" would also pass for a drop.
-    expect(calls[0]?.prompt.text).toContain("recent group discussion");
+    expect(calls[0]?.prompt.text).toContain("recent discussion here");
     expect(calls[0]?.prompt.text).toContain("早于身份的提问");
   });
 
@@ -663,7 +663,7 @@ describe("turn flow", () => {
     );
     await idle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("[recent group discussion:");
+    expect(calls[0]?.prompt.text).toContain("[recent discussion here:");
     expect(calls[0]?.prompt.text).toContain("user ou_alice (msg om_context): deploy failed");
 
     await handler(
@@ -677,7 +677,7 @@ describe("turn flow", () => {
       ),
     );
     await idle();
-    expect(calls[1]?.prompt.text).not.toContain("recent group discussion");
+    expect(calls[1]?.prompt.text).not.toContain("recent discussion here");
   });
 
   it("isolates a non-Agent thread's buffer and folds it only into an @mention in that thread", async () => {
@@ -1671,7 +1671,7 @@ describe("turn flow", () => {
     await idle();
     expect(calls).toHaveLength(3);
     const roomTurn = calls[2]?.prompt.text ?? "";
-    expect(roomTurn).toContain("[recent group discussion:");
+    expect(roomTurn).toContain("[recent discussion here:");
     expect(roomTurn).toContain("蓝色背景");
   });
 

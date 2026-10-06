@@ -86,6 +86,14 @@ export function ownFiles(m: TelegramMessage): string[] {
 }
 
 /** A stable sender label for attribution. */
+/**
+ * The place a message lives in: a chat, or a forum topic within it. The context buffer's bucket and the default
+ * session's suffix, for an update and for a message the agent sends itself alike.
+ */
+export function telegramPlaceKey(chatId: number | string, threadId?: number): string {
+  return threadId ? `${chatId}:${threadId}` : `${chatId}`;
+}
+
 export function fromLabel(from: TelegramMessage["from"]): string | undefined {
   if (!from) return undefined;
   return from.username ? `@${from.username}` : `${from.first_name ?? "user"} (id ${from.id})`;

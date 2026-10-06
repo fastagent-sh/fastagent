@@ -362,8 +362,8 @@ describe("add: fastagent add <channel>", () => {
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
     const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
     expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
-    expect(sendTool).toContain("sendDocument");
-    expect(sendTool).toContain("sendMessage"); // text mode too — the delivery path for scheduled/woken turns
+    // It rides the channel's transport, which is what records a sent message into the chat's discussion.
+    expect(sendTool).toContain("telegramTransport(ctx.cwd)");
     // next steps carry this channel's env vars (with hints)
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");

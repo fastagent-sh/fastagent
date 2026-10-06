@@ -10,3 +10,9 @@ export {
   type TelegramRoute,
   type TelegramFailure,
 } from "./channels/telegram/telegram.ts";
+export {
+  telegramTransport,
+  type TelegramSendTarget,
+  type TelegramSent,
+  type TelegramTransport,
+} from "./channels/telegram/shared-api.ts";

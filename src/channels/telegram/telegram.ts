@@ -24,8 +24,10 @@ import {
   ownImages,
   pickMessage,
   telegramEnvelope,
+  telegramPlaceKey,
   telegramStop,
 } from "./parse.ts";
+import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome } from "../kit/state.ts";
@@ -123,6 +125,12 @@ export function telegramChannel({
     const stateHome = join(stateRoot, "channels", "telegram");
     ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+    // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
+    registerTelegramTransport(stateRoot, {
+      apiBaseUrl,
+      botToken,
+      record: (placeKey, entry) => buffer.push(placeKey, entry),
+    });
     // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
     // replay on the next start.
     const store = createTurnStore(join(stateHome, "turns.json"));
@@ -223,7 +231,7 @@ export function telegramChannel({
       // Decide whether/where to answer, then run the turn.
       const m = pickMessage(update);
       if (!m) return new Response(null, { status: 200 });
-      const placeKey = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
+      const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
       const r = decide(update);
       if (!r) {
         // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be

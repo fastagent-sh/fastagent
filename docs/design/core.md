@@ -457,6 +457,7 @@ Telegram is the stateful channel reference:
 | `context-buffer.ts` | telegram's entry shape over the generic `../kit/context-buffer.ts` |
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
+| `shared-api.ts` | the transport the channel and the send tool share; a message the agent sends itself is pushed into that chat's buffer, since Telegram never echoes a bot its own messages and has no history read |
 | `../kit/state.ts` | atomic small JSON state files |
 
 Turn replay is at-least-once: a crash can re-run side-effecting tools, and a narrow pre-ACK window can

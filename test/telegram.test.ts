@@ -8,8 +8,11 @@ import {
   defaultTelegramRoute,
   telegramChannel as buildTelegramChannel,
   telegramEnvelope,
+  telegramTransport,
 } from "../src/telegram.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
+import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
+import { log } from "../src/log.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { fauxControlledAgent } from "./agent.ts";
@@ -1384,13 +1387,74 @@ describe("telegram channel", () => {
     await ch(tgRequest(groupMsg(3, "alice", "/bot summarize"))); // summoned → folds the buffer in
     await groupSettle();
     const p1 = calls[0]?.text ?? "";
-    expect(p1).toMatch(/recent group discussion/);
+    expect(p1).toMatch(/recent discussion here/);
     expect(p1).toMatch(/@alice \(msg \d+\): the deploy failed/);
     expect(p1).toMatch(/@bob \(msg \d+\): which service\?/);
 
     await ch(tgRequest(groupMsg(4, "bob", "/bot again"))); // summoned → buffer already cleared
     await groupSettle();
-    expect(calls[1]?.text ?? "").not.toMatch(/recent group discussion/);
+    expect(calls[1]?.text ?? "").not.toMatch(/recent discussion here/);
+  });
+
+  it("a message the agent sends itself is in that chat's next answered turn, once", async () => {
+    // Telegram never delivers a bot its own messages, so a schedule's digest posted with the send tool would be
+    // unknown to the chat it went to (#633). The transport records it into that chat's discussion.
+    const { agent, calls } = replyingAgent("ok");
+    let sentId = 500;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { chat_id?: number };
+        return Response.json({ ok: true, result: { message_id: ++sentId, chat: { id: body.chat_id } } });
+      }),
+    );
+    const home = freshStateDir();
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: onlyCommands,
+      stateDir: home,
+    });
+    // A tool finds the mounted channel's transport by its agent's state root.
+    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
+    const digest = `Digest: 1. deploys 2. incidents 3. hiring ${"detail ".repeat(400)}`;
+    const sent = await telegramTransport("/any/agent/dir").sendText({ chatId: grp.id }, digest);
+    expect(sent.notRecorded).toBeUndefined();
+
+    await ch(tgRequest(groupMsg(1, "alice", "/bot what did point 3 mean?")));
+    await groupSettle();
+    const p1 = calls[0]?.text ?? "";
+    expect(p1).toContain(
+      `you (sent with telegram-send) (msg ${sent.messageIds[0]}): Digest: 1. deploys 2. incidents 3. hiring`,
+    );
+    // A digest keeps far more than a human line's bound, and says when it was cut.
+    expect(p1).toMatch(/detail detail .* … \(truncated\)/);
+
+    await ch(tgRequest(groupMsg(2, "alice", "/bot again")));
+    await groupSettle();
+    expect(calls[1]?.text ?? "").not.toContain("sent with telegram-send"); // folded once, then in the session
+  });
+
+  it("a message that was sent but not recorded says so, and is not reported as unsent", async () => {
+    // The message is already in the chat: throwing would read as "not sent" and invite a duplicate.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ok: true, result: { message_id: 9, chat: { id: -100 } } })),
+    );
+    const root = rootOfHome.get(freshStateDir()) as string;
+    registerTelegramTransport(root, {
+      apiBaseUrl: API,
+      botToken: "BOT",
+      record: () => {
+        throw new Error("disk full");
+      },
+    });
+    vi.stubEnv("FASTAGENT_STATE_DIR", root);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const sent = await telegramTransport("/any/agent/dir").sendText({ chatId: -100 }, "digest");
+    expect(sent).toEqual({ messageIds: [9], notRecorded: "recording it failed: Error: disk full" });
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not recorded into place -100: Error: disk full/));
   });
 
   it("keeps the group buffer under the char budget (drops the oldest un-summoned messages)", async () => {
@@ -1404,7 +1468,7 @@ describe("telegram channel", () => {
     await ch(tgRequest(groupMsg(99, "alice", "/bot go")));
     await groupSettle();
     const p = calls[0]?.text ?? "";
-    expect(p).toMatch(/recent group discussion/);
+    expect(p).toMatch(/recent discussion here/);
     expect(p).toMatch(/M29-/); // newest kept
     expect(p).not.toMatch(/M0-/); // oldest dropped over budget
   });

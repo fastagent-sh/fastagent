@@ -1016,7 +1016,7 @@ restart included, throws from the events iterator; recover with the reconnect st
 import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
 import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
-import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
+import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackTransport } from "@fastagent-sh/fastagent/slack";
 import { feishuChannel, feishuTransport, type FeishuTransport } from "@fastagent-sh/fastagent/feishu";
 import { larkChannel, larkTransport, type LarkTransport } from "@fastagent-sh/fastagent/lark";

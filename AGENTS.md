@@ -135,6 +135,8 @@ src/
 │   │   ├── context-buffer.ts # telegram's entry shape + attachment selection over the generic buffer
 │   │   ├── preview.ts      # live-preview pump + terminal-write policy
 │   │   ├── telegram-api.ts # the single Bot API pipeline + HTML-aware split
+│   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share; records what
+│   │   │                   # the agent sends itself into that chat's discussion (no update ever echoes it)
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/       # `add telegram` bundle (channel.ts + send tool)
 │   ├── slack/              # Slack Agent: native streams + inline tool traces, signed Events API ingress
