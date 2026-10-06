@@ -23,7 +23,7 @@ reviewer/                   # the agent, its working directory, and a git reposi
 ├── schedules/              # optional prompts run on a cron (<name>.md)
 ├── extensions/             # optional pi extension modules (see configuration.md)
 ├── reference.md            # optional reference material the agent reads (any file layout)
-└── .state/ .secrets/ .contexts/   # this machine's instance: sessions, credentials, clones (never committed)
+└── .state/ .secrets/ .contexts/   # this machine's instance: sessions, credentials, clones (kept out of git, except .secrets/.env.example)
 
 app/                        # a context it works on, declared in fastagent.config.ts
 ├── AGENTS.md               # optional project context, loaded with the agent
@@ -31,17 +31,17 @@ app/                        # a context it works on, declared in fastagent.confi
 ```
 
 A context is a directory on this machine (`{ local }`) or a GitHub repository (`{ github }`). A repository reaches every
-place the agent runs: it is the user's checkout here, and a clone elsewhere. A local directory stays on this machine,
-and a deployment says so.
+place the agent runs: your checkout here when `local` names one, otherwise a clone, here and on a host. A local
+directory stays on this machine, and a deployment says so.
 
 ## What FastAgent provides
 
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as [contexts](configuration.md#contexts), each with its `AGENTS.md` as project context.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
-3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, contexts and their `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
+3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each context's `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `context`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Clients** — a session control plane (`/control/*`: state, history, live events, steer and stop) and an authoring API (`createAgent`, `addContext`, `removeContext`) a desktop app uses to create agents and edit their contexts under the same rules as the CLI.
+6. **Clients** — HTTP routes a served agent can add for session control (`/control/*`: state, history, live events, steer and stop; opt-in with [`sessionControl`](configuration.md#config-file), and unauthenticated, so bind loopback or put a gateway in front), and an [authoring API](api-reference.md#contexts) (`createAgent`, `addContext`, `removeContext`) for clients such as a desktop app, to create agents and edit their contexts under the same rules as the CLI.
 7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
@@ -62,7 +62,7 @@ See [Design principles](principles.md) for the full rationale and non-goals.
 
 FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
 
-- **No platform to move to** — no dashboard, no control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
+- **No platform to move to** — no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
 - **No new format or DSL** — `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
 - **Engine-neutral contract; pi reference implementation** — channels depend on `Agent`, while the included assembly uses pi; models and hosts remain replaceable runtime choices.
