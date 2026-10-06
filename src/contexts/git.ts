@@ -163,11 +163,13 @@ function untouched(dir: string): Checkout | undefined {
 async function remoteCheckout(url: string, ref: string | undefined, cwd: string): Promise<Checkout | undefined> {
   if (ref !== undefined && FULL_COMMIT.test(ref)) return { commit: ref.toLowerCase(), branch: "HEAD" };
   // `--` before the operands, as for `clone`: nothing declared reaches git as an option.
-  const asked =
-    ref === undefined ? ["--symref", "--", url, "HEAD"] : ["--", url, `refs/heads/${ref}`, `refs/tags/${ref}`];
+  const listed =
+    ref === undefined
+      ? await runGit(["ls-remote", "--symref", "--", url, "HEAD"], cwd)
+      : await runGit(["ls-remote", "--", url, `refs/heads/${ref}`, `refs/tags/${ref}`], cwd);
   const refs = new Map<string, string>();
   let defaultBranch: string | undefined;
-  for (const line of (await runGit(["ls-remote", ...asked], cwd)).split("\n")) {
+  for (const line of listed.split("\n")) {
     const [left, name] = line.split("\t");
     if (left === undefined || name === undefined) continue;
     if (left.startsWith("ref: refs/heads/")) defaultBranch = left.slice("ref: refs/heads/".length);
