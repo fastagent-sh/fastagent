@@ -117,6 +117,7 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
+  process.env.FASTAGENT_CONTEXTS_DIR ||= join(root, ".contexts");
   // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).

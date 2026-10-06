@@ -46,8 +46,8 @@ are processes serving the same instance. Its state stays where it is today:
 ~/agents/reviewer/                   the working directory
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
-└── .state/                          the instance's sessions, channel and schedule state, and the clones it
-                                     made, under each context's name (.state/contexts/<name>)
+├── .state/                          the instance's sessions, channel and schedule state
+└── .contexts/                       the clones the instance made, under each context's name
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
@@ -131,7 +131,7 @@ Startup says what the agent works on and what it knows:
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
-knows     handbook  ~/agents/reviewer/.state/contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
+knows     handbook  ~/agents/reviewer/.contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -139,7 +139,7 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context has no checkout here | `cloned github acme/app into .state/contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
+| A `github` context has no checkout here | `cloned github acme/app into .contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
 | A local context's path does not exist | Refused, naming the path and the declaration |
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |

@@ -107,17 +107,19 @@ Use `--no-watch` to serve once without the supervisor.
 ## Sessions disappear after redeploy
 
 By default, machine state (sessions, channel state, schedule state) lives under the agent's
-`.state/`, and the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`:
+`.state/`, the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
+github contexts under its `.contexts/`:
 
 ```txt
 <state root>    # default <agent dir>/.state
 <secrets dir>   # default <agent dir>/.secrets
+<clones dir>    # default <agent dir>/.contexts
 ```
 
-A redeploy that replaces the agent wipes both. Point each at durable storage (generated deployments do):
+A redeploy that replaces the agent wipes all three. Point each at durable storage (generated deployments do):
 
 ```bash
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets FASTAGENT_CONTEXTS_DIR=/data/.contexts fastagent start
 ```
 
 Sessions live under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent

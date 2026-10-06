@@ -6,7 +6,7 @@
 import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { declareContexts } from "../src/contexts/declare.ts";
 import { declarationFor } from "../src/contexts/source.ts";
 import { contextsAbsentHere, resolveContexts } from "../src/contexts/resolve.ts";
@@ -117,10 +117,19 @@ describe("contexts: resolved for this instance", () => {
       expect.objectContaining({
         kind: "github",
         clone: true,
-        location: join(agentDir, ".state", "contexts", "app"),
+        location: join(agentDir, ".contexts", "app"),
         notices: [expect.stringMatching(/^not cloned yet/)],
       }),
     ]);
+    // A deployment puts the clones on its storage (`start` sets FASTAGENT_CONTEXTS_DIR there), as it does the state.
+    vi.stubEnv("FASTAGENT_CONTEXTS_DIR", join(root, "storage", ".contexts"));
+    try {
+      expect(resolveContexts(agentDir, [{ github: "acme/app" }], "host")).toEqual([
+        expect.objectContaining({ location: join(root, "storage", ".contexts", "app") }),
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("asks the nesting question again of the real paths: a symlink cannot smuggle the agent in", async () => {

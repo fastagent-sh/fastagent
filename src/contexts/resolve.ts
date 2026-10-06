@@ -6,7 +6,7 @@
  */
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { isDeployedWorkspace, resolveStateRoot } from "../paths.ts";
+import { isDeployedWorkspace, resolveContextsDir } from "../paths.ts";
 import { type DeclaredContext, declareContexts, nestingError } from "./declare.ts";
 import { type CloneOutcome, checkoutProblem, refNotice, refreshClone } from "./git.ts";
 
@@ -84,8 +84,8 @@ function resolveOne(agentDir: string, context: DeclaredContext, place: Place): R
       const offRef = ref === undefined ? undefined : refNotice(checkout, ref);
       return { name, readonly, location: checkout, notices: offRef ? [offRef] : [], ...github, clone: false };
     }
-    // No checkout to use, so the instance clones it, under its own state and the context's name.
-    const location = join(resolveStateRoot(agentDir), "contexts", name);
+    // No checkout to use, so the instance clones it, into its own storage under the context's name.
+    const location = join(resolveContextsDir(agentDir), name);
     const notices = [
       ...(problem ? [`${checkout} ${problem}, so github ${repo} is cloned instead`] : []),
       ...(existsSync(location) ? [] : ["not cloned yet: it is cloned when the agent starts"]),

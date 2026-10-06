@@ -68,7 +68,7 @@ describe("github contexts: resolved, without touching the network or the disk", 
     const { root, agentDir } = await agent();
     const elsewhere = join(root, "other");
     git(root, "clone", "-q", "https://github.com/acme/other.git", elsewhere);
-    const clone = join(agentDir, ".state", "contexts", "app");
+    const clone = join(agentDir, ".contexts", "app");
 
     const bare = resolveOne(agentDir, { github: "acme/app" });
     expect(bare).toMatchObject({ location: clone, clone: true });
@@ -144,7 +144,7 @@ describe("github contexts: a clone is brought up to date in place, never over th
       outcome: "kept",
       reason: "it is on branch fix, declared the default branch, main",
     });
-    expect(readdirSync(join(agentDir, ".state", "contexts"))).toEqual(["app"]);
+    expect(readdirSync(join(agentDir, ".contexts"))).toEqual(["app"]);
   });
 
   it("a clone pinned to a commit moves to the declared one, unless it holds commits nothing else does", async () => {
@@ -258,7 +258,7 @@ describe("github contexts: a clone is brought up to date in place, never over th
     const outcomes = await Promise.all([cloneContext(context), cloneContext(context)]);
     expect(outcomes.map((o) => o.outcome).sort()).toEqual(["cloned", "current"]);
     expect(git(context.location, "status", "--porcelain")).toBe("");
-    expect(readdirSync(join(agentDir, ".state", "contexts"))).toEqual(["app"]);
+    expect(readdirSync(join(agentDir, ".contexts"))).toEqual(["app"]);
   });
 
   it("a first clone that fails says why and leaves nothing behind", async () => {
@@ -268,7 +268,7 @@ describe("github contexts: a clone is brought up to date in place, never over th
     await expect(cloneContext(context)).rejects.toThrow(
       /context "app": could not clone github acme\/app at no-such-branch: .*no-such-branch.* git's own credentials/s,
     );
-    expect(readdirSync(join(agentDir, ".state", "contexts"))).toEqual([]);
+    expect(readdirSync(join(agentDir, ".contexts"))).toEqual([]);
   });
 
   it("a clone reaches GitHub with GITHUB_TOKEN when git has no credential of its own, without storing it", async () => {
@@ -341,11 +341,11 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     const info = await cli(["info", "--json"], agentDir);
     expect(info.code, info.stderr).toBe(0);
     expect(JSON.parse(info.stdout).contexts[0].notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
-    expect(existsSync(join(agentDir, ".state", "contexts"))).toBe(false);
+    expect(existsSync(join(agentDir, ".contexts"))).toBe(false);
 
     const opened = await createPiAgentFromDir(agentDir);
     expect(opened.contexts).toEqual([
-      expect.objectContaining({ name: "handbook", location: join(agentDir, ".state", "contexts", "handbook") }),
+      expect.objectContaining({ name: "handbook", location: join(agentDir, ".contexts", "handbook") }),
     ]);
     expect(opened.contexts[0]?.notices).toEqual([]);
     expect(opened.definition.contextFiles.map((file) => file.content)).toContain("HANDBOOK: be brief.\n");
@@ -381,7 +381,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     const opened = await createPiAgentFromDir(agentDir);
     const said = info.mock.calls.map(([line]) => line);
     info.mockRestore();
-    const clone = join(agentDir, ".state", "contexts", "app");
+    const clone = join(agentDir, ".contexts", "app");
     // The author's directory is not on the host: absent from what the agent is given, and said at start.
     expect(opened.contexts).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
     expect(said).toContain(
@@ -420,7 +420,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     });
     await collect(running.invoke({ session: "s" }, { text: "hi" }));
     expect(prompt).toContain(
-      `- app: ${join(agentDir, ".state", "contexts", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change)`,
+      `- app: ${join(agentDir, ".contexts", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change)`,
     );
     expect(prompt).toContain(`- docs: ${checkout} (a checkout of github acme/docs on this machine)`);
   });

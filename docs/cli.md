@@ -308,6 +308,7 @@ bind:     --bind > all interfaces
 /invoke:  --no-invoke > fastagent.config.ts http.invoke > served
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets
+clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
 ```
 
 ## Global options

@@ -170,8 +170,8 @@ only by the declaration. An agent's directory is its own, and often its own repo
 
 The check runs when an agent is loaded, and a nested layout is refused with the way out: move the agent directory
 out, or declare another context. It is about what an author declares. The clones and copies an instance makes for
-itself are its own state, kept in `.state/` with the rest of it (§3); they are not declared contexts and not part
-of the definition.
+itself are its own, kept in its storage (`.contexts/`, §3); they are not declared contexts and not part of the
+definition.
 
 A git repository can merge both sides, so an agent committed inside the repository it works on is coherent in
 principle: one repository, one clone per instance, the harness running from it. It is not supported yet. Starting
@@ -245,8 +245,9 @@ Attributes:
 - **A clone lives as long as the instance's storage.** A host whose storage a deployment resets (AgentCore,
   [core](core.md) §9) clones every repository again, and what the agent did not push is lost; its deployment says
   so before it runs.
-- **What an instance clones, it keeps in its own storage, under the context's name.** It lives with the instance's
-  runtime state (§5), not in the definition.
+- **What an instance clones, it keeps in its own storage, under the context's name**: `.contexts/<name>`, beside
+  the instance's runtime state (§5) and not inside it, since the agent works in a clone and `.state/` is
+  bookkeeping. It is never part of the definition.
 - **A name is one path segment, unique within the agent regardless of case.** It becomes a directory name, so it
   is letters, digits, `-` and `_`, the spelling a release's agent name already has (`isReleaseAgentName`), and two
   names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either
