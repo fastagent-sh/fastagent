@@ -121,7 +121,7 @@ describe("contexts: resolved for this instance", () => {
         notices: [expect.stringMatching(/^not cloned yet/)],
       }),
     ]);
-    // A deployment puts the clones on its storage (`start` sets FASTAGENT_CONTEXTS_DIR there), as it does the state.
+    // FASTAGENT_CONTEXTS_DIR moves the clones (a deployment's `start` points it at its storage: deployment-start.test.ts).
     vi.stubEnv("FASTAGENT_CONTEXTS_DIR", join(root, "storage", ".contexts"));
     try {
       expect(resolveContexts(agentDir, [{ github: "acme/app" }], "host")).toEqual([

@@ -11,7 +11,7 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import { resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
+import { resolveContextsDir, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
@@ -165,7 +165,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     model: modelSpec,
     serving: true,
   });
-  const { agent, config, stateRoot, sessionsDir } = opened;
+  const { agent, config, stateRoot, sessionsDir, contexts } = opened;
   await reportAssembly(
     { ...opened, modelSpec },
     {
@@ -183,6 +183,12 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
   if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
     log.info(
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
+    );
+  }
+  // Only when something is cloned: a clone holds what the agent changed and has not pushed.
+  if (contexts.some((c) => c.kind === "github" && c.clone) && isUnderDir(resolveContextsDir(agentDir), agentDir)) {
+    log.info(
+      "[fastagent] note: github context clones live under the definition; use FASTAGENT_CONTEXTS_DIR on persistent storage for deployment.",
     );
   }
   const traced = logAgentLoop(agent);
