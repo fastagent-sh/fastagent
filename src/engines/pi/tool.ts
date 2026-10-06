@@ -200,7 +200,7 @@ export async function loadTools(dir: string): Promise<{
   collisions: ToolCollision[];
   failures: ModuleLoadFailure[];
 }> {
-  // The same containment guard channels/routines/skills get.
+  // The same containment guard channels/schedules/skills get.
   await assertInsideAgentDir(dir, "tools");
   const { modules, failures } = await loadModuleDir(join(dir, "tools"));
   const byName = new Map<string, AgentTool>();

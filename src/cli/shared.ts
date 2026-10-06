@@ -61,7 +61,7 @@ export async function enterAgentDirectory(
 }
 
 /**
- * How every command that RUNS the agent on this machine enters it (dev, start, invoke, routine run, chat):
+ * How every command that RUNS the agent on this machine enters it (dev, start, invoke, chat):
  * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
  * every new conversation, so it stops at startup with {@link missingDefaultModel} instead.
  */
@@ -69,14 +69,7 @@ export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean },
 ): Promise<Required<EnteredAgent>> {
-  return requireDefaultModel(await enterAgentDirectory(dirArg, opts));
-}
-
-/**
- * The startup half of {@link enterAgentCommand}, for the one command that checks something of its own in between:
- * `routine run`, whose unknown name or unset secret is the more basic fault and is reported first.
- */
-export function requireDefaultModel(entered: EnteredAgent): Required<EnteredAgent> {
+  const entered = await enterAgentDirectory(dirArg, opts);
   const { modelSpec } = entered;
   if (!modelSpec) failStartup(missingDefaultModel());
   return { ...entered, modelSpec };

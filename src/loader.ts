@@ -1,5 +1,5 @@
 /**
- * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`, `routines/`,
+ * Generic ESM module discovery + loading for the agent's code-input dirs (`tools/`, `channels/`,
  * config).
  */
 import type { Dirent } from "node:fs";
@@ -22,7 +22,7 @@ function moduleName(fileName: string): string {
 
 /** One module file a directory declares. */
 interface InventoryEntry {
-  /** Basename without extension — the authoritative name for tools/channels/routines. */
+  /** Basename without extension — the authoritative name for tools/channels. */
   name: string;
   /** "tools/foo.ts"-style label for errors and collisions. */
   label: string;
@@ -81,14 +81,14 @@ export interface ModuleLoadFailure {
   message: string;
 }
 
-/** A module the loader skipped, said once, the same way for tools, channels and routines. */
+/** A module the loader skipped, said once, the same way for tools, channels and schedules. */
 export function reportModuleLoadFailures(failures: readonly ModuleLoadFailure[]): void {
   for (const f of failures) log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);
 }
 
 /**
  * THE REFUSAL every path that is about to RUN the agent shares: an enabled file under `tools/`, `channels/` or
- * `routines/` is a declaration, so one that cannot load means the agent is missing something its author said it
+ * `schedules/` is a declaration, so one that cannot load means the agent is missing something its author said it
  * has. Starting anyway announces a ready service over an absent capability — a schedule that never fires, a tool the
  * model simply never gets — with nothing but one warning to find it by. Every failure is reported before this
  * throws, so a boot fixes all of them at once rather than one per restart.

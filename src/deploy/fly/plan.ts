@@ -3,7 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
-import { CRON_CAN_BE_EXTERNAL, type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
+import { type Residency, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
@@ -27,7 +27,7 @@ export interface FlyPlanInput extends ContainerInput {
    * carries.
    */
   secrets?: readonly DeploymentSecret[];
-  /** `routines/` declares a cron — one of the things that forces a machine up (deploy/residency.ts). */
+  /** `schedules/` declares a schedule — one of the things that forces a machine up (deploy/residency.ts). */
   hasCron: boolean;
 }
 
@@ -44,15 +44,6 @@ function flyToml(appName: string, port: number, residency: Residency | undefined
   const min = residency
     ? `  min_machines_running = 1         # ${residency.why}`
     : `  min_machines_running = 0         # scale to zero — ${WAKEUPS_WHEN_ASLEEP}`;
-  // The one reason with a way out gets it stated NEXT TO the line it is about, which is where an operator reading
-  // `min_machines_running = 1` and wondering what it costs them is looking.
-  const alternative =
-    residency?.reason === CRON_CAN_BE_EXTERNAL
-      ? `  # …or keep the time somewhere else and set this to 0: a scheduler you own (Fly Cron Manager,\n` +
-        `  # supercronic, GitHub Actions) calls \`POST /run\`, which runs one declared unit of work by name.\n` +
-        `  # It is an API, not a clock: read its contract first — docs/api-reference.md#post-run.\n` +
-        `  # At 0, ${WAKEUPS_WHEN_ASLEEP}.\n`
-      : "";
   // Suspend, not stop: a resume is fast enough that a webhook does not time out. Edit the line to change it.
   const stopLine = `  auto_stop_machines = "suspend"   # suspend on idle (fast resume on the next webhook)`;
   return `${GENERATED_FLY_TOML_MARKER}. Edit freely — it is not regenerated unless you pass --force.
@@ -72,7 +63,7 @@ primary_region = "iad"  # set your region (list: \`fly platform regions\`)
 ${stopLine}
   auto_start_machines = true
 ${min}
-${alternative}
+
 [mounts]
   source = "data"
   destination = "/data"            # state and credentials survive stop/suspend/redeploy

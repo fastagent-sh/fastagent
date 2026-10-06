@@ -41,7 +41,7 @@ One agent shape, one marker:
 ├── SYSTEM.md               # optional: replaces pi's default system prompt
 ├── APPEND_SYSTEM.md        # optional: standing instructions added to it
 ├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
-├── skills/  prompts/  tools/  channels/  routines/
+├── skills/  prompts/  tools/  channels/  schedules/
 ├── fastagent.config.ts     # THE marker, and the agent's declared contexts
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
@@ -96,7 +96,7 @@ for, and no environment variable selects an agent.
 
 - **The marker is the config, and it is a declaration rather than configuration.** Nothing in an agent directory is
   logically required to serve a turn, so the marker has to be the one artifact present in every agent and absent
-  from every non-agent. `SYSTEM.md`, `skills/`, `tools/`, `channels/` and `routines/` are each optional and generic
+  from every non-agent. `SYSTEM.md`, `skills/`, `tools/`, `channels/` and `schedules/` are each optional and generic
   enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
   signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
 - **A context and the agent directory are kept apart.** A harness is released to every instance; a writable
@@ -147,7 +147,7 @@ context and skill edits take effect on the next turn; code modules are reloaded 
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
 process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool,
-mounted on every serve. `tools/`, `routines/` and `channels/` are the author's code: they change with a restart or a
+mounted on every serve. `tools/`, `schedules/` and `channels/` are the author's: they change with a restart or a
 release. (Reloading them in-process was built and removed — the design is #582, why it went is #600.) A skill the
 agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
 and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
@@ -199,7 +199,7 @@ separate tag in `engines/pi/session-effects.ts` because it is control flow, not 
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
 `createPiAgentFromDir` sits above L2 and resolves the agent directory, config, contexts, model, auth, tools,
-sessions, and machinery paths. `dev`, `start`, `invoke`, and `routine run` share it rather than carrying parallel
+sessions, and machinery paths. `dev`, `start` and `invoke` share it rather than carrying parallel
 implementations.
 
 Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
@@ -290,7 +290,7 @@ capability is one thing, inheriting an identity would be the agent becoming some
 A directory agent's tools merge in this order: all pi coding tools
 (`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
 `tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
-refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `routines/`. The coding set is fixed for directory agents: isolation belongs around the whole
+refuses the run — an enabled file is a declaration, and the same rule covers `channels/` and `schedules/`. The coding set is fixed for directory agents: isolation belongs around the whole
 agent process, where it also covers authored tools and channel code. Pi's codemode and tool-search
 extensions load by default (`BUILTIN_EXTENSIONS`, machine.ts); Pi's MCP extension is not loaded, because its server
 connections live as long as a session and a served session lives one turn; self-scheduling `wake` remains serving-only. Reusable
@@ -592,26 +592,34 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   ID/Secret travel as channel secrets. Event callbacks must still finish within three seconds, so the
   shared acceptance boundary persists and enqueues only.
 
-## 8. Routines and self-scheduling
+## 8. Schedules and self-scheduling
 
-A **routine** is `routines/<name>.ts` exporting `{ prompt, cron?, tz? }` — the only named unit of work,
-and `cron` is a FIELD of it rather than the concept: with one, the clock fires it; without one, its name
-is the only way in (`POST /run`, `fastagent routine run`). Either way it runs in the stable session
-`routine:<name>`. The clock claims a slot before invoking, catches up one overdue occurrence after
-downtime (not every missed slot, and not at all before its first fire — nothing recorded that it was
-armed then), writes the outcome back into that claim, and leaves delivery to agent tools. A routine with no cron is not armed and not warned about.
+A **schedule** is `schedules/<name>.md`: a frontmatter holding `cron` and an optional `tz`, over the prompt. It is
+data, like a skill, so an author or a client writes one without TypeScript (the agent's own follow-up work is a
+wake-up: a schedule is loaded at start and replaced by each release); the frontmatter is read
+strictly (two keys, one line each) rather than as YAML, so a bare `*/5 * * * *` works and anything else is refused
+naming the file. Every fire runs in the stable session `schedule:<name>`. The clock claims a slot before invoking,
+catches up one overdue occurrence after downtime (not every missed slot, and not at all before its first fire —
+nothing recorded that it was armed then), writes the outcome back into that claim, and leaves delivery to agent
+tools.
+
+**Nothing runs a schedule by name.** Work a caller starts is `POST /invoke`, and a prompt it reuses is a prompt
+template (`/<name>`), which pi expands on every invoke. An earlier design had a named unit of work with an optional
+cron (a "routine"), a `POST /run` route and a CLI to run one; a prompt template plus `POST /invoke` already did that
+job, and a schedule whose prompt was built in TypeScript from declared secrets is now a plain prompt that names its
+target.
 
 **The claim is the whole record.** A fire's history is `<stateRoot>/schedule/claims/<name>/<slot>`,
 one JSON object — `{"firedAt"}` at claim time, gaining `outcome` and `ms` when the turn reports — pruned
-to the newest 512, which is what makes `fastagent routine history` bounded by construction rather than
+to the newest 512, which is what makes the history `fastagent schedules list --json` reads bounded by construction rather than
 by a retention policy. JSON rather than a line this module splits itself, because `settleClaim` may not
 write atomically (see below): half an object does not parse, so a torn claim reads as unsettled instead
 of as a record whose third field happened to look like a number. Two events have no claim and therefore no stored record at all: a wake-up (removed from the store
 before its turn starts) and a stale slot (refused before a claim is taken; it is a WARN line where a
 duplicate delivery is INFO).
 
-**What the turn SAID is stored once, and not here.** Every fire runs in a session — `routine:<name>` for
-a cron, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
+**What the turn SAID is stored once, and not here.** Every fire runs in a session — `schedule:<name>` for
+a schedule, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
 like any other, with the engine's own storage and compaction semantics. The claim therefore carries the
 outcome and nothing else, and the log carries the fact that the fire completed, plus the failure detail
 when it did not. #546 was about model output accumulating where nothing prunes it; a second copy in the
@@ -763,7 +771,7 @@ and EventBridge Scheduler rules delivering each cron slot. Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
-reply so the forwarder re-emits it byte-exact), a routine fire goes through `fireRoutineOnce` with
+reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
 the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
 SSE. `GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every leased session, a turn,
 compaction or control write however it started, and channel work not yet at one) so an idle reclaim cannot kill a

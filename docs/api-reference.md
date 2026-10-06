@@ -195,7 +195,7 @@ function createAgentService(
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
                                           // took over or `http.invoke: false` withheld
-  routines: readonly LoadedRoutine[];
+  schedules: readonly Schedule[];         // schedules/*.md: { name, cron, tz?, prompt }
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
   controlPrefix?: string;                // "/control", when sessionControl is on
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
@@ -273,7 +273,7 @@ The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.co
 starts, and `update({ model })` sets it) runs on that model. A session with no model of its own fails its invoke with
 `failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }` and leaves no record behind, including a
 new thread whose `parentSession` supplied no model; `update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
-registry does not know still fails the open. The CLI's `dev`, `start`, `invoke`, `routine run` and `chat` still
+registry does not know still fails the open. The CLI's `dev`, `start`, `invoke` and `chat` still
 refuse to start without a default (`missing model`), since every new conversation they took would fail.
 
 ```ts
@@ -354,7 +354,7 @@ Read credentials this way rather than from `process.env`:
 required.
 
 `ctx.secrets` reads the process environment on every call; `.secrets/.env` is read once at startup. Its keys are
-typed from the list. `defineChannel` and `defineRoutine` take the same field, and `fastagent info` prints every
+typed from the list. `defineChannel` takes the same field, and `fastagent info` prints every
 declared name and flags the ones with no value.
 
 The second `execute` argument is a `ToolContext`:
@@ -518,7 +518,7 @@ is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.
 
-A serve refuses to start if an enabled file under `tools/`, `channels/` or `routines/` cannot load, and names
+A serve refuses to start if an enabled file under `tools/`, `channels/` or `schedules/` cannot load, and names
 every file that failed. An absent directory is valid. `fastagent info` and `fastagent tool` load what they can and
 report the rest.
 
@@ -532,122 +532,15 @@ const textHeaders: { readonly "content-type": "text/plain" };
 
 See [Channel development](channel-development.md).
 
-## Routine authoring
+## Schedules
 
-A **routine** is a prompt the definition owns, addressed by name. With a `cron`, the clock fires it; without one,
-it runs only by name (`POST /run`, `fastagent routine run`).
+A schedule is `schedules/<name>.md`: a cron in the frontmatter over a prompt ([Configuration](configuration.md#schedules)).
+It has no API of its own: `AgentService.schedules` lists what a serve loaded, and work a caller starts itself is
+`POST /invoke`.
 
-```ts
-interface Routine {
-  prompt: string; // the turn's text = the routine's instruction (a builder is resolved at load)
-  cron?: string; // 5-field cron expression — ABSENT means "by name only"
-  tz?: string; // IANA timezone (default "UTC"); meaningless without `cron`
-  secrets?: readonly string[]; // env vars this file needs, typed into the prompt builder
-}
-// what an author writes: `prompt` may be built FROM the declared secrets, keys typed from `secrets`
-function defineRoutine<const S extends readonly string[]>(routine: {
-  prompt: string | ((secrets: Record<S[number], string>) => string);
-  cron?: string;
-  tz?: string;
-  secrets?: S;
-}): Routine;
-```
+### Self-scheduling
 
-Each `routines/<name>.ts` default-exports `defineRoutine(...)`; the filename is the routine name (`.`, `..` and
-path separators are refused).
-
-```ts
-// routines/daily-digest.ts        → routine "daily-digest", fired by the clock and callable by name
-import { defineRoutine } from "@fastagent-sh/fastagent";
-
-export default defineRoutine({
-  cron: "0 9 * * *",
-  tz: "America/New_York",
-  secrets: ["SLACK_DIGEST_CHANNEL"], // same contract as a tool's — required at start and by deploy --run
-  prompt: (secrets) => `Generate today's digest and send it with slack-send to channel ${secrets.SLACK_DIGEST_CHANNEL}.`,
-});
-```
-
-```ts
-// routines/reindex.ts             → routine "reindex", no clock: reached by name alone
-export default defineRoutine({ prompt: "Re-read the docs and refresh your notes." });
-```
-
-**A routine keeps one continuing conversation**, `routine:<name>`: it remembers its previous runs and knows nothing
-about users' chats. A **wake-up** (the `wake` tool) is work the agent schedules for itself at runtime, stored in
-state and fired back into the conversation that made it; only the agent cancels one, with `unwake`.
-`fastagent routine list` shows both.
-
-**Put the delivery target in `secrets`.** A chat or channel id differs per environment: declare it and build the
-prompt from it. The builder runs once at load, and `dev`/`start` refuse to boot while the name is unset.
-
-On each cron instant the scheduler invokes the agent with `prompt` in `routine:<name>`. It:
-
-- **delivers nothing** — the agent's tools send output; the scheduler logs the outcome, and failure details. What
-  the turn said is in the session under `<stateRoot>/sessions/`.
-- **fires each slot at most once** — a claim under `<stateRoot>/schedule/claims/<name>/` is created before the
-  invoke, even with several schedulers over one state root.
-- **catches up one overdue run** after downtime, not one per missed slot. A routine that has never fired starts
-  at its next slot. A slot older than the newest claim is refused as a stale replay.
-
-The scheduler runs while `dev`/`start` serves; `fastagent routine run <name>` runs one turn immediately.
-
-### `GET /routines`
-
-What this deployment will answer `POST /run` for:
-
-```bash
-curl -sS https://your-agent/routines
-# [{"name":"daily-digest","cron":"0 9 * * *","tz":"America/New_York"},{"name":"reindex"}]
-```
-
-Names and schedules only, never prompts. A missing `cron` means the routine runs by name only. Served exactly
-where `POST /run` is.
-
-### `POST /run`
-
-A serve that declares any routine also answers `POST /run`, which runs one declared routine by name:
-
-```bash
-curl -sS -X POST https://your-agent/run \
-  -H 'content-type: application/json' -d '{"name":"daily-digest"}'
-```
-
-The body names the routine and nothing else; the prompt stays in `routines/<name>.ts`.
-
-This route is an API, not a clock: it records no slot and no fire history.
-
-| Clock | Owner | What a run gets |
-|---|---|---|
-| the resident loop (`dev` / `start`) | fastagent | slot claim, settlement, history |
-| AgentCore | fastagent (`deploy` writes EventBridge rules) | slot claim, settlement, history |
-| anything else (platform cron, CI, a script) | you | this API |
-
-There is no idempotency key: retrying may re-run work whose side effects already landed, so retry only work
-that tolerates running twice.
-
-**Exposure**: unauthenticated, with the agent's full tool authority, like `POST /invoke`. `http.invoke: false`
-withholds both; `http.run: true` keeps this one.
-
-**Replies:**
-
-| Reply | Meaning |
-|---|---|
-| `200 { name, session, ran: true, failed?, ms }` | The routine ran. `failed` means the turn did not finish; its side effects may have landed. |
-| `200 { name, session, ran: false, reason, ms }` | The previous run of this routine is still going; try later. |
-| `400` | Malformed body. |
-| `404` | Unknown name; the reply lists the available ones. |
-
-`session` is where the output is (`fastagent routine history <name>`, or `/control/sessions/<id>/events`).
-
-**Keeping the clock elsewhere.** A scaled-to-zero deployment needs an external clock:
-[Fly](https://fly.io/docs/blueprints/task-scheduling/) has Cron Manager, supercronic or scheduled Machines; Railway
-has a cron service (5-minute floor) that can call this route over the private network, which also wakes a slept
-service. On AgentCore `deploy` registers the rules, and `http.run` is inert; run a routine by name there with
-`aws bedrock-agentcore invoke-agent-runtime` and `{"kind":"routine-run","name":"reindex"}`.
-
-**Self-scheduling.** Every serve (`dev`/`start`, not one-shot `invoke`/`routine run`) mounts the built-in
-**`wake`** and **`unwake`** tools:
+Every serve (`dev`/`start`, not a one-shot `invoke`) mounts the built-in **`wake`** and **`unwake`** tools:
 
 - `wake({ in: "30m", prompt })` records a one-shot wake-up; `wake({ cron: "0 9 * * *", tz?, prompt })` a
   recurring one. Wake-ups persist under `<stateRoot>/schedule/` and fire back into the same session, with the
@@ -1076,8 +969,6 @@ GET    /control/sessions/{id}/events           SSE
 POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
 
 POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
-GET    /routines                           what this agent will run by name
-POST   /run                                {name} — run one of them
 ```
 
 `{id}` is percent-encoded, so a Telegram group is `/control/sessions/telegram%3A-1001234567890` — session

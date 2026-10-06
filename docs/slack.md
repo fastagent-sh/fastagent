@@ -286,22 +286,20 @@ file id) so the agent can record the outcome.
 The destination is what the turn's instruction names. A user id (`U…`) as `channelId` messages that
 user's DM — Slack opens it under `chat:write`, no `conversations.open` needed — and the result reports
 the DM channel id (`D…`), which is what a file upload to that user needs. A schedule that reports to its
-owner therefore needs only the owner's user id — declared in `secrets`, since it is
-environment-specific, and built into the prompt:
+owner therefore needs only the owner's user id, named in its prompt:
 
-```ts
-export default defineRoutine({
-  cron: "0 9 * * 1-5",
-  secrets: ["OWNER_SLACK_USER_ID"],
-  prompt: (secrets) =>
-    `Summarize yesterday's growth notes and send them with slack-send to user ${secrets.OWNER_SLACK_USER_ID}.`,
-});
+```md
+---
+cron: "0 9 * * 1-5"
+---
+
+Summarize yesterday's growth notes and send them with slack-send to user U0123456789.
 ```
 
 The tool holds no transport of its own. It calls `slackTransport(ctx.cwd)` from
 `@fastagent-sh/fastagent/slack`, which hands back the mounted channel's Slack transport — the same
 token, `apiBaseUrl`, Markdown splitting and rate-limit handling the channel replies with. With no
-channel mounted (`fastagent routine run` / `invoke`) the transport is built from `SLACK_BOT_TOKEN` against
+channel mounted (`fastagent invoke`) the transport is built from `SLACK_BOT_TOKEN` against
 Slack's default API base. `tools/slack-send.ts` is the package's and is rewritten by every `add slack`.
 
 File mode uses Slack's current [external upload

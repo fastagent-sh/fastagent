@@ -29,7 +29,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 | Configure model, auth, ports, sessions, tools, and channels | [Configuration](configuration.md) |
 | Embed an agent in an existing app or route | [Embedding](embedding.md) |
 | Connect Telegram, Slack, Feishu, or another channel | [Channels](channels.md) |
-| Run the agent on a cron, or let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [API reference](api-reference.md#routine-authoring) |
+| Run the agent on a cron, or let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [Schedules](configuration.md#schedules) |
 | Ship the agent to a host | [Deploy](deploy.md) |
 
 ## Channel guides
@@ -52,7 +52,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 
 ## Core concepts
 
-- **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `routines/`, and markdown context. What it works on is declared as contexts, whose `AGENTS.md` is project context.
+- **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, and markdown context. What it works on is declared as contexts, whose `AGENTS.md` is project context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.

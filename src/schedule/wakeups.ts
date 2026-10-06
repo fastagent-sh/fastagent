@@ -1,6 +1,6 @@
 /**
  * The agent's self-scheduled wake-ups — the SECOND producer of scheduled invocations (the first is the author's
- * `routines/` files).
+ * `schedules/` files).
  */
 import { randomUUID } from "node:crypto";
 import { log } from "../log.ts";

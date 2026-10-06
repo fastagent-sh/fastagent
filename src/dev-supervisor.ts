@@ -19,9 +19,8 @@ import { declaredChannels } from "./channels/discover.ts";
 import { activeWork } from "./channels/busy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
-/** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
 /** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. */
-const CODE_INPUT_DIRS = ["tools", "channels", "routines", "extensions"] as const;
+const CODE_INPUT_DIRS = ["tools", "channels", "schedules", "extensions"] as const;
 
 const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, models-store.json, .secrets/.env`;
 

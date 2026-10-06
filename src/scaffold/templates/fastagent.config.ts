@@ -23,8 +23,7 @@ export default {
   // need), `dev` loopback. `cors: ["https://your-app.example.com"]` pins which origins a browser may call
   // this serve from. The default is `*` on every bind — any page your users visit can call this port and
   // read the reply, a loopback bind included (it stops another machine, not your own browser).
-  // `invoke: false` withholds POST /invoke, for a serve meant to be reached only through its channels
-  // (POST /run goes with it; `run: true` keeps that one for a scheduler of yours that calls routines by name).
+  // `invoke: false` withholds POST /invoke, for a serve meant to be reached only through its channels.
   http: { port: 8787 },
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
   // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way

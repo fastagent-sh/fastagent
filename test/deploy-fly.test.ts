@@ -33,7 +33,7 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("keeps one machine running for a cron, scales to zero otherwise (definition-aware)", () => {
     expect(flyToml(planFlyDeploy({ ...base, channels: [], hasCron: true }))).toContain(
-      "min_machines_running = 1", // routines/wake need a running machine — no external wake-up for a cron instant
+      "min_machines_running = 1", // schedules need a running machine — no external wake-up for a cron instant
     );
     expect(flyToml(planFlyDeploy({ ...base, channels: declaredChannels(["telegram"]) }))).toContain(
       "min_machines_running = 0",

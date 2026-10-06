@@ -2,78 +2,78 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRoutines } from "../src/schedule/discover.ts";
+import { loadSchedules } from "../src/schedule/discover.ts";
 
-const routineHref = new URL("../src/schedule/routine.ts", import.meta.url).href;
-const def = (cron: string, prompt = "go", tz?: string): string =>
-  `import { defineRoutine } from ${JSON.stringify(routineHref)};\n` +
-  `export default defineRoutine({ cron: ${JSON.stringify(cron)}, prompt: ${JSON.stringify(prompt)}${tz ? `, tz: ${JSON.stringify(tz)}` : ""} });\n`;
+const md = (frontmatter: string, prompt = "go"): string => `---\n${frontmatter}\n---\n\n${prompt}\n`;
 
 async function ws(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-sd-"));
-  await mkdir(join(dir, "routines"), { recursive: true });
-  for (const [name, content] of Object.entries(files)) await writeFile(join(dir, "routines", name), content);
+  await mkdir(join(dir, "schedules"), { recursive: true });
+  for (const [name, content] of Object.entries(files)) await writeFile(join(dir, "schedules", name), content);
   return dir;
 }
 
 describe("schedule/discover", () => {
-  it("loads valid routines, named from the filename", async () => {
-    const dir = await ws({ "daily.ts": def("0 9 * * *", "digest", "UTC") });
-    const { routines, failures } = await loadRoutines(dir);
-    expect(failures).toEqual([]);
-    expect(routines).toEqual([{ name: "daily", cron: "0 9 * * *", tz: "UTC", prompt: "digest" }]);
-  });
-
-  it("a routine with NO cron loads — its name is the only way in", async () => {
-    // The rename's whole point: `cron` is a field, not the concept. A routine without one is reached
-    // by name (`POST /run`, `fastagent routine run`), so its absence is a declaration, not an error.
+  it("loads schedules/<name>.md: the frontmatter's cron and tz, the body as the prompt", async () => {
     const dir = await ws({
-      "reindex.ts": `import { defineRoutine } from ${JSON.stringify(routineHref)};\nexport default defineRoutine({ prompt: "refresh" });\n`,
+      "daily.md": md('cron: "0 9 * * 1-5"\ntz: Asia/Shanghai', "Summarize yesterday.\n\nPost it to #team."),
+      // A bare cron starting with `*` is what an author types; YAML would read it as an alias.
+      "often.md": md("# every five minutes\ncron: */5 * * * *"),
+      "notes.txt": "not a schedule", // only *.md files are schedules
     });
-    const { routines, failures } = await loadRoutines(dir);
+    const { schedules, failures } = await loadSchedules(dir);
     expect(failures).toEqual([]);
-    expect(routines).toEqual([{ name: "reindex", prompt: "refresh" }]);
+    expect(schedules).toEqual([
+      { name: "daily", cron: "0 9 * * 1-5", tz: "Asia/Shanghai", prompt: "Summarize yesterday.\n\nPost it to #team." },
+      { name: "often", cron: "*/5 * * * *", prompt: "go" },
+    ]);
   });
 
-  it("refuses a tz with no cron — it would read as a time this routine does not have", async () => {
+  it("refuses, naming the file, whatever is not exactly a schedule; the valid ones still load", async () => {
     const dir = await ws({
-      "odd.ts": `import { defineRoutine } from ${JSON.stringify(routineHref)};\nexport default defineRoutine({ prompt: "x", tz: "UTC" });\n`,
+      "ok.md": md('cron: "0 * * * *"'),
+      "no-front.md": "just a prompt\n",
+      "unclosed.md": '---\ncron: "0 * * * *"\nprompt\n',
+      "no-cron.md": md("tz: UTC"),
+      "bad-cron.md": md("cron: not a cron"),
+      "bad-tz.md": md('cron: "0 * * * *"\ntz: Mars/Olympus'),
+      "unknown-key.md": md('cron: "0 * * * *"\nsession: mine'),
+      "twice.md": md('cron: "0 * * * *"\ncron: "0 1 * * *"'),
+      "not-kv.md": md('cron: "0 * * * *"\n- a list item'),
+      "empty.md": md('cron: "0 * * * *"', ""),
     });
-    const { routines, failures } = await loadRoutines(dir);
-    expect(routines).toEqual([]);
-    expect(failures[0]?.message).toMatch(/"tz" means nothing without "cron"/);
-  });
-
-  it("isolates a file with an invalid cron — reported, not thrown (G2)", async () => {
-    const dir = await ws({ "bad.ts": def("not a cron"), "ok.ts": def("0 * * * *", "hourly") });
-    const { routines, failures } = await loadRoutines(dir);
-    expect(routines.map((s) => s.name)).toEqual(["ok"]); // the good one still loads
-    expect(failures.find((f) => f.label.includes("bad"))?.message).toMatch(/invalid cron/);
-  });
-
-  it("isolates a non-schedule default export", async () => {
-    const dir = await ws({ "x.ts": "export default { nope: true };\n" });
-    const { routines, failures } = await loadRoutines(dir);
-    expect(routines).toEqual([]);
-    expect(failures[0]?.message).toMatch(/must default-export defineRoutine/);
+    const { schedules, failures } = await loadSchedules(dir);
+    expect(schedules.map((s) => s.name)).toEqual(["ok"]);
+    const why = Object.fromEntries(failures.map((f) => [f.label, f.message]));
+    expect(why).toEqual({
+      "schedules/bad-cron.md": expect.stringMatching(/^invalid cron\/tz/),
+      "schedules/bad-tz.md": expect.stringMatching(/unknown timezone "Mars\/Olympus"/),
+      "schedules/empty.md": expect.stringMatching(/has no prompt/),
+      "schedules/no-cron.md": expect.stringMatching(/needs a "cron"/),
+      "schedules/no-front.md": expect.stringMatching(/must start with a "---" frontmatter/),
+      "schedules/not-kv.md": expect.stringMatching(/is not "key: value"/),
+      "schedules/twice.md": expect.stringMatching(/"cron" appears twice/),
+      "schedules/unclosed.md": expect.stringMatching(/no closing "---"/),
+      "schedules/unknown-key.md": expect.stringMatching(/unknown frontmatter key "session"/),
+    });
   });
 
   it("refuses only names that could leave the claims directory — a legal filename is a legal schedule", async () => {
     // The name becomes a path segment under `claims/`, so that is the whole rule. Narrowing it further would make an
-    // ordinary filename load into nothing but one warning, and its schedule would silently stop firing.
+    // ordinary filename load into nothing, and its schedule would silently stop firing.
     const dir = await ws({
-      "...ts": def("0 * * * *"),
-      "每日简报.ts": def("0 * * * *"),
-      "my report.ts": def("0 * * * *"),
+      "..md": md('cron: "0 * * * *"'),
+      "每日简报.md": md('cron: "0 * * * *"'),
+      "my report.md": md('cron: "0 * * * *"'),
     });
-    const { routines, failures } = await loadRoutines(dir);
-    expect(routines.map((s) => s.name).sort()).toEqual(["my report", "每日简报"]);
+    const { schedules, failures } = await loadSchedules(dir);
+    expect(schedules.map((s) => s.name).sort()).toEqual(["my report", "每日简报"]);
     expect(failures).toHaveLength(1);
-    expect(failures[0]?.message).toMatch(/cannot be "\.", "\.\." or contain a path separator/);
+    expect(failures[0]?.message).toMatch(/cannot be empty, "\.", "\.\." or contain a path separator/);
   });
 
-  it("a missing routines/ dir yields empty (no routines is normal)", async () => {
+  it("a missing schedules/ dir yields none (no schedules is normal)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sd-empty-"));
-    expect((await loadRoutines(dir)).routines).toEqual([]);
+    expect(await loadSchedules(dir)).toEqual({ schedules: [], failures: [] });
   });
 });

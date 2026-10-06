@@ -4,9 +4,8 @@
  * A host may only phrase its own REMEDY — the setting it owns (`min_machines_running`, App Sleeping) — never
  * re-derive the reason.
  *
- * ORDER IS THE POINT, not just precedence: the reason reported has to be the one an operator cannot work around,
- * because the message it produces differs. A declared schedule has a substitute, because the clock does not have to
- * be ours — see {@link CRON_CAN_BE_EXTERNAL}; a long connection has none.
+ * A schedule is the agent's own clock: it keeps one machine up, and nothing here offers a way around that. Scaling to
+ * zero with timed work means not declaring the schedule and keeping the time elsewhere (docs/deploy.md), never both.
  *
  * A WAKE-UP IS NOT A REASON. Every serve mounts `wake`, so counting it would pin every deployment up. It does not
  * need to: the wake-up store is on the volume and the poll drains what is due when the process starts, so a box that
@@ -16,20 +15,13 @@
 import type { DeclaredChannel } from "../channels/discover.ts";
 
 /** Why one machine has to stay up. Also the order they are checked in. */
-export type ResidencyReason = "long-connection" | "cron";
+type ResidencyReason = "long-connection" | "cron";
 
 export interface Residency {
   reason: ResidencyReason;
   /** The host-neutral cause, one clause, for a generated comment or a runbook line. */
   why: string;
 }
-
-/**
- * The ONE reason a caller may offer a way out of: a cron is a TIME, and a time can be kept elsewhere — a platform
- * scheduler, a CI cron, a crontab — which then calls this agent. Nothing else here can be moved out: a long
- * connection is one this process holds.
- */
-export const CRON_CAN_BE_EXTERNAL: ResidencyReason = "cron";
 
 /** What scaling to zero costs the agent's own wake-ups — said next to every setting that allows it. */
 export const WAKEUPS_WHEN_ASLEEP =
@@ -38,7 +30,7 @@ export const WAKEUPS_WHEN_ASLEEP =
 /** What forbids scale-to-zero for this deployment, or `undefined` when nothing does. */
 export function residencyFor(facts: {
   channels: readonly DeclaredChannel[];
-  /** `routines/` declares at least one cron. */
+  /** `schedules/` declares at least one schedule. */
   hasCron: boolean;
 }): Residency | undefined {
   if (facts.channels.some((channel) => channel.ingress === "long-connection")) {

@@ -3,7 +3,7 @@ import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
-import { CRON_CAN_BE_EXTERNAL, WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
+import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
@@ -27,7 +27,7 @@ export interface RailwayPlanInput extends ContainerInput {
    * carries.
    */
   secrets?: readonly DeploymentSecret[];
-  /** `routines/` declares a cron — one of the things that forbids App Sleeping (deploy/residency.ts). */
+  /** `schedules/` declares a schedule — one of the things that forbids App Sleeping (deploy/residency.ts). */
   hasCron: boolean;
 }
 
@@ -161,20 +161,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     residency
       ? `# Scale-to-zero: do NOT enable App Sleeping — ${residency.why}.`
       : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping —\n# ${WAKEUPS_WHEN_ASLEEP}.`,
-    ...(residency?.reason === CRON_CAN_BE_EXTERNAL
-      ? [
-          `# To sleep anyway: keep the time in a Railway CRON SERVICE (Settings -> Cron Schedule, >= 5 min) that`,
-          `# calls this service's \`POST /run\` over the private network — traffic from another service in the`,
-          `# project wakes a slept one. A cron service must EXIT, so it cannot be this service.`,
-          `#   set a variable on the cron service and curl it (Railway resolves the reference at deploy):`,
-          `#     AGENT_RUN=http://${serviceName}.railway.internal:\${{${serviceName}.PORT}}/run`,
-          `#     curl --retry 3 -fsS -X POST "$AGENT_RUN" -H 'content-type: application/json' -d '{"name":"<routine>"}'`,
-          `#   --retry because the FIRST request to a slept service may answer 502 (Railway documents it). The`,
-          `#   route has no dedup, so decide for yourself whether a retry that may duplicate work is what you want.`,
-          `# \`POST /run\` is an API, not a clock: read its contract — docs/api-reference.md#post-run.`,
-          `# Asleep, ${WAKEUPS_WHEN_ASLEEP}.`,
-        ]
-      : []),
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
   );
 

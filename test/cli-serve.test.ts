@@ -9,7 +9,7 @@ import { type MountableAgent, mountSessionControl, routesFor } from "../src/serv
 import { log } from "../src/log.ts";
 import { router } from "../src/channels/serve.ts";
 import { text } from "../src/channels/respond.ts";
-import type { LoadedRoutine } from "../src/schedule/routine.ts";
+import type { Schedule } from "../src/schedule/schedule.ts";
 
 describe("serving surface", () => {
   it("can suppress the data plane for AgentCore's publicly forwarded surface", async () => {
@@ -22,49 +22,6 @@ describe("serving surface", () => {
       http: { invoke: false },
     });
     expect(Object.keys(agentcore.unverified)).toEqual(["GET /health"]);
-  });
-
-  it("mounts POST /run + GET /routines only where there is something to run, and reserves those paths", async () => {
-    // It rides the unverified table for the reason that table exists: the JSON gate, the cross-origin
-    // policy, the reserved path and the startup report's account of what is open all follow from being
-    // in it — none of which this route had to ask for.
-    const dir = await mkdtemp(join(tmpdir(), "fa-trigger-surface-"));
-    const none = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {});
-    expect(Object.keys(none.unverified)).not.toContain("POST /run");
-    expect(Object.keys(none.unverified)).not.toContain("GET /routines");
-
-    const routines = [{ name: "digest", cron: "0 * * * *", tz: "UTC", prompt: "go" }];
-    const withRun = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { routines });
-    expect(Object.keys(withRun.unverified)).toContain("POST /run");
-    // The CATALOGUE of that route, mounted exactly where it is: listing names nobody can use would be
-    // a catalogue of nothing, and the names were already public (the 404 lists them).
-    expect(Object.keys(withRun.unverified)).toContain("GET /routines");
-
-    // It FOLLOWS `http.invoke`: `http.invoke: false` means "the channels' signature checks are the only
-    // way in", and a second anonymous turn-starter appearing behind that choice would reverse it.
-    const invokeOff = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
-      routines,
-      http: { invoke: false },
-    });
-    expect(Object.keys(invokeOff.unverified)).toEqual(["GET /health"]);
-    // …with one explicit exception, which is the combination this route exists for: no `/invoke`, but
-    // a scheduler of yours calling routines by name.
-    const clockOnly = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
-      routines,
-      http: { invoke: false, run: true },
-    });
-    expect(Object.keys(clockOnly.unverified).sort()).toEqual(["GET /health", "GET /routines", "POST /run"]);
-
-    // Reserved like /invoke: a channel taking the path would answer for a route every runbook names.
-    const taken = await mkdtemp(join(tmpdir(), "fa-trigger-taken-"));
-    await mkdir(join(taken, "channels"));
-    await writeFile(
-      join(taken, "channels", "mine.mjs"),
-      `export default () => ({ "POST /run": () => new Response("mine") });\n`,
-    );
-    await expect(routesFor(taken, {} as Agent, join(taken, ".state"), undefined, { routines })).rejects.toThrow(
-      /channel route\(s\) "POST \/run" take a path this serve answers on itself/,
-    );
   });
 
   it("serves the data plane beside a channel, and RESERVES its path against one", async () => {
@@ -138,14 +95,14 @@ describe("mountAgentcore", () => {
       yield { type: "completed" as const };
     },
   };
-  const routine: LoadedRoutine = { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" };
+  const schedule: Schedule = { name: "job", cron: "0 * * * *", tz: "UTC", prompt: "go" };
 
   it("mounts the adapter's two paths, and ONLY those — the channels live behind the envelope", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-mount-"));
     const routes = mountAgentcore({
       agent,
       stateRoot: dir,
-      routines: [],
+      schedules: [],
       channels: () => ({ routes: { "POST /telegram": () => text("ok\n", 200) } }),
     });
     // The channel is NOT beside them: AgentCore routes only these two into the container, so a
@@ -157,20 +114,20 @@ describe("mountAgentcore", () => {
     });
   });
 
-  it("binds routine runs by name — an unknown name 404s through the adapter", async () => {
+  it("binds schedule fires by name — an unknown name 404s through the adapter", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-fire-"));
-    // routine-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
+    // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
-    const routes = mountAgentcore({ agent, stateRoot: dir, routines: [routine], channels: () => ({ routes: {} }) });
+    const routes = mountAgentcore({ agent, stateRoot: dir, schedules: [schedule], channels: () => ({ routes: {} }) });
     // The clock's name for this fire — the instant EventBridge would have injected.
-    // (a routine's fire history is claimed by occurrence — schedule/scheduler.ts).
+    // (a schedule's fire history is claimed by occurrence — schedule/scheduler.ts).
     const occurrence = new Date().toISOString();
     const fire = (name: string): Promise<Response> | Response =>
       routes["POST /invocations"]!(
         new Request("http://x/invocations", {
           method: "POST",
-          body: JSON.stringify({ auth: "ingress-s3cret", kind: "routine-fire", name, occurrence }),
+          body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name, occurrence }),
         }),
       );
     expect((await fire("nope")).status).toBe(404);
@@ -243,17 +200,12 @@ describe("cli: the assembled serving surface", () => {
     const configuredOff = { ...opened, http: { invoke: false } } as MountableAgent;
     expect(withRunOverrides(configuredOff, {}).http?.invoke).toBe(false);
     expect(withRunOverrides(configuredOff, { invoke: true }).http?.invoke).toBe(false);
-
-    // It takes `POST /run` with it, over a definition that asked for it. Both routes start a turn
-    // for an anonymous caller, and `dev --tunnel --no-invoke` leaving the other one on the tunnel URL
-    // would be the flag failing at the job it exists for. The rest of `http` stands.
-    const runOn = { ...opened, http: { run: true, cors: ["https://app.example.com"] } } as MountableAgent;
-    expect(withRunOverrides(runOn, { invoke: false }).http).toEqual({
-      run: false,
+    // The rest of `http` stands.
+    const withCors = { ...opened, http: { cors: ["https://app.example.com"] } } as MountableAgent;
+    expect(withRunOverrides(withCors, { invoke: false }).http).toEqual({
       invoke: false,
       cors: ["https://app.example.com"],
     });
-    expect(withRunOverrides(runOn, {}).http?.run).toBe(true); // no flag, the definition stands
   });
 
   it("the cross-origin grant is said at EVERY boot, loopback included", async () => {
@@ -268,17 +220,6 @@ describe("cli: the assembled serving surface", () => {
       expect(said).toMatch(/any web page your browser visits can call this serve cross-origin/);
       expect(said).toContain("POST /invoke");
       expect(said).toContain("http.cors");
-
-      // `POST /run` is on the same table and is named the same way: it runs a turn too, from a
-      // prompt the definition wrote down rather than one the caller sent.
-      warn.mockClear();
-      announceControl(
-        { unverifiedRoutes: ["POST /invoke", "POST /run", "GET /health"] },
-        { host: "127.0.0.1", tunnel: false },
-      );
-      expect(warn.mock.calls.flat().join(" ")).toContain(
-        "POST /run (run any routine this agent declares; GET /routines lists them)",
-      );
 
       // …and NOT once `http.cors` has taken it back — then the operator named the origins themselves.
       warn.mockClear();

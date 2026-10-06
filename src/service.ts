@@ -10,15 +10,13 @@ import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
-import { loadRoutines } from "./schedule/discover.ts";
-import { createRoutineListHandler, createRunHandler } from "./schedule/run.ts";
+import { loadSchedules } from "./schedule/discover.ts";
 import { createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
 import { refuseBrokenDeclarations } from "./loader.ts";
-import { gateSecrets } from "./secrets-gate.ts";
-import type { LoadedRoutine } from "./schedule/routine.ts";
+import type { Schedule } from "./schedule/schedule.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. */
 const CLOSE_DEADLINE_MS = 5_000;
@@ -64,8 +62,8 @@ function closeWithin(
 
 export interface ServingSurface {
   /**
-   * The routes that AUTHENTICATE NOBODY — `GET /health`, `POST /invoke`, and `POST /run` where the definition
-   * declares routines, minus what a channel took over or `http.invoke: false` withheld. Kept APART from the
+   * The routes that AUTHENTICATE NOBODY — `GET /health` and `POST /invoke`, minus what a channel took over or
+   * `http.invoke: false` withheld. Kept APART from the
    * channels' table rather than derived from it, because three decisions read it (browser reachability, the JSON
    * body gate, what the startup line calls unauthenticated) and must give the same answer.
    */
@@ -107,32 +105,15 @@ export interface HttpSurface {
    * with the agent's full tool authority.
    */
   invoke?: boolean;
-  /**
-   * Serve `POST /run` (and `GET /routines`), which run a routine this definition declares by name. It follows
-   * `invoke` unless set: turning the anonymous turn endpoint off must not leave a second one open behind it. Set it
-   * `true` for the one combination that gets wrong — no `/invoke`, but an external clock (a crontab, a CI job) driving
-   * the routines. It has no effect where `routines/` declares nothing; there is no route then.
-   */
-  run?: boolean;
-}
-
-/**
- * Does this surface serve `POST /run`, given a routine to run? It FOLLOWS `invoke` unless `run` says otherwise (see
- * {@link HttpSurface.run}). ONE function because the assembly mounts the route and `preflightDeploy` names it; a
- * default spelled twice is a default that moves once.
- */
-export function shouldServeRun(http: HttpSurface | undefined): boolean {
-  return http?.run ?? http?.invoke !== false;
 }
 
 /**
  * What an anonymous caller of a port can do, worst first — the ONE wording the startup report and deploy's pre-flight
  * both print, each from its own facts (what mounted vs what will mount).
  */
-export function describeAnonymousSurface(open: { invoke: boolean; run: boolean; controlPrefix?: string }): string[] {
+export function describeAnonymousSurface(open: { invoke: boolean; controlPrefix?: string }): string[] {
   return [
     ...(open.invoke ? ["POST /invoke (run a turn with this agent's tools)"] : []),
-    ...(open.run ? ["POST /run (run any routine this agent declares; GET /routines lists them)"] : []),
     ...(open.controlPrefix ? [`${open.controlPrefix}/* (read, steer or delete any session)`] : []),
   ];
 }
@@ -153,11 +134,8 @@ export async function routesFor(
    * `http.invoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
    * Runtime's `/invocations` contract instead, and an author sets it to leave the channels' signature checks as the
    * only way into a public port.
-   *
-   * `routines` mounts `POST /run` and `GET /routines` (per {@link shouldServeRun}). Passed in rather than loaded here
-   * so the routes and the resident clock cannot disagree about which routines exist (`loadServingRoutines`).
    */
-  options: { http?: HttpSurface; routines?: readonly LoadedRoutine[] } = {},
+  options: { http?: HttpSurface } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
@@ -187,17 +165,6 @@ export async function routesFor(
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
   if (options.http?.invoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
-  // `POST /run` exists only where there is something to run, and `GET /routines` exactly where that route does:
-  // it is the catalogue OF that route, so listing names nobody can use would be a catalogue of nothing. Both ride
-  // this table for the reason the table exists: they authenticate nobody, so they inherit the JSON body gate, the
-  // cross-origin policy, the reserved path and the startup report's account of what is open.
-  if (shouldServeRun(options.http)) {
-    const routines = options.routines ?? [];
-    const run = createRunHandler({ agent, routines });
-    if (run) unverified["POST /run"] = run;
-    const list = createRoutineListHandler({ routines });
-    if (list) unverified["GET /routines"] = list;
-  }
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
@@ -250,44 +217,39 @@ export function mountSessionControl(
 }
 
 /**
- * Load the agent's `routines/`, gated.
- *
- * Separate from {@link startSchedules} because two things need the SAME list and one of them runs first: the
- * `POST /run` route is built with the routes (so a channel cannot take that path unnoticed), and the resident
- * clock starts later, inside the service's scope. Loading twice would let them disagree about which routines exist.
+ * Load the agent's `schedules/`, refusing a file that is not a valid schedule: it is a declaration, so serving without
+ * it would announce a ready service whose schedule never fires. Separate from {@link startSchedules} so the refusal
+ * happens with the rest of the definition's, before anything is served; the clock starts later, inside the service's
+ * scope.
  */
-export async function loadServingRoutines(agentDir: string): Promise<LoadedRoutine[]> {
+export async function loadServingSchedules(agentDir: string): Promise<Schedule[]> {
   // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
   // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
-  const { routines, secrets, failures } = await loadRoutines(agentDir);
-  // The routines' half of the serving-path gate (the opener does the tools', loadChannels the
-  // channels'): a routine reads its env at IMPORT time, so an unset declared value has already
-  // produced a broken prompt — refusing here is the last point where that is a startup failure.
-  gateSecrets({ declared: secrets, failures });
+  const { schedules, failures } = await loadSchedules(agentDir);
   refuseBrokenDeclarations(failures);
-  return routines;
+  return schedules;
 }
 
 /**
- * Start the clock over routines {@link loadServingRoutines} already gated — on every serve, routines or not: the
+ * Start the clock over the schedules {@link loadServingSchedules} loaded — on every serve, schedules or not: the
  * agent's own wake-ups are a default capability, and this is what fires them.
  */
 export function startSchedules(
   agent: Agent,
   stateRoot: string,
-  routines: LoadedRoutine[],
+  schedules: readonly Schedule[],
   options: { externalClock?: boolean } = {},
-): { routines: LoadedRoutine[]; stop: () => void } {
+): { schedules: readonly Schedule[]; stop: () => void } {
   const scheduler = Effect.runSync(
-    createScheduler({ agent, stateRoot, routines, externalClock: options.externalClock }),
+    createScheduler({ agent, stateRoot, schedules, externalClock: options.externalClock }),
   );
   scheduler.start();
-  if (routines.length > 0) {
+  if (schedules.length > 0) {
     log.info(
-      `[fastagent] routines: ${routines.map((r) => r.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
+      `[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}${options.externalClock ? " (external clock — no resident cron timers)" : ""}`,
     );
   }
-  return { routines, stop: () => scheduler.stop() };
+  return { schedules, stop: () => scheduler.stop() };
 }
 
 export interface AgentService {
@@ -313,17 +275,17 @@ export interface AgentService {
    * about this surface must come from what was actually assembled, not from re-deriving it.
    */
   corsOrigins?: readonly string[];
-  routines: readonly LoadedRoutine[];
+  schedules: readonly Schedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
   /** The control plane's prefix, when `sessionControl` is on. */
   controlPrefix?: string;
   /**
-   * Stop long connections and routines. It does NOT drain agent turns: a turn takes seconds to minutes, and the
+   * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
    * that safe is replay, not waiting — a chat turn's intent is durable before it is accepted and its channel
    * replays it on the next boot (`channels/kit/turn-store.ts`), and an in-flight HTTP/SSE caller sees the stream
-   * drop and retries. The one path with neither is a routine fire, whose claim is written before the turn: it
+   * drop and retries. The one path with neither is a schedule fire, whose claim is written before the turn: it
    * stays skipped, and the next boot records it as `interrupted` rather than losing it silently.
    */
   close(): Promise<void>;
@@ -344,9 +306,9 @@ export interface MountAgentServiceOptions {
 /** What the assembly needs from an opened agent directory — the whole of it. */
 export interface MountableAgent {
   agent: Agent;
-  /** The definition dir: where channels/, tools/ and routines/ are read from, and the agent's working directory. */
+  /** The definition dir: where channels/, tools/ and schedules/ are read from, and the agent's working directory. */
   agentDir: string;
-  /** Where durable state lives (channel state, sessions, routine fires). */
+  /** Where durable state lives (channel state, sessions, schedule fires). */
   stateRoot: string;
   /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
    *  a chat channel's stop command reaches the running turn through it. */
@@ -359,7 +321,7 @@ export interface MountableAgent {
 }
 
 /**
- * The assembly itself, over an already-opened directory: channels, the control plane, routines and long connections,
+ * The assembly itself, over an already-opened directory: channels, the control plane, schedules and long connections,
  * composed into one handler.
  */
 export async function mountAgentService(
@@ -367,7 +329,7 @@ export async function mountAgentService(
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
   const { agentDir, stateRoot, sessionControl } = opened;
-  // Wrapped BEFORE anything consumes it: routes, the control plane and routines must all drive the same agent, so
+  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the same agent, so
   // this is a hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
@@ -376,10 +338,9 @@ export async function mountAgentService(
   const corsOrigins = opened.http?.cors;
   if (corsOrigins) assertCorsOrigins(corsOrigins, "mountAgentService: http.cors");
 
-  // Loaded BEFORE the routes, because `POST /run` is one of them and the resident clock below must run over the
-  // same list — two loads would be two answers to "which routines exist".
-  const routines = await loadServingRoutines(agentDir);
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http, routines });
+  // Loaded with the rest of the definition, so a broken schedule refuses the serve before anything is published.
+  const schedules = await loadServingSchedules(agentDir);
+  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
   // Composed BEFORE anything starts.
   const handler = router({
@@ -433,7 +394,7 @@ export async function mountAgentService(
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         const scheduled = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => startSchedules(agent, stateRoot, routines),
+            try: () => startSchedules(agent, stateRoot, schedules),
             catch: (error) => error,
           }),
           (scheduled) => Effect.sync(scheduled.stop),
@@ -521,7 +482,7 @@ export async function mountAgentService(
           },
           unverifiedRoutes: Object.keys(routed.unverified),
           ...(corsOrigins ? { corsOrigins } : {}),
-          routines: scheduled.routines,
+          schedules: scheduled.schedules,
           ready,
           ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
           close,

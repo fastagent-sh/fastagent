@@ -62,7 +62,7 @@ src/
 │                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
-├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ routines/ config
+├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/.contexts)
 ├── contexts/               # what an agent works on and knows — engine-neutral
@@ -72,7 +72,7 @@ src/
 │   ├── source.ts           # what a command's <source> declares (github:owner/repo, a checkout, a directory)
 │   └── config-text.ts      # the literal `contexts: [...]` block `fastagent context` rewrites
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
-│                           # (defineTool/defineChannel/defineRoutine): the ONE read of
+│                           # (defineTool/defineChannel): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
 │                           # them, and what "has no value" means
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load
@@ -196,12 +196,10 @@ src/
 │                             # deciding that produced the same defect five review rounds running. Every AWS
 │                             # read that asks "is it there, and could I tell" goes through it. shell.ts is the
 │                             # command-shell WebSocket `login --deployment` speaks (SigV4 presigned, AWS CLI creds)
-├── schedule/               # the N axis: the unit of work (a ROUTINE) and the clock that fires it
-│   ├── routine.ts          # defineRoutine({ prompt, cron?, tz? }) — the ONLY named unit of work. `cron` is a
-│   │                       # FIELD: without one, the name is the only way in. Not a "schedule" (that named a time)
-│   ├── run.ts              # POST /run: an API, by name. NO occurrence — that lives where we own the clock
+├── schedule/               # the N axis: prompts on a cron and the clock that fires them
+│   ├── schedule.ts         # a schedule as loaded ({ name, cron, tz?, prompt }) + its one session, schedule:<name>
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
-│   ├── discover.ts         # routines/ filesystem discovery; a bad file is isolated
+│   ├── discover.ts         # schedules/<name>.md discovery: a strict cron/tz frontmatter over the prompt
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
 │   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
@@ -270,7 +268,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **Public surface is scoped on purpose.** `src/core.ts` is engine- and runtime-neutral (zero packages), `src/node.ts` is engine-neutral but needs a Node runtime, `src/pi.ts` names the engine, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
-- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, `tools/`, `channels/`, `routines/`, its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and engine settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
+- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, `tools/`, `channels/`, `schedules/`, its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and engine settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
 - **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What an engine needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `writeFileAtomic` and `sessionToolActivation` are that shape.

@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, context, dev, chat, invoke, tool, start, login, models, add, routine, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, context, dev, chat, invoke, tool, start, login, models, add, schedules, and deploy commands with flags."
 status: current
 ---
 
@@ -26,9 +26,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `dev [agent]` | Serve locally with watch/reload. |
 | `chat [agent]` | Open the assembled agent in pi's interactive TUI. |
 | `invoke <message> [agent]` | Run one turn and exit. |
-| `routine run <name> [agent]` | Run one routine's turn now, cron or not. |
-| `routine history <name> [agent]` | Print a routine's recent fires. |
-| `routine list [agent] [--json]` | Every declared routine (next cron instant, or `on demand`) plus pending wake-ups. |
+| `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
 | `tool <name> <json> [agent]` | Run one tool directly. |
 | `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
@@ -93,7 +91,7 @@ Prints, without serving:
 - skills (each context's named `<context>/<skill>`) and their diagnostics,
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
-- routines with their next fire instant (a broken routine file is reported),
+- schedules with their next fire instant (a file that is not a valid schedule is reported),
 - declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
@@ -173,11 +171,11 @@ fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-
 
 Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, its own and each context's `AGENTS.md`, skills and prompt templates
 are re-read every turn. A supervisor restarts the
-worker on edits to `tools/`, `channels/`, `routines/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
+worker on edits to `tools/`, `channels/`, `schedules/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
 once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
 an agent that edits its own `tools/` does not cut off the turn that made the edit.
 
-With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`, `routine run`,
+With no model set and a terminal attached, commands that need one (`dev`, `start`, `invoke`,
 `chat`, `deploy`) show the model catalog and write the pick to the config.
 
 `--tunnel` opens a Cloudflare Quick Tunnel (needs `cloudflared`), prints the public URL, and registers webhooks
@@ -206,46 +204,27 @@ fastagent invoke <message> [agent] [--model provider/modelId] [--no-input]
 
 Runs one turn and exits: answer text to stdout, tool and diagnostic lines to stderr, non-zero exit on `failed`.
 
-## `fastagent routine run`
+## `fastagent schedules list`
 
 ```bash
-fastagent routine run <name> [agent] [--model provider/modelId] [--no-input]
+fastagent schedules list [agent] [--json]
 ```
 
-Fires `routines/<name>.ts` now, in the routine's session, and streams like `invoke`. It does not advance the
-routine's fire state. No name → exit 2; an unknown name → exit 1 with the available names. See
-[Routine authoring](api-reference.md#routine-authoring).
-
-## `fastagent routine history`
-
-```bash
-fastagent routine history <name> [agent] [--json]
-```
-
-Prints a routine's recent fires: time, outcome, and duration. Text output shows the last 20; `--json` shows all
-retained fires (the last 512).
+Lists every schedule (`schedules/<name>.md`, see [Schedules](configuration.md#schedules)) with its next cron
+instant, how its last run ended and the session its runs continue (`schedule:<name>`), then the agent's pending
+wake-ups (id, next fire, one-shot or cron, session, prompt). `--json` adds each schedule's retained fire history
+(the last 512):
 
 | Outcome | Meaning |
 |---|---|
 | `completed` / `failed` | The turn finished, or failed. |
-| `interrupted` | The process stopped mid-turn. The slot is not replayed; the next resident start records it. |
+| `skipped` | The previous run was still going when this instant arrived. |
+| `interrupted` | The process stopped mid-turn. The instant is not replayed; the next resident start records it. |
 | `unreported` | Still running, or never settled (AgentCore has no resident start to record it). |
 
-What a fire said is in its session (`routine:<name>` under `<state root>/sessions/`), whose path this command
-prints. A failure before the model was reached (credentials, model, a missing secret) is only in the logs, under
-the host's retention.
-
-Wake-ups have no history here, only log lines.
-
-## `fastagent routine list`
-
-```bash
-fastagent routine list [agent] [--json]
-```
-
-Lists every declared routine with its next cron instant (or `on demand`), and the agent's pending wake-ups (id,
-next fire, one-shot or cron, session, prompt). The agent cancels its own wake-ups with `unwake({ id })`; as a last
-resort, edit `<state root>/schedule/wakeups.json`.
+What a run said is in its session under `<state root>/sessions/`. A failure before the model was reached
+(credentials, model) is only in the logs, under the host's retention. The agent cancels its own wake-ups with
+`unwake({ id })`; as a last resort, edit `<state root>/schedule/wakeups.json`.
 
 ## `fastagent tool`
 
@@ -324,15 +303,15 @@ Flags come after the command: `fastagent info --json`. Global: `-h`/`--help` (al
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke`, `POST /run` or `GET /routines` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
-| `--no-input` | `dev`, `start`, `invoke`, `routine run`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
+| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
+| `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/.env`, then `config.model`. |
-| `--json` | `info`, `routine history`, `routine list` | Machine-readable output. |
+| `--json` | `info`, `schedules list`, `context list` | Machine-readable output. |
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Success (including help and version). |
-| `1` | Runtime failure: a failed turn, a broken definition, a deploy gate, an unknown tool or routine name, invalid runtime configuration. |
+| `1` | Runtime failure: a failed turn, a broken definition, a deploy gate, an unknown tool name, invalid runtime configuration. |
 | `2` | Usage error: unknown command or flag, missing or invalid arguments, conflicting flags. A mistyped command suggests the nearest one. |

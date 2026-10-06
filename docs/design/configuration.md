@@ -69,7 +69,7 @@ This is the rule §3's question 4 already implied, written as something a review
 
 ```
 fastagent.config.ts               # in git (or .js/.mjs): name / model / http / deploy.{secrets,apt}
-SYSTEM.md  APPEND_SYSTEM.md  skills/  prompts/  tools/  channels/  routines/
+SYSTEM.md  APPEND_SYSTEM.md  skills/  prompts/  tools/  channels/  schedules/
 
 .secrets/.env                     # the local (= single-instance deploy) values
 .secrets/auth.json                # this project's OAuth credentials (login writes here by default)
@@ -128,7 +128,7 @@ fastagent logs agentcore --env production
 | `deploy <host> [dir]` | add `--env <name>`; drop `--model` (§5: it never reaches the box) and `--auth-path`; `host` stays a required positional (unambiguous, so it does not move) |
 | `logs <host> [dir]` | add `--env <name>` |
 | `login [provider]` | add `-g`; drop the `--auth-path` flag (the SDK's `authPath` option stays) |
-| `dev`, `chat`, `info`, `invoke`, `routine run`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
+| `dev`, `chat`, `info`, `invoke`, `start` | drop the `--auth-path` flag; `FASTAGENT_AUTH_PATH` stays (§11) |
 | the other six commands | unchanged |
 
 `[dir]` is a positional both `deploy` and `logs` already carry, so `--env` is a flag rather than a second optional positional — `deploy fly production` and `deploy fly ./myagent` are indistinguishable otherwise. `deploy` without `--run` keeps its current meaning: it writes the generated artifacts into the agent dir (ownership markers decide what may be overwritten) and changes nothing on the host. Reading back remote state is **not** part of this proposal.
@@ -215,7 +215,7 @@ Day one is built: the credential layers (§5, §8), the value-file-only delivery
 | Work | Where |
 |---|---|
 | `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }`: the **one** read of the selected value file, shared by the plan side and the run side | a new module under `src/deploy/` |
-| Loading a definition under a given env's values (channel/routine discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
+| Loading a definition under a given env's values (channel discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
 | `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/engines/pi/config.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) | `src/deploy/container.ts` + each host's `plan.ts` |

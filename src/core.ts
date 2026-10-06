@@ -27,8 +27,8 @@ export type {
   LongConnectionChannelModule,
   Routes,
 } from "./channel.ts";
-// Mounting only.
-export { defineRoutine, type DefineRoutineOptions, type LoadedRoutine, type Routine } from "./schedule/routine.ts";
+// What a `schedules/<name>.md` loads into (`AgentService.schedules`).
+export type { Schedule } from "./schedule/schedule.ts";
 // What a `channels/*.ts` file is written against when it needs credentials: declaring them is what
 // lets `deploy` carry them and the serve refuse to start without them.
 export { defineChannel, type DefineChannelOptions } from "./channels/define-channel.ts";

@@ -1,6 +1,6 @@
 /**
- * WHICH ENV VARS THIS AGENT'S CODE NEEDS, in ONE shape, wherever it was declared: `defineTool`, `defineChannel` and
- * `defineRoutine({ secrets })`, each next to the code that reads the value.
+ * WHICH ENV VARS THIS AGENT'S CODE NEEDS, in ONE shape, wherever it was declared: `defineTool` and `defineChannel`,
+ * each next to the code that reads the value.
  *
  * One list, two consequences:
  *  - a serving path ASSERTS the values before it runs, so a missing one is a startup failure naming the file, not a
@@ -17,7 +17,7 @@
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "tools/x-post.ts", "routines/daily-digest.ts", "config.tools" — printed in
+  /** Where it was declared: "tools/x-post.ts", "channels/slack.ts", "config.tools" — printed in
    *  runbooks and failures, so it must name a place the author can open. */
   source: string;
 }
@@ -47,7 +47,7 @@ function secretNamesProblem(value: unknown): string | undefined {
 
 /**
  * THE READ: what a code-input module declared, attributed to its file — the one implementation for
- * `tools/`, `routines/` and `channels/`.
+ * `tools/` and `channels/`.
  *
  * One function, so every code input gets the same shape check: a `secrets: "FOO"` is that file's load
  * failure, wherever it is. What a caller DOES with a bad declaration differs (push a failure and skip, or throw
@@ -99,7 +99,7 @@ export function missingSecrets(
   return dedupeSecrets(declared).filter((s) => !env[s.name]);
 }
 
-/** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (routines/digest.ts)" — grouped by the
+/** "X_API_KEY, X_API_SECRET (tools/x-post.ts); SLACK_TOKEN (channels/slack.ts)" — grouped by the
  *  file to open, since that is the unit the author fixes. */
 export function describeSecrets(declared: readonly DeclaredSecret[]): string {
   const bySource = new Map<string, string[]>();

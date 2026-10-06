@@ -25,7 +25,7 @@ The design choices are deliberate:
 | **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
 | **Typed edges** | Tools use Zod schemas, events have a closed shape, and invalid inputs fail at the boundary instead of becoming hidden prompt bugs. |
-| **Filesystem as source of truth** | The deployable definition is the directory: identity, tools, channels, routines and its own `skills/`. No hidden registry dependency, no builder-machine state baked into the artifact. |
+| **Filesystem as source of truth** | The deployable definition is the directory: identity, tools, channels, schedules and its own `skills/`. No hidden registry dependency, no builder-machine state baked into the artifact. |
 | **The machine is an environment, not a dependency** | An agent inherits the box it runs on — its `PATH`, and equally its Agent Skills directories, prompt templates and engine settings. Deploying ships the project scope; the environment is the machine's business, local or deployed. |
 | **One path from dev to serve** | `info`, `dev`, `invoke`, and `start` assemble the same directory so local behavior matches served behavior. |
 | **Visible failures** | Runtime problems become `failed` events or diagnostics. Silent fallback is worse than a clear error. |
