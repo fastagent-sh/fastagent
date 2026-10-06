@@ -15,7 +15,7 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
-import { declareContexts } from "../contexts/declare.ts";
+import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -98,6 +98,33 @@ export interface DeployReport {
   issue(text: string): void;
 }
 
+/**
+ * What each context becomes on the host, one line each, and the refusal of every one that cannot reach it: an
+ * instance never starts with a context silently missing (agent-model.md §3). A repository is cloned there, as on this
+ * machine without a checkout; a directory reaches a host only as a copy in the image, which is not built yet.
+ */
+function checkContexts(contexts: readonly DeclaredContext[], storageResets: boolean, report: DeployReport): void {
+  const refused: string[] = [];
+  for (const context of contexts) {
+    const role = context.readonly ? "knows" : "works on";
+    if (context.kind === "github") {
+      const fate = storageResets
+        ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
+        : "cloned on the host, and brought up to date in place at each start";
+      report.note(`${role} ${context.name}: github ${context.repo}${context.ref ? `@${context.ref}` : ""}, ${fate}`);
+    } else {
+      refused.push(
+        context.kind === "copy"
+          ? `context "${context.name}" (${context.path}) is to be copied to the host, which deploy does not do yet: ` +
+              `declare it as a github repository, or remove it`
+          : `context "${context.name}" (${context.path}) is a directory on this machine, which a host does not ` +
+              `have: declare it as a github repository, or remove it`,
+      );
+    }
+  }
+  if (refused.length > 0) throw new DeployGate(refused.join("; "));
+}
+
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
 class DeployGate {
   readonly text: string;
@@ -122,6 +149,11 @@ interface PreflightInput {
    * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
    */
   publicUrl?: boolean;
+  /**
+   * Does every deployment start this host's storage over (AgentCore)? Then a clone the instance made, and anything the
+   * agent did in it, does not outlive a release. Its own question, apart from {@link externalClock}.
+   */
+  storageResets?: boolean;
 }
 
 /** Run the host-neutral pre-flight. */
@@ -144,7 +176,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, force, externalClock, publicUrl = true } = input;
+  const { agentDir, config, force, externalClock, publicUrl = true, storageResets = false } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -155,15 +187,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  // A deployment ships the definition and nothing else yet, and an instance must never start with a context silently
-  // missing (agent-model.md §3), so an agent that declares one is not deployed.
   const contexts = declareContexts(config.contexts, agentDir);
-  if (contexts.length > 0) {
-    throw new DeployGate(
-      `this agent declares contexts (${contexts.map((c) => c.name).join(", ")}), and deploying an agent with ` +
-        `contexts is not supported yet — remove them from fastagent.config.ts to deploy it`,
-    );
-  }
+  checkContexts(contexts, storageResets, report);
 
   // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
   // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
@@ -179,6 +204,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // cannot disagree about it.
   const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
+  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, which travels like every value.
+  if (contexts.some((context) => context.kind === "github") && !values.get("GITHUB_TOKEN")) {
+    report.note(
+      `no GITHUB_TOKEN in ${valueFile}: the host clones without a credential, which reaches public repositories ` +
+        `only, and the agent cannot push from its clones. Set one there to give it access; it travels with the ` +
+        `other values`,
+    );
+  }
   const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
     // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
@@ -375,8 +408,10 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(agentDir, authPath);
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
-  // Write-back mechanics are fastagent's (the policy is the agent's prompt's).
-  const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
+  // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository context is cloned on the
+  // host, which takes git too.
+  const needsGit = shipsGit || contexts.some((context) => context.kind === "github");
+  const apt = needsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),
     agent: basename(agentDir),

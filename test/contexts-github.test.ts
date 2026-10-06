@@ -4,7 +4,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -271,6 +271,31 @@ describe("github contexts: a clone is brought up to date in place, never over th
     expect(readdirSync(join(agentDir, ".state", "contexts"))).toEqual([]);
   });
 
+  it("a clone reaches GitHub with GITHUB_TOKEN when git has no credential of its own, without storing it", async () => {
+    githubStandIn().repo("acme/app").commit({ "README.md": "app\n" });
+    const { agentDir } = await agent();
+    const context = resolveOne(agentDir, { github: "acme/app" });
+    await cloneContext(context);
+    const fill = (token: string | undefined) =>
+      execFileSync("git", ["credential", "fill"], {
+        cwd: context.location,
+        input: "protocol=https\nhost=github.com\npath=acme/app.git\n\n",
+        encoding: "utf8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GITHUB_TOKEN: token ?? "" },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    // What the agent's own `git push` there would be given: the token as it is now in the environment.
+    expect(fill("ghp_one")).toContain("password=ghp_one");
+    expect(fill("ghp_two")).toContain("password=ghp_two");
+    expect(() => fill(undefined)).toThrow();
+    // A clone whose config lost it (made before it existed, or edited) gets it back at the next start.
+    git(context.location, "config", "--unset", "credential.https://github.com.helper");
+    expect(() => fill("ghp_one")).toThrow();
+    await cloneContext(context);
+    expect(fill("ghp_one")).toContain("password=ghp_one");
+    expect(readFileSync(join(context.location, ".git", "config"), "utf8")).not.toContain("ghp_");
+  });
+
   it("a ref that git would read as an option is refused before git runs", async () => {
     githubStandIn().repo("acme/app").commit({ "README.md": "app\n" });
     const { agentDir } = await agent();
@@ -338,6 +363,24 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("a deployed start clones a repository, whatever checkout its author named", async () => {
+    const github = githubStandIn();
+    github.repo("acme/app").commit({ "AGENTS.md": "APP: ship it.\n" });
+    const { root, agentDir } = await agent();
+    const checkout = join(root, "app");
+    git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
+    await writeFile(
+      join(agentDir, "fastagent.config.ts"),
+      `export default {\n  contexts: [{ github: "acme/app", local: ${JSON.stringify(checkout)} }],\n};\n`,
+    );
+    // What marks a process as the deployed one (paths.ts isDeployedWorkspace).
+    vi.stubEnv("FASTAGENT_RELEASE_FILE", join(agentDir, "fastagent.release.json"));
+    const opened = await createPiAgentFromDir(agentDir);
+    const clone = join(agentDir, ".state", "contexts", "app");
+    expect(opened.contexts).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
+    expect(readFileSync(join(clone, "AGENTS.md"), "utf8")).toBe("APP: ship it.\n");
   });
 
   it("the agent is told what it changes in a clone stays, and that a checkout is the user's", async () => {

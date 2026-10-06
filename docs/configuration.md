@@ -235,7 +235,9 @@ A `github` context is one of two things on this machine:
   the start and is named, never removed: move it away yourself.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
-`git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). git never prompts: a
+`git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). When git has none of its
+own, it uses `GITHUB_TOKEN` from the environment, read each time git asks (the clone's config names a helper that
+reads it, never the token itself), and so does the agent's own `git push` in the clone. git never prompts: a
 missing credential fails the start instead of waiting.
 
 `fastagent init <dir> --context <source>` and `fastagent context add/remove` edit this list
@@ -253,8 +255,9 @@ What each context gives the agent, re-read every turn:
   runs a command in it with `cd <location> && …`.
 - **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
 
-The locations are resolved when a process starts; editing `contexts` restarts `dev`. Deploying an agent that has
-contexts is not supported yet: `deploy` refuses an agent that declares one, by name.
+The locations are resolved when a process starts; editing `contexts` restarts `dev`. On a deployed host a `github`
+context is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)); a
+directory context does not reach a host yet, and `deploy` refuses it by name.
 
 ## The system prompt
 

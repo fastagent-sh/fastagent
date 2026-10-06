@@ -88,6 +88,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // AgentCore DOES get a public URL (the forwarder's, AuthType NONE) — but nothing of ours answers behind it:
     // that relay reaches the channels' routes only, each verifying its platform's signature (agentcore-service.ts).
     publicUrl: host !== "agentcore",
+    // Every AgentCore deployment starts the storage over (core.md §9).
+    storageResets: host === "agentcore",
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

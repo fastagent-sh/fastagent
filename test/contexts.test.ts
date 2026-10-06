@@ -104,9 +104,18 @@ describe("contexts: resolved for this instance", () => {
       /context "missing": .*missing does not exist/,
     );
     expect(() => resolveContexts(agentDir, [{ local: "../file" }], "local")).toThrow(/is not a directory/);
-    expect(() => resolveContexts(agentDir, [{ local: "../app" }], "host")).toThrow(
-      /context "app": a deployment does not carry contexts yet/,
+    expect(() => resolveContexts(agentDir, [{ local: "../app", copy: true }], "host")).toThrow(
+      /context "app": a deployment carries only github contexts yet, and this one is a directory/,
     );
+    // A repository is cloned on a host, wherever the author's checkout is: no `local` of theirs is looked for there.
+    expect(resolveContexts(agentDir, [{ github: "acme/app", local: join(root, "app") }], "host")).toEqual([
+      expect.objectContaining({
+        kind: "github",
+        clone: true,
+        location: join(agentDir, ".state", "contexts", "app"),
+        notices: [expect.stringMatching(/^not cloned yet/)],
+      }),
+    ]);
   });
 
   it("asks the nesting question again of the real paths: a symlink cannot smuggle the agent in", async () => {
