@@ -5,6 +5,8 @@ name: CodeQL
 # repo. A regular workflow's pull_request event runs for forks too.
 on:
   pull_request:
+  # The "CodeQL" gate is a required check, so it must also report in the merge queue.
+  merge_group:
   push:
     branches: [main]
   schedule:
