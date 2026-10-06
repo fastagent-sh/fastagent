@@ -2,12 +2,12 @@
 title: Agent model
 description: "What an agent is, as a program: model + harness + context, the instance that runs it, what it works on and what it knows, and how each kind of context reaches every place an agent runs. The user-facing vocabulary every later design builds on."
 type: design-doc
-status: proposed
+status: implemented
 ---
 
 # Agent model
 
-**Status: proposed.** This note fixes the concepts and the vocabulary, seen from the author's side. It says what
+**Status: implemented.** This note fixes the concepts and the vocabulary, seen from the author's side. It says what
 an author declares and what an agent sees, not how it is stored or implemented, and it does not cover
 synchronization, distribution or deployment (§8). Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 
@@ -359,44 +359,31 @@ When a change takes effect:
 | Changed | Takes effect |
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
-| What a process loads once: `tools/`, `channels/`, `routines/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When each process serving the instance is idle: its running turns finish, then it restarts |
+| What a process loads once: `tools/`, `channels/`, `routines/`, `extensions/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
-The second row is a commitment, for `dev` and `start` alike, and neither keeps it today. `start` does not restart
-at all. `dev` restarts at once: its supervisor stops the worker 200 ms after the edit, so a running turn, the one
-that wrote `tools/x.ts` included, is cut off, and a definition that fails to load stops `dev` until the next edit.
-The commitment also covers `fastagent context add` on a running instance.
+So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
+through `bash`, its prompt files and `AGENTS.md`, and `wake` for its own follow-up work. Code modules and
+configuration are the author's to put into service, with a restart or a release: the rule #600 set, which
+[core](core.md) §2 and the deployed prompt give.
 
-Every process serving the instance follows the rule on its own: a change made in a turn in one process restarts
-another process once that one is idle, and a failure is reported in whichever process next runs a turn.
+An earlier version of this note reversed that rule: every process would restart onto a changed definition by
+itself once idle, after checking that it loads, and every routine would be held to `wake`'s 10-minute floor. It
+was not built:
 
-This reverses a decision. #600 removed in-process reloading of `tools/` and stated the rule `core.md` §2 and the
-deployed prompt still give: an agent improves itself through skills, scripts run through `bash`, and `wake`;
-`tools/`, `routines/` and `channels/` are the author's code and change with a restart or a release. Its reasons,
-and how this model answers them:
+- **No observed need.** What a script cannot be is a tool with a typed interface, a channel or an extension, and
+  nothing so far has needed one written by the agent and put into service within the same run.
+- **Its cost.** A supervisor for `start`, draining every way a turn starts (`/invoke`, `/run`, chat channels, the
+  scheduler, AgentCore) on four hosts, and a retry on AgentCore whose behavior is unknown.
+- **Nothing worse without it.** The agent is told that code changes take effect at a restart, so it does not count
+  on one it has not had.
 
-- **The reload mechanism.** Reloading modules inside a running process had twelve documented limits (module
-  caches per format and runtime, state leaking per reload, a helper loaded twice). A restart has none of them: it
-  is a new process.
-- **The need was already met.** Skills, scripts and `wake` remain the first path: they take effect on the next
-  turn. A code module is a second path, for what a script cannot be: a tool with a typed interface, a channel, an
-  extension. Agent harnesses now let an agent write those for itself, and this model follows them.
-- **A routine written by the agent bypassed `wake`'s guards.** `wake` is mounted on every serve now (#612), so
-  the guard left is its floor: a recurring wake fires at most every 10 minutes (`src/schedule/wakeups.ts`). Every
-  routine is held to that floor, whoever wrote it. Telling the author's routines from the agent's would need a
-  record of who wrote each file that survives a restart, and an agent can trigger a restart; one floor for all
-  needs no record. A routine that must fire more often is the author's to drive from outside the agent: an
-  external scheduler calling `POST /run`, the same way a host without a resident clock runs one.
+Reconsider with a case where an agent must write a code module and use it before the next release.
 
-One risk is new: an agent can break the module that reaches it. A process restarts only onto a definition that
-loads; when the changed one does not (a tool or channel that throws while loading), the process keeps running
-what it had and reports the failure to the log and to the agent's next turn. That protects a process that is
-alive. The broken definition is still on disk, so the next fresh start (a machine restart, a crash, a host waking a
-scaled-to-zero instance, the author running `start` again) fails to load it, and the instance serves nothing until
-the definition is repaired. The failure is reported at that start, and the way back is the author's: revert the
+One risk remains: an agent can write a module that does not load. The next start (a restart, a crash, a host
+waking a scaled-to-zero instance, a release) fails on it and says why, and the way back is the author's: revert the
 change with version control on this machine, or deploy again on a host, which ships the definition anew. Keeping
-the last definition that loaded, and starting from it with a report, would close this gap; it is not part of
-this model yet. A channel that loads and then fails while handling messages is not caught either: the agent can
-lose that channel until the author repairs it.
+the last definition that loaded, and starting from it with a report, would close this gap; it is not part of this
+model yet.
 
 A change to a context reaches other instances the way that context synchronizes. A change an agent on a host
 makes to its harness lasts until the next deployment ships the definition again: keeping it is a question of

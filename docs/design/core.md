@@ -147,6 +147,20 @@ agent writes lives in the definition, so it lasts until the next deployment repl
 and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
 
+### Decisions behind the agent model
+
+Kept from the implementation plan of [agent model](agent-model.md) and [agent CLI](agent-cli.md) (#684), which was
+deleted when its stages landed:
+
+| Question | Chosen | Not chosen, and why |
+|---|---|---|
+| When contexts are resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
+| Whether a local directory reaches a host | No: a context reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the harness, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
+| How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would need ours re-added by hand |
+| How `fastagent context` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
+| Where an agent's work goes, apart from its definition | A context it works on, as the prompt directs; the working directory stays the agent's own directory | A context declared `workdir` (#716; built in #719, closed). It differs from a writable context in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate pi's one cwd from the agent directory in every reader. Reopen with a measurement of results landing in the definition |
+| Whether a process restarts onto a changed definition by itself | No: code modules and configuration take effect at the author's restart or the next release (agent model §6); `dev` restarts on an edit | A supervisor on every process that checks a changed definition, drains every way a turn starts and restarts: no observed need, a large cost across four hosts. Reopen with a case where an agent must put a code module it wrote into service before the next release |
+
 ### Promise ports
 
 Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change: the

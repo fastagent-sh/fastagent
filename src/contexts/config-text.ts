@@ -1,7 +1,7 @@
 /**
  * The literal `contexts: [ … ]` block of fastagent.config.ts, as text: found, checked to be a literal, and written back
  * from a list. Pure — `fastagent context` imports the result and compares it before anything replaces the real file
- * (docs/design/agent-model-implementation.md §3.6), which is what makes editing a TypeScript module this way safe.
+ * (docs/design/core.md §2), which is what makes editing a TypeScript module this way safe.
  */
 import { CONTEXT_KEYS, type ContextDeclaration } from "./declare.ts";
 

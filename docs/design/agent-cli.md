@@ -2,12 +2,12 @@
 title: Agent CLI
 description: "How the CLI addresses an Agent, where a local instance lives, what init declares, how contexts are edited, and what each command shows about them. The command-line side of the agent model."
 type: design-doc
-status: proposed
+status: implemented
 ---
 
 # Agent CLI
 
-**Status: proposed.** The command-line side of the [agent model](agent-model.md): what an author types and what
+**Status: implemented.** The command-line side of the [agent model](agent-model.md): what an author types and what
 they see. Tracking issue: [#684](https://github.com/fastagent-sh/fastagent/issues/684).
 
 Three rules shape every command:
@@ -144,7 +144,7 @@ What is said rather than handled quietly:
 | A context contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
-| A changed definition does not load when a process restarts itself | That process keeps running the previous one, and the log and the agent's next turn say why |
+| A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |
 | The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
 | A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
 

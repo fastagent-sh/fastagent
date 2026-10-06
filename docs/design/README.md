@@ -31,9 +31,8 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
-| [agent-model.md](agent-model.md) | **Proposed.** What an agent is, as a program: model + harness + context, the instance that runs it, what it works on and what it knows, the context types, and the vocabulary later designs build on. |
-| [agent-model-implementation.md](agent-model-implementation.md) | **Proposed, temporary.** How the agent model is built on today's code: the one resolved value every consumer reads, the change by area, and the stages. Folded into `core.md` as stages land, then deleted. |
-| [agent-cli.md](agent-cli.md) | **Proposed.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing contexts, and what each command shows. |
+| [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, the instance that runs it, what it works on and what it knows, the context types, and the vocabulary later designs build on. |
+| [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing contexts, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
 | [distribution.md](distribution.md) | Why an agent directory has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |
