@@ -16,7 +16,7 @@ import {
   loadSkills,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { log } from "../../log.ts";
+import { warnWhenChanged } from "./report.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { ResolvedContext } from "../../contexts/resolve.ts";
 
@@ -268,10 +268,12 @@ export async function loadExtensionPaths(agentDir: string, options: { env?: Exec
     throw new Error(`cannot read ${dir}: ${listed.error.message}`);
   }
   const paths: string[] = [];
+  // Said when the set changes, not on every listing: the directory is listed again for every session.
+  const notices: string[] = [];
   for (const entry of listed.value) {
     if (entry.kind === "symlink") {
       // EVERY symlink here is announced, without guessing whether it meant to be an extension.
-      warnSymlinkRefused(entry.path);
+      notices.push(symlinkRefused(entry.path));
       continue;
     }
     if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
@@ -279,22 +281,27 @@ export async function loadExtensionPaths(agentDir: string, options: { env?: Exec
       continue;
     }
     if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
-    const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
+    const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")], notices);
     if (index.path) {
       paths.push(index.path);
     } else if (!index.refused) {
       // Silent when the index WAS found and refused for being a symlink.
-      log.warn(
+      notices.push(
         `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
           `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
       );
     }
   }
+  warnWhenChanged(`extensions listed in ${root}`, notices);
   return paths.sort();
 }
 
 /** The first candidate that is a REAL file, and whether one was found but REFUSED as a symlink. */
-async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
+async function firstRealFile(
+  e: ExecutionEnv,
+  candidates: string[],
+  notices: string[],
+): Promise<{ path?: string; refused: boolean }> {
   let refused = false;
   for (const candidate of candidates) {
     const info = await e.fileInfo(candidate, BACKGROUND_CONTEXT);
@@ -304,18 +311,18 @@ async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ p
     }
     if (info.value.kind === "file") return { path: candidate, refused };
     if (info.value.kind === "symlink") {
-      warnSymlinkRefused(candidate);
+      notices.push(symlinkRefused(candidate));
       refused = true;
     }
   }
   return { refused };
 }
 
-function warnSymlinkRefused(path: string): void {
-  log.warn(
+function symlinkRefused(path: string): string {
+  return (
     `[fastagent] ${path} is a symlink and will not be loaded: an extension must be a real file inside ` +
-      `the definition so it travels with the artifact — move it in. (If it is not an extension, ` +
-      `keep it outside extensions/ to silence this.)`,
+    `the definition so it travels with the artifact — move it in. (If it is not an extension, ` +
+    `keep it outside extensions/ to silence this.)`
   );
 }
 

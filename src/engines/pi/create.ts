@@ -237,7 +237,7 @@ export function fastagentPromptSections(options: {
   // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
   // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
   // once per process (machine.ts), so it would not be live.
-  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash. It lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
+  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash — or, for a tool or command of your own, a pi extension in extensions/, loaded from your next session on. Either lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
     // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model
     // does not have invites calls to it.
     mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""
@@ -314,8 +314,8 @@ export interface PiAssembly {
   excludedToolNames: readonly string[];
   /** The prompt and skills a session runs on, read when a session is bound. */
   readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
-  /** The extension entry points every session loads, discovered once with the assembly. */
-  extensionPaths: readonly string[];
+  /** The extension entry points a session loads, listed afresh for each (the catalog's own discovery). */
+  extensionPaths: () => Promise<readonly string[]>;
   /** The agent's contexts, resolved: what its tools see as `ctx.contexts`. */
   contexts: readonly ResolvedContext[];
 }
@@ -333,7 +333,7 @@ function assemblePi(opts: {
   /** Where conversations live. */
   sessions?: PiSessionRecordStore;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
-  extensionPaths?: string[];
+  extensionPaths?: () => Promise<readonly string[]>;
   env?: ExecutionEnv;
   /**
    * The working directory: where tools operate, what the model is told its working directory is, and what session
@@ -350,19 +350,14 @@ function assemblePi(opts: {
   const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   const createModelRuntime = opts.models;
-  let registry: Promise<ModelRuntime> | undefined;
-  const modelRuntime = () => {
-    registry ??= opts.catalog();
-    return registry;
-  };
-  let engine: Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }> | undefined;
+  // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
+  const modelRuntime = opts.catalog;
   const resolveEngine = () => {
     const spec = opts.model;
-    engine ??= modelRuntime().then((runtime) => ({
+    return modelRuntime().then((runtime) => ({
       modelRuntime: runtime,
       ...(spec ? { model: resolveModel(runtime, spec) } : {}),
     }));
-    return engine;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
@@ -388,7 +383,7 @@ function assemblePi(opts: {
     tools: opts.tools ?? [],
     excludedToolNames,
     readDefinition: opts.readDefinition,
-    extensionPaths: opts.extensionPaths ?? [],
+    extensionPaths: opts.extensionPaths ?? (async () => []),
     contexts: opts.contexts ?? [],
   };
 }
@@ -558,8 +553,8 @@ export async function assemblePiFromDefinition(
     },
     tools,
     sessions: options.sessions,
-    // The catalog's own discovery: the models it registered and the extensions sessions load are one list.
-    extensionPaths: [...(await models.extensionPaths())],
+    // The catalog's own discovery: the models it registered and the extensions sessions load are one listing.
+    extensionPaths: models.extensionPaths,
     cwd,
     contexts,
     env,

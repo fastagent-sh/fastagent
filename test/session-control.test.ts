@@ -1696,14 +1696,15 @@ async function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = 
 }
 
 describe("session control: boundary mutations", () => {
-  it("capabilities describe every model a session may be set to, with the levels state() then reports for it", async () => {
+  it("models() describes every model a session may be set to, with the levels state() then reports for it", async () => {
     const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
     expect(caps.compaction).toBe(true);
     expect(caps.updatable).toContain("thinkingLevel");
-    const specs = (caps.allowedModels ?? []).map((model) => model.spec);
+    const models = await control.models();
+    const specs = models.map((model) => model.spec);
     expect(specs).toEqual([...specs].sort());
-    const described = caps.allowedModels?.find((model) => model.spec === spec);
+    const described = models.find((model) => model.spec === spec);
     expect(described?.thinkingLevels).toContain("high");
     await sessions.openOrCreate("sCaps");
     // What a picker offers before the session runs on the model is what the session then accepts.
@@ -1993,9 +1994,10 @@ describe("session control: boundary mutations", () => {
           sessions,
           boundary: {
             lease: inProcessLease(),
-            models: modelRuntime,
             sessionFactory,
-            defaults: { model, thinkingLevel },
+            models: async () => modelRuntime,
+            defaultModel: () => model,
+            thinkingLevel: thinkingLevel,
           },
         });
         const initial = await sessionFactory("astra");
@@ -2376,11 +2378,12 @@ describe("session control: boundary mutations", () => {
       },
       boundary: {
         lease: inProcessLease(),
-        models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
-        defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
+        models: async () => models,
+        defaultModel: () => models.getProviders()[0]!.getModels()[0]!,
+        thinkingLevel: "medium",
       },
     });
     const state = await control.sessions.get("sBroken").state();
@@ -2437,11 +2440,12 @@ describe("session control: boundary mutations", () => {
       },
       boundary: {
         lease: inProcessLease(),
-        models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
-        defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
+        models: async () => models,
+        defaultModel: () => models.getProviders()[0]!.getModels()[0]!,
+        thinkingLevel: "medium",
       },
       tap: (_session, event) => seen.push(event),
     });
@@ -2604,8 +2608,9 @@ describe("session control: boundary mutations", () => {
           sessions,
           boundary: {
             lease,
-            models,
-            defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+            models: async () => models,
+            defaultModel: () => faux.getModel(),
+            thinkingLevel: "medium",
             sessionFactory: async () => session,
           },
         });
@@ -2651,8 +2656,9 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
-        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        models: async () => models,
+        defaultModel: () => faux.getModel(),
+        thinkingLevel: "medium",
         sessionFactory: async () => {
           throw new Error("must not bind");
         },
@@ -2708,8 +2714,9 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
-        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        models: async () => models,
+        defaultModel: () => faux.getModel(),
+        thinkingLevel: "medium",
         sessionFactory: async () => session,
       },
     });
@@ -3119,8 +3126,9 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
-        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+        models: async () => models,
+        defaultModel: () => faux.getModel(),
+        thinkingLevel: "medium",
         sessionFactory: async () => session,
       },
     });
@@ -3250,8 +3258,9 @@ describe("session control: boundary mutations", () => {
     const broke = makeFaux();
     const boundary: PiBoundaryWiring = {
       lease,
-      models: broke.models,
-      defaults: { model: broke.faux.getModel(), thinkingLevel: "medium" },
+      models: async () => broke.models,
+      defaultModel: () => broke.faux.getModel(),
+      thinkingLevel: "medium",
       sessionFactory: async () => {
         throw new Error("no session for you");
       },
@@ -3367,7 +3376,7 @@ describe("session control: boundary mutations", () => {
     const { control } = await makeObserved([]); // observation + run modulation only
     const caps = control.capabilities();
     expect(caps.compaction).toBe(false);
-    expect(caps.allowedModels).toBeUndefined();
+    expect(await control.models()).toEqual([]);
     const result = await control.sessions.get("sB5").update({ model: "any/thing" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);

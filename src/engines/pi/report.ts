@@ -24,6 +24,21 @@ function findingsSignature(def: Findings): string {
   return [...collisions, ...diagnostics, ...shadowed, ...ignored].sort().join("\n");
 }
 
+/** What {@link warnWhenChanged} last said, by key. */
+const lastSaid = new Map<string, string>();
+
+/**
+ * Warn `lines` when they differ from what was last said under `key` (a directory and what about it). Every read of a
+ * live definition meets the same faults again, so each is said when it appears, not per read; and a fault repaired
+ * and then made again is said again, which a "once per process" rule would swallow.
+ */
+export function warnWhenChanged(key: string, lines: readonly string[]): void {
+  const signature = [...lines].sort().join("\n");
+  if (lastSaid.get(key) === signature) return;
+  lastSaid.set(key, signature);
+  for (const line of lines) log.warn(line);
+}
+
 /** The last reported finding set PER DEFINITION DIR. */
 const lastFindings = new Map<string, string>();
 

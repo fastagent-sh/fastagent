@@ -95,7 +95,8 @@ describe("deploy/container: shared Docker context", () => {
       // The agent's runtime path to a new capability is a skill + script, not a code reload — and that skill is
       // gone with the definition at the next deployment, which the same sentence has to say.
       expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("It lasts until the next deployment replaces that directory");
+      expect(note()).toContain("Either lasts until the next deployment replaces that directory");
+      expect(note()).toContain("a pi extension in extensions/, loaded from your next session on");
       // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(note()).not.toContain("wake tool");
       expect(note([{ name: "wake" } as MountedTool])).toContain("use the wake tool.");
@@ -105,7 +106,8 @@ describe("deploy/container: shared Docker context", () => {
       expect(note()).toContain("resets this host's storage entirely");
       // Same path, same lifetime warning: this host's next deploy erases the definition along with the rest.
       expect(note()).toContain("To give yourself a new capability now, write a skill");
-      expect(note()).toContain("It lasts until the next deployment replaces that directory");
+      expect(note()).toContain("Either lasts until the next deployment replaces that directory");
+      expect(note()).toContain("a pi extension in extensions/, loaded from your next session on");
     } finally {
       for (const [key, value] of [
         ["FASTAGENT_RELEASE_FILE", before],

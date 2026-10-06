@@ -5,7 +5,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
+import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   AGENT_MODEL_CATALOG_FILE,
   resolveAgentDir,
@@ -47,13 +48,14 @@ import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts
  *
  * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
  * bound session runs on, so the menu cannot offer a name the next prompt would not expand. The same holds for
- * extensions: `served` is what sessions load — the assembly's entry points, discovered once, and the runtime turns run
- * on (asked only when there are extensions) — never a fresh scan of `extensions/`.
+ * extensions: `served` is what sessions load — the entry points `extensions/` holds now, asked through the same
+ * live-extensions check a session's load goes through (live-extensions.ts), and the runtime turns run on (asked only
+ * when there are extensions) — never a listing of its own.
  */
 export async function agentCommands(
   agentDir: string,
   contexts: readonly ResolvedContext[],
-  served: { extensionPaths: readonly string[]; modelRuntime: () => Promise<ModelRuntime> },
+  served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
   // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
   // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
@@ -62,7 +64,7 @@ export async function agentCommands(
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(agentDir);
   const prompts = withMachine(own.prompts, machine.prompts);
-  const { extensionPaths } = served;
+  const extensionPaths = await served.extensionPaths();
   const extensionCommands = await servedExtensionCommands({
     cwd: agentDir,
     modelRuntime: await served.modelRuntime(),
@@ -399,15 +401,18 @@ export async function createPiAgentFromDir(
   const wantControl = publish || options.serving === true;
   let hub: ReturnType<typeof createPiSessionControl> | undefined;
   if (wantControl) {
-    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
-    // credentials and is not. Resolved only when the boundary is wired, so an ordinary serve does not pay for it.
+    // The plane resolves the registry and the default pair through the SAME function a turn's binding does, at each
+    // use (the definition's extensions can change both). Resolved once here as well, only when the boundary is wired,
+    // so a default model that does not resolve stops the open rather than the first control call.
+    if (publish) await assembly.engine();
     const boundary = publish
-      ? await assembly.engine().then(({ modelRuntime, model }) => ({
+      ? {
           lease: assembly.lease,
-          models: modelRuntime,
           sessionFactory: assembly.sessionFactory,
-          defaults: { ...(model ? { model } : {}), thinkingLevel: assembly.thinkingLevel },
-        }))
+          models: assembly.modelRuntime,
+          defaultModel: (registry: Models) => (modelSpec ? resolveModel(registry, modelSpec) : undefined),
+          thinkingLevel: assembly.thinkingLevel,
+        }
       : undefined;
     hub = createPiSessionControl({
       sessions,

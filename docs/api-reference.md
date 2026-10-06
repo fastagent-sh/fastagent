@@ -929,8 +929,8 @@ From then on it is an existing session that has not run yet: listed with `messag
 recorded settings, `delete()` removes it, `compact()` answers `nothing_to_compact` and writes nothing, and it can be
 forked. A later `invoke` does not seed it from `scope.parentSession`. Writes that need a record (`compact`, `delete`,
 `fork`'s source) refuse an id with no record with `no_such_session`. Invalid payloads, and an id no client could
-address (`""`, `.`, `..`), reject `invalid_command` before acceptance, and nothing is created. `capabilities()` lists `allowedModels`, the deployment's registry, each entry
-described like `availableModelsFromDir`'s, with the `thinkingLevels` a session on that model accepts.
+address (`""`, `.`, `..`), reject `invalid_command` before acceptance, and nothing is created. `models()` lists the deployment's registry as a turn would resolve it now
+(an edited extension's models included), each entry described like `availableModelsFromDir`'s, with the `thinkingLevels` a session on that model accepts.
 `state().availableThinkingLevels` is the same list for the model the session is on, and `update({ thinkingLevel })`
 validates against it rather than recording an override the run would ignore. Every write
 requires the wiring the agent opener provides (`sessionControl: true`); a hub without it reports an
@@ -990,6 +990,7 @@ The wire is RESTful and mechanical, so a non-TypeScript client is a `curl` away:
 ```
 GET    /control/capabilities                   what this deployment allows
 GET    /control/commands                       the agent's skills
+GET    /control/models                         the models update({ model }) accepts now
 GET    /control/sessions                       list
 PUT    /control/sessions/{id}                  {from, at} — fork (idempotent)
 GET    /control/sessions/{id}                  state

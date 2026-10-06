@@ -27,7 +27,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 /** A definition with only Pi's built-in extensions. */
 const noExtensions = {
-  extensionPaths: [],
+  extensionPaths: async () => [],
   modelRuntime: () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false }),
 };
 
@@ -134,7 +134,7 @@ it("`commands()` lists extension commands as pi dispatches them, and drops a tem
   );
   const modelRuntime = () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 
-  const extensionPaths = await loadExtensionPaths(dir);
+  const extensionPaths = () => loadExtensionPaths(dir);
   expect(await agentCommands(dir, [], { extensionPaths, modelRuntime })).toEqual([
     { name: "go:1", description: "d-go", source: "extension" },
     { name: "tag", description: "d-tag", source: "extension" },

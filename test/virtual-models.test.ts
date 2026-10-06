@@ -87,7 +87,7 @@ describe("Pi virtual models", () => {
     const opened = await routedAgent();
     // Described as the extension declares it, the same in both listings.
     const auto = { spec: "router/auto", name: "Automatic", thinkingLevels: ["off", "high"], contextWindow: 8000 };
-    expect(opened.sessionControl!.capabilities().allowedModels).toContainEqual(auto);
+    expect(await opened.sessionControl!.models()).toContainEqual(auto);
     expect(await availableModelsFromDir(opened.dir)).toContainEqual(auto);
     expect(await opened.models.authStatus("router", "auto")).toMatchObject({ source: "virtual" });
     const results = await Promise.all([

@@ -15,11 +15,9 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     // The running clock re-reads schedules/ itself, so an edit there restarts nothing (and cuts off no turn).
     expect(ignored(join(root, "schedules", "daily.md"))).toBe(true);
-    // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart
-    // this watcher exists to give. (Their per-turn reload is a different thing and does not help:
-    // it re-instantiates the set discovered at boot.)
-    expect(ignored(join(root, "extensions", "notify.ts"))).toBe(false);
-    expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(false);
+    // The next session lists extensions/ again and reloads changed code, so an edit there restarts nothing.
+    expect(ignored(join(root, "extensions", "notify.ts"))).toBe(true);
+    expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
     // models.json is loaded once per worker (the model hub is built during assembly) AND a malformed one

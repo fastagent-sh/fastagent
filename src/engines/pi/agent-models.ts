@@ -7,6 +7,7 @@
  */
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
+import { liveExtensions } from "./live-extensions.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { definitionServices } from "./agent-session-factory.ts";
 import { loadExtensionPaths } from "./definition.ts";
@@ -53,7 +54,8 @@ export interface AgentModels {
   /**
    * The registry: pi's built-ins, plus (with a directory) the agent's `models.json` and model catalog over the
    * machine's, plus `providers` and extension model declarations. An unbound catalog, built on first use and shared
-   * after; session bindings use createRuntime and their own extension instances.
+   * until the extensions' code changes, when it is built again; session bindings use createRuntime and their own
+   * extension instances.
    */
   runtime(): Promise<ModelRuntime>;
   /** A session-local registry, before its extensions are loaded. Credentials remain shared. */
@@ -65,8 +67,10 @@ export interface AgentModels {
    */
   authStatus(provider: string, modelId?: string): Promise<AuthStatus>;
   /**
-   * The definition's extension entry points, discovered once: what this catalog registers models from and what every
-   * session of the assembly built over it loads. Empty without a directory.
+   * The definition's extension entry points, listed afresh on every call and answered only once pi's cache holds the
+   * code on disk (live-extensions.ts): what this catalog registers models from and what each session of the assembly
+   * built over it loads, so an extension added or edited while the agent runs is loaded from the next session on.
+   * Empty without a directory.
    */
   extensionPaths(): Promise<readonly string[]>;
 }
@@ -129,25 +133,32 @@ export function agentModels(
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
-  let discovered: Promise<readonly string[]> | undefined;
-  const extensionPaths = (): Promise<readonly string[]> =>
-    (discovered ??= agentDir
-      ? loadExtensionPaths(agentDir, options.env ? { env: options.env } : {})
-      : Promise.resolve([]));
-  let registry: Promise<ModelRuntime> | undefined;
-  const runtime = (): Promise<ModelRuntime> => {
-    registry ??= createRuntime().then(async (models) => {
-      if (agentDir) {
-        await definitionServices({
-          cwd: agentDir,
-          modelRuntime: models,
-          definition: { skills: [] },
-          extensionPaths: await extensionPaths(),
-        });
-      }
-      return models;
-    });
-    return registry;
+  // Only a definition has extensions/; the low-level paths (no directory) load none and watch nothing.
+  const live = agentDir
+    ? liveExtensions(agentDir, () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}))
+    : undefined;
+  const loadable = (): Promise<{ paths: readonly string[]; generation: number }> =>
+    live?.paths() ?? Promise.resolve({ paths: [], generation: 0 });
+  const extensionPaths = async (): Promise<readonly string[]> => (await loadable()).paths;
+  // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
+  // plane lists and lets a session select is what a session would load (a model an edited extension declares).
+  let registry: { generation: number; runtime: Promise<ModelRuntime> } | undefined;
+  const runtime = async (): Promise<ModelRuntime> => {
+    const { paths, generation } = await loadable();
+    if (registry?.generation !== generation) {
+      const built = createRuntime().then(async (models) => {
+        if (agentDir)
+          await definitionServices({
+            cwd: agentDir,
+            modelRuntime: models,
+            definition: { skills: [] },
+            extensionPaths: paths,
+          });
+        return models;
+      });
+      registry = { generation, runtime: built };
+    }
+    return registry.runtime;
   };
   return {
     ...(files ? { auth: files } : {}),

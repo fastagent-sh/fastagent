@@ -34,6 +34,7 @@ import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type ImageRef, type Json, MISSING_MODEL_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
+  type ModelDescriptor,
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   isAddressableSession,
@@ -268,20 +269,66 @@ class Subscriber {
 // ── The hub ──────────────────────────────────────────────────────────────────
 
 /** What the plane's writes (`update` / `compact` / `fork` / `delete`) need — the SAME instances the
- *  agent assembly uses: the lease (a write must not race a run), the model registry (validation +
- *  allowedModels), and the session factory (compaction is a model call). Two writes create a record:
+ *  agent assembly uses: the lease (a write must not race a run), the model registry (what `models()`
+ *  lists and `update({ model })` validates against), and the session factory (compaction is a model call). Two writes create a record:
  *  fork's `into`, and `update()` on an id that has none (through the store's `openOrCreate`, like an
  *  invoke). Every other write needs a record that exists. */
 export interface PiBoundaryWiring {
   lease: Lease;
-  models: Models;
+  /**
+   * The registry as a turn's binding resolves it NOW. Asked at each use, never held: the definition's extensions can
+   * change what it holds, and a plane that kept a snapshot would list and validate models no turn runs on.
+   */
+  models: () => Promise<Models>;
+  /**
+   * The configured default model, resolved against `models` the way a turn resolves it: it throws when the registry no
+   * longer holds it (a turn then fails on it too), and answers undefined when the agent sets no default (a session
+   * then runs on the model it records, and `state()` of one that records none reports no model).
+   */
+  defaultModel: (models: Models) => AnyModel | undefined;
+  /** The configured thinking level, the other half of the default PAIR a session with no overrides runs on. */
+  thinkingLevel: ThinkingLevel;
   sessionFactory: PiAgentSessionFactory;
-  /** The assembly's configured PAIR — what a session with no overrides runs on. One field because
-   *  model and thinking level are one setting: which levels exist is a property of the model, so a
-   *  wiring that could carry them apart could carry a pair no run uses. Must be what
-   *  {@link sessionFactory} was built with. No model when the agent sets no default: a session then runs on the model
-   *  it records, and `state()` of one that records none reports no model. */
-  defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel };
+}
+
+/**
+ * A deployment-level fault every read meets again until it is repaired: said when it starts or changes, not once per
+ * read that meets it (each `state()`, `update()` and usage publication would repeat it, and the turn that meets it
+ * fails with its own code anyway). Said again after a read finds it repaired.
+ */
+function faultOnce(): { say(message: string): void; repaired(): void } {
+  let said: string | undefined;
+  return {
+    say(message) {
+      if (message === said) return;
+      said = message;
+      log.warn(message);
+    },
+    repaired() {
+      said = undefined;
+    },
+  };
+}
+
+/**
+ * The registry and the default PAIR as a turn would resolve them now. A configured default the registry no longer
+ * holds (an edited extension dropped it) is said and leaves the pair without a model, as an agent with no default
+ * has: a session's recorded or newly set model still resolves, and the turn that would run on the missing default
+ * fails with its own code. Rejects when the registry itself cannot be built (`extensions/` cannot be read).
+ */
+async function resolveBoundary(
+  b: PiBoundaryWiring,
+  defaultFault: ReturnType<typeof faultOnce>,
+): Promise<{ models: Models; defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel } }> {
+  const models = await b.models();
+  let model: AnyModel | undefined;
+  try {
+    model = b.defaultModel(models);
+    defaultFault.repaired();
+  } catch (error) {
+    defaultFault.say(`[fastagent] the configured default model does not resolve: ${String(error)}`);
+  }
+  return { models, defaults: { ...(model ? { model } : {}), thinkingLevel: b.thinkingLevel } };
 }
 
 export interface CreatePiSessionControlOptions {
@@ -328,6 +375,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    *  both are model calls a client must be able to stop). Set at ADMISSION, cleared by the
    *  detached task before `compaction_finished`. */
   const compacting = new Map<string, { abort: () => void }>();
+  const defaultFault = faultOnce();
+  const registryFault = faultOnce();
 
   /** Fan an event out to this session's subscribers — shared by the observer (run events) and the
    *  boundary mutations (session-level events, no runId). */
@@ -397,13 +446,20 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // The CONTRACT's list, not a copy of it: a field added to SessionUpdate is advertised
         // without anyone remembering to, and one removed cannot linger here.
         updatable: b ? [...UPDATE_FIELDS] : [],
-        // The registry is a deployment fact (any session may be pointed at any of it). Each model carries the levels
-        // a session on it accepts, so a picker can offer them before the session runs on that model;
-        // `state().availableThinkingLevels` answers for the model the session is on.
-        ...(b ? { allowedModels: describeModels(b.models.getModels()) } : {}),
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: true, // state().usage, and state_changed{usage} after each run and compaction
       };
+    },
+
+    /**
+     * The registry is a deployment fact (any session may be pointed at any of it), read as a turn would resolve it now.
+     * Each model carries the levels a session on it accepts, so a picker can offer them before the session runs on
+     * that model; `state().availableThinkingLevels` answers for the model the session is on.
+     */
+    async models(): Promise<ModelDescriptor[]> {
+      const b = boundary;
+      if (!b) return [];
+      return describeModels((await b.models()).getModels());
     },
 
     async state(session: string): Promise<SessionState> {
@@ -417,16 +473,32 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
       // next invoke fails (binding a session walks the same chain) and a boundary dispatch answers
       // `boundary_command_failed`. Here it is a server-side warn.
+      // OBSERVATION IS TOTAL here too: a registry that cannot be built now (`extensions/` unreadable) leaves the
+      // pair absent, said once; the turn and `update()` meet it with their own codes.
       const b = boundary;
+      const engine = b
+        ? await resolveBoundary(b, defaultFault).then(
+            (resolved) => {
+              registryFault.repaired();
+              return resolved;
+            },
+            (error: unknown) => {
+              registryFault.say(
+                `[fastagent] the model registry cannot be built (state() reports no model): ${String(error)}`,
+              );
+              return undefined;
+            },
+          )
+        : undefined;
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
       let usage: SessionState["usage"];
       if (!opened) {
         // An id with no record is an empty conversation at the defaults: its first turn would run on these.
-        if (b) settings = resolveSessionSettings([], b.models, b.defaults);
+        if (engine) settings = resolveSessionSettings([], engine.models, engine.defaults);
       } else {
         try {
           const path = activePath(opened);
-          if (b) settings = resolveSessionSettings(path, b.models, b.defaults);
+          if (engine) settings = resolveSessionSettings(path, engine.models, engine.defaults);
           const selected = settings?.model;
           const latest =
             selected?.api === "pi-virtual"
@@ -440,7 +512,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   )
                   .at(-1)
               : undefined;
-          const physical = latest?.role === "assistant" ? b?.models.getModel(latest.provider, latest.model) : undefined;
+          const physical =
+            latest?.role === "assistant" ? engine?.models.getModel(latest.provider, latest.model) : undefined;
           usage = sessionUsage(path as unknown as PiSessionEntry[], opened, (physical ?? selected)?.contextWindow);
         } catch (error) {
           log.warn(`[fastagent] session ${session}: state unreadable (entry chain): ${String(error)}`);
@@ -742,15 +815,18 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (fields.length === 0) return { ok: true }; // an empty patch asks for nothing, and gets it
         const b = boundary;
         if (!b) return unsupported(`update(${fields.join(", ")})`);
+        // The registry and defaults a turn would resolve now — the same that `models()` lists.
+        const engine = yield* port(() => resolveBoundary(b, defaultFault));
 
         // PAYLOAD validation first — before the session is even opened, and long before the lease: an
         // invalid value must not briefly block a run.
         let model: AnyModel | undefined;
         if (patch.model !== undefined) {
           const slash = patch.model.indexOf("/");
-          model = slash > 0 ? b.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
+          model =
+            slash > 0 ? engine.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
           if (!model) {
-            return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted models`);
+            return invalid(`unknown model "${patch.model}" — models() lists the accepted models`);
           }
         }
         if (patch.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
@@ -791,7 +867,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // moves to can carry a model override of its own — validating on the path being left would
             // reject a level the destination supports, and accept one it does not.
             const path = existing ? activePath(existing, patch.leafEntryId) : [];
-            resolved = resolveSessionSettings(path, b.models, b.defaults);
+            resolved = resolveSessionSettings(path, engine.models, engine.defaults);
           } catch (error) {
             return failed(error);
           }
@@ -838,7 +914,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           let settings: ReturnType<typeof resolveSessionSettings> | undefined;
           if (applied.path) {
             try {
-              settings = resolveSessionSettings(applied.path, b.models, b.defaults);
+              settings = resolveSessionSettings(applied.path, engine.models, engine.defaults);
             } catch (error) {
               // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
               // the position without it and let the next invoke — which walks the same path — be where
@@ -1070,8 +1146,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   const control: SessionControl = {
     capabilities: reads.capabilities,
     commands: reads.commands,
+    models: reads.models,
     sessions: {
-      // The one read that may REJECT (design §13): `[]` is what a deployment with no sessions
+      // A read that may REJECT (design §13): `[]` is what a deployment with no sessions
       // answers, so a store that cannot be read must not borrow that shape. The transport turns the
       // throw into a coded non-2xx; nothing here swallows it.
       list: () => sessions.list(),

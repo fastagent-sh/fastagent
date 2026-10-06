@@ -6,9 +6,16 @@ import type { ImageRef, Json, Prompt } from "./agent.ts";
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 export interface SessionControl {
+  /** What this deployment supports. Fixed for its life, so a client may read it once. */
   capabilities(): SessionCapabilities;
   /** The names this agent exposes — what a composer's `/` completion LISTS. */
   commands(): Promise<AgentCommand[]>;
+  /**
+   * The models `update({ model })` accepts now, by `spec`; empty where `model` is not updatable. Asked per call, like
+   * {@link commands}: the definition can change them while it runs (an extension that declares a model). Rejects when
+   * the registry cannot be built now (`extensions/` cannot be read): `[]` would say `model` is not updatable.
+   */
+  models(): Promise<ModelDescriptor[]>;
   sessions: SessionCollection;
 }
 
@@ -16,9 +23,8 @@ export interface SessionCollection {
   /**
    * Every session this DEPLOYMENT holds — what a GUI shows as its conversation list, and the only call that is not
    * about ONE session. Deployment-level on purpose: a multi-tenant facade in front of one deployment MUST NOT expose
-   * it, because it answers for every user at once. The one read that MAY reject: `[]` is a complete answer for a
-   * deployment with no sessions, so it would be a lie for a store that cannot be enumerated. Every other read stays
-   * TOTAL.
+   * it, because it answers for every user at once. It MAY reject: `[]` is a complete answer for a deployment with no
+   * sessions, so it would be a lie for a store that cannot be enumerated. A session's own reads stay TOTAL.
    */
   list(): Promise<SessionSummary[]>;
   /** Copy `from`'s history up to entry `at` into a session called `into`. */
@@ -84,7 +90,7 @@ export interface Session {
 export interface SessionUpdate {
   /** The display name `list()` reports — a label, not an identity: the id stays the Caller's. */
   name?: string;
-  /** A FastAgent model spec, constrained to {@link SessionCapabilities.allowedModels}. */
+  /** A FastAgent model spec, constrained to what {@link SessionControl.models} lists. */
   model?: string;
   /**
    * A string because supported levels are MODEL-dependent — the set for this session's current model is {@link
@@ -130,10 +136,8 @@ export interface SessionCapabilities {
   compaction: boolean;
   fork: boolean;
   delete: boolean;
-  /** Which {@link SessionUpdate} fields this deployment accepts. */
+  /** Which {@link SessionUpdate} fields this deployment accepts; `models()` lists the models `model` takes. */
   updatable: SessionUpdateField[];
-  /** The models `update({ model })` accepts, by `spec` — present iff `model` is updatable. */
-  allowedModels?: ModelDescriptor[];
   toolProgress: boolean;
   usage: boolean;
 }
