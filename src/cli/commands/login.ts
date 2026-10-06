@@ -3,8 +3,6 @@
  * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`. `--deployment` runs the same login on this
  * agent's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
 import { agentModels } from "../../engines/pi/agent-models.ts";
@@ -23,8 +21,8 @@ export interface LoginOptions {
   global?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
-  /** `--deployment [host]`: log in this agent's deployment (`true` when no host was named). */
-  deployment?: string | boolean;
+  /** `--deployment <host>`: log in this agent's deployment on that host. */
+  deployment?: string;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
   stdio?: boolean;
   /** `--if-missing` (with `--stdio`): keep a credential already stored for the provider. */
@@ -96,38 +94,22 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
 }
 
 /**
- * `--deployment [host]`: the host is named, or the one whose generated artifact is in the agent dir. Several is a
- * question only the operator can answer, so it is asked back rather than guessed.
+ * `--deployment <host>`: always named. The agent directory cannot answer which host it means: a Railway deploy leaves
+ * no file of its own there, and a directory can hold several hosts' files, so a guess could log a different box in
+ * than the one that asked. Every command fastagent prints names it (`deploymentLoginCommand`, `deployedHost`).
  */
 async function runDeploymentLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.global) failUsage("--deployment logs the deployment in; -g names this machine's global file — pick one");
   const agentDir = agentDirOrExit(process.cwd());
   // The host's CLI must reach the account/region/proxy the deploy used, and those may be definition-local.
   enterAgentEnv(agentDir);
-  let host: DeployHost;
-  if (typeof opts.deployment === "string") {
-    if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment)) {
-      failUsage(
-        `--deployment takes a host (${DEPLOY_HOSTS.join(", ")}), not "${opts.deployment}" — to name a provider too: ` +
-          `fastagent login <provider> --deployment <host>`,
-      );
-    }
-    host = opts.deployment as DeployHost;
-  } else {
-    const found = DEPLOY_HOSTS.filter((h) => {
-      const artifact = HOSTS[h].artifact;
-      return artifact !== undefined && existsSync(join(agentDir, artifact));
-    });
-    if (found.length !== 1) {
-      failUsage(
-        found.length === 0
-          ? `no deployment artifacts in ${agentDir} (a railway deploy leaves none) — name the host: ` +
-              `--deployment <${DEPLOY_HOSTS.join("|")}>`
-          : `this agent deploys to ${found.join(" and ")} — name one: --deployment <${found.join("|")}>`,
-      );
-    }
-    host = found[0] as DeployHost;
+  if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment as string)) {
+    failUsage(
+      `--deployment takes a host (${DEPLOY_HOSTS.join(", ")}), not "${opts.deployment}" — to name a provider too: ` +
+        `fastagent login <provider> --deployment <host>`,
+    );
   }
+  const host = opts.deployment as DeployHost;
   const input = opts.input !== false && isInteractive();
   if (!input) {
     failStartup(new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal`));

@@ -425,7 +425,7 @@ and verifies it. Review [Deploy](deploy.md) before authorizing resource creation
 
 Put the model in config and every value the deployment needs in `.secrets/.env`; `deploy` carries the whole file. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner, in a terminal:
-`--run` starts `fastagent login --deployment` once the box is up, and without a terminal it stops and names that
+`--run` starts `fastagent login --deployment <host>` once the box is up, and without a terminal it stops and names that
 command ([Logging a deployment in](deploy.md#logging-a-deployment-in)). CLI-managed
 registration uses the selected host's ingress and local onboarding credentials where supported. Finish
 any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that

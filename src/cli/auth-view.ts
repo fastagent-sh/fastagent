@@ -1,9 +1,10 @@
 /** CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). */
+import type { DeployHost } from "../deploy/hosts.ts";
 
 /**
  * Format the auth status for a provider, from `AgentModels.authStatus`'s answer. `deployed`: this process is a
- * deployed box, which logs in from the owner's agent directory (`fastagent login --deployment`), never by a login run on it
- * by hand.
+ * deployed box, which logs in from the owner's agent directory (`fastagent login --deployment <host>`), never by a
+ * login run on it by hand; `host` is which one, when the box can tell (`deployedHost`).
  */
 export function formatAuthReport(status: {
   provider: string;
@@ -13,12 +14,14 @@ export function formatAuthReport(status: {
   error?: string;
   stored?: string;
   shadowed?: string;
-  deployed?: boolean;
+  deployed?: { host: DeployHost | undefined };
 }): { line: string; warn?: string } {
-  const { provider, path, source, error, stored, shadowed, deployed = false } = status;
+  const { provider, path, source, error, stored, shadowed, deployed } = status;
   const because = error === undefined ? "" : ` (${error})`;
   const login = (name: string) =>
-    deployed ? `\`${name} --deployment\` from the agent directory this was deployed from` : `\`${name}\``;
+    deployed
+      ? `\`${name} --deployment ${deployed.host ?? "<host>"}\` from the agent directory this was deployed from`
+      : `\`${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;
     if (shadowed === undefined) return { line };

@@ -30,7 +30,7 @@ import {
   reportFindingsIfChanged,
   reportToolCollisions,
 } from "../engines/pi/report.ts";
-import { isDeployedWorkspace } from "../paths.ts";
+import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import type { ResolvedContext } from "../contexts/resolve.ts";
 import { contextLines } from "./contexts-view.ts";
 import { log } from "../log.ts";
@@ -161,7 +161,12 @@ export async function reportAuth(models: AgentModels, modelSpec: string): Promis
   // line cannot name a file, or a source, other than the ones the runtime uses.
   const modelId = modelSpec.slice(provider.length + 1);
   const status = await models.authStatus(provider, modelId).catch(failStartup);
-  const report = formatAuthReport({ provider, path: models.auth.path, ...status, deployed: isDeployedWorkspace() });
+  const report = formatAuthReport({
+    provider,
+    path: models.auth.path,
+    ...status,
+    ...(isDeployedWorkspace() ? { deployed: { host: deployedHost() } } : {}),
+  });
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }

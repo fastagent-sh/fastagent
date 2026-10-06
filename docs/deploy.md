@@ -42,9 +42,12 @@ A model with no API key in `.secrets/.env` (an OAuth subscription such as `opena
 with `fastagent login`) authenticates on the deployment itself:
 
 ```bash
-fastagent login --deployment            # the one host this agent dir has deploy artifacts for (railway: name it)
+fastagent login --deployment railway    # the host is always named
 fastagent login openai-codex --deployment fly
 ```
+
+The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one
+directory can hold several hosts' files.
 
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
 `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` signed with your AWS CLI credentials). This terminal
@@ -58,7 +61,7 @@ side can log the other out. Logging in again replaces it.
 credential it already authenticates the model's provider with (a login it holds, unexpired or refreshable; a
 variable its host sets; a role it runs as), and logs in only when it has none. A redeploy therefore keeps the box's
 credential. A credential revoked at the provider before it expires is not detected, and the first turn fails with
-the provider's error: run `fastagent login --deployment` to replace it. Without a terminal (CI), `--run` stops at
+the provider's error: run `fastagent login --deployment <host>` to replace it. Without a terminal (CI), `--run` stops at
 the login with `not logged in` and the command to run, exit 1. It has registered no webhook at that point, so when
 the agent has any, the message also says what to re-run once the box is logged in.
 
@@ -79,7 +82,8 @@ and schedules fire, and each turn they start fails for want of a model credentia
 the login. For an unattended first deploy of such an agent, use an API key.
 
 When the credential is missing or rejected later (revoked, volume lost), the box's startup log names
-`fastagent login --deployment`.
+`fastagent login --deployment <host>`, with its host filled in on Fly, Railway and AgentCore (read from what each
+platform sets in the box's environment). A Docker box cannot tell, and leaves `<host>` for you to fill in.
 
 - **Railway** needs Railway CLI 5.x on `PATH`: 4.x's `railway ssh` goes through an SSH-key gateway and answers with a
   signup URL instead of opening the shell (`railway --version`; an old Homebrew copy can shadow the installer's).

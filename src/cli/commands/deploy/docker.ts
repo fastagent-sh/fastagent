@@ -25,7 +25,6 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
-  artifact: DOCKER_COMPOSE_FILE,
   shell: async (agentDir) => composeShell(DOCKER_COMPOSE_FILE, agentDir),
   async deploy(ctx) {
     const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;

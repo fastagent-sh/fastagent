@@ -583,10 +583,9 @@ const login: CommandSpec = {
       description: `store in ~/.fastagent/.secrets/auth.json — every agent here reads it for a provider it has no other credential for`,
     },
     {
-      flags: "--deployment [host]",
+      flags: "--deployment <host>",
       description:
-        "log in this agent's deployment instead, on the box itself (docker, fly, railway, agentcore); the host may be left out " +
-        "when the agent dir holds one host's deploy artifacts",
+        "log in this agent's deployment on <host> instead, on the box itself (docker, fly, railway, agentcore)",
     },
     { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
     { flags: "--if-missing", description: "with --stdio: keep a stored credential for the provider", hidden: true },
@@ -608,7 +607,7 @@ const login: CommandSpec = {
     (await import("./commands/login.ts")).runLogin(args[0], {
       global: f.global === true,
       input: f.input !== false,
-      ...(f.deployment !== undefined ? { deployment: f.deployment as string | boolean } : {}),
+      ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,
     }),

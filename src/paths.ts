@@ -7,6 +7,7 @@ import { type Stats, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { DeployHost } from "./deploy/hosts.ts";
 
 /** The user-global machinery home, `~/.fastagent`: the machine's credentials, models.json and model catalog. */
 export function globalHome(): string {
@@ -177,6 +178,20 @@ export function isDeployedWorkspace(): boolean {
 /** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */
 export function isAgentcoreRuntime(): boolean {
   return process.env.FASTAGENT_AGENTCORE === "1";
+}
+
+/**
+ * Which host this deployed box runs on, for the command that logs it in (`login --deployment <host>`). Read from what
+ * each platform puts in a box's environment (`FLY_APP_NAME`, `RAILWAY_SERVICE_ID`) or what our AgentCore template
+ * sets, because the artifacts in the agent directory cannot say it: a Railway deploy leaves no file of its own, and a
+ * directory can hold several hosts' files. Undefined where nothing says (Docker sets nothing, nor would a host
+ * fastagent did not deploy to): the caller then asks for the host by name.
+ */
+export function deployedHost(env: NodeJS.ProcessEnv = process.env): DeployHost | undefined {
+  if (env.FASTAGENT_AGENTCORE === "1") return "agentcore";
+  if (env.FLY_APP_NAME) return "fly";
+  if (env.RAILWAY_SERVICE_ID) return "railway";
+  return undefined;
 }
 
 /**

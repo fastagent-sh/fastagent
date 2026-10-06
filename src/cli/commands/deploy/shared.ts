@@ -51,11 +51,6 @@ interface DeployContext {
 export interface HostDeploy {
   /** Did this host generate the file at `path`? */
   isOurs(path: string, content: string): boolean;
-  /**
-   * The file in the agent dir whose presence says this agent deploys to the host. None for Railway, which generates
-   * only the container files every host shares: `login --deployment` asks for its name.
-   */
-  artifact?: string;
   /** The shell into this agent's running box (`fastagent login --deployment`). */
   shell(agentDir: string): Promise<BoxShell>;
   /**
