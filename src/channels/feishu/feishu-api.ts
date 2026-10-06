@@ -122,6 +122,21 @@ export interface FeishuApiOptions {
   appSecret: string;
 }
 
+/** One message as `GET /im/v1/messages` lists it — the fields the history read uses. */
+export interface FeishuListedMessage {
+  message_id?: string;
+  msg_type?: string;
+  /** Milliseconds since the epoch, as a string. */
+  create_time?: string;
+  parent_id?: string;
+  root_id?: string;
+  thread_id?: string;
+  deleted?: boolean;
+  body?: { content?: string };
+  mentions?: { key?: string; name?: string; id?: string }[];
+  sender?: { id?: string; id_type?: string; sender_type?: string };
+}
+
 interface ApiBody {
   code?: number;
   msg?: string;
@@ -139,6 +154,12 @@ export interface FeishuAppScope {
  * single pipeline (module header). Throws {@link FeishuApiError} on any failure.
  */
 export interface FeishuApi {
+  /**
+   * This client over the same pipeline and token cache, reporting the id of every message it creates (a send, a reply,
+   * each chunk of a long text). The channel sends through one to know which messages in a chat's history are its own
+   * turn output; the send tool shares the plain client, so what the agent sends itself stays part of the discussion.
+   */
+  recordingSends(onSent: (messageId: string) => void): FeishuApi;
   /** Validate appId/appSecret by acquiring the tenant token through this pipeline. Does not require
    *  the bot capability (unlike botInfo), so guided onboarding can fail before persisting a typo. */
   verifyCredentials(): Promise<void>;
@@ -160,6 +181,16 @@ export interface FeishuApi {
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
+  /**
+   * A place's messages, NEWEST first: a chat's (an ordinary group lists a thread's root only; a topic group lists
+   * every message) or a thread's. Cards come back as sent, and senders as open_ids.
+   */
+  listMessages(
+    container: { type: "chat" | "thread"; id: string },
+    pageSize: number,
+  ): Promise<{ items: FeishuListedMessage[]; hasMore: boolean }>;
+  /** A chat's members by name, keyed by open_id (needs `im:chat.members:read`). */
+  chatMemberNames(chatId: string): Promise<Map<string, string>>;
   /** Fetch one message (the reply-referent path). Undefined when the API returns no item.
    *
    *  `sender` is typed rather than `unknown` because the referent path READS it: an app-sent message
@@ -344,184 +375,231 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     }
   };
 
-  const api: FeishuApi = {
-    async verifyCredentials() {
-      await tenantToken();
-    },
-    async botInfo() {
-      // bot/v3/info answers at the TOP LEVEL (`bot`), not under `data` — an older API family.
-      const data = await call<ApiBody & { bot?: { open_id?: string; app_name?: string } }>(
-        "botInfo",
-        "GET",
-        "/open-apis/bot/v3/info",
-      );
-      return { openId: data.bot?.open_id, appName: data.bot?.app_name };
-    },
-    async sendMessage(chatId, msgType, content) {
-      const data = await call<ApiBody & { data?: { message_id?: string } }>(
-        "sendMessage",
-        "POST",
-        "/open-apis/im/v1/messages?receive_id_type=chat_id",
-        { receive_id: chatId, msg_type: msgType, content },
-      );
-      return data.data?.message_id;
-    },
-    async replyMessage(messageId, msgType, content, opts2) {
-      const data = await call<ApiBody & { data?: { message_id?: string } }>(
-        "replyMessage",
-        "POST",
-        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`,
-        { msg_type: msgType, content, ...(opts2?.replyInThread ? { reply_in_thread: true } : {}) },
-      );
-      return data.data?.message_id;
-    },
-    async sendText(target, text) {
-      const chunks = chunkFeishuText(text);
-      let firstId: string | undefined;
-      let first = true;
-      for (const chunk of chunks) {
-        const content = JSON.stringify({ text: chunk });
-        // A normal group quote-replies only the first chunk — N reply-quotes would be noise. A thread
-        // must reply_in_thread on EVERY chunk; a plain chat send would leak continuations to main chat.
-        const reply = target.replyTo !== undefined && (first || target.replyInThread === true);
-        const id = reply
-          ? await api.replyMessage(target.replyTo as string, "text", content, {
-              replyInThread: target.replyInThread,
-            })
-          : await api.sendMessage(target.chatId, "text", content);
-        if (first) firstId = id;
-        first = false;
-      }
-      return firstId;
-    },
-    async editTextMessage(messageId, text) {
-      await call("editTextMessage", "PUT", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
-        msg_type: "text",
-        content: JSON.stringify({ text }),
-      });
-    },
-    async deleteMessage(messageId) {
-      await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
-    },
-    async getMessage(messageId) {
-      const data = await call<ApiBody & { data?: { items?: unknown[] } }>(
-        "getMessage",
-        "GET",
-        // Pin the id type: callers match mentions/sender against open_ids, so the response's id shape
-        // must not depend on the platform's default staying open_id. And ask for a card as it was SENT:
-        // by default a Card 2.0 message (every answer this channel streams) comes back as the
-        // placeholder "please upgrade the client to view this", so a quoted answer was unreadable.
-        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id&card_msg_content_type=user_card_content`,
-      );
-      return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
-    },
-    async downloadResource(messageId, fileKey, type) {
-      // The byte download is the one non-JSON call, so it cannot ride the pipeline — same token +
-      // timeout + naming discipline, applied here once.
-      const label = "downloadResource";
-      const token = await tenantToken();
-      let res: Response;
-      let buf: ArrayBuffer | undefined;
-      let errBody: string | undefined;
-      try {
-        res = await fetch(
-          `${baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`,
-          { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) },
+  return client(undefined);
+
+  function client(onSent: ((messageId: string) => void) | undefined): FeishuApi {
+    /** Every created message passes here, so `onSent` cannot miss one (sendText's chunks ride send/reply). */
+    const sent = (messageId: string | undefined): string | undefined => {
+      if (messageId !== undefined) onSent?.(messageId);
+      return messageId;
+    };
+    const api: FeishuApi = {
+      recordingSends: (record) => client(record),
+      async verifyCredentials() {
+        await tenantToken();
+      },
+      async botInfo() {
+        // bot/v3/info answers at the TOP LEVEL (`bot`), not under `data` — an older API family.
+        const data = await call<ApiBody & { bot?: { open_id?: string; app_name?: string } }>(
+          "botInfo",
+          "GET",
+          "/open-apis/bot/v3/info",
         );
-        buf = res.ok ? await res.arrayBuffer() : undefined;
-        errBody = res.ok ? undefined : await res.text(); // the error body self-describes (expired key etc.)
-      } catch (e) {
-        throw new FeishuApiError(kind, label, 0, 0, String(e), { cause: e });
-      }
-      if (!res.ok || buf === undefined) {
-        let description: string | undefined;
-        let code = 0;
+        return { openId: data.bot?.open_id, appName: data.bot?.app_name };
+      },
+      async sendMessage(chatId, msgType, content) {
+        const data = await call<ApiBody & { data?: { message_id?: string } }>(
+          "sendMessage",
+          "POST",
+          "/open-apis/im/v1/messages?receive_id_type=chat_id",
+          { receive_id: chatId, msg_type: msgType, content },
+        );
+        return sent(data.data?.message_id);
+      },
+      async replyMessage(messageId, msgType, content, opts2) {
+        const data = await call<ApiBody & { data?: { message_id?: string } }>(
+          "replyMessage",
+          "POST",
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`,
+          { msg_type: msgType, content, ...(opts2?.replyInThread ? { reply_in_thread: true } : {}) },
+        );
+        return sent(data.data?.message_id);
+      },
+      async listMessages(container, pageSize) {
+        const query = new URLSearchParams({
+          container_id_type: container.type,
+          container_id: container.id,
+          sort_type: "ByCreateTimeDesc",
+          page_size: String(pageSize),
+          user_id_type: "open_id",
+          // A Card 2.0 (every streamed answer, a feishu-send digest) otherwise reads as "please upgrade the client".
+          card_msg_content_type: "user_card_content",
+        });
+        const data = await call<ApiBody & { data?: { items?: FeishuListedMessage[]; has_more?: boolean } }>(
+          "listMessages",
+          "GET",
+          `/open-apis/im/v1/messages?${query}`,
+        );
+        return { items: data.data?.items ?? [], hasMore: data.data?.has_more === true };
+      },
+      async chatMemberNames(chatId) {
+        const names = new Map<string, string>();
+        let pageToken: string | undefined;
+        // A bound, not a loop on trust: a chat's members are a few pages at most.
+        for (let page = 0; page < 10; page++) {
+          const query = new URLSearchParams({ member_id_type: "open_id", page_size: "100" });
+          if (pageToken) query.set("page_token", pageToken);
+          const data = await call<
+            ApiBody & {
+              data?: { items?: { member_id?: string; name?: string }[]; has_more?: boolean; page_token?: string };
+            }
+          >("chatMemberNames", "GET", `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?${query}`);
+          for (const member of data.data?.items ?? []) {
+            if (member.member_id && member.name) names.set(member.member_id, member.name);
+          }
+          if (data.data?.has_more !== true || !data.data.page_token) break;
+          pageToken = data.data.page_token;
+        }
+        return names;
+      },
+      async sendText(target, text) {
+        const chunks = chunkFeishuText(text);
+        let firstId: string | undefined;
+        let first = true;
+        for (const chunk of chunks) {
+          const content = JSON.stringify({ text: chunk });
+          // A normal group quote-replies only the first chunk — N reply-quotes would be noise. A thread
+          // must reply_in_thread on EVERY chunk; a plain chat send would leak continuations to main chat.
+          const reply = target.replyTo !== undefined && (first || target.replyInThread === true);
+          const id = reply
+            ? await api.replyMessage(target.replyTo as string, "text", content, {
+                replyInThread: target.replyInThread,
+              })
+            : await api.sendMessage(target.chatId, "text", content);
+          if (first) firstId = id;
+          first = false;
+        }
+        return firstId;
+      },
+      async editTextMessage(messageId, text) {
+        await call("editTextMessage", "PUT", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+          msg_type: "text",
+          content: JSON.stringify({ text }),
+        });
+      },
+      async deleteMessage(messageId) {
+        await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
+      },
+      async getMessage(messageId) {
+        const data = await call<ApiBody & { data?: { items?: unknown[] } }>(
+          "getMessage",
+          "GET",
+          // Pin the id type: callers match mentions/sender against open_ids, so the response's id shape
+          // must not depend on the platform's default staying open_id. And ask for a card as it was SENT:
+          // by default a Card 2.0 message (every answer this channel streams) comes back as the
+          // placeholder "please upgrade the client to view this", so a quoted answer was unreadable.
+          `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id&card_msg_content_type=user_card_content`,
+        );
+        return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
+      },
+      async downloadResource(messageId, fileKey, type) {
+        // The byte download is the one non-JSON call, so it cannot ride the pipeline — same token +
+        // timeout + naming discipline, applied here once.
+        const label = "downloadResource";
+        const token = await tenantToken();
+        let res: Response;
+        let buf: ArrayBuffer | undefined;
+        let errBody: string | undefined;
         try {
-          const parsed = JSON.parse(errBody ?? "") as ApiBody;
-          description = parsed.msg;
-          code = parsed.code ?? 0;
-        } catch {
-          /* non-JSON error body — fall through to the generic description */
+          res = await fetch(
+            `${baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`,
+            { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) },
+          );
+          buf = res.ok ? await res.arrayBuffer() : undefined;
+          errBody = res.ok ? undefined : await res.text(); // the error body self-describes (expired key etc.)
+        } catch (e) {
+          throw new FeishuApiError(kind, label, 0, 0, String(e), { cause: e });
         }
-        throw new FeishuApiError(kind, label, res.status, code, description ?? "response was not the expected bytes");
-      }
-      const bytes = Buffer.from(buf);
-      if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("resource is too large (max 20 MB)");
-      return { bytes, contentType: res.headers.get("content-type") ?? undefined };
-    },
-    async fetchImage(messageId, fileKey) {
-      const { bytes, contentType } = await api.downloadResource(messageId, fileKey, "image");
-      const mime = contentType?.split(";")[0]?.trim();
-      return { mimeType: mime?.startsWith("image/") ? mime : "image/jpeg", data: bytes.toString("base64") };
-    },
-    async fetchFile(messageId, fileKey, name, chatId, filesDir) {
-      const { bytes } = await api.downloadResource(messageId, fileKey, "file");
-      const dest = attachmentPath(filesDir, chatId, name);
-      await mkdir(dest.dir, { recursive: true });
-      await writeFile(dest.path, bytes);
-      return { path: dest.path, name: dest.name, size: bytes.byteLength };
-    },
-    async getAppConfig(appId) {
-      // v6 app detail — the one read surface that returns the event-security material (under data.app).
-      const data = await call<
-        ApiBody & { data?: { app?: { encryption?: { encryption_key?: string; verification_token?: string } } } }
-      >("getAppConfig", "GET", `/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`);
-      return {
-        verificationToken: data.data?.app?.encryption?.verification_token,
-        encryptionKey: data.data?.app?.encryption?.encryption_key,
-      };
-    },
-    async listAppScopes() {
-      const data = await call<
-        ApiBody & {
-          data?: { scopes?: Array<{ scope_name?: unknown; grant_status?: unknown; scope_type?: unknown }> };
+        if (!res.ok || buf === undefined) {
+          let description: string | undefined;
+          let code = 0;
+          try {
+            const parsed = JSON.parse(errBody ?? "") as ApiBody;
+            description = parsed.msg;
+            code = parsed.code ?? 0;
+          } catch {
+            /* non-JSON error body — fall through to the generic description */
+          }
+          throw new FeishuApiError(kind, label, res.status, code, description ?? "response was not the expected bytes");
         }
-      >("listAppScopes", "GET", "/open-apis/application/v6/scopes");
-      return (data.data?.scopes ?? []).flatMap((scope): FeishuAppScope[] => {
-        if (typeof scope.scope_name !== "string" || typeof scope.grant_status !== "number") return [];
-        const type = scope.scope_type === "user" || scope.scope_type === "tenant" ? scope.scope_type : undefined;
-        return [{ name: scope.scope_name, grantStatus: scope.grant_status, type }];
-      });
-    },
-    async updateEventSubscription(appId, cfg) {
-      await call(
-        "updateEventSubscription",
-        "PATCH",
-        `/open-apis/application/v7/applications/${encodeURIComponent(appId)}/config`,
-        {
-          event: { subscription_type: cfg.subscriptionType, request_url: cfg.requestUrl },
-        },
-      );
-    },
-    async createCard(cardJson) {
-      const data = await call<ApiBody & { data?: { card_id?: string } }>(
-        "createCard",
-        "POST",
-        "/open-apis/cardkit/v1/cards",
-        {
-          type: "card_json",
-          data: cardJson,
-        },
-      );
-      const id = data.data?.card_id;
-      if (!id) throw new FeishuApiError(kind, "createCard", 200, 0, "response carried no card_id");
-      return id;
-    },
-    async updateCardElement(cardId, elementId, content, sequence, opts) {
-      await call(
-        "updateCardElement",
-        "PUT",
-        `/open-apis/cardkit/v1/cards/${encodeURIComponent(cardId)}/elements/${encodeURIComponent(elementId)}/content`,
-        { content, sequence },
-        opts,
-      );
-    },
-    async updateCard(cardId, cardJson, sequence) {
-      await call("updateCard", "PUT", `/open-apis/cardkit/v1/cards/${encodeURIComponent(cardId)}`, {
-        card: { type: "card_json", data: cardJson },
-        sequence,
-      });
-    },
-  };
-  return api;
+        const bytes = Buffer.from(buf);
+        if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("resource is too large (max 20 MB)");
+        return { bytes, contentType: res.headers.get("content-type") ?? undefined };
+      },
+      async fetchImage(messageId, fileKey) {
+        const { bytes, contentType } = await api.downloadResource(messageId, fileKey, "image");
+        const mime = contentType?.split(";")[0]?.trim();
+        return { mimeType: mime?.startsWith("image/") ? mime : "image/jpeg", data: bytes.toString("base64") };
+      },
+      async fetchFile(messageId, fileKey, name, chatId, filesDir) {
+        const { bytes } = await api.downloadResource(messageId, fileKey, "file");
+        const dest = attachmentPath(filesDir, chatId, name);
+        await mkdir(dest.dir, { recursive: true });
+        await writeFile(dest.path, bytes);
+        return { path: dest.path, name: dest.name, size: bytes.byteLength };
+      },
+      async getAppConfig(appId) {
+        // v6 app detail — the one read surface that returns the event-security material (under data.app).
+        const data = await call<
+          ApiBody & { data?: { app?: { encryption?: { encryption_key?: string; verification_token?: string } } } }
+        >("getAppConfig", "GET", `/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`);
+        return {
+          verificationToken: data.data?.app?.encryption?.verification_token,
+          encryptionKey: data.data?.app?.encryption?.encryption_key,
+        };
+      },
+      async listAppScopes() {
+        const data = await call<
+          ApiBody & {
+            data?: { scopes?: Array<{ scope_name?: unknown; grant_status?: unknown; scope_type?: unknown }> };
+          }
+        >("listAppScopes", "GET", "/open-apis/application/v6/scopes");
+        return (data.data?.scopes ?? []).flatMap((scope): FeishuAppScope[] => {
+          if (typeof scope.scope_name !== "string" || typeof scope.grant_status !== "number") return [];
+          const type = scope.scope_type === "user" || scope.scope_type === "tenant" ? scope.scope_type : undefined;
+          return [{ name: scope.scope_name, grantStatus: scope.grant_status, type }];
+        });
+      },
+      async updateEventSubscription(appId, cfg) {
+        await call(
+          "updateEventSubscription",
+          "PATCH",
+          `/open-apis/application/v7/applications/${encodeURIComponent(appId)}/config`,
+          {
+            event: { subscription_type: cfg.subscriptionType, request_url: cfg.requestUrl },
+          },
+        );
+      },
+      async createCard(cardJson) {
+        const data = await call<ApiBody & { data?: { card_id?: string } }>(
+          "createCard",
+          "POST",
+          "/open-apis/cardkit/v1/cards",
+          {
+            type: "card_json",
+            data: cardJson,
+          },
+        );
+        const id = data.data?.card_id;
+        if (!id) throw new FeishuApiError(kind, "createCard", 200, 0, "response carried no card_id");
+        return id;
+      },
+      async updateCardElement(cardId, elementId, content, sequence, opts) {
+        await call(
+          "updateCardElement",
+          "PUT",
+          `/open-apis/cardkit/v1/cards/${encodeURIComponent(cardId)}/elements/${encodeURIComponent(elementId)}/content`,
+          { content, sequence },
+          opts,
+        );
+      },
+      async updateCard(cardId, cardJson, sequence) {
+        await call("updateCard", "PUT", `/open-apis/cardkit/v1/cards/${encodeURIComponent(cardId)}`, {
+          card: { type: "card_json", data: cardJson },
+          sequence,
+        });
+      },
+    };
+    return api;
+  }
 }

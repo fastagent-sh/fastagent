@@ -40,8 +40,8 @@ export default defineChannel({
       // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
       // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultFeishuRoute:
       // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
-      // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
-      // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
+      // Agent takes part and exactly ONE human does. Other group/thread discussion is read from the
+      // platform by that place's next answered turn; @other-only messages are discussion, not asks.
       // Override to customise explicit routing, reusing the export:
       //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
       //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },

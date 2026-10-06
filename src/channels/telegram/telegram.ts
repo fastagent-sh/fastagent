@@ -144,10 +144,10 @@ export function telegramChannel({
     const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
       label: "[telegram]",
       store,
-      buffer,
+      discussion: buffer,
       toStored: ({ previewId: _live, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, previewId: undefined }),
-      bufferKey: (rec) => rec.placeKey,
+      discussionKey: (rec) => rec.placeKey,
       where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
       // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the bot ignored
       // me" once the current turn runs long.

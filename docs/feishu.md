@@ -44,15 +44,15 @@ fastagent add lark --ingress webhook
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
-it, and other unsummoned group discussion is durably buffered for the next `@Agent` turn. That takes the app
+it, and each answered turn reads what was said in its place since the Agent last answered there. That takes the app
 scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); onboarding
 then checks what the app actually holds and names any scope your tenant withheld.
 
 | Scope | Without it |
 |---|---|
 | `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in the Agent's threads, no group discussion as context |
-| `im:message:readonly` (or `im:message`) | a message quoted by an ask cannot be read and degrades to a marker in the prompt |
-| `im:chat.members:read` | the Agent cannot list a chat's members by name (events carry only open_ids) |
+| `im:message:readonly` (or `im:message`) | the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker |
+| `im:chat.members:read` | people in the discussion the Agent reads are shown by open_id, not by name |
 
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
 credentials.
@@ -239,8 +239,8 @@ its branded `defaultLarkRoute` compatibility alias:
 
 - **p2p chats always answer**,
 - **an explicit group @mention always answers** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
-- in an **Agent-created group thread**, a bare user continuation answers without another @mention; a message that explicitly mentions only other people is instead buffered, while `@bot + @others` still answers,
-- in a main group chat or a thread the Agent did not create, human messages without `@bot` are buffered and folded into the next explicit `@bot` turn in that same place,
+- in an **Agent-created group thread**, a bare user continuation answers without another @mention; a message that explicitly mentions only other people is instead left as discussion, while `@bot + @others` still answers,
+- in a main group chat or a thread the Agent did not create, human messages without `@bot` are left as discussion, which the next explicit `@bot` turn in that same place reads (see [Place history](#place-history)),
 - all non-user senders are ignored, preventing two bots from answering each other forever.
 
 Override `route(event)` to customise; it returns:
@@ -254,20 +254,40 @@ type FeishuRoute = {
 ```
 
 Return `null` to ignore the event. Omitted fields default from the message. A custom route is
-authoritative: its `null` neither falls through to the built-in thread rule nor
-enters the default context buffer. The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
+authoritative: its `null` does not fall through to the built-in thread rule, and a routed turn reads no place
+history (the router decides what a session's place is). The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
 marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
 reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only; some tenants approve it by hand) delivers all group messages once the app holds it. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel. The sensitive `im:message.group_msg` scope (custom apps only; some tenants approve it by hand) delivers all group messages once the app holds it. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Everything else is discussion, which that place's next answered turn reads from the platform.
 
 Practical consequences in groups:
 
 - without `im:message.group_msg`, a **bare image/file** cannot summon (it has no mention) and is not delivered — put the ask and attachment in one rich-text `post`, or reply to the attachment and @mention the bot,
-- with that scope, a bare attachment inside a thread the Agent is part of is primary input and answered immediately; elsewhere it is buffered as background input for the next `@bot` turn in that place,
-- buffered attachment failures degrade per resource with a visible prompt note; primary attachment failures still fail the turn visibly.
+- with that scope, a bare attachment inside a thread the Agent is part of is primary input and answered immediately; elsewhere it is discussion, and its image/file rides the next `@bot` turn in that place as background input,
+- background attachment failures degrade per resource with a visible prompt note; primary attachment failures still fail the turn visibly.
+
+### Place history
+
+A place is a group chat or a thread in one. When a turn in a group runs, the channel reads the place's messages from
+the platform (`GET /im/v1/messages`) and folds what was said since the Agent last answered there into the prompt, as
+`[recent group discussion: …]`. The first turn in a place reads its newest 20 messages. The read leaves out what the
+session already holds: every message that was a turn (answered or queued) and every message the channel posted as a
+turn's output (answers, queue notices, stop feedback). What the Agent posted itself, with `feishu-send` from a
+schedule for example, stays, labelled `you (sent outside an answer, …)`, so a later "what did point 3 mean?" has it.
+
+- People are named from the chat's member list (`im:chat.members:read`), other bots as `bot <app_id>`.
+- Cards are read as they were sent (`card_msg_content_type=user_card_content`), so a Card 2.0 digest reads as its text.
+- In a topic group, the main chat's history is each topic's first post; a reply inside a topic belongs to that topic.
+- A thread's first turn also reads its room's discussion, read-only: the room's own next turn still reads it.
+- The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it
+  leaves out is counted in the prompt. A place with more than 50 messages since its last answer says earlier ones
+  are not shown.
+- A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
+  a warning is logged, and the next turn reads the same messages again.
+- Direct messages and turns from a custom `route` read no history.
 
 ## Threads and sessions
 
@@ -356,17 +376,18 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
 - files / audio / video are downloaded to `<state root>/channels/<kind>/files/c-<chat>/` — `c-` plus the URL-encoded chat id, so a thread id keeps its `:` and `/` as one directory (`oc_x:thread/1` → `c-oc_x%3Athread%2F1`) — and listed in the prompt so the agent reads them with its tools,
 - a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
-- the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like buffered attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
+- the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like background attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
 
 ## State & restarts
 
 The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
-- `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
+- `seen.json` — the most recent 2,000 `message_id`s the channel took as input (a turn, a `/stop`); Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key. A place's history read leaves these out,
+- `sent.json` — the most recent 1,000 `message_id`s the channel posted as turn output, which a history read leaves out,
+- `history.json` — per place, the newest message its last answered turn read; the next read starts after it. Losing it costs one re-read of a place's newest 20 messages,
 - `bot.json` — the bot's own `open_id`, bound to its `appId` and cached from `bot/v3/info` so a cold start recognizes @mentions immediately,
 - `thread-participants.json` — per thread, the humans the Agent heard (at most two) and whether it has answered there. Losing the file costs one mention per thread to re-enter it,
-- `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Never pruned by FastAgent; size and prune it yourself.
 
 The seen ring is best-effort dedup, not exactly-once: a crash between writes, a failed ring write, or a duplicate
@@ -410,10 +431,11 @@ picks up the current tool.
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
   Token + Subscription mode/URL only on an explicit route-level 404.
-- The group context buffer is gated on the sensitive `im:message.group_msg` scope; without it the platform never delivers unsummoned messages.
+- Without the sensitive `im:message.group_msg` scope the platform never delivers unsummoned messages, so only @mentions summon.
+- A read of a place's history adds about 300–400 ms before a group turn starts.
 - Sessions are one per chat and one per thread, with no TTL or GC, so session storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
 - `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
-- The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
+- The sender in events carries only ids (no display name), so the ask's own envelope attributes it as `user <open_id>`; only the discussion read from history is named. A custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds in either mode. The channel persists/enqueues synchronously;
   webhook returns HTTP 200 and the SDK returns its ACK frame without waiting for the Agent turn. A
   persistence throw becomes HTTP/WS 500 and asks the platform to re-push.
