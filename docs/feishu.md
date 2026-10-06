@@ -113,7 +113,9 @@ device-authorization grant) as its default behavior. The CLI opens a one-time co
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. A webhook app also gets
-`application:application:patch`, which the webhook bootstrap registers the Request URL through. A WebSocket app
+`application:application:patch`, which the webhook bootstrap registers the Request URL through; when the app is
+not granted it (a tenant that reviews it, or an app born WebSocket), onboarding names it and leaves the
+Verification Token and Request URL to the console instead of trying. A WebSocket app
 does not: a tenant that reviews that scope holds the app's whole first version in review, for a scope WebSocket
 never uses. A tenant may withhold any requested scope; onboarding names what it withheld. The CLI immediately persists App ID/Secret to
 `.secrets/.env` before starting later network work.

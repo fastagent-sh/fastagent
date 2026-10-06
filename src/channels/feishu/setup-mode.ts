@@ -51,6 +51,21 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   },
 ];
 
+/** The config scope as an app needs it: webhook only ({@link FEISHU_APP_CONFIG_SCOPE}). */
+const FEISHU_APP_CONFIG_REQUEST: FeishuScopeRequest = {
+  request: FEISHU_APP_CONFIG_SCOPE,
+  withoutIt:
+    "the Verification Token is not captured and no Request URL is registered for you (add, dev --tunnel, deploy --run)",
+};
+
+/**
+ * Every scope an app of this ingress needs: what onboarding requests at creation AND what it checks the app holds, so a
+ * scope the app is asked for is one whose absence is reported.
+ */
+export function feishuAppScopes(ingress: FeishuSubscriptionMode): FeishuScopeRequest[] {
+  return [...(ingress === "webhook" ? [FEISHU_APP_CONFIG_REQUEST] : []), ...FEISHU_AGENT_SCOPES];
+}
+
 /**
  * What a created app carries on top of the platform's agent template — the `addons` merged onto the confirm page. A
  * scope that arrives here needs no console visit; one a tenant withholds is reported after creation (`add-feishu.ts`).
@@ -59,9 +74,8 @@ export function feishuAppAddons(ingress: FeishuSubscriptionMode): {
   scopes: { tenant: string[] };
   events: { items: { tenant: string[] } };
 } {
-  const config = ingress === "webhook" ? [FEISHU_APP_CONFIG_SCOPE] : [];
   return {
-    scopes: { tenant: [...config, ...FEISHU_AGENT_SCOPES.map((entry) => entry.request)] },
+    scopes: { tenant: feishuAppScopes(ingress).map((entry) => entry.request) },
     events: { items: { tenant: [FEISHU_MESSAGE_RECEIVE_EVENT] } },
   };
 }
