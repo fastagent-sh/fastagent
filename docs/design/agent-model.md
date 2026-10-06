@@ -378,20 +378,22 @@ module cache off) where Node's own loader, which `tools/` and `channels/` use, c
 An earlier version of this note reversed that rule: every process would restart onto a changed definition by
 itself once idle, after checking that it loads. It was not built:
 
-- **No observed need.** What a script cannot be is a tool with a typed interface, a channel or an extension, and
-  nothing so far has needed one written by the agent and put into service within the same run.
+- **No observed need.** What a script cannot be is a tool with a typed interface or a channel (an extension the
+  agent writes is already live), and nothing so far has needed one written by the agent and put into service within
+  the same run.
 - **Its cost.** A supervisor for `start`, draining every way a turn starts (`/invoke`, chat channels, the
   scheduler, AgentCore) on four hosts, and a retry on AgentCore whose behavior is unknown.
-- **Nothing worse without it.** The agent is told that code changes take effect at a restart, so it does not count
-  on one it has not had.
+- **Nothing worse without it.** The agent is told that changes to tools, channels and configuration take effect at
+  a restart, so it does not count on one it has not had.
 
 Reconsider with a case where an agent must write a code module and use it before the next release.
 
-One risk remains: an agent can write a module that does not load. The next start (a restart, a crash, a host
-waking a scaled-to-zero instance, a release) fails on it and says why, and the way back is the author's: revert the
+One risk remains: an agent can write a tool or channel module that does not load. The next start (a restart, a
+crash, a host waking a scaled-to-zero instance, a release) fails on it and says why, and the way back is the author's: revert the
 change with version control on this machine, or deploy again on a host, which ships the definition anew. Keeping
 the last definition that loaded, and starting from it with a report, would close this gap; it is not part of this
-model yet.
+model yet. An extension that does not load fails no start: it is reported once, and sessions run without it
+until the agent or the author repairs it.
 
 A change to a context reaches other instances the way that context synchronizes. A change an agent on a host
 makes to its harness lasts until the next deployment ships the definition again: keeping it is a question of

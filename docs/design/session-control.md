@@ -317,7 +317,8 @@ FIXED for the deployment's life, so a client may read it once.
 The models `update({ model })` accepts are not on it: `models()` lists them, asked per call like `commands()`,
 because the registry is a deployment fact the definition can change while it runs (an extension that declares a
 model, edited or added; the pi reference reads the registry as a turn would resolve it now). Empty where `model` is
-not updatable. Each entry describes a model the way a picker shows it, before any session runs on it:
+not updatable, so a registry that cannot be built now (`extensions/` cannot be read) REJECTS rather than borrow
+that answer, as `commands()` does for a definition it cannot read; `state()` stays total and reports no model. Each entry describes a model the way a picker shows it, before any session runs on it:
 
 ```ts
 interface ModelDescriptor {

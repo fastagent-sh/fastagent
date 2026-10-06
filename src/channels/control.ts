@@ -271,7 +271,7 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
 
     "GET /control/models": async () => json(await control.models()),
 
-    // The DEPLOYMENT's conversation list — and the one read that may fail.
+    // The DEPLOYMENT's conversation list — a read that may fail, with its own retryable code.
     "GET /control/sessions": async () => {
       try {
         return json(await control.sessions.list());

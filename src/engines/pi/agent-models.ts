@@ -137,13 +137,14 @@ export function agentModels(
   const live = agentDir
     ? liveExtensions(agentDir, () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}))
     : undefined;
-  const extensionPaths = (): Promise<readonly string[]> => live?.paths() ?? Promise.resolve([]);
+  const loadable = (): Promise<{ paths: readonly string[]; generation: number }> =>
+    live?.paths() ?? Promise.resolve({ paths: [], generation: 0 });
+  const extensionPaths = async (): Promise<readonly string[]> => (await loadable()).paths;
   // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
   // plane lists and lets a session select is what a session would load (a model an edited extension declares).
   let registry: { generation: number; runtime: Promise<ModelRuntime> } | undefined;
   const runtime = async (): Promise<ModelRuntime> => {
-    const paths = await extensionPaths();
-    const generation = live?.generation() ?? 0;
+    const { paths, generation } = await loadable();
     if (registry?.generation !== generation) {
       const built = createRuntime().then(async (models) => {
         if (agentDir)

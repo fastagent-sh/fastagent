@@ -269,8 +269,8 @@ class Subscriber {
 // ── The hub ──────────────────────────────────────────────────────────────────
 
 /** What the plane's writes (`update` / `compact` / `fork` / `delete`) need — the SAME instances the
- *  agent assembly uses: the lease (a write must not race a run), the model registry (validation +
- *  allowedModels), and the session factory (compaction is a model call). Two writes create a record:
+ *  agent assembly uses: the lease (a write must not race a run), the model registry (what `models()`
+ *  lists and `update({ model })` validates against), and the session factory (compaction is a model call). Two writes create a record:
  *  fork's `into`, and `update()` on an id that has none (through the store's `openOrCreate`, like an
  *  invoke). Every other write needs a record that exists. */
 export interface PiBoundaryWiring {
@@ -292,21 +292,41 @@ export interface PiBoundaryWiring {
 }
 
 /**
+ * A deployment-level fault every read meets again until it is repaired: said when it starts or changes, not once per
+ * read that meets it (each `state()`, `update()` and usage publication would repeat it, and the turn that meets it
+ * fails with its own code anyway). Said again after a read finds it repaired.
+ */
+function faultOnce(): { say(message: string): void; repaired(): void } {
+  let said: string | undefined;
+  return {
+    say(message) {
+      if (message === said) return;
+      said = message;
+      log.warn(message);
+    },
+    repaired() {
+      said = undefined;
+    },
+  };
+}
+
+/**
  * The registry and the default PAIR as a turn would resolve them now. A configured default the registry no longer
  * holds (an edited extension dropped it) is said and leaves the pair without a model, as an agent with no default
- * has: the plane's reads stay TOTAL, a session's recorded or newly set model still resolves, and the turn that would
- * run on the missing default fails with its own code. Rejects only when the registry itself cannot be built.
+ * has: a session's recorded or newly set model still resolves, and the turn that would run on the missing default
+ * fails with its own code. Rejects when the registry itself cannot be built (`extensions/` cannot be read).
  */
 async function resolveBoundary(
   b: PiBoundaryWiring,
-  session: string,
+  defaultFault: ReturnType<typeof faultOnce>,
 ): Promise<{ models: Models; defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel } }> {
   const models = await b.models();
   let model: AnyModel | undefined;
   try {
     model = b.defaultModel(models);
+    defaultFault.repaired();
   } catch (error) {
-    log.warn(`[fastagent] session ${session}: the configured default model does not resolve: ${String(error)}`);
+    defaultFault.say(`[fastagent] the configured default model does not resolve: ${String(error)}`);
   }
   return { models, defaults: { ...(model ? { model } : {}), thinkingLevel: b.thinkingLevel } };
 }
@@ -355,6 +375,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
    *  both are model calls a client must be able to stop). Set at ADMISSION, cleared by the
    *  detached task before `compaction_finished`. */
   const compacting = new Map<string, { abort: () => void }>();
+  const defaultFault = faultOnce();
+  const registryFault = faultOnce();
 
   /** Fan an event out to this session's subscribers — shared by the observer (run events) and the
    *  boundary mutations (session-level events, no runId). */
@@ -451,8 +473,23 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
       // next invoke fails (binding a session walks the same chain) and a boundary dispatch answers
       // `boundary_command_failed`. Here it is a server-side warn.
+      // OBSERVATION IS TOTAL here too: a registry that cannot be built now (`extensions/` unreadable) leaves the
+      // pair absent, said once; the turn and `update()` meet it with their own codes.
       const b = boundary;
-      const engine = b ? await resolveBoundary(b, session) : undefined;
+      const engine = b
+        ? await resolveBoundary(b, defaultFault).then(
+            (resolved) => {
+              registryFault.repaired();
+              return resolved;
+            },
+            (error: unknown) => {
+              registryFault.say(
+                `[fastagent] the model registry cannot be built (state() reports no model): ${String(error)}`,
+              );
+              return undefined;
+            },
+          )
+        : undefined;
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
       let usage: SessionState["usage"];
       if (!opened) {
@@ -779,7 +816,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         const b = boundary;
         if (!b) return unsupported(`update(${fields.join(", ")})`);
         // The registry and defaults a turn would resolve now — the same that `models()` lists.
-        const engine = yield* port(() => resolveBoundary(b, session));
+        const engine = yield* port(() => resolveBoundary(b, defaultFault));
 
         // PAYLOAD validation first — before the session is even opened, and long before the lease: an
         // invalid value must not briefly block a run.
@@ -1111,7 +1148,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     commands: reads.commands,
     models: reads.models,
     sessions: {
-      // The one read that may REJECT (design §13): `[]` is what a deployment with no sessions
+      // A read that may REJECT (design §13): `[]` is what a deployment with no sessions
       // answers, so a store that cannot be read must not borrow that shape. The transport turns the
       // throw into a coded non-2xx; nothing here swallows it.
       list: () => sessions.list(),

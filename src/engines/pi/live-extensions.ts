@@ -9,19 +9,21 @@
  * filled, the cache is dropped first. Readers never decide this themselves, so none can load stale code while another
  * loads fresh.
  */
+import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DefaultResourceLoader, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface LiveExtensions {
   /**
-   * The extension entry points to load now. Resolves only once pi's cache holds the code on disk: when it changed,
-   * the cache is dropped before this resolves, by one caller while the others wait for it. A failure to drop it
-   * rejects (and the next call tries again), never resolves with stale code.
+   * The extension entry points to load now, with the generation they belong to: it changes whenever the code handed
+   * out does, and is what a derived cache (the model catalog) is keyed by. Taken together, so a list read while
+   * another reader dropped the cache is never filed under that reader's newer generation. Resolves only once pi's
+   * cache holds the code on disk: when it changed, the cache is dropped before this resolves, by one caller while
+   * the others wait for it. A failure to drop it rejects (and the next call tries again), never resolves with stale
+   * code.
    */
-  paths(): Promise<readonly string[]>;
-  /** Changes whenever the code {@link paths} hands out does: what a derived cache (the model catalog) is keyed by. */
-  generation(): number;
+  paths(): Promise<{ paths: readonly string[]; generation: number }>;
 }
 
 /** What one agent directory's cached code was loaded from, shared by every reader in the process (pi's cache is). */
@@ -65,9 +67,9 @@ export function liveExtensions(agentDir: string, list: () => Promise<readonly st
         state.inFlight = undefined;
       });
       await state.inFlight;
-      return list();
+      const generation = state.generation;
+      return { paths: await list(), generation };
     },
-    generation: () => state.generation,
   };
 }
 
@@ -95,29 +97,38 @@ async function dropExtensionCache(cwd: string): Promise<void> {
  * Every file under `dir` as one string that changes when any of them does (path, size, modification time); empty when
  * `dir` does not exist. A file gone between listing and `stat` is simply not there any more: an editor's or an atomic
  * write's rename does that, and it is not a failure.
+ *
+ * Every reader asks this before it loads, so it skips what can be large and is not the extensions' own code: a
+ * `node_modules` (an extension with its own dependencies) and dot directories (`.git`). A dependency upgraded without
+ * touching any file outside them (its `package.json` or lockfile) is therefore not seen until the next start.
  */
 async function fingerprint(dir: string): Promise<string> {
-  let names: string[];
-  try {
-    names = await readdir(dir, { recursive: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-  const files = await Promise.all(
-    names.map(async (name) => {
-      const path = join(dir, name);
-      try {
-        const info = await stat(path);
-        return info.isFile() ? `${name}\t${info.size}\t${info.mtimeMs}` : undefined;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-        throw error;
-      }
-    }),
-  );
-  return files
-    .filter((line) => line !== undefined)
-    .sort()
-    .join("\n");
+  const lines: string[] = [];
+  const walk = async (at: string, prefix: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(at, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        const name = `${prefix}${entry.name}`;
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name.startsWith(".")) return;
+          return walk(join(at, entry.name), `${name}/`);
+        }
+        try {
+          // `stat`, not the entry: a symlink to a file counts as the file it names.
+          const info = await stat(join(at, entry.name));
+          if (info.isFile()) lines.push(`${name}\t${info.size}\t${info.mtimeMs}`);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }),
+    );
+  };
+  await walk(dir, "");
+  return lines.sort().join("\n");
 }

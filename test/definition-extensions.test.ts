@@ -3,7 +3,7 @@
  * refused when they would not survive the trip into a container, and loaded both by `fastagent chat`
  * and by serving — where every bound session gets its own extension instances and no terminal.
  */
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -559,9 +559,35 @@ describe("definition: an extension can define the model chat runs on", () => {
     // No turn, no menu read first: the plane resolves through the same function a turn would, at each call.
     expect(await allowed()).toEqual(["acme/second"]);
     // The configured default is gone from the registry, so state() reports no model (and a turn would fail on it).
-    expect((await sessionControl!.sessions.get("s").state()).model).toBeUndefined();
-    expect(await sessionControl!.sessions.get("s").update({ model: "acme/second" })).toEqual({ ok: true });
-    expect((await sessionControl!.sessions.get("s").update({ model: "acme/first" })).ok).toBe(false);
+    // Said once, not by every read that meets it again.
+    const warns = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const defaultGone = () => warns.mock.calls.filter(([m]) => /configured default model does not resolve/.test(m));
+    try {
+      expect((await sessionControl!.sessions.get("s").state()).model).toBeUndefined();
+      expect((await sessionControl!.sessions.get("t").state()).model).toBeUndefined();
+      expect(await sessionControl!.sessions.get("s").update({ name: "n" })).toEqual({ ok: true });
+      expect(defaultGone()).toHaveLength(1);
+      expect(await sessionControl!.sessions.get("s").update({ model: "acme/second" })).toEqual({ ok: true });
+      expect((await sessionControl!.sessions.get("s").update({ model: "acme/first" })).ok).toBe(false);
+
+      // A registry that cannot be built now (extensions/ unreadable): state() stays TOTAL and reports no model, said
+      // once; models() rejects, since [] would say the model is not updatable.
+      await chmod(join(dir, "extensions"), 0o000);
+      try {
+        const state = await sessionControl!.sessions.get("t").state();
+        expect(state.status).toBe("idle");
+        expect(state.model).toBeUndefined();
+        await sessionControl!.sessions.get("t").state();
+        expect(warns.mock.calls.filter(([m]) => /model registry cannot be built/.test(m))).toHaveLength(1);
+        await expect(sessionControl!.models()).rejects.toThrow(/EACCES/);
+      } finally {
+        await chmod(join(dir, "extensions"), 0o755);
+      }
+      await writeFile(join(dir, "extensions", "provider.ts"), provider("first"));
+      expect((await sessionControl!.sessions.get("t").state()).model).toBe("acme/first");
+    } finally {
+      warns.mockRestore();
+    }
   });
 
   it("joins registration refreshes even when the SDK's final refresh finishes first", async () => {
