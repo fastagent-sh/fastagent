@@ -126,6 +126,11 @@ export async function freshClone(
   ref: string | undefined,
   dir: string,
 ): Promise<{ cloned: boolean; warning?: string }> {
+  // A library caller can hand this anything; git reads a leading "-" as an option, and no repository or ref has one
+  // (a declaration with one is refused at load, declare.ts).
+  if (repo.startsWith("-") || ref?.startsWith("-")) {
+    throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
+  }
   const current = existsSync(dir) ? untouched(dir) : undefined;
   if (current !== undefined) {
     let remote: Checkout | undefined;

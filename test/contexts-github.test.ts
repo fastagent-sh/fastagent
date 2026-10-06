@@ -237,6 +237,16 @@ describe("github contexts: a clone is made afresh each time", () => {
     ]);
   });
 
+  it("a ref that git would read as an option is refused before git runs", async () => {
+    githubStandIn().repo("acme/app").commit({ "README.md": "app\n" });
+    const { agentDir } = await agent();
+    const context = resolveOne(agentDir, { github: "acme/app" });
+    await expect(cloneContext({ ...context, ref: "--upload-pack=touch pwned" })).rejects.toThrow(
+      /would reach git as an option/,
+    );
+    expect(existsSync(context.location)).toBe(false);
+  });
+
   it("the user's checkout is never cloned over", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "README.md": "app\n" });
