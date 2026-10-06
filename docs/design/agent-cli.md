@@ -150,8 +150,8 @@ What is said rather than handled quietly:
 
 ## 6. `info`
 
-`info` adds each context's resolution and what a deployment would do with it, so an author learns that a deploy
-would be refused without trying one.
+`info` adds each context's resolution and what a deployment would do with it, so an author sees which contexts would
+not reach a host without deploying.
 
 ## 7. `deploy`
 
