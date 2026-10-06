@@ -14,3 +14,5 @@ export {
 // a repository with no checkout here real.
 export type { ContextDeclaration } from "./contexts/declare.ts";
 export { cloneContext, resolveContexts, type ResolvedContext } from "./contexts/resolve.ts";
+// A directory or `github:owner/repo` read as a declaration, the way `init --context` and `context add` read it.
+export { declarationFor, type SourceOptions } from "./contexts/source.ts";

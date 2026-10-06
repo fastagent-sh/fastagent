@@ -3,7 +3,8 @@
  * resolveModelSpec).
  */
 import { existsSync, statSync } from "node:fs";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -19,6 +20,7 @@ import { AGENT_CONFIG_FILE } from "../../paths.ts";
 import { type ContextDeclaration, declareContexts } from "../../contexts/declare.ts";
 import { canonicalDeclaration, rewriteContexts } from "../../contexts/config-text.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
+import { withLockedFile } from "./locked-file.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -258,38 +260,61 @@ export function resolveModelSpec(
   return flag ?? (env.FASTAGENT_MODEL || config.model);
 }
 
-/** Where a candidate config is imported before it replaces the real one: beside it, and not a code input `dev` watches. */
-const CANDIDATE_CONFIG_FILE = ".fastagent.config.next.ts";
+/**
+ * Where a candidate config is imported before it replaces the real one: beside it, and not a code input `dev` watches.
+ * Unique per edit, because `import()` caches by URL and two edits must never read each other's candidate.
+ */
+const candidateConfigFile = (): string => `.fastagent.config.next.${randomUUID()}.ts`;
 
 /**
- * Replace the agent's `contexts` with `declarations`, in the literal list in fastagent.config.ts. Every context is
- * resolved first (it exists, it is not nested with the agent); then the candidate file is written beside the config,
- * imported, and compared with what it meant to declare. Only a match replaces the config, so a refusal leaves it, and
- * any process watching it, untouched.
+ * Edit the agent's `contexts`, the literal list in fastagent.config.ts: `edit` gets the declarations as written and
+ * returns the new list. Reading, rewriting and replacing happen under the config file's lock, so concurrent edits (the
+ * CLI and a client, or two calls of one client) apply one after the other instead of one losing to the other. Every
+ * context is resolved first (it exists, it is not nested with the agent); then the candidate file is written beside
+ * the config, imported, and compared with what it meant to declare. Only a match replaces the config, so a refusal
+ * leaves it, and any process watching it, untouched.
  */
-export async function writeContexts(agentDir: string, declarations: readonly ContextDeclaration[]): Promise<void> {
-  resolveContexts(agentDir, declarations);
+export async function editContexts<T>(
+  agentDir: string,
+  edit: (declared: ContextDeclaration[]) => { contexts: ContextDeclaration[]; result: T },
+): Promise<T> {
   const path = join(agentDir, AGENT_CONFIG_FILE);
-  const src = await readFile(path, "utf8");
-  let next: string;
-  try {
-    next = rewriteContexts(src, declarations);
-  } catch (error) {
-    throw new Error(`cannot edit ${path}: ${(error as Error).message}`);
-  }
-  const candidate = join(agentDir, CANDIDATE_CONFIG_FILE);
-  await writeFile(candidate, next);
-  try {
-    const written = (await loadConfigFile(candidate, agentDir)).contexts ?? [];
-    const meant = JSON.stringify(declarations.map(canonicalDeclaration));
-    const got = JSON.stringify(written.map(canonicalDeclaration));
-    if (got !== meant) {
-      throw new Error(`cannot edit ${path}: the edited file would declare ${got}, not ${meant} — edit it by hand`);
-    }
-    await rename(candidate, path);
-  } finally {
-    await rm(candidate, { force: true });
-  }
+  // Throws when there is no config: the lock would otherwise create the file it locks.
+  const mode = statSync(path).mode & 0o777;
+  return withLockedFile(
+    path,
+    async (src) => {
+      // Undefined only when the file vanished between the stat above and the lock.
+      if (src === undefined) throw new Error(`${path} disappeared while it was being edited`);
+      const { contexts: declarations, result } = edit((await loadConfigFile(path, agentDir)).contexts ?? []);
+      resolveContexts(agentDir, declarations);
+      let next: string;
+      try {
+        next = rewriteContexts(src, declarations);
+      } catch (error) {
+        throw new Error(`cannot edit ${path}: ${(error as Error).message}`);
+      }
+      const candidate = join(agentDir, candidateConfigFile());
+      await writeFile(candidate, next);
+      try {
+        const written = (await loadConfigFile(candidate, agentDir)).contexts ?? [];
+        const meant = JSON.stringify(declarations.map(canonicalDeclaration));
+        const got = JSON.stringify(written.map(canonicalDeclaration));
+        if (got !== meant) {
+          throw new Error(`cannot edit ${path}: the edited file would declare ${got}, not ${meant} — edit it by hand`);
+        }
+      } finally {
+        await rm(candidate, { force: true });
+      }
+      return { result, next };
+    },
+    { mode },
+  );
+}
+
+/** Replace the agent's `contexts` with `declarations` ({@link editContexts}). */
+export function writeContexts(agentDir: string, declarations: readonly ContextDeclaration[]): Promise<void> {
+  return editContexts(agentDir, () => ({ contexts: [...declarations], result: undefined }));
 }
 
 /**

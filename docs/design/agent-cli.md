@@ -108,7 +108,8 @@ works on app  ~/code/app (github acme/app); a host clones it
 
 People edit `fastagent.config.ts` by hand. A client such as duang cannot safely rewrite a TypeScript module, and
 contexts belong in the definition, not in the client, or a deployment from that directory would lose them. Both
-use one command:
+use one implementation: the command, or the API under it (`createAgent`, `addContext`, `removeContext`,
+`listContexts` in `/pi`; [API reference](../api-reference.md#contexts)). The command:
 
 ```bash
 fastagent context list [agent] [--json]

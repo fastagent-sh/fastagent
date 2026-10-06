@@ -42,6 +42,17 @@ export {
   resolveModel,
   type FastagentConfig,
 } from "./engines/pi/config.ts";
+// Creating an agent and editing its contexts: what `fastagent init` and `fastagent context` run.
+export {
+  addContext,
+  ContextNameError,
+  createAgent,
+  listContexts,
+  removeContext,
+  type ContextEdit,
+  type CreateAgentOptions,
+  type CreatedAgent,
+} from "./engines/pi/authoring.ts";
 export type { SessionObserver } from "./engines/pi/turn-kit.ts";
 export { inProcessLease, type Lease, type Release } from "./engines/pi/turn-kit.ts";
 export {

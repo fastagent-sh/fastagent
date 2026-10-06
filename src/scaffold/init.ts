@@ -23,11 +23,19 @@ export interface ScaffoldResult {
 /** Entries a directory may hold and still count as empty. */
 const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
 
+export interface ScaffoldOptions {
+  /**
+   * Include `tools/fetch-url.ts`, the example code tool. It imports `@fastagent-sh/fastagent` at run time, so an agent
+   * that has it runs only once `npm install` has installed that package into the agent directory.
+   */
+  exampleTool?: boolean;
+}
+
 /**
  * Scaffold a runnable agent INTO `dir`, which must be new or empty. An agent is a directory of its own: what it works
  * on is declared, never the directory around it.
  */
-export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
+export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const skill = (name: string) => ({
     rel: join("skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),
@@ -45,7 +53,9 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
     { rel: ".gitignore", content: baseTemplate("gitignore") },
     { rel: join(SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
     { rel: join(SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
-    { rel: join("tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
+    ...(options.exampleTool
+      ? [{ rel: join("tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") }]
+      : []),
     // The agent's own manifest, named after its directory.
     { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
   ];

@@ -243,7 +243,7 @@ function cloneContext(
 ): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
 type ContextDeclaration =
-  | { local: string; copy?: boolean; readonly?: boolean; name?: string }
+  | { local: string; readonly?: boolean; name?: string }
   | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
 type ResolvedContext = {
@@ -252,7 +252,7 @@ type ResolvedContext = {
   location: string;                     // its absolute directory on this instance
   notices: string[];                    // what to tell the user: a checkout off its ref, a clone not made yet
 } & (
-  | { kind: "local" | "copy" }
+  | { kind: "local" }
   | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: no checkout of it here
 );
 ```
@@ -266,6 +266,33 @@ refuses, a fetch that fails, or a clone on another branch than declared keeps it
 `reason`). `createPiAgentFromDir` clones before it resolves; a caller that
 resolves for `createPiAgentFromDefinition` calls `cloneContext` for each context with `clone: true`, then resolves
 again.
+
+`declarationFor(source, cwd, options?)` (also `/node`) reads a directory or `github:owner/repo` the way
+`init --context` and `fastagent context add` do: the root of a checkout whose `origin` is on GitHub becomes that
+repository with the checkout as its `local`, any other directory `{ local }`. It returns the declaration and `notes`
+for the user.
+
+```ts
+// From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent context` run.
+function createAgent(
+  dir: string,
+  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean },
+): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[] }>;
+function listContexts(agentDir: string): Promise<ResolvedContext[]>;
+function addContext(agentDir: string, declaration: ContextDeclaration): Promise<{ name: string; contexts: ResolvedContext[] }>;
+function removeContext(agentDir: string, name: string): Promise<{ name: string; contexts: ResolvedContext[] }>;
+class ContextNameError extends Error {}
+```
+
+The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
+every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
+removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
+`init` adds) the agent imports nothing at run time and runs without `npm install`. `addContext` names the context
+after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.
+Both rewrite only the literal `contexts` list, under the config file's lock, so concurrent edits apply one after the
+other; each returns the name it acted on with the contexts after the edit. A name that cannot name a context, is
+taken (ignoring case, including by another context `createAgent` was given), or is not the agent's is a
+`ContextNameError`, which the CLI reports with exit code 2.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
