@@ -11,13 +11,18 @@ import {
 const AGENT_SCOPES = FEISHU_AGENT_SCOPES.map((entry) => entry.request);
 const grantedAll = (): FeishuAppScope[] => AGENT_SCOPES.map((name) => ({ name, grantStatus: 1, type: "tenant" }));
 
-async function check(kind: "feishu" | "lark", listAppScopes: Pick<FeishuApi, "listAppScopes">["listAppScopes"]) {
+async function check(
+  kind: "feishu" | "lark",
+  listAppScopes: Pick<FeishuApi, "listAppScopes">["listAppScopes"],
+  ingress: "webhook" | "websocket" = "websocket",
+) {
   const notes: string[] = [];
   const opened: string[] = [];
   const result = await checkAgentScopes({
     kind,
     appId: "cli_a",
     apiBase: kind === "feishu" ? "https://open.feishu.cn" : "https://open.larksuite.com",
+    ingress,
     api: { listAppScopes },
     note: (message) => notes.push(message),
     openUrl: (url) => opened.push(url),
@@ -31,21 +36,21 @@ const requested = (url: string | undefined): string[] => new URL(url ?? "").sear
 describe("Feishu/Lark agent permission check", () => {
   it("an app holding every agent scope is ready to publish, and no console page opens", async () => {
     const { result, notes, opened } = await check("feishu", async () => grantedAll());
-    expect(result).toEqual({ publishReady: true });
+    expect(result).toEqual({ publishReady: true, missing: [] });
     expect(notes).toContain("granted");
     expect(opened).toEqual([]);
   });
 
-  it("names each missing scope with its state, and opens the console pre-filled with exactly those", async () => {
+  it("names each missing scope with what it costs, and opens the console pre-filled with exactly those", async () => {
     // A tenant can withhold a scope the confirm page asked for (its approval policy), or an app made by hand never
-    // had it; the author is sent to request precisely what is missing.
+    // had it; the author is sent to request precisely what is missing. A listed but ungranted scope is missing too.
     const scopes = grantedAll()
       .filter((scope) => scope.name !== "im:chat.members:read")
       .map((scope) => (scope.name === "im:message.group_msg" ? { ...scope, grantStatus: 0 } : scope));
     const { result, notes, opened } = await check("feishu", async () => scopes);
-    expect(result).toEqual({ publishReady: false });
-    expect(notes).toContain("im:message.group_msg (awaiting approval)");
-    expect(notes).toContain("im:chat.members:read (not on the app)");
+    expect(result).toEqual({ publishReady: false, missing: ["im:message.group_msg", "im:chat.members:read"] });
+    expect(notes).toContain("im:message.group_msg: without it only @mentions arrive");
+    expect(notes).toContain("im:chat.members:read: without it the agent cannot list");
     expect(notes).toContain("Tick and enable them on the page that opens");
     expect(opened).toHaveLength(1);
     expect(new URL(opened[0] as string).pathname).toBe("/app/cli_a/auth");
@@ -63,11 +68,23 @@ describe("Feishu/Lark agent permission check", () => {
     expect(new URL(opened[0] as string).origin).toBe("https://open.larksuite.com");
   });
 
+  it("a webhook app also needs the app-config scope, and its absence is named; a WebSocket app never asks for it", async () => {
+    // The webhook bootstrap and every Request URL registration go through it: an app without it (a tenant that
+    // reviews it, or one born WebSocket) is told so here rather than failing later as tunnel weather.
+    const webhook = await check("feishu", async () => grantedAll(), "webhook");
+    expect(webhook.result).toEqual({ publishReady: false, missing: [FEISHU_APP_CONFIG_SCOPE] });
+    expect(webhook.notes).toContain(`${FEISHU_APP_CONFIG_SCOPE}: without it the Verification Token`);
+    expect(requested(webhook.opened[0])).toEqual([FEISHU_APP_CONFIG_SCOPE]);
+
+    const websocket = await check("feishu", async () => grantedAll(), "websocket");
+    expect(websocket.result).toEqual({ publishReady: true, missing: [] });
+  });
+
   it("an unreadable permission list is said, and the console opens with every agent scope", async () => {
     const { result, notes, opened } = await check("feishu", async () => {
       throw new Error("HTTP 403");
     });
-    expect(result).toEqual({ publishReady: false });
+    expect(result).toEqual({ publishReady: false, missing: [] });
     expect(notes).toMatch(/could not read the feishu app's permissions: Error: HTTP 403/);
     expect(requested(opened[0])).toEqual(AGENT_SCOPES);
   });

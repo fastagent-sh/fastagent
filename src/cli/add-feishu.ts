@@ -6,10 +6,11 @@ import { readFile } from "node:fs/promises";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
 import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
-  FEISHU_AGENT_SCOPES,
+  FEISHU_APP_CONFIG_SCOPE,
   type FeishuScopeRequest,
   type FeishuSubscriptionMode,
   feishuAppAddons,
+  feishuAppScopes,
   feishuScopeRequestUrl,
   scopeSatisfied,
 } from "../channels/feishu/setup-mode.ts";
@@ -30,18 +31,21 @@ import { startCloudflareTunnel } from "../tunnel.ts";
 export interface AgentScopeCheck {
   /** Safe to proceed to version publishing now; false means Permissions still needs console or admin work. */
   publishReady: boolean;
+  /** The scopes found missing; empty when the list could not be read (`publishReady` is false then). */
+  missing: string[];
 }
 
 /**
- * Check that the app holds {@link FEISHU_AGENT_SCOPES}. A created app asks for them on its confirm page, and a tenant
- * may still withhold some (its approval policy, or an app made by hand): those are NAMED, and the console page that
- * requests them is opened pre-filled. Nothing is requested through the config API — that needs a scope of its own,
- * which a tenant can withhold just the same.
+ * Check that the app holds what an app of this ingress needs ({@link feishuAppScopes}). A created app asks for them on
+ * its confirm page, and a tenant may still withhold some (its approval policy, or an app made by hand): those are
+ * NAMED, with what each one costs, and the console page that requests them is opened pre-filled. Nothing is requested
+ * through the config API — that needs a scope of its own, which a tenant can withhold just the same.
  */
 export async function checkAgentScopes(input: {
   kind: "feishu" | "lark";
   appId: string;
   apiBase: string;
+  ingress: FeishuSubscriptionMode;
   api: Pick<FeishuApi, "listAppScopes">;
   note?: (message: string) => void;
   openUrl?: (url: string) => void;
@@ -49,7 +53,8 @@ export async function checkAgentScopes(input: {
   const { kind, appId, apiBase, api } = input;
   const note = input.note ?? ((message: string) => console.error(message));
   const openUrl = input.openUrl ?? openExternalUrl;
-  const requested = FEISHU_AGENT_SCOPES.map((entry) => entry.request);
+  const needed = feishuAppScopes(input.ingress);
+  const requested = needed.map((entry) => entry.request);
   let scopes: Awaited<ReturnType<FeishuApi["listAppScopes"]>>;
   try {
     scopes = await api.listAppScopes();
@@ -60,31 +65,30 @@ export async function checkAgentScopes(input: {
         `${requested.join(", ")} before publishing. Opening ${url}`,
     );
     openUrl(url);
-    return { publishReady: false };
+    return { publishReady: false, missing: [] };
   }
   // A user-type entry is not the tenant scope the app acts with.
   const tenant = scopes.filter((scope) => scope.type === undefined || scope.type === "tenant");
   const granted = (name: string): boolean => tenant.some((scope) => scope.name === name && scope.grantStatus === 1);
-  const onApp = (name: string): boolean => tenant.some((scope) => scope.name === name);
-  const missing = FEISHU_AGENT_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
+  const missing = needed.filter((entry) => !scopeSatisfied(entry, granted));
   if (missing.length === 0) {
     note(`[fastagent] ${kind} app permissions: ${requested.join(", ")} granted`);
-    return { publishReady: true };
+    return { publishReady: true, missing: [] };
   }
-  const describe = (entry: FeishuScopeRequest): string =>
-    `${entry.request} (${scopeSatisfied(entry, onApp) ? "awaiting approval" : "not on the app"})`;
+  // "Not granted", not "not requested": the list omits a scope still under review (measured), so the two look alike.
+  const describe = (entry: FeishuScopeRequest): string => `\n  ${entry.request}: without it ${entry.withoutIt}`;
   const url = feishuScopeRequestUrl(
     apiBase,
     appId,
     missing.map((entry) => entry.request),
   );
   note(
-    `[fastagent] the ${kind} app lacks ${missing.map(describe).join(", ")} — the agent cannot hear its group ` +
-      `chats fully without them. Tick and enable them on the page that opens, and have a tenant admin approve ` +
-      `them if your tenant requires it, before publishing. Opening ${url}`,
+    `[fastagent] the ${kind} app is not granted:${missing.map(describe).join("")}\n` +
+      `Tick and enable them on the page that opens (one may already be awaiting a tenant admin's approval), ` +
+      `before publishing. Opening ${url}`,
   );
   openUrl(url);
-  return { publishReady: false };
+  return { publishReady: false, missing: missing.map((entry) => entry.request) };
 }
 
 /** Create or resume the platform app behind `add feishu` / `add lark`. */
@@ -111,6 +115,7 @@ export async function onboardFeishuCloudApp(
         kind,
         appId,
         apiBase,
+        ingress,
         api: createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret }),
       });
       return undefined;
@@ -183,6 +188,7 @@ export async function onboardFeishuCloudApp(
     kind: "lark",
     appId: credentials.LARK_APP_ID,
     apiBase,
+    ingress,
     api: createFeishuApi({
       kind: "lark",
       baseUrl: apiBase,
@@ -253,6 +259,7 @@ async function createFeishuAppFlow(
     kind: "feishu",
     appId,
     apiBase,
+    ingress,
     api: createFeishuApi({ kind: "feishu", baseUrl: apiBase, appId, appSecret }),
   });
 
@@ -286,7 +293,16 @@ async function createFeishuAppFlow(
     // it was needed would otherwise be invisible.
     console.error(`[fastagent] could not read the app's Verification Token directly: ${(error as Error).message}`);
   }
-  if (!token) {
+  // The bootstrap registers a Request URL through the config scope; without it every attempt is refused, so it is not
+  // tried, and the reason is the one the permission check above already named.
+  const configWithheld = groupSetup.missing.includes(FEISHU_APP_CONFIG_SCOPE);
+  if (!token && configWithheld) {
+    console.error(
+      `[fastagent] not capturing the Verification Token: the app is not granted ${FEISHU_APP_CONFIG_SCOPE}. Choose webhook ` +
+        `in Events & Callbacks and set the Request URL there yourself (dev --tunnel and deploy --run cannot ` +
+        `either), or have the permission approved and re-run \`fastagent add feishu\`.`,
+    );
+  } else if (!token) {
     console.error(
       `[fastagent] capturing the Verification Token — a throwaway webhook registration delivers it (spinning up a temporary tunnel; can take a few minutes on a slow edge)…`,
     );
@@ -295,13 +311,14 @@ async function createFeishuAppFlow(
         api,
         appId,
         startTunnel: (port) => startCloudflareTunnel(port),
+        // Only edge weather is retried; a refusal (scope, auth, app under review) is reported as itself.
+        shouldRetryPatch: isTransientFeishuRegistrationError,
       });
       webhookModeChanged = true;
       console.error(`[fastagent] Verification Token captured`);
     } catch (e) {
-      // Transient tunnel weather is the usual cause.
       console.error(
-        `[fastagent] warn: could not capture the Verification Token: ${String(e)} — usually a transient tunnel issue; finish this app with the manual copy below`,
+        `[fastagent] warn: could not capture the Verification Token: ${String(e)} — finish this app with the manual copy below`,
       );
     }
   }
