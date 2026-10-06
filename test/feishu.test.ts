@@ -2171,6 +2171,32 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
+  it("startup names each agent scope the app lacks, and a superset counts as the scope it covers", async () => {
+    // The warning is what docs/troubleshooting.md sends an operator to, so it must name exactly what is missing:
+    // `im:message` covers `im:message:readonly`, and a user-type grant is not the tenant scope the app acts with.
+    feishuFetch({
+      "/application/v6/scopes": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            scopes: [
+              { scope_name: "im:message", grant_status: 1, scope_type: "tenant" },
+              { scope_name: "im:message.group_msg", grant_status: 1, scope_type: "user" },
+              { scope_name: "im:chat.members:read", grant_status: 1, scope_type: "tenant" },
+            ],
+          },
+        }),
+    });
+    const warnings: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
+    buildChannel();
+    await vi.waitFor(() => expect(warnings.filter((w) => w.includes("is not granted"))).toHaveLength(1));
+    expect(warnings.filter((w) => w.includes("is not granted"))).toEqual([
+      expect.stringMatching(/^\[feishu\] im:message\.group_msg is not granted — only @mentions arrive/),
+    ]);
+  });
+
   it("a sender with no id flavour counts as a distinct speaker per message, warned once", async () => {
     feishuFetch();
     const warnings: string[] = [];

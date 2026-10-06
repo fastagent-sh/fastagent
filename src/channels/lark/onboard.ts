@@ -1,4 +1,4 @@
-import type { FeishuGroupBehavior, FeishuSubscriptionMode } from "../feishu/setup-mode.ts";
+import type { FeishuSubscriptionMode } from "../feishu/setup-mode.ts";
 
 /** Guided Lark-international onboarding. */
 
@@ -26,7 +26,6 @@ export interface LarkOnboardOptions {
   /** Existing active .env values. */
   existing?: Readonly<Record<string, string | undefined>>;
   ingress?: FeishuSubscriptionMode;
-  groupBehavior?: FeishuGroupBehavior;
   verifyCredentials(appId: string, appSecret: string): Promise<void>;
   bootstrapWebhook?(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
 }
@@ -71,9 +70,7 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   io.openUrl(eventSecurityUrl);
   if (opts.ingress === "websocket") {
     io.note(
-      opts.groupBehavior === "mentions"
-        ? "Choose long connection, subscribe im.message.receive_v1, then create + publish an app version. No Verification Token or Request URL is needed."
-        : "Choose long connection and subscribe im.message.receive_v1, but do not publish yet — context-aware group permission setup follows. No Verification Token or Request URL is needed.",
+      "Choose long connection and subscribe im.message.receive_v1, but do not publish yet — the permission check follows. No Verification Token or Request URL is needed.",
     );
     return { LARK_APP_ID: appId, LARK_APP_SECRET: appSecret };
   }

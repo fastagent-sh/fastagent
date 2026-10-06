@@ -155,7 +155,7 @@ src/
 │   │   ├── context-buffer.ts # feishu's entry shape + resource selection over the generic buffer
 │   │   ├── feishu-api.ts   # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
-│   │   ├── setup-mode.ts   # the onboarding choices (webhook vs websocket, group visibility)
+│   │   ├── setup-mode.ts   # the onboarding choice (webhook vs websocket) + the scopes every agent app asks for
 │   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
 │   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation

@@ -59,12 +59,13 @@ not addressed to the agent is buffered as context (`channels/kit/context-buffer.
 the next answered turn in that place; speaking is governed by rule 1.
 
 This is what the platform's sensitive group-message scope actually buys. It does not grant the right
-to speak — it grants the ability to *hear*. The permission selects a posture rather than a feature:
+to speak — it grants the ability to *hear*. Onboarding asks for it on every app; a tenant that withholds
+it gets the second row, and both onboarding and the channel's startup say so:
 
 | Posture | Permission | Experience |
 |---|---|---|
 | Present participant | group-message scope granted | hears context, answers with it |
-| Summoned tool | mention-only | sees only what is addressed to it |
+| Summoned tool | scope withheld | sees only what is addressed to it |
 
 ## 3. Rule 1 — when to speak
 

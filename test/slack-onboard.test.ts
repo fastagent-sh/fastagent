@@ -8,7 +8,7 @@ import {
   isSlackRequestUrlUnverified,
   SlackConfigApiError,
 } from "../src/channels/slack/config-api.ts";
-import { buildSlackManifest, slackBotEvents, slackBotScopes } from "../src/channels/slack/manifest.ts";
+import { buildSlackManifest, slackBotScopes } from "../src/channels/slack/manifest.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../src/channels/slack/onboard.ts";
 import {
   currentSlackConfigToken,
@@ -33,27 +33,22 @@ afterEach(async () => {
 });
 
 describe("Slack internal-app manifest and control API", () => {
-  it("keeps mention-only least privilege and adds context history/events explicitly", () => {
-    expect(slackBotScopes("mentions")).toEqual([
-      "app_mentions:read",
-      "assistant:write",
-      "chat:write",
-      "files:read",
-      "files:write",
-      "im:history",
-      "reactions:write",
-    ]);
-    expect(slackBotEvents("mentions")).toEqual(["app_context_changed", "app_home_opened", "app_mention", "message.im"]);
-    expect(slackBotScopes("context")).toEqual(
-      expect.arrayContaining(["channels:history", "groups:history", "mpim:history"]),
+  it("asks for the history scopes and message events every app hears its channels with", () => {
+    const bare = buildSlackManifest({ name: "Agent" });
+    expect(slackBotScopes()).toEqual(
+      expect.arrayContaining(["app_mentions:read", "im:history", "channels:history", "groups:history", "mpim:history"]),
     );
-    expect(slackBotEvents("context")).toEqual(
-      expect.arrayContaining(["message.channels", "message.groups", "message.mpim"]),
+    expect(bare.oauth_config.scopes.bot).toEqual(slackBotScopes());
+    expect(bare.settings.event_subscriptions).toBeUndefined(); // no Request URL yet, so no subscription
+    expect(
+      buildSlackManifest({ name: "Agent", requestUrl: "https://agent.test/slack" }).settings.event_subscriptions
+        ?.bot_events,
+    ).toEqual(
+      expect.arrayContaining(["app_mention", "message.im", "message.channels", "message.groups", "message.mpim"]),
     );
 
     const manifest = buildSlackManifest({
       name: "My Internal Agent",
-      groupBehavior: "context",
       requestUrl: "https://agent.test/slack",
       redirectUrl: "https://agent.test/oauth",
     });
@@ -139,11 +134,11 @@ describe("Slack internal-app manifest and control API", () => {
           ok: true,
           access_token: "xoxb-bot",
           app_id: "A1",
-          scope: slackBotScopes("mentions").join(","),
+          scope: slackBotScopes().join(","),
           team: { id: "T1", name: "Acme" },
         }),
       );
-    const manifest = buildSlackManifest({ name: "Agent", groupBehavior: "mentions" });
+    const manifest = buildSlackManifest({ name: "Agent" });
     await expect(createSlackApp("xoxe.config", manifest, { fetch: fetchMock })).resolves.toMatchObject({
       appId: "A1",
       clientSecret: "secret",
@@ -199,7 +194,6 @@ describe("Slack internal-app onboarding", () => {
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
-      groupBehavior: "mentions",
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
@@ -236,7 +230,7 @@ describe("Slack internal-app onboarding", () => {
           appId: "A1",
           teamId: "T1",
           teamName: "Acme",
-          scopes: slackBotScopes("mentions"),
+          scopes: slackBotScopes(),
         }),
       },
     );
@@ -260,7 +254,6 @@ describe("Slack internal-app onboarding", () => {
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
-      groupBehavior: "mentions",
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
@@ -276,7 +269,6 @@ describe("Slack internal-app onboarding", () => {
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
-      groupBehavior: "mentions",
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
@@ -314,7 +306,6 @@ describe("Slack internal-app onboarding", () => {
     const stateRoot = await root();
     const initial = newSlackOnboardingState({
       appName: "Agent",
-      groupBehavior: "mentions",
       configToken: "xoxe.config",
       configRefreshToken: "xoxe-refresh",
     });
@@ -363,7 +354,7 @@ describe("Slack internal-app onboarding", () => {
           botToken: "xoxb-bot",
           appId: "A1",
           teamId: "T1",
-          scopes: slackBotScopes("mentions"),
+          scopes: slackBotScopes(),
         }),
       },
     );
@@ -397,7 +388,6 @@ describe("Slack internal-app onboarding", () => {
     const state = {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "mentions",
         configToken: "xoxe.old",
         configRefreshToken: "xoxe-old-refresh",
       }),
@@ -425,7 +415,6 @@ describe("Slack internal-app onboarding", () => {
     const state = {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "mentions" as const,
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),
@@ -483,7 +472,6 @@ describe("Slack Request URL registration", () => {
     writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "context",
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),
@@ -516,7 +504,6 @@ describe("Slack Request URL registration", () => {
     writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "context",
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),
@@ -547,7 +534,6 @@ describe("Slack Request URL registration", () => {
     writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "context",
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),
@@ -578,7 +564,6 @@ describe("Slack Request URL registration", () => {
     writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "context",
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),

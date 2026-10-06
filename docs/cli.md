@@ -249,7 +249,7 @@ fastagent add telegram [agent]
 fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
-                             # feishu/lark take --ingress websocket|webhook (asked when omitted)
+                             # feishu/lark take --ingress websocket|webhook (asked when omitted; websocket by default)
 ```
 
 Writes `channels/<kind>.ts` (yours after that) and a companion send tool (`tools/<kind>-send.ts`, rewritten on
@@ -259,8 +259,6 @@ tool.
 
 Slack:
 
-- `--group-behavior context|mentions` picks the app's scopes: `context` (default) hears channel messages,
-  `mentions` is least privilege.
 - Onboarding creates the app through `apps.manifest.create`, installs it through OAuth, and writes the bot token
   and signing secret to `.secrets/.env`. The App Configuration token stays in `<state root>/channels/slack/` on
   this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.

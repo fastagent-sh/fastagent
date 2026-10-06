@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
+import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { newSlackOnboardingState, onboardSlackApp } from "../channels/slack/onboard.ts";
 import {
   configTokenExpiry,
@@ -73,7 +73,6 @@ export async function onboardSlackInternalApp(input: {
    */
   target: string;
   stateRoot: string;
-  groupBehavior: GroupBehaviorChoice;
   /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
   replaceConfig?: boolean;
 }): Promise<void> {
@@ -109,12 +108,6 @@ export async function onboardSlackInternalApp(input: {
           "restore them from the Slack app console, or delete the app + onboarding state and create a new one",
       );
     }
-    if (input.groupBehavior.explicit && state.groupBehavior !== input.groupBehavior.behavior) {
-      throw new Error(
-        `the onboarded Slack app uses group behavior ${state.groupBehavior}; changing an installed app's ` +
-          "OAuth scopes is a migration. Keep the existing choice, or remove the app + Slack onboarding state and create a new app",
-      );
-    }
     const action = await chooseTokenAction({
       forced: input.replaceConfig === true,
       message: `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
@@ -137,14 +130,7 @@ export async function onboardSlackInternalApp(input: {
       "Slack's configuration refresh token can manage apps owned by your user in this workspace. " +
         "FastAgent stores it only in owner-readable local state; it is never deployed.",
     );
-    state = newSlackOnboardingState({
-      appName,
-      groupBehavior: input.groupBehavior.behavior,
-      ...(await promptConfigTokens()),
-    });
-    writeSlackOnboardingState(input.stateRoot, state);
-  } else if (input.groupBehavior.explicit && !state.appId) {
-    state = { ...state, groupBehavior: input.groupBehavior.behavior };
+    state = newSlackOnboardingState({ appName, ...(await promptConfigTokens()) });
     writeSlackOnboardingState(input.stateRoot, state);
   }
   if (state.createAttemptedAt && !state.appId) {

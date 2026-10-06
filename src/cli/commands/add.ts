@@ -13,8 +13,6 @@ import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../.
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
-  type GroupBehavior,
-  type GroupBehaviorChoice,
   appendChannelDotEnv,
   appendChannelEnv,
   assertChannelReady,
@@ -30,7 +28,7 @@ import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
+  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the AGENT DIR
   // (`fastagent/`), the same place dev/start discover channels/.
@@ -49,7 +47,6 @@ export async function runAddChannel(
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
-  const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
@@ -71,15 +68,14 @@ export async function runAddChannel(
     created = await onboardSlackInternalApp({
       target,
       stateRoot: resolveStateRoot(target),
-      groupBehavior,
       replaceConfig: opts.replaceConfig,
     })
       .then(() => undefined)
       .catch(failStartup);
   } else if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
   }
-  const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
+  const setup = channelSetup(channelKind, ingress);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
@@ -151,6 +147,13 @@ export async function runAddChannel(
   process.exit(0);
 }
 
+/**
+ * Feishu/Lark ingress when the author did not choose one. WebSocket: no public URL or tunnel, and no
+ * `application:application:patch`, which some tenants review and which then holds a new app in review. It runs on
+ * every host but AgentCore, which has no resident process; webhook is for AgentCore and for scale-to-zero.
+ */
+const DEFAULT_FEISHU_INGRESS: FeishuSubscriptionMode = "websocket";
+
 async function resolveIngress(
   kind: ChannelKind,
   file: string,
@@ -191,66 +194,29 @@ async function resolveIngress(
   if (requested) return requested;
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     console.error(
-      `[fastagent] no interactive terminal — defaulting ${kind} ingress to webhook (use --ingress websocket)`,
+      `[fastagent] no interactive terminal — defaulting ${kind} ingress to ${DEFAULT_FEISHU_INGRESS} ` +
+        "(pass --ingress webhook for AgentCore or scale-to-zero)",
     );
-    return "webhook";
+    return DEFAULT_FEISHU_INGRESS;
   }
   const answer = await select<FeishuSubscriptionMode>({
     message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
-    // The default must match the non-interactive branch above.
-    initialValue: "webhook",
+    initialValue: DEFAULT_FEISHU_INGRESS,
     options: [
+      {
+        value: "websocket",
+        label: "WebSocket long connection (recommended)",
+        hint: "no public URL; runs locally, on Docker, Fly and Railway with one always-on process",
+      },
       {
         value: "webhook",
         label: "Webhook endpoint",
-        hint: "works on every deploy target; supports scale-to-zero; requires a public HTTPS URL",
-      },
-      {
-        value: "websocket",
-        label: "WebSocket long connection",
-        hint: "no public URL; needs an always-on process (not on AgentCore)",
+        hint: "for AgentCore or scale-to-zero; needs a public HTTPS URL and the app-config permission",
       },
     ],
   });
   if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
   return answer;
-}
-
-async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined): Promise<GroupBehaviorChoice> {
-  if (raw !== undefined && raw !== "context" && raw !== "mentions") {
-    failUsage(`--group-behavior must be "context" or "mentions", got "${raw}"`);
-  }
-  if (kind !== "feishu" && kind !== "lark" && kind !== "slack") return { behavior: "context", explicit: false };
-  if (raw !== undefined) return { behavior: raw, explicit: true };
-  const defaultBehavior: GroupBehavior = "context";
-  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    console.error(
-      `[fastagent] no interactive terminal — assuming ${kind} group behavior ${defaultBehavior}; pass --group-behavior explicitly to override`,
-    );
-    return { behavior: defaultBehavior, explicit: false };
-  }
-  const choices = [
-    {
-      value: "context" as const,
-      label: "Context-aware groups (recommended)",
-      hint:
-        kind === "slack"
-          ? "bare replies in the Agent's threads + buffer; requires channel/group/mpim history scopes"
-          : "bare replies in the Agent's threads + buffer; im:message.group_msg delivers all group messages",
-    },
-    {
-      value: "mentions" as const,
-      label: "Mention-only (least privilege)",
-      hint: "only explicit @Agent messages; no group-wide message permission",
-    },
-  ];
-  const answer = await select<GroupBehavior>({
-    message: "Choose group-chat behavior",
-    initialValue: defaultBehavior,
-    options: choices,
-  });
-  if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
-  return { behavior: answer, explicit: true };
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

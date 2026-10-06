@@ -6,13 +6,12 @@ import { readFile } from "node:fs/promises";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
 import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
-  FEISHU_GROUP_CONTEXT_SCOPE,
-  FEISHU_CONTEXT_ONBOARDING_SCOPES,
-  FEISHU_MESSAGE_READ_SCOPE,
-  feishuAppAddons,
-  scopeSatisfied,
-  type FeishuGroupBehavior,
+  FEISHU_AGENT_SCOPES,
+  type FeishuScopeRequest,
   type FeishuSubscriptionMode,
+  feishuAppAddons,
+  feishuScopeRequestUrl,
+  scopeSatisfied,
 } from "../channels/feishu/setup-mode.ts";
 import { cloudFor } from "../channels/feishu/cloud.ts";
 import {
@@ -25,121 +24,66 @@ import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { onboardLarkApp } from "../channels/lark/onboard.ts";
 import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
+import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
-export interface GroupBehaviorSetup {
-  /** Safe to proceed to version publishing now; false means Permissions still needs manual/admin work. */
+export interface AgentScopeCheck {
+  /** Safe to proceed to version publishing now; false means Permissions still needs console or admin work. */
   publishReady: boolean;
 }
 
-export async function configureGroupBehavior(input: {
+/**
+ * Check that the app holds {@link FEISHU_AGENT_SCOPES}. A created app asks for them on its confirm page, and a tenant
+ * may still withhold some (its approval policy, or an app made by hand): those are NAMED, and the console page that
+ * requests them is opened pre-filled. Nothing is requested through the config API — that needs a scope of its own,
+ * which a tenant can withhold just the same.
+ */
+export async function checkAgentScopes(input: {
   kind: "feishu" | "lark";
   appId: string;
   apiBase: string;
-  api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
-  behavior: FeishuGroupBehavior;
-  /** Whether the author chose the behavior (flag or prompt). */
-  explicit: boolean;
+  api: Pick<FeishuApi, "listAppScopes">;
   note?: (message: string) => void;
   openUrl?: (url: string) => void;
-}): Promise<GroupBehaviorSetup> {
-  const { kind, appId, apiBase, api, behavior, explicit } = input;
+}): Promise<AgentScopeCheck> {
+  const { kind, appId, apiBase, api } = input;
   const note = input.note ?? ((message: string) => console.error(message));
   const openUrl = input.openUrl ?? openExternalUrl;
+  const requested = FEISHU_AGENT_SCOPES.map((entry) => entry.request);
   let scopes: Awaited<ReturnType<FeishuApi["listAppScopes"]>>;
-  let inspected = true;
   try {
     scopes = await api.listAppScopes();
   } catch (error) {
+    const url = feishuScopeRequestUrl(apiBase, appId, requested);
     note(
-      `[fastagent] warn: could not inspect ${kind} group-message permission: ${String(error)} — check Permissions & Scopes manually`,
+      `[fastagent] warn: could not read the ${kind} app's permissions: ${String(error)} — make sure it holds ` +
+        `${requested.join(", ")} before publishing. Opening ${url}`,
     );
-    inspected = false;
-    scopes = [];
+    openUrl(url);
+    return { publishReady: false };
   }
-  const granted = (name: string): boolean =>
-    scopes.some(
-      (scope) =>
-        scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
-    );
-  // Same type filter as `granted`: a user-type entry is not the tenant scope this path needs, so treating one as "on
-  // the app" would report an approval that can never arrive and skip the PATCH that would actually add it.
-  const onApp = (name: string): boolean =>
-    scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
-  // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages) and reading a
-  // quoted message (so a thread's opening ask carries what it replies to).
-  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
-  const missingNames = missing.map((entry) => entry.request);
-
-  if (behavior === "mentions") {
-    if (!inspected) {
-      const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
-      note(
-        `[fastagent] mention-only scope state could not be verified — check Permissions before publishing. Opening ${permissionUrl}`,
-      );
-      openUrl(permissionUrl);
-      return { publishReady: false };
-    }
-    if (granted(FEISHU_GROUP_CONTEXT_SCOPE)) {
-      const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
-      note(
-        `[fastagent] warn: mention-only was selected, but ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted — remove it before publishing a new version to restore least-privilege platform delivery. Opening ${permissionUrl}`,
-      );
-      openUrl(permissionUrl);
-      return { publishReady: false };
-    }
-    note(
-      `[fastagent] group behavior: mention-only — bare replies in the Agent's threads and group context buffering are disabled. ` +
-        `Add ${FEISHU_MESSAGE_READ_SCOPE} by hand if you want an @mention to carry the message it quotes`,
-    );
-    return { publishReady: true };
-  }
-
-  note(
-    `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
-      `FastAgent invokes @Agent, answers bare replies in threads it takes part in, and durably buffers ` +
-      `other discussion. ${FEISHU_GROUP_CONTEXT_SCOPE} (delivery) is required; ${FEISHU_MESSAGE_READ_SCOPE} ` +
-      `(reading a quoted message) is requested with it — without it a quoted message degrades to a marker`,
-  );
+  // A user-type entry is not the tenant scope the app acts with.
+  const tenant = scopes.filter((scope) => scope.type === undefined || scope.type === "tenant");
+  const granted = (name: string): boolean => tenant.some((scope) => scope.name === name && scope.grantStatus === 1);
+  const onApp = (name: string): boolean => tenant.some((scope) => scope.name === name);
+  const missing = FEISHU_AGENT_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
   if (missing.length === 0) {
-    note(
-      `[fastagent] ${FEISHU_CONTEXT_ONBOARDING_SCOPES.map((entry) => entry.request).join(" + ")} are already granted`,
-    );
+    note(`[fastagent] ${kind} app permissions: ${requested.join(", ")} granted`);
     return { publishReady: true };
   }
-  const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
-  // A missing scope is in one of two states, and they need different actions.
-  const awaitingApproval = missing.filter((entry) => scopeSatisfied(entry, onApp)).map((entry) => entry.request);
-  const toRequest = missing.filter((entry) => !scopeSatisfied(entry, onApp)).map((entry) => entry.request);
-  if (toRequest.length === 0) {
-    note(
-      `[fastagent] ${awaitingApproval.join(" + ")} awaiting approval — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
-    );
-    openUrl(permissionUrl);
-    return { publishReady: false };
-  }
-  if (!explicit) {
-    // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested permission set untouched
-    // (a scripted re-run must not silently escalate a mention-only app).
-    note(
-      `[fastagent] ${missingNames.join(" + ")} not granted (or could not be verified) — group behavior was ` +
-        `defaulted, so nothing was requested. Re-run with --group-behavior context to add ${missing.length > 1 ? "them" : "it"} ` +
-        `to the app draft, or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
-    );
-    return { publishReady: false };
-  }
-  try {
-    await api.addAppScopes(appId, toRequest);
-    note(
-      `[fastagent] added ${toRequest.join(" + ")} to the app draft — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
-    );
-  } catch (error) {
-    note(
-      `[fastagent] warn: could not add ${toRequest.join(" + ")} automatically: ${String(error)} — add it manually before publishing. Opening ${permissionUrl}`,
-    );
-  }
-  openUrl(permissionUrl);
+  const describe = (entry: FeishuScopeRequest): string =>
+    `${entry.request} (${scopeSatisfied(entry, onApp) ? "awaiting approval" : "not on the app"})`;
+  const url = feishuScopeRequestUrl(
+    apiBase,
+    appId,
+    missing.map((entry) => entry.request),
+  );
+  note(
+    `[fastagent] the ${kind} app lacks ${missing.map(describe).join(", ")} — the agent cannot hear its group ` +
+      `chats fully without them. Tick and enable them on the page that opens, and have a tenant admin approve ` +
+      `them if your tenant requires it, before publishing. Opening ${url}`,
+  );
+  openUrl(url);
   return { publishReady: false };
 }
 
@@ -147,8 +91,7 @@ export async function configureGroupBehavior(input: {
 export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
-  ingress: FeishuSubscriptionMode = "webhook",
-  groupBehavior: GroupBehaviorChoice = { behavior: "context", explicit: false },
+  ingress: FeishuSubscriptionMode,
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
@@ -164,20 +107,18 @@ export async function onboardFeishuCloudApp(
     if (ingress === "webhook") {
       const appId = existing[`${envPrefix}_APP_ID`] as string;
       const appSecret = existing[`${envPrefix}_APP_SECRET`] as string;
-      await configureGroupBehavior({
+      await checkAgentScopes({
         kind,
         appId,
         apiBase,
         api: createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret }),
-        behavior: groupBehavior.behavior,
-        explicit: groupBehavior.explicit,
       });
       return undefined;
     }
   }
 
   if (capabilities.appCreation === "scan-to-create") {
-    await createFeishuAppFlow(target, existing, ingress, groupBehavior);
+    await createFeishuAppFlow(target, existing, ingress);
     return undefined;
   }
 
@@ -202,7 +143,6 @@ export async function onboardFeishuCloudApp(
     {
       existing,
       ingress,
-      groupBehavior: groupBehavior.behavior,
       verifyCredentials: async (appId, appSecret) => {
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
@@ -239,7 +179,7 @@ export async function onboardFeishuCloudApp(
       },
     },
   );
-  await configureGroupBehavior({
+  await checkAgentScopes({
     kind: "lark",
     appId: credentials.LARK_APP_ID,
     apiBase,
@@ -249,8 +189,6 @@ export async function onboardFeishuCloudApp(
       appId: credentials.LARK_APP_ID,
       appSecret: credentials.LARK_APP_SECRET,
     }),
-    behavior: groupBehavior.behavior,
-    explicit: groupBehavior.explicit,
   });
   return Object.fromEntries(
     Object.entries(credentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -262,7 +200,6 @@ async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
   ingress: FeishuSubscriptionMode,
-  groupBehavior: GroupBehaviorChoice,
 ): Promise<void> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { apiBase } = cloudFor("feishu");
@@ -279,8 +216,8 @@ async function createFeishuAppFlow(
     const app = await registerFeishuApp({
       name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
       desc: "Served by fastagent",
-      // The agent template alone is not enough to SERVE (see feishuAppAddons).
-      addons: feishuAppAddons(),
+      // The agent template alone is not enough to SERVE, nor to hear a group (see feishuAppAddons).
+      addons: feishuAppAddons(ingress),
       onVerificationUrl: ({ url, expiresInS }) => {
         console.error(
           `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
@@ -312,13 +249,11 @@ async function createFeishuAppFlow(
     );
   }
 
-  const groupSetup = await configureGroupBehavior({
+  const groupSetup = await checkAgentScopes({
     kind: "feishu",
     appId,
     apiBase,
     api: createFeishuApi({ kind: "feishu", baseUrl: apiBase, appId, appSecret }),
-    behavior: groupBehavior.behavior,
-    explicit: groupBehavior.explicit,
   });
 
   if (ingress === "websocket") {

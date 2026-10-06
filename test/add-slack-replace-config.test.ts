@@ -67,7 +67,6 @@ describe("add slack --replace-config", () => {
     onboardSlackInternalApp({
       target,
       stateRoot,
-      groupBehavior: { behavior: "context", explicit: false },
       replaceConfig: true,
     });
 
@@ -84,7 +83,6 @@ describe("add slack --replace-config", () => {
     writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
-      groupBehavior: "context",
       appId: "A1",
       configToken: "xoxe.xoxp-old",
       configRefreshToken: "xoxe-old",
@@ -108,7 +106,6 @@ describe("add slack --replace-config", () => {
     writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
-      groupBehavior: "context",
       appId: "A1",
       configToken: "xoxe.xoxp-old",
       configRefreshToken: "xoxe-old",
@@ -124,7 +121,6 @@ describe("add slack --replace-config", () => {
     writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
-      groupBehavior: "context",
       appId: "A1", // created, never installed — the state a revoked token would otherwise strand
       configToken: "xoxe.xoxp-old",
       configRefreshToken: "xoxe-old",

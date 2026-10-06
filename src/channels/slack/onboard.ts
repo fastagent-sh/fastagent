@@ -9,7 +9,7 @@ import {
   SlackConfigApiError,
   updateSlackAppManifest,
 } from "./config-api.ts";
-import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
+import { buildSlackManifest, slackBotScopes } from "./manifest.ts";
 import {
   configTokenExpiry,
   currentSlackConfigToken,
@@ -64,7 +64,6 @@ export async function onboardSlackApp(
     });
   const manifest = buildSlackManifest({
     name: state.appName,
-    groupBehavior: state.groupBehavior,
     requestUrl: input.requestUrl,
     redirectUrl: input.redirectUrl,
   });
@@ -141,7 +140,7 @@ export async function onboardSlackApp(
   const oauthState = randomBytes(24).toString("hex");
   const authorize = new URL("https://slack.com/oauth/v2/authorize");
   authorize.searchParams.set("client_id", state.clientId);
-  authorize.searchParams.set("scope", slackBotScopes(state.groupBehavior).join(","));
+  authorize.searchParams.set("scope", slackBotScopes().join(","));
   authorize.searchParams.set("redirect_uri", input.redirectUrl);
   authorize.searchParams.set("state", oauthState);
   // The redirect lands on the tunnel hostname, which THIS machine may not resolve yet (#421).
@@ -160,7 +159,7 @@ export async function onboardSlackApp(
     redirectUrl: input.redirectUrl,
   });
   if (oauth.appId !== state.appId) throw new Error("Slack OAuth installed a different app than the manifest app");
-  if (slackBotScopes(state.groupBehavior).some((scope) => !oauth.scopes.includes(scope))) {
+  if (slackBotScopes().some((scope) => !oauth.scopes.includes(scope))) {
     throw new Error("Slack OAuth completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
   await io.writeRuntimeSecrets({ botToken: oauth.botToken });
@@ -177,7 +176,6 @@ export async function onboardSlackApp(
 
 export function newSlackOnboardingState(input: {
   appName: string;
-  groupBehavior: SlackGroupBehavior;
   configToken: string;
   configRefreshToken: string;
   /** When the pair was captured; pass it through rather than re-deriving the same expiry twice. */
@@ -187,7 +185,6 @@ export function newSlackOnboardingState(input: {
   return {
     version: 1,
     appName: input.appName,
-    groupBehavior: input.groupBehavior,
     configToken: input.configToken,
     configRefreshToken: input.configRefreshToken,
     configTokenExpiresAt: input.configTokenExpiresAt ?? configTokenExpiry(input.now),

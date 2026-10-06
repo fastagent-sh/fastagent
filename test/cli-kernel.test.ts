@@ -78,7 +78,7 @@ describe("cli kernel: spec conformance", () => {
       [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
       [["start"], "share one credential across projects"],
       [["start"], "frozen by git"],
-      [["add", "feishu"], "admin approval for im:message.group_msg before publish"],
+      [["add", "feishu"], "any your tenant withholds are named"],
       [["add", "lark"], "config-route 404"],
       [["add", "skill"], "review with git diff"],
       [["deploy"], "Durable ingress remains operator-owned"],

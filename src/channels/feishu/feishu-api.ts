@@ -200,9 +200,6 @@ export interface FeishuApi {
   /** List the app's scopes and grant state. Used by onboarding/runtime to make group visibility
    * explicit instead of silently assuming unmentioned group events are delivered. */
   listAppScopes(): Promise<FeishuAppScope[]>;
-  /** Add tenant scopes to the app draft through application-v7 config. Approval + version publishing
-   * remain console actions; this method only removes the error-prone manual draft edit. */
-  addAppScopes(appId: string, scopeNames: string[]): Promise<void>;
   /** Update the app's own event subscription (application-v7 config PATCH — tenant token can only
    *  operate on itself; the request-URL change takes effect immediately, no version publish). The
    *  platform VERIFIES `requestUrl` with a url_verification challenge during this call, so the server
@@ -483,19 +480,6 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         const type = scope.scope_type === "user" || scope.scope_type === "tenant" ? scope.scope_type : undefined;
         return [{ name: scope.scope_name, grantStatus: scope.grant_status, type }];
       });
-    },
-    async addAppScopes(appId, scopeNames) {
-      if (scopeNames.length === 0) return;
-      await call(
-        "addAppScopes",
-        "PATCH",
-        `/open-apis/application/v7/applications/${encodeURIComponent(appId)}/config`,
-        {
-          scope: {
-            add_scopes: scopeNames.map((scopeName) => ({ scope_name: scopeName, token_type: "tenant" })),
-          },
-        },
-      );
     },
     async updateEventSubscription(appId, cfg) {
       await call(

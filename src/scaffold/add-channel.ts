@@ -8,18 +8,9 @@ import { detectRuntime } from "../runtime.ts";
 import { SECRETS_DIRNAME, SECRET_FILE_MODE, assertInsideAgentDir, exists } from "../paths.ts";
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
-import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
+import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "telegram" | "slack" | "feishu" | "lark";
-
-/** Group-visibility choice shared by the slack/feishu/lark onboarding flows. */
-export type GroupBehavior = "context" | "mentions";
-
-/** A resolved group-behavior decision plus whether the author actually chose it (flag or prompt). */
-export interface GroupBehaviorChoice {
-  behavior: GroupBehavior;
-  explicit: boolean;
-}
 
 /** An env var a scaffolded channel reads. */
 export interface ChannelEnv {
@@ -35,6 +26,14 @@ interface ChannelScaffold {
   /** Channel-specific next-step lines, printed after the env lines and before the `dev` line. */
   steps: string[];
 }
+
+const AGENT_SCOPE_LIST = FEISHU_AGENT_SCOPES.map((entry) => entry.request).join(", ");
+const FEISHU_PERMISSION_STEP =
+  `before publishing: the app needs ${AGENT_SCOPE_LIST} — \`add feishu\` requests them with the app and names any ` +
+  "your tenant withheld (approve those, then publish)";
+const LARK_PERMISSION_STEP =
+  `before publishing: add ${AGENT_SCOPE_LIST} — \`add lark\` checks them and opens the permission page for any that ` +
+  "are missing";
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   telegram: {
@@ -90,7 +89,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
+      FEISHU_PERMISSION_STEP,
       "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
@@ -114,7 +113,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
+      LARK_PERMISSION_STEP,
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
@@ -128,7 +127,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   feishu: {
     env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) => ["FEISHU_APP_ID", "FEISHU_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
+      FEISHU_PERMISSION_STEP,
       "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
@@ -138,7 +137,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   lark: {
     env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) => ["LARK_APP_ID", "LARK_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
+      LARK_PERMISSION_STEP,
       "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
@@ -151,34 +150,11 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
-  groupBehavior?: GroupBehavior,
 ): { env: ChannelEnv[]; steps: string[] } {
-  const behavior = groupBehavior ?? "context";
   const setup =
     ingress === "websocket" && (kind === "feishu" || kind === "lark")
       ? WEBSOCKET_SETUPS[kind]
       : CHANNEL_SCAFFOLDS[kind];
-  if ((kind === "feishu" || kind === "lark") && behavior === "mentions") {
-    return {
-      env: setup.env,
-      steps: setup.steps.map((step) =>
-        step.includes("im:message.group_msg")
-          ? "group behavior: mention-only — do not grant im:message.group_msg; bare thread replies and group context buffering remain disabled. im:message:readonly is independent of this choice: add it if you want an @mention to carry the message it quotes (without it that quote degrades to a marker)"
-          : step,
-      ),
-    };
-  }
-  if (kind === "slack" && behavior === "mentions") {
-    return {
-      env: setup.env,
-      steps: [
-        "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
-        "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, and message.im; set Request URL to <public-url>/slack",
-        "group behavior: mention-only — bare thread replies and unsummoned group context remain disabled",
-        ...setup.steps.slice(2),
-      ],
-    };
-  }
   return { env: setup.env, steps: setup.steps };
 }
 
