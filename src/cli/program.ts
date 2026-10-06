@@ -254,10 +254,6 @@ const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description: "Feishu/Lark ingress: websocket or webhook (interactive when omitted)",
 };
-const GROUP_BEHAVIOR: FlagSpec = {
-  flags: "--group-behavior <behavior>",
-  description: "Slack/Feishu/Lark groups: context (recommended) or mentions (least privilege)",
-};
 const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
   description: "Slack: scaffold only; skip internal-app creation/OAuth",
@@ -279,18 +275,12 @@ const channelSub = (
   summary,
   description,
   args: [AGENT_ARG],
-  flags:
-    kind === "feishu" || kind === "lark"
-      ? [INGRESS, GROUP_BEHAVIOR]
-      : kind === "slack"
-        ? [GROUP_BEHAVIOR, NO_ONBOARD, REPLACE_CONFIG]
-        : [],
+  flags: kind === "feishu" || kind === "lark" ? [INGRESS] : kind === "slack" ? [NO_ONBOARD, REPLACE_CONFIG] : [],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
       ingress: f.ingress as string | undefined,
-      groupBehavior: f.groupBehavior as string | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
     }),
@@ -312,7 +302,7 @@ const add: CommandSpec = {
     channelSub(
       "slack",
       "scaffold the Slack Events API channel (files, threads, context, live preview)",
-      "Choose group visibility, scaffold channels/slack.ts plus slack-send.ts, create a single-workspace " +
+      "Scaffold channels/slack.ts plus slack-send.ts, create a single-workspace " +
         "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
         "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
       "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
@@ -326,7 +316,7 @@ const add: CommandSpec = {
         "through scan-to-create, writing the matching credentials to .env.",
       "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
         "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
-        "Context-aware groups (recommended) request admin approval for im:message.group_msg before publish.",
+        "The app asks for the scopes that let the agent hear its group chats; any your tenant withholds are named.",
     ),
     channelSub(
       "lark",
@@ -334,8 +324,8 @@ const add: CommandSpec = {
       "Choose WebSocket or webhook, scaffold channels/lark.ts, and guide credential setup against the " +
         "international developer console.",
       "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
-        "App ID/Secret validation; webhook and recommended context-aware group setup probe config " +
-        "automation and fall back to explicit manual steps on the international config-route 404.",
+        "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
+        "back to explicit manual steps on the international config-route 404.",
     ),
     {
       name: "skill",

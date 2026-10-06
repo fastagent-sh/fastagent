@@ -263,7 +263,6 @@ describe("tunnel: announceWebhooks", () => {
     writeSlackOnboardingState(stateRoot, {
       ...newSlackOnboardingState({
         appName: "Agent",
-        groupBehavior: "mentions",
         configToken: "xoxe.config",
         configRefreshToken: "xoxe-refresh",
       }),

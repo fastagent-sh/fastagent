@@ -572,11 +572,9 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   Observations only accumulate: no platform emits an event when someone stops taking part, and the
   error directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes
   it speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK window.
-- **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups` (recommended)
-  requests the sensitive `im:message.group_msg` scope; `Mention-only` is the least-privilege
-  alternative. The CLI states that the former delivers all group messages, adds it to the app draft
-  through application-v7 config when supported, opens tenant-admin approval, and reports the granted
-  capability again at startup. A mention arriving before the startup `bot/v3/info` settles is kept as
+- **Group visibility is scope-gated, with one posture.** A created app asks for every agent scope on its
+  confirm page (`FEISHU_AGENT_SCOPES`, the sensitive `im:message.group_msg` among them); onboarding and the
+  channel's startup both name any a tenant withheld, with what the agent loses without it. A mention arriving before the startup `bot/v3/info` settles is kept as
   context rather than answered (fail-closed: without its own open_id the channel cannot tell a mention
   of itself from one of someone else). Other human discussion is persisted in `buffers.json`, bucketed
   by main chat or thread, and folded into that place's next answered turn under the same

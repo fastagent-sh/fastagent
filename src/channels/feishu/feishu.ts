@@ -32,12 +32,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
-import {
-  FEISHU_GROUP_CONTEXT_SCOPE,
-  FEISHU_MESSAGE_READ_REQUEST,
-  FEISHU_MESSAGE_READ_SCOPE,
-  scopeSatisfied,
-} from "./setup-mode.ts";
+import { FEISHU_AGENT_SCOPES, scopeSatisfied } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -266,32 +261,18 @@ function createFeishuRuntimeFactory(
 
     void api.listAppScopes().then(
       (scopes) => {
-        const grantedScope = (name: string): boolean =>
+        const granted = (name: string): boolean =>
           scopes.some(
             (scope) =>
               scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
           );
-        if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
-          // This scope settles the rule's whole input: it delivers the un-mentioned group messages the channel
-          // buffers, which is also what lets it HEAR a thread.
-          log.info(
-            `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
-          );
-        } else {
-          log.warn(
-            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
-          );
+        const missing = FEISHU_AGENT_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
+        if (missing.length === 0) {
+          log.info(`${label} permissions: every agent scope granted — the agent hears its group chats`);
         }
-        // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every posture (a p2p
-        // thread's opening ask, any quoted @mention in a group), so pairing this warning with the group scope would
-        // leave a mention-only deployment silently losing every referent.
-        if (!scopeSatisfied(FEISHU_MESSAGE_READ_REQUEST, grantedScope)) {
-          log.warn(
-            `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
-          );
-        }
+        for (const entry of missing) log.warn(`${label} ${entry.request} is not granted — ${entry.withoutIt}`);
       },
-      (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
+      (error) => log.warn(`${label} could not inspect the app's permissions: ${String(error)}`),
     );
     // The channel-state convention: this channel's durable home is `<stateRoot>/channels/<kind>` (engine state at the
     // root, channel state under `channels/<kind>/`).

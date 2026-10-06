@@ -1,6 +1,6 @@
-export type SlackGroupBehavior = "context" | "mentions";
-
-const SLACK_BASE_BOT_SCOPES = [
+// One posture, as on Feishu: the agent hears the channels it is in (participant-model.md §2), so the history scopes
+// and their message events are part of every app.
+const SLACK_BOT_SCOPES = [
   "app_mentions:read",
   "assistant:write",
   "chat:write",
@@ -8,10 +8,19 @@ const SLACK_BASE_BOT_SCOPES = [
   "files:write",
   "im:history",
   "reactions:write",
+  "channels:history",
+  "groups:history",
+  "mpim:history",
 ] as const;
-const SLACK_CONTEXT_BOT_SCOPES = ["channels:history", "groups:history", "mpim:history"] as const;
-const SLACK_BASE_BOT_EVENTS = ["app_context_changed", "app_home_opened", "app_mention", "message.im"] as const;
-const SLACK_CONTEXT_BOT_EVENTS = ["message.channels", "message.groups", "message.mpim"] as const;
+const SLACK_BOT_EVENTS = [
+  "app_context_changed",
+  "app_home_opened",
+  "app_mention",
+  "message.im",
+  "message.channels",
+  "message.groups",
+  "message.mpim",
+] as const;
 
 export interface SlackAppManifest {
   display_information: {
@@ -43,12 +52,12 @@ export interface SlackAppManifest {
   };
 }
 
-export function slackBotScopes(groupBehavior: SlackGroupBehavior): string[] {
-  return [...SLACK_BASE_BOT_SCOPES, ...(groupBehavior === "context" ? SLACK_CONTEXT_BOT_SCOPES : [])].sort();
+export function slackBotScopes(): string[] {
+  return [...SLACK_BOT_SCOPES].sort();
 }
 
-export function slackBotEvents(groupBehavior: SlackGroupBehavior): string[] {
-  return [...SLACK_BASE_BOT_EVENTS, ...(groupBehavior === "context" ? SLACK_CONTEXT_BOT_EVENTS : [])].sort();
+function slackBotEvents(): string[] {
+  return [...SLACK_BOT_EVENTS].sort();
 }
 
 /** Slack's bot display name is more restrictive than the app name. */
@@ -63,7 +72,6 @@ function slackBotDisplayName(name: string): string {
 
 export function buildSlackManifest(input: {
   name: string;
-  groupBehavior: SlackGroupBehavior;
   requestUrl?: string;
   redirectUrl?: string;
 }): SlackAppManifest {
@@ -90,7 +98,7 @@ export function buildSlackManifest(input: {
       bot_user: { display_name: slackBotDisplayName(name), always_online: false },
     },
     oauth_config: {
-      scopes: { bot: slackBotScopes(input.groupBehavior) },
+      scopes: { bot: slackBotScopes() },
       ...(input.redirectUrl ? { redirect_urls: [input.redirectUrl] } : {}),
     },
     settings: {
@@ -98,7 +106,7 @@ export function buildSlackManifest(input: {
         ? {
             event_subscriptions: {
               request_url: input.requestUrl,
-              bot_events: slackBotEvents(input.groupBehavior),
+              bot_events: slackBotEvents(),
             },
           }
         : {}),

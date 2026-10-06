@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { SECRET_FILE_MODE } from "../../paths.ts";
 import { rotateSlackConfigToken } from "./config-api.ts";
-import type { SlackGroupBehavior } from "./manifest.ts";
 
 /** Slack config access tokens expire in 12 hours; use 11h so registration rotates before the edge. */
 const CONFIG_TOKEN_TTL_MS = 11 * 60 * 60_000;
@@ -16,7 +15,6 @@ export function configTokenExpiry(now = Date.now()): number {
 export interface SlackOnboardingState {
   version: 1;
   appName: string;
-  groupBehavior: SlackGroupBehavior;
   appId?: string;
   /** Set before apps.manifest.create; without an appId it blocks blind duplicate-creation retries. */
   createAttemptedAt?: string;
@@ -44,7 +42,6 @@ function validState(value: unknown): value is SlackOnboardingState {
     state !== null &&
     state.version === 1 &&
     typeof state.appName === "string" &&
-    (state.groupBehavior === "context" || state.groupBehavior === "mentions") &&
     typeof state.configToken === "string" &&
     typeof state.configRefreshToken === "string" &&
     typeof state.configTokenExpiresAt === "number"

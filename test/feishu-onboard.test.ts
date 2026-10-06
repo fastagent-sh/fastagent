@@ -1,191 +1,85 @@
-import { describe, expect, it, vi } from "vitest";
-import { configureGroupBehavior } from "../src/cli/add-feishu.ts";
+import { describe, expect, it } from "vitest";
+import { checkAgentScopes } from "../src/cli/add-feishu.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import {
+  FEISHU_AGENT_SCOPES,
   FEISHU_APP_CONFIG_SCOPE,
   FEISHU_MESSAGE_RECEIVE_EVENT,
   feishuAppAddons,
 } from "../src/channels/feishu/setup-mode.ts";
 
-function fixture(scopes: FeishuAppScope[] = []): {
-  api: Pick<FeishuApi, "listAppScopes" | "addAppScopes">;
-  addAppScopes: ReturnType<typeof vi.fn>;
-  notes: string[];
-  opened: string[];
-} {
-  const addAppScopes = vi.fn(async () => {});
-  return {
-    api: { listAppScopes: async () => scopes, addAppScopes },
-    addAppScopes,
-    notes: [],
-    opened: [],
-  };
+const AGENT_SCOPES = FEISHU_AGENT_SCOPES.map((entry) => entry.request);
+const grantedAll = (): FeishuAppScope[] => AGENT_SCOPES.map((name) => ({ name, grantStatus: 1, type: "tenant" }));
+
+async function check(kind: "feishu" | "lark", listAppScopes: Pick<FeishuApi, "listAppScopes">["listAppScopes"]) {
+  const notes: string[] = [];
+  const opened: string[] = [];
+  const result = await checkAgentScopes({
+    kind,
+    appId: "cli_a",
+    apiBase: kind === "feishu" ? "https://open.feishu.cn" : "https://open.larksuite.com",
+    api: { listAppScopes },
+    note: (message) => notes.push(message),
+    openUrl: (url) => opened.push(url),
+  });
+  return { result, notes: notes.join("\n"), opened };
 }
 
-describe("Feishu/Lark group-behavior onboarding", () => {
-  it("adds the sensitive scope to the draft for recommended context-aware groups", async () => {
-    const fx = fixture();
-    const result = await configureGroupBehavior({
-      kind: "feishu",
-      appId: "cli_a",
-      apiBase: "https://open.feishu.cn",
-      api: fx.api,
-      behavior: "context",
-      explicit: true,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
-    });
+/** The `q` of a pre-filled scope-request link, as the list of scopes it asks for. */
+const requested = (url: string | undefined): string[] => new URL(url ?? "").searchParams.get("q")?.split(",") ?? [];
 
-    expect(result).toEqual({ publishReady: false });
-    // Delivery is the scope the context path REQUIRES; the read scope rides the same approval round so
-    // a quoted message is not silently lost. Splitting them would cost the author a second round.
-    expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message.group_msg", "im:message:readonly"]);
-    expect(fx.notes.join("\n")).toMatch(/context-aware \(recommended\).*all group messages/);
-    expect(fx.notes.join("\n")).toContain("complete tenant-admin approval before publishing");
-    expect(fx.opened).toEqual(["https://open.feishu.cn/app/cli_a/permission"]);
-  });
-
-  it("requests only the scope that is missing, never one already granted", async () => {
-    // The gap this guards is narrower than the delivery scope's: bare replies work without the read
-    // scope, but a thread's opening ask silently loses the message it quotes.
-    const fx = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
-    const result = await configureGroupBehavior({
-      kind: "feishu",
-      appId: "cli_a",
-      apiBase: "https://open.feishu.cn",
-      api: fx.api,
-      behavior: "context",
-      explicit: true,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
-    });
-
-    expect(result).toEqual({ publishReady: false });
-    expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message:readonly"]);
-  });
-
-  it("recognizes both already-granted tenant scopes as ready to publish without reopening the console", async () => {
-    const fx = fixture([
-      { name: "im:message.group_msg", grantStatus: 1, type: "tenant" },
-      { name: "im:message:readonly", grantStatus: 1, type: "tenant" },
-    ]);
-    const result = await configureGroupBehavior({
-      kind: "feishu",
-      appId: "cli_a",
-      apiBase: "https://open.feishu.cn",
-      api: fx.api,
-      behavior: "context",
-      explicit: true,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
-    });
-
+describe("Feishu/Lark agent permission check", () => {
+  it("an app holding every agent scope is ready to publish, and no console page opens", async () => {
+    const { result, notes, opened } = await check("feishu", async () => grantedAll());
     expect(result).toEqual({ publishReady: true });
-    expect(fx.addAppScopes).not.toHaveBeenCalled();
-    expect(fx.notes.at(-1)).toContain("already granted");
-    expect(fx.opened).toEqual([]);
+    expect(notes).toContain("granted");
+    expect(opened).toEqual([]);
   });
 
-  it("names the scope actually missing on a defaulted run, not the one already granted", async () => {
-    // The common upgrade: delivery was granted long ago, the read scope is new. Reporting the granted
-    // one sends the author to a permission that is already there.
-    const fx = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
-    const result = await configureGroupBehavior({
-      kind: "feishu",
-      appId: "cli_a",
-      apiBase: "https://open.feishu.cn",
-      api: fx.api,
-      behavior: "context",
-      explicit: false,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
-    });
-
+  it("names each missing scope with its state, and opens the console pre-filled with exactly those", async () => {
+    // A tenant can withhold a scope the confirm page asked for (its approval policy), or an app made by hand never
+    // had it; the author is sent to request precisely what is missing.
+    const scopes = grantedAll()
+      .filter((scope) => scope.name !== "im:chat.members:read")
+      .map((scope) => (scope.name === "im:message.group_msg" ? { ...scope, grantStatus: 0 } : scope));
+    const { result, notes, opened } = await check("feishu", async () => scopes);
     expect(result).toEqual({ publishReady: false });
-    expect(fx.addAppScopes).not.toHaveBeenCalled(); // a defaulted run never escalates the app
-    const notes = fx.notes.join("\n");
-    expect(notes).toContain("im:message:readonly not granted");
-    expect(notes).not.toMatch(/im:message\.group_msg not granted/);
+    expect(notes).toContain("im:message.group_msg (awaiting approval)");
+    expect(notes).toContain("im:chat.members:read (not on the app)");
+    expect(opened).toHaveLength(1);
+    expect(new URL(opened[0] as string).pathname).toBe("/app/cli_a/auth");
+    expect(requested(opened[0])).toEqual(["im:message.group_msg", "im:chat.members:read"]);
   });
 
-  it("keeps mention-only least privilege explicit and blocks publish on a conflicting existing grant", async () => {
-    const missing = fixture();
-    const missingResult = await configureGroupBehavior({
-      kind: "lark",
-      appId: "cli_l",
-      apiBase: "https://open.larksuite.com",
-      api: missing.api,
-      behavior: "mentions",
-      explicit: true,
-      note: (message) => missing.notes.push(message),
-      openUrl: (url) => missing.opened.push(url),
-    });
-    expect(missingResult).toEqual({ publishReady: true });
-    expect(missing.notes.join("\n")).toMatch(/mention-only.*bare replies in the Agent.s threads.*disabled/);
-    expect(missing.addAppScopes).not.toHaveBeenCalled();
-    expect(missing.opened).toEqual([]);
-
-    const granted = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
-    const grantedResult = await configureGroupBehavior({
-      kind: "lark",
-      appId: "cli_l",
-      apiBase: "https://open.larksuite.com",
-      api: granted.api,
-      behavior: "mentions",
-      explicit: true,
-      note: (message) => granted.notes.push(message),
-      openUrl: (url) => granted.opened.push(url),
-    });
-    expect(grantedResult).toEqual({ publishReady: false });
-    expect(granted.notes.join("\n")).toContain("already granted");
-    expect(granted.notes.join("\n")).toContain("remove it");
-    expect(granted.opened).toEqual(["https://open.larksuite.com/app/cli_l/permission"]);
+  it("a broader scope satisfies a narrower one, and a user-type entry satisfies nothing", async () => {
+    const scopes: FeishuAppScope[] = [
+      ...grantedAll().filter((scope) => scope.name !== "im:message:readonly" && scope.name !== "im:chat.members:read"),
+      { name: "im:message", grantStatus: 1, type: "tenant" },
+      { name: "im:chat.members:read", grantStatus: 1, type: "user" },
+    ];
+    const { opened } = await check("lark", async () => scopes);
+    expect(requested(opened[0])).toEqual(["im:chat.members:read"]);
+    expect(new URL(opened[0] as string).origin).toBe("https://open.larksuite.com");
   });
 
-  it("never requests the sensitive scope for a defaulted (non-explicit) context choice", async () => {
-    const fx = fixture();
-    const result = await configureGroupBehavior({
-      kind: "feishu",
-      appId: "cli_a",
-      apiBase: "https://open.feishu.cn",
-      api: fx.api,
-      behavior: "context",
-      explicit: false,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
+  it("an unreadable permission list is said, and the console opens with every agent scope", async () => {
+    const { result, notes, opened } = await check("feishu", async () => {
+      throw new Error("HTTP 403");
     });
-
     expect(result).toEqual({ publishReady: false });
-    expect(fx.addAppScopes).not.toHaveBeenCalled();
-    expect(fx.notes.join("\n")).toMatch(/defaulted.*--group-behavior context/s);
-    expect(fx.opened).toEqual([]);
-  });
-
-  it("falls back visibly to manual permission setup when app-config mutation is unavailable", async () => {
-    const fx = fixture();
-    fx.addAppScopes.mockRejectedValueOnce(new Error("HTTP 404"));
-    const result = await configureGroupBehavior({
-      kind: "lark",
-      appId: "cli_l",
-      apiBase: "https://open.larksuite.com",
-      api: fx.api,
-      behavior: "context",
-      explicit: true,
-      note: (message) => fx.notes.push(message),
-      openUrl: (url) => fx.opened.push(url),
-    });
-
-    expect(result).toEqual({ publishReady: false });
-    expect(fx.notes.join("\n")).toMatch(/could not add.*add it manually before publishing/);
-    expect(fx.opened).toEqual(["https://open.larksuite.com/app/cli_l/permission"]);
+    expect(notes).toMatch(/could not read the feishu app's permissions: Error: HTTP 403/);
+    expect(requested(opened[0])).toEqual(AGENT_SCOPES);
   });
 });
 
 describe("Feishu app creation addons", () => {
+  it("asks for every agent scope on the confirm page, so a tenant that grants them needs no console visit", () => {
+    expect(feishuAppAddons().scopes.tenant).toEqual(expect.arrayContaining(AGENT_SCOPES));
+  });
+
   it("requests the app-config scope for either ingress — a WebSocket app can still move to webhook", () => {
     // The scope only webhook USES on day one, requested for both: changing ingress is a migration the
-    // CLI refuses to perform, so an app that was not born with it has to be recreated or repaired by
-    // hand in the console after a PATCH already failed.
+    // CLI refuses to perform, so an app that was not born with it has to be repaired by hand.
     expect(feishuAppAddons().scopes.tenant).toContain(FEISHU_APP_CONFIG_SCOPE);
   });
 

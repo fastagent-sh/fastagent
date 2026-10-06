@@ -64,7 +64,6 @@ export async function registerSlackWebhook(
           current.state.appId as string,
           buildSlackManifest({
             name: current.state.appName,
-            groupBehavior: current.state.groupBehavior,
             requestUrl: `${publicBaseUrl}/slack`,
             // A manifest update replaces the whole manifest and redirect_urls may not be empty, so a placeholder is
             // declared.

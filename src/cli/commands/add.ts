@@ -13,8 +13,6 @@ import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../.
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
-  type GroupBehavior,
-  type GroupBehaviorChoice,
   appendChannelDotEnv,
   appendChannelEnv,
   assertChannelReady,
@@ -30,7 +28,7 @@ import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
+  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the AGENT DIR
   // (`fastagent/`), the same place dev/start discover channels/.
@@ -49,7 +47,6 @@ export async function runAddChannel(
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
-  const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
@@ -71,15 +68,14 @@ export async function runAddChannel(
     created = await onboardSlackInternalApp({
       target,
       stateRoot: resolveStateRoot(target),
-      groupBehavior,
       replaceConfig: opts.replaceConfig,
     })
       .then(() => undefined)
       .catch(failStartup);
   } else if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
   }
-  const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
+  const setup = channelSetup(channelKind, ingress);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
@@ -214,43 +210,6 @@ async function resolveIngress(
   });
   if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
   return answer;
-}
-
-async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined): Promise<GroupBehaviorChoice> {
-  if (raw !== undefined && raw !== "context" && raw !== "mentions") {
-    failUsage(`--group-behavior must be "context" or "mentions", got "${raw}"`);
-  }
-  if (kind !== "feishu" && kind !== "lark" && kind !== "slack") return { behavior: "context", explicit: false };
-  if (raw !== undefined) return { behavior: raw, explicit: true };
-  const defaultBehavior: GroupBehavior = "context";
-  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    console.error(
-      `[fastagent] no interactive terminal — assuming ${kind} group behavior ${defaultBehavior}; pass --group-behavior explicitly to override`,
-    );
-    return { behavior: defaultBehavior, explicit: false };
-  }
-  const choices = [
-    {
-      value: "context" as const,
-      label: "Context-aware groups (recommended)",
-      hint:
-        kind === "slack"
-          ? "bare replies in the Agent's threads + buffer; requires channel/group/mpim history scopes"
-          : "bare replies in the Agent's threads + buffer; im:message.group_msg delivers all group messages",
-    },
-    {
-      value: "mentions" as const,
-      label: "Mention-only (least privilege)",
-      hint: "only explicit @Agent messages; no group-wide message permission",
-    },
-  ];
-  const answer = await select<GroupBehavior>({
-    message: "Choose group-chat behavior",
-    initialValue: defaultBehavior,
-    options: choices,
-  });
-  if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
-  return { behavior: answer, explicit: true };
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

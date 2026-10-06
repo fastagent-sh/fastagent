@@ -259,8 +259,6 @@ tool.
 
 Slack:
 
-- `--group-behavior context|mentions` picks the app's scopes: `context` (default) hears channel messages,
-  `mentions` is least privilege.
 - Onboarding creates the app through `apps.manifest.create`, installs it through OAuth, and writes the bot token
   and signing secret to `.secrets/.env`. The App Configuration token stays in `<state root>/channels/slack/` on
   this machine; `dev --tunnel` and `deploy --run` use it to update the Request URL.

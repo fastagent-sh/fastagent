@@ -251,11 +251,10 @@ With only the `im:message.group_at_msg:readonly` scope, the platform delivers ju
 @mention the bot. Unmentioned group or thread discussion never reaches the channel, so it cannot be
 buffered, and bare continuations inside Agent-created threads are not delivered either.
 
-Re-run `fastagent add feishu` (or `add lark`) and choose **Context-aware groups (recommended)**. The
-CLI adds the sensitive `im:message.group_msg` scope to the app draft when the cloud control plane allows
-it, then opens Permissions for tenant-admin approval; complete that approval and publish a new app
-version. If the CLI reports a Lark config-API fallback, add the scope manually. A serving process reports
-`group visibility: @mentions only` until the granted scope is visible. See the
+Re-run `fastagent add feishu` (or `add lark`). It checks the app's permissions, names every scope that is
+missing, and opens the console page that requests them; approve them (a tenant admin, if your tenant
+requires it) and publish a new app version. A serving process warns
+`im:message.group_msg is not granted — …` until the granted scope is visible. See the
 [Feishu channel](feishu.md) guide.
 
 ## Schedule did not fire

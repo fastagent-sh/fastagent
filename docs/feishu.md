@@ -39,19 +39,24 @@ fastagent add feishu   # interactive ingress choice + scan-to-create
 fastagent add lark     # interactive ingress choice + guided console setup
 
 # Non-interactive / explicit:
-fastagent add feishu --ingress websocket --group-behavior context
-fastagent add lark --ingress webhook --group-behavior mentions
+fastagent add feishu --ingress websocket
+fastagent add lark --ingress webhook
 ```
 
-Onboarding also asks for group behavior. **Context-aware groups (recommended)** is selected first: bare
-human replies in a thread the Agent is part of invoke it, while other unsummoned group discussion is
-durably buffered for the next `@Agent` turn. It requires the tenant-admin-approved
-`im:message.group_msg` scope, which makes the platform deliver all group messages to the app.
-**Mention-only (least privilege)** skips that scope; users must @Agent on every group turn, and neither
-bare thread replies nor background buffering is available. This choice configures the remote
-App's visibility; it does not add a second runtime routing mode. Without an interactive terminal the
-choice must be explicit: a run without `--group-behavior` assumes context-aware for guidance but only
-inspects and reports — requesting the sensitive scope requires `--group-behavior context`.
+The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
+it, and other unsummoned group discussion is durably buffered for the next `@Agent` turn. That takes the app
+scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); onboarding
+then checks what the app actually holds and names any scope your tenant withheld.
+
+| Scope | Without it |
+|---|---|
+| `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in the Agent's threads, no group discussion as context |
+| `im:message:readonly` (or `im:message`) | a message quoted by an ask cannot be read and degrades to a marker in the prompt |
+| `im:message.group_msg.include_bot:read` | other bots' group messages (CI, alerts, deploy notices) never arrive |
+| `im:chat.members:read` | the Agent cannot list a chat's members by name (events carry only open_ids) |
+
+What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
+credentials.
 
 The ingress choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
 
@@ -70,13 +75,12 @@ and production intentionally use different modes.
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work.
 Within either cloud, ingress determines the remaining work. WebSocket's runtime credential set stops at
-the validated/persisted App ID/Secret pair; onboarding continues through group-permission guidance and
+the validated/persisted App ID/Secret pair; onboarding continues through the permission check and
 opens Events & Callbacks so the user can select long connection and publish.
 Webhook continues through the existing temporary-tunnel challenge to capture the Verification Token and
-configure the Request URL. For recommended context-aware groups, onboarding inspects the App's scopes,
-adds `im:message.group_msg` to the draft through the application-config API when supported, and opens
-Permissions for approval before publish. Lark's missing config API falls back to explicit manual
-permission/Token/mode/URL steps. Re-running a partial setup reuses the complete App ID/Secret pair rather
+configure the Request URL. Onboarding then reads the App's scopes and, for any that is missing, opens the
+console page that requests it, pre-filled. Lark's missing config API falls back to explicit manual
+Token/mode/URL steps. Re-running a partial setup reuses the complete App ID/Secret pair rather
 than creating or attaching a different app.
 
 This creates (for the feishu kind; lark mirrors it):
@@ -94,9 +98,10 @@ It also appends the required env vars to `.env.example` when possible.
 device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
-pre-configured—and adds `im.message.receive_v1`. Onboarding requests
+pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. It also requests
 `application:application:patch` for every app it creates, whichever ingress you pick, so the app can move to
-webhook later. The CLI immediately persists App ID/Secret to
+webhook later: the webhook bootstrap registers the Request URL through it. A tenant may withhold any of these;
+onboarding names what it withheld. The CLI immediately persists App ID/Secret to
 `.secrets/.env` before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
@@ -104,12 +109,12 @@ generated Verification Token has no read API; its only programmatic delivery is 
 challenge, so the CLI captures it through a throwaway tunnel and persists it as a second stage. If that
 stage is interrupted, re-running resumes Token capture for the same App rather than minting another.
 
-Console completion remains: for context-aware groups, approve the sensitive `im:message.group_msg`
-request first; then **create + publish a version**. The CLI adds the scope to the draft when the control
-plane supports it and opens the Permissions page; a visible manual fallback handles unsupported Lark
-config APIs. WebSocket keeps the template's long-connection mode; webhook flips it and registers a
-Request URL. Mode and scope changes take effect only after publish, while later webhook URL changes apply
-immediately. Version publishing and tenant-admin approval have no general automatic completion path.
+What is left for the console depends on the tenant. A tenant that grants the requested scopes at creation
+gets an app that holds them at once; one that withholds some needs them requested (the CLI opens that page)
+and approved, then a version created and published. WebSocket keeps the template's long-connection mode;
+webhook flips it and registers a Request URL. Mode and scope changes take effect only after publish, while
+later webhook URL changes apply immediately. Version publishing and tenant-admin approval have no general
+automatic completion path.
 
 ## Configure the app by hand (developer console)
 
@@ -119,10 +124,9 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 2. **Permissions** — add:
    - `im:message.p2p_msg:readonly` — receive direct messages,
    - `im:message.group_at_msg:readonly` — receive group messages that @mention the bot,
-   - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare replies in threads the Agent is part of,
+   - the four agent scopes in the table under [Add the channel](#add-the-channel),
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
-   - `im:message:readonly` — OPTIONAL, and independent of the scope above: the channel fetches a replied-to message by id, so an ask can carry what it quotes. `add feishu|lark --group-behavior context` requests it alongside `im:message.group_msg` because they share one approval round. Without it group messages are still delivered and the thread rule still works; a quoted message degrades to a marker in the prompt. `im:message` (the read/write superset) also satisfies it,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
@@ -241,7 +245,7 @@ reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only; some tenants approve it by hand) delivers all group messages once the app holds it. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
 
 Practical consequences in groups:
 
@@ -372,7 +376,7 @@ the agent directory.
 
 `tools/feishu-send.ts` / `tools/lark-send.ts` are the package's, not authored glue: re-running
 `fastagent add feishu|lark` rewrites the tool, keeps `channels/<kind>.ts` and the credentials already in
-`.env`, and re-checks the app's group visibility. That is how an agent scaffolded by an earlier release
+`.env`, and re-checks the app's permissions. That is how an agent scaffolded by an earlier release
 picks up the current tool.
 
 ## Limits
@@ -383,10 +387,9 @@ picks up the current tool.
   App Sleeping. Multiple clients for one app are cluster/load-balanced, not broadcast.
 - The official SDK currently carries event subscriptions over long connection; callback subscriptions
   are not part of this FastAgent ingress. Card streaming remains outbound HTTP and is unaffected.
-- Subscription mode and `im:message.group_msg` cannot travel as arbitrary sensitive creation-link
-  config. Feishu onboarding therefore adds the chosen scope to the post-creation app draft through the
-  application-config API; Lark falls back to a manual console step when that API is unavailable.
-  Tenant-admin approval and version publishing remain console actions.
+- Subscription mode cannot travel as creation-link config, and a tenant may withhold any requested scope.
+  Onboarding names a withheld scope and opens the page that requests it; tenant-admin approval and version
+  publishing remain console actions.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual

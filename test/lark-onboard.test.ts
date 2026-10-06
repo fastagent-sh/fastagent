@@ -71,17 +71,6 @@ describe("guided Lark app onboarding", () => {
     expect(fx.notes.at(-1)).toMatch(/long connection.*do not publish yet.*No Verification Token/);
   });
 
-  it("lets an explicit mention-only WebSocket setup proceed directly to publish", async () => {
-    const fx = fakeIO(["cli_ws", "secret"]);
-    await onboardLarkApp(fx.io, {
-      ingress: "websocket",
-      groupBehavior: "mentions",
-      verifyCredentials: async () => {},
-    });
-    expect(fx.notes.at(-1)).toMatch(/then create \+ publish/);
-    expect(fx.notes.at(-1)).not.toContain("do not publish yet");
-  });
-
   it("prompts for the console token only after a definitive config-API fallback", async () => {
     const fx = fakeIO(["cli_app", "secret", "manual-token"]);
     await expect(

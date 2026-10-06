@@ -53,7 +53,7 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
     manual: (baseUrl) => `slack: set Event Subscriptions → Request URL → ${baseUrl}/slack`,
     runbook: (baseUrl) => [
       `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
-      `# answers Slack's challenge), and match scopes/subscriptions to the app \`add slack --group-behavior\` created:`,
+      `# answers Slack's challenge), and match scopes/subscriptions to the app \`add slack\` created:`,
       `#   Request URL = ${baseUrl}/slack`,
     ],
   },

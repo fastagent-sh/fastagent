@@ -14,11 +14,10 @@ The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.
 fastagent add slack
 ```
 
-`--group-behavior context|mentions` decides what the created app is allowed to hear. `context`
-(default) subscribes the channel/private-channel/MPIM message streams, which is what lets the Agent
-take part in a thread and read recent discussion ([Group context](#group-context)). `mentions` asks for
-`app_mention` and DMs only — least privilege, for a workspace that will not approve an app reading
-channel history. The runtime has one behavior either way; what differs is which events Slack delivers.
+The created app subscribes the channel, private-channel and MPIM message streams with their history scopes,
+which is what lets the Agent take part in a thread and read recent discussion
+([Group context](#group-context)). There is no mention-only variant: the Agent takes part in the channels it is
+invited to.
 
 The command creates:
 
@@ -214,10 +213,9 @@ The next answered turn in that place receives a bounded sender-prefixed block. C
 3. commit exactly that snapshot only when the Agent emits `completed`;
 4. retain it on failure/crash, and retain messages that arrive while the turn is running.
 
-This deliberately lets the app read messages in channels where it is installed. Create the app with
-`--group-behavior mentions` when that permission or retention boundary is inappropriate: without the
-history subscriptions none of the above ever fires. State is local to the deployment and gitignored
-from git, but operators still own retention/privacy policy.
+This deliberately lets the app read messages in channels where it is installed; invite it only to channels
+it may read. State is local to the deployment and gitignored from git, but operators still own
+retention/privacy policy.
 
 ## Inbound files
 

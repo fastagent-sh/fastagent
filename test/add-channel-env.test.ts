@@ -9,37 +9,27 @@ import {
   scaffoldChannel,
   scaffoldCompanionTools,
 } from "../src/scaffold/add-channel.ts";
+import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 
 describe("channel setup guidance", () => {
-  it("puts recommended context-aware permission approval before publishing and explains mention-only degradation", () => {
+  it("names every agent permission before the publish step, for both clouds and ingresses", () => {
     for (const kind of ["feishu", "lark"] as const) {
       for (const ingress of ["webhook", "websocket"] as const) {
-        const contextSteps = channelSetup(kind, ingress, "context").steps;
-        const scopeIndex = contextSteps.findIndex((step) => step.includes("im:message.group_msg"));
-        const publishIndex = contextSteps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
+        const steps = channelSetup(kind, ingress).steps;
+        const scopeIndex = steps.findIndex((step) => step.includes("im:message.group_msg"));
+        const publishIndex = steps.findIndex((step, index) => index > scopeIndex && /publish/i.test(step));
         expect(scopeIndex).toBeGreaterThanOrEqual(0);
         expect(publishIndex).toBeGreaterThan(scopeIndex);
-        expect(contextSteps[scopeIndex]).toContain("all group messages");
-        expect(contextSteps[scopeIndex]).not.toContain("optional");
-
-        const mentionSteps = channelSetup(kind, ingress, "mentions").steps;
-        expect(mentionSteps.join("\n")).toContain("mention-only");
-        expect(mentionSteps.join("\n")).toContain("bare thread replies");
-        expect(mentionSteps.join("\n")).toContain("disabled");
+        for (const entry of FEISHU_AGENT_SCOPES) expect(steps[scopeIndex]).toContain(entry.request);
       }
     }
   });
 
-  it("Slack group choice changes scopes/guidance and the generated runtime policy", async () => {
-    const context = channelSetup("slack", "webhook", "context");
-    expect(context.env.map((entry) => entry.name)).toEqual(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"]);
-    expect(context.steps.join("\n")).toContain("channels:history");
-    expect(context.steps.join("\n")).toContain("message.channels");
-
-    const mentions = channelSetup("slack", "webhook", "mentions");
-    expect(channelSetup("slack").steps).toEqual(context.steps);
-    expect(mentions.steps.join("\n")).toContain("mention-only");
-    expect(mentions.steps.join("\n")).not.toContain("message.channels");
+  it("Slack's guidance asks for the history scopes and message events, and the scaffold renders natively", async () => {
+    const setup = channelSetup("slack");
+    expect(setup.env.map((entry) => entry.name)).toEqual(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"]);
+    expect(setup.steps.join("\n")).toContain("channels:history");
+    expect(setup.steps.join("\n")).toContain("message.channels");
 
     const dir = await mkdtemp(join(tmpdir(), "fa-slack-scaffold-"));
     await scaffoldChannel(dir, "slack");
