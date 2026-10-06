@@ -3,50 +3,11 @@
  * `ref`, and a clone, made or brought up to date in place. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
  * a private repository is reached the way the user's own `git clone` reaches it.
  */
-import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { promisify } from "node:util";
+import { gitFor } from "../git.ts";
 
-/**
- * Never wait on a terminal prompt for a credential: a serving process has nobody to answer it, so git fails and says
- * why instead. Not covered by a test: it takes a remote that asks for a credential.
- */
-const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
-
-const NO_GIT = "git is not installed: a github context needs it on this machine";
-
-/**
- * git's answer in `cwd` (which must exist), or undefined when it answers with a non-zero exit: not a checkout, no such
- * remote, no such ref. A git that cannot run is an error.
- */
-function gitAnswer(args: string[], cwd: string): string | undefined {
-  try {
-    return execFileSync("git", args, {
-      cwd,
-      env: gitEnv(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(NO_GIT);
-    if (typeof (error as { status?: unknown }).status === "number") return undefined;
-    throw error;
-  }
-}
-
-const execGit = promisify(execFile);
-
-/** Run git in `cwd`: its output, or its stderr as the error. */
-async function runGit(args: string[], cwd: string): Promise<string> {
-  try {
-    return (await execGit("git", args, { cwd, env: gitEnv() })).stdout;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(NO_GIT);
-    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
-    throw new Error(stderr || (error as Error).message);
-  }
-}
+const { answer: gitAnswer, run: runGit } = gitFor("a github context needs it on this machine");
 
 /** The `owner/repo` a GitHub remote URL names, in any of its spellings (https, ssh, scp-like), or undefined. */
 export function githubRepoOf(url: string): string | undefined {

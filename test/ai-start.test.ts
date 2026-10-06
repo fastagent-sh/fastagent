@@ -22,7 +22,17 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
   const parent = await realpath(await mkdtemp(join(tmpdir(), "fa-ai-start-")));
   const agentDir = join(parent, "my-agent");
   // Per-process, so a hung step fails naming its own command instead of the whole test.
-  const node = (args: string[], cwd = agentDir) => exec(process.execPath, args, { cwd, timeout: 60_000 });
+  // `init` commits: a git that reads none of the developer's configuration (identity, hooks, signing).
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "a",
+    GIT_AUTHOR_EMAIL: "a@example.com",
+    GIT_COMMITTER_NAME: "a",
+    GIT_COMMITTER_EMAIL: "a@example.com",
+  };
+  const node = (args: string[], cwd = agentDir) => exec(process.execPath, args, { cwd, env, timeout: 60_000 });
   const cli = (args: string[]) => node([join(root, "src/cli.ts"), ...args]);
   try {
     await node([join(root, "src/cli.ts"), "init", "my-agent", "--no-install"], parent);

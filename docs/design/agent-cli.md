@@ -87,6 +87,9 @@ with `fastagent context add --readonly`.
   refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --context ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
   with the command that creates the agent elsewhere and attaches this directory.
+- **The agent is a git repository from the start.** `init` runs `git init` and commits the scaffold, so a change the
+  agent makes to itself can be reviewed and undone ([agent model](agent-model.md) §6). Inside an existing repository
+  that tracks it, it does not; without git, or without a commit identity, it says so.
 
 `init` scaffolds `APPEND_SYSTEM.md` for the agent's standing instructions, so a
 new agent keeps pi's default prompt and follows it as pi improves it. An agent that should be someone other than
