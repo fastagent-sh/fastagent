@@ -262,9 +262,12 @@ function contextKind(c: ResolvedContext): string {
       : "a directory on this machine";
   }
   if (!c.clone) return `a checkout of github ${c.repo} on this machine`;
-  // A clone does not outlast the process: the next start replaces it, so a change the agent wants kept is pushed.
-  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` at ${c.ref}` : ""}, made afresh each time you start`;
-  return c.readonly ? clone : `${clone}: commit and push what should last`;
+  // A clone is brought up to date at each start only while it holds nothing of the agent's; what the agent changes
+  // stays, and reaches anyone else only when pushed.
+  const clone = `a shallow clone of github ${c.repo}${c.ref ? ` at ${c.ref}` : ""} in your own storage`;
+  return c.readonly
+    ? `${clone}, brought up to date each time you start`
+    : `${clone}: what you change in it stays, and while you have changed nothing it is brought up to date each time you start; push to share a change`;
 }
 
 /**

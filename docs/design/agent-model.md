@@ -41,8 +41,8 @@ Relations:
 
 Every instance of an Agent, given the same version of its definition, runs the same program on contexts
 resolved the same way: the same declarations, the same names, the same working directory (its own), the same
-`AGENTS.md`, and the same skills from its harness and its contexts. A repository an instance clones is cloned at its
-declared version every time the instance starts (§3). A checkout the user names with `local` is the exception: it
+`AGENTS.md`, and the same skills from its harness and its contexts. A repository an instance clones is brought to its
+declared version at each start while it holds nothing of the agent's (§3). A checkout the user names with `local` is the exception: it
 is read as the user left it, and a difference from the declared version is reported, not corrected. A laptop instance and a hosted one behave the same on the same data.
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
@@ -204,7 +204,7 @@ it from what they are given, and every command prints it (§4), so an author rar
 |---|---|---|---|---|
 | **local** | `{ local: "/Users/me/notes" }` | That directory, edited in place | Absent: deploying is refused (below) | The directory |
 | **local, copied** | `{ local: "/Users/me/notes", copy: true }` | That directory, edited in place | A copy | Each instance keeps its own |
-| **github** | `{ github: "acme/app" }` | An existing checkout (`local`), used as it is; otherwise a clone made afresh each time the instance starts | A clone made afresh each time the instance starts | To the repository, when pushed: a clone's unpushed changes are gone at the next start |
+| **github** | `{ github: "acme/app" }` | An existing checkout (`local`), used as it is; otherwise a clone the instance makes | A clone the instance makes | To the repository, when pushed |
 
 Attributes:
 
@@ -221,17 +221,17 @@ Attributes:
 
 - **Read-only is an instruction in the first version.** The agent is told not to write a context it only knows;
   nothing stops a shell from writing it. A read-only `github` context is never pushed back.
-- **A repository is cloned afresh each time an instance starts, unless this machine has a checkout of it.**
+- **A repository is the user's checkout when this machine has one, else a clone the instance makes, which is
+  replaced only when that loses nothing.**
   - A checkout named by `local` is the user's: FastAgent never fetches it and never switches its branch. When it
     is not at the declared `ref`, startup says so.
-  - Without one, the instance clones the repository at its declared `ref` every time it starts, whether it works on
-    it or only knows it, replacing the clone the last start made. A clone always matches the definition, and
-    nothing has to be reconciled with what an earlier process left. The price is that a clone the agent works on is
-    its own for one process: what it changed there and did not push is gone at the next start, and the agent is
-    told so. Work that must outlast a start is pushed, or done in a checkout.
-  - A last clone identical to a fresh one (the remote's commit and branch, nothing changed) is kept rather than
-    cloned again: it is what a new clone would hold. When the remote cannot be reached, an untouched clone is used
-    and startup warns that it may be behind; a changed one stops the start.
+  - Without one, the instance clones the repository at its declared `ref` the first time it starts. At each later
+    start a clone that holds nothing of the agent's (no changed, added or ignored file, no commit since it was
+    cloned) is brought to the remote's `ref` by cloning it again, whether the agent works on it or only knows it,
+    so it matches the definition. A clone with changes of the agent's is kept as it is, and startup says it is not
+    brought up to date: bringing the agent's work and the remote together is git's, the agent's or the user's
+    (synchronization, §8). Nothing the agent did is lost to a restart.
+  - When the remote cannot be reached, the clone there is used, and startup warns that it may be behind.
 - **What a host copies follows from whether the context is writable.** A copy of a context the instance only knows
   is made again every time the instance is deployed: there is nothing local to lose, and it always matches the
   definition. A copy of one it works on is made once and belongs to the instance afterwards; a later deployment

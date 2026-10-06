@@ -71,12 +71,13 @@ all read that one resolution.
 
 A `github` context whose `local` is the root of a checkout of that repository is that checkout, used as it is: never
 fetched, never moved to its `ref`, only said to be off it. Any other `github` context is a clone in
-`<state root>/contexts/<name>`, made fresh by `cloneContext` each time a process that runs the agent opens it (the
-opener, before it resolves): shallow, at `ref`, built beside the last clone and renamed into place under a lock in
-that directory (`git.ts`), so another process reads one clone or the other. What the agent did in the last clone and
-did not push is gone, and the prompt tells it so. The last clone is kept when it is identical to a fresh one (the
-commit and branch `git ls-remote` names, a clean `status --ignored`), and kept with a warning when the remote cannot
-be reached and it is untouched. `info`, `context list` and `fastagent tool` resolve without
+`<state root>/contexts/<name>`, which `cloneContext` makes or brings up to date each time a process that runs the
+agent opens it (the opener, before it resolves). A clone is replaced only when that loses nothing: one with changes
+of the agent's (a dirty `status --ignored`, or a HEAD other than the commit recorded in its `.git` when it was
+cloned) is kept with a warning; an untouched one is kept when `git ls-remote` names its commit and branch, cloned
+again when the remote moved, and kept with a warning when the remote cannot be reached. A new clone is shallow, at
+`ref`, built beside the old one and renamed into place under a lock in that directory (`git.ts`), so another process
+reads one clone or the other. `info`, `context list` and `fastagent tool` resolve without
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a directory in a GitHub checkout, any other
 directory); `config-text.ts` rewrites the literal list `init --context` and `fastagent context add/remove` edit;
 `writeContexts` imports a candidate file beside the config and replaces the config only when the import declares

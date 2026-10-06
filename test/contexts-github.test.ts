@@ -1,8 +1,8 @@
 /**
  * GitHub contexts against a local stand-in for GitHub (github-standin.ts): a checkout of the user's is used as it is,
- * and a repository with no checkout here is cloned afresh each time the agent starts.
+ * and a repository with no checkout here is cloned, and brought up to date at each start while that loses nothing.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -72,7 +72,7 @@ describe("github contexts: resolved, without touching the network or the disk", 
 
     const bare = resolveOne(agentDir, { github: "acme/app" });
     expect(bare).toMatchObject({ location: clone, clone: true });
-    expect(bare.notices).toEqual(["not cloned yet: it is cloned afresh each time the agent starts"]);
+    expect(bare.notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
     expect(resolveOne(agentDir, { github: "acme/app", local: elsewhere }).notices[0]).toBe(
       `${elsewhere} is a checkout of https://github.com/acme/other.git, not of github acme/app, so github acme/app is cloned instead`,
     );
@@ -92,58 +92,60 @@ describe("github contexts: resolved, without touching the network or the disk", 
   });
 });
 
-describe("github contexts: a clone is made afresh each time", () => {
-  it("replaces the last clone whole: new commits arrive, and what was not pushed is gone", async () => {
-    const github = githubStandIn();
-    const app = github.repo("acme/app");
-    app.commit({ "README.md": "one\n" });
-    const { agentDir } = await agent();
-    const context = resolveOne(agentDir, { github: "acme/app" });
-
-    await cloneContext(context);
-    expect(readFileSync(join(context.location, "README.md"), "utf8")).toBe("one\n");
-    writeFileSync(join(context.location, "unpushed.md"), "the agent's\n");
-    app.commit({ "README.md": "two\n" });
-    await cloneContext(context);
-    expect(readFileSync(join(context.location, "README.md"), "utf8")).toBe("two\n");
-    expect(existsSync(join(context.location, "unpushed.md"))).toBe(false);
-    // Nothing is left beside it: no half-built clone, no replaced one.
-    expect(readdirSync(join(agentDir, ".state", "contexts")).filter((entry) => !entry.endsWith(".lock"))).toEqual([
-      "app",
-    ]);
-  });
-
-  it("keeps a clone identical to a fresh one; any change in it, or on the remote, means a new clone", async () => {
+describe("github contexts: a clone is replaced only when that loses nothing", () => {
+  it("brings an untouched clone up to date, and keeps one with changes of the agent's as it is", async () => {
     const github = githubStandIn();
     const app = github.repo("acme/app");
     app.commit({ "README.md": "one\n", ".gitignore": "build/\n" });
     const { agentDir } = await agent();
     const context = resolveOne(agentDir, { github: "acme/app" });
     const inode = () => statSync(context.location).ino;
+    const readme = () => readFileSync(join(context.location, "README.md"), "utf8");
 
     expect(await cloneContext(context)).toEqual({ cloned: true });
     let before = inode();
     expect(await cloneContext(context)).toEqual({ cloned: false });
     expect(inode()).toBe(before);
+    // Untouched: a new commit on the remote, or a branch switched with nothing on it, is a new clone.
     for (const change of [
-      () => writeFileSync(join(context.location, "README.md"), "edited\n"),
-      () => {
-        mkdirSync(join(context.location, "build"));
-        writeFileSync(join(context.location, "build", "out"), "ignored, still a change\n");
-      },
-      () => git(context.location, "checkout", "-q", "-b", "elsewhere"),
       () => app.commit({ "README.md": "two\n" }),
+      () => git(context.location, "checkout", "-q", "-b", "elsewhere"),
     ]) {
       before = inode();
       change();
       expect(await cloneContext(context)).toEqual({ cloned: true });
       expect(inode()).not.toBe(before);
-      expect(git(context.location, "status", "--porcelain", "--ignored")).toBe("");
     }
-    expect(readFileSync(join(context.location, "README.md"), "utf8")).toBe("two\n");
+    expect(readme()).toBe("two\n");
+
+    // The agent's changes stay, and the clone stays behind the remote until they are gone.
+    const kept = /^the clone has (changes in its files|commits of its own): kept as it is, not brought up to date/;
+    writeFileSync(join(context.location, "README.md"), "edited\n");
+    app.commit({ "README.md": "three\n" });
+    expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
+    expect(readme()).toBe("edited\n");
+    git(context.location, "checkout", "-q", "--", "README.md");
+    expect(await cloneContext(context)).toEqual({ cloned: true });
+    expect(readme()).toBe("three\n");
+    mkdirSync(join(context.location, "build"));
+    writeFileSync(join(context.location, "build", "out"), "ignored, still the agent's\n");
+    expect(await cloneContext(context)).toEqual({ cloned: false, warning: expect.stringMatching(kept) });
+    rmSync(join(context.location, "build"), { recursive: true });
+    writeFileSync(join(context.location, "notes.md"), "committed, not pushed\n");
+    git(context.location, "add", "-A");
+    git(context.location, "commit", "-q", "-m", "notes");
+    expect(await cloneContext(context)).toEqual({
+      cloned: false,
+      warning: expect.stringMatching(/^the clone has commits of its own/),
+    });
+    expect(readFileSync(join(context.location, "notes.md"), "utf8")).toBe("committed, not pushed\n");
+    // Nothing is left beside it: no half-built clone, no replaced one.
+    expect(readdirSync(join(agentDir, ".state", "contexts")).filter((entry) => !entry.endsWith(".lock"))).toEqual([
+      "app",
+    ]);
   });
 
-  it("offline, an untouched clone is used and said to be; a changed one stops the start", async () => {
+  it("offline, the clone there is used and said to be", async () => {
     const github = githubStandIn();
     const app = github.repo("acme/app");
     const first = app.commit({ "README.md": "one\n" });
@@ -157,11 +159,11 @@ describe("github contexts: a clone is made afresh each time", () => {
     const kept = await cloneContext(context);
     expect(kept.cloned).toBe(false);
     expect(kept.warning).toMatch(/^could not reach github acme\/app \(.+\); using the clone made at \d{4}-/);
-    // A clone pinned to a commit needs no remote to know it is what a fresh one would be.
+    // A clone pinned to a commit needs no remote to know it is up to date.
     expect(await cloneContext(pinned)).toEqual({ cloned: false });
+    // One with the agent's changes is kept without asking the remote at all.
     writeFileSync(join(context.location, "notes.md"), "the agent's\n");
-    await expect(cloneContext(context)).rejects.toThrow(/context "app": could not clone github acme\/app/);
-    expect(readFileSync(join(context.location, "notes.md"), "utf8")).toBe("the agent's\n");
+    expect((await cloneContext(context)).warning).toMatch(/^the clone has changes in its files/);
   });
 
   it("clones at the declared ref: a branch, a tag or a commit", async () => {
@@ -281,9 +283,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     );
     const info = await cli(["info", "--json"], agentDir);
     expect(info.code, info.stderr).toBe(0);
-    expect(JSON.parse(info.stdout).contexts[0].notices).toEqual([
-      "not cloned yet: it is cloned afresh each time the agent starts",
-    ]);
+    expect(JSON.parse(info.stdout).contexts[0].notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
     expect(existsSync(join(agentDir, ".state", "contexts"))).toBe(false);
 
     const opened = await createPiAgentFromDir(agentDir);
@@ -336,7 +336,7 @@ describe("github contexts: what runs the agent clones, what reports on it does n
     });
     await collect(running.invoke({ session: "s" }, { text: "hi" }));
     expect(prompt).toContain(
-      `- app: ${join(agentDir, ".state", "contexts", "app")} (a shallow clone of github acme/app at main, made afresh each time you start: commit and push what should last)`,
+      `- app: ${join(agentDir, ".state", "contexts", "app")} (a shallow clone of github acme/app at main in your own storage: what you change in it stays, and while you have changed nothing it is brought up to date each time you start; push to share a change)`,
     );
     expect(prompt).toContain(`- docs: ${checkout} (a checkout of github acme/docs on this machine)`);
   });

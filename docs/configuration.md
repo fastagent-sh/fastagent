@@ -204,7 +204,7 @@ export default {
     { local: "/Users/me/notes" },                                // works on, on this machine
     { local: "/Users/me/handbook", copy: true, readonly: true }, // knows; a host gets a copy
     { github: "acme/app", local: "/Users/me/code/app" },         // works on: this checkout here
-    { github: "acme/docs", ref: "main", readonly: true },        // knows: cloned afresh at each start
+    { github: "acme/docs", ref: "main", readonly: true },        // knows: a clone, kept up to date
   ],
 } satisfies FastagentConfig;
 ```
@@ -222,15 +222,17 @@ A `github` context is one of two things on this machine:
 
 - **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
   as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
-- **Otherwise, a fresh clone each time the agent starts** (`dev`, `start`, `chat`, `invoke`, `routine run`),
-  shallow, at `ref`, in `.state/contexts/<name>`. It replaces the clone the last start made, so what the agent
-  changed there and did not push is gone, and the agent is told to push what should last. The last clone is kept
-  instead when it is exactly what a new one would be: on the commit and branch the remote names now, with nothing in
-  its files changed, added or ignored. So an untouched clone costs one `git ls-remote` per start (none for a `ref`
-  that is a full commit). `info`, `context list` and `fastagent tool` report it without cloning.
-- **When GitHub cannot be reached**, an untouched clone is used as it is, and startup warns that it may be behind.
-  A clone the agent changed cannot stand for a fresh one, so the start stops, with git's reason, as it does when
-  there is no clone yet.
+- **Otherwise, a clone** in `.state/contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
+  `start`, `chat`, `invoke`, `routine run`). At each later start it is brought up to date only when that loses
+  nothing:
+  - Untouched (no changed, added or ignored file, no commit since it was cloned): checked with one `git ls-remote`
+    (none for a `ref` that is a full commit), kept when the remote has not moved, cloned again when it has.
+  - With changes of the agent's: kept as it is, and startup warns that it is not brought up to date. Bring it
+    together with the remote with git, or ask the agent to.
+  - When GitHub cannot be reached: the clone there is used, and startup warns that it may be behind.
+
+  `info`, `context list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
+  with git's reason.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). git never prompts: a

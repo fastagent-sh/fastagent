@@ -59,7 +59,7 @@ Each `--context <source>` declares something the agent works on in the config's 
 
 | `<source>` | Declared |
 |---|---|
-| `github:owner/repo` | `{ github: "owner/repo" }`, cloned afresh each time the agent starts |
+| `github:owner/repo` | `{ github: "owner/repo" }`, cloned when the agent starts and kept up to date while unchanged |
 | A directory in a checkout whose `origin` is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }`, the whole repository; a subdirectory is said to mean the root |
 | Any other directory | `{ local: "<absolute path>" }` |
 

@@ -465,8 +465,8 @@ const context: CommandSpec = {
       ],
       notes:
         "A directory in a GitHub checkout is declared `{ github, local }`: the whole repository, with that " +
-        "checkout used as it is on this machine. A repository with no checkout here is cloned afresh each " +
-        "time the agent starts. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
+        "checkout used as it is on this machine. A repository with no checkout here is cloned, and kept up to " +
+        "date while the agent has not changed it. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
         "own copy. A context may not contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {

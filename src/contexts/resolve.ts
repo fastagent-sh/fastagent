@@ -8,7 +8,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isDeployedWorkspace, resolveStateRoot } from "../paths.ts";
 import { type DeclaredContext, declareContexts, nestingError } from "./declare.ts";
-import { checkoutProblem, freshClone, refNotice } from "./git.ts";
+import { checkoutProblem, refreshClone, refNotice } from "./git.ts";
 
 /** A declared context, resolved for this instance. */
 export type ResolvedContext = {
@@ -31,8 +31,9 @@ export type ResolvedContext = {
       repo: string;
       ref?: string;
       /**
-       * A clone made afresh each time the agent starts, in the instance's state: there is no checkout of the
-       * repository on this machine to use. False when it is the user's own checkout, which is never synchronized.
+       * A clone in the instance's state, brought up to date at each start while it holds nothing of the agent's:
+       * there is no checkout of the repository on this machine to use. False when it is the user's own checkout,
+       * which is never touched.
        */
       clone: boolean;
     }
@@ -69,7 +70,7 @@ function resolveOne(agentDir: string, context: DeclaredContext, place: Place): R
     const location = join(resolveStateRoot(agentDir), "contexts", name);
     const notices = [
       ...(problem ? [`${checkout} ${problem}, so github ${repo} is cloned instead`] : []),
-      ...(existsSync(location) ? [] : ["not cloned yet: it is cloned afresh each time the agent starts"]),
+      ...(existsSync(location) ? [] : ["not cloned yet: it is cloned when the agent starts"]),
     ];
     return { name, readonly, location, notices, ...github, clone: true };
   }
@@ -91,16 +92,15 @@ function refuseNesting(agentDir: string, location: string, name: string): void {
 }
 
 /**
- * Make a clone real, as a fresh clone at its `ref`: what the agent did in the last one and did not push is gone (it is
- * told so). A clone already identical to a fresh one is kept rather than cloned again; one that cannot be checked,
- * for want of the remote, is kept with a `warning` saying so. Only a process that runs the agent calls this. The
- * user's own checkout is never cloned over.
+ * Make a clone real and bring it up to date at its `ref`, never losing what the agent did in it (git.ts
+ * `refreshClone`): one with changes of its own, or one the remote cannot be asked about, is kept with a `warning`. Only
+ * a process that runs the agent calls this. The user's own checkout is never cloned over.
  */
 export async function cloneContext(
   context: Extract<ResolvedContext, { kind: "github" }>,
 ): Promise<{ cloned: boolean; warning?: string }> {
   if (!context.clone) throw new Error(`context "${context.name}" is the checkout at ${context.location}, not a clone`);
-  return freshClone(context.repo, context.ref, context.location).catch((error: unknown) => {
+  return refreshClone(context.repo, context.ref, context.location).catch((error: unknown) => {
     throw new Error(`context "${context.name}": ${(error as Error).message}`);
   });
 }

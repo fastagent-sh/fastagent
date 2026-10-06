@@ -4,7 +4,16 @@
  * a private repository is reached the way the user's own `git clone` reaches it.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
@@ -115,13 +124,15 @@ const FULL_COMMIT = /^[0-9a-f]{40}$/i;
 type Checkout = { commit: string; branch: string };
 
 /**
- * Give `dir` what a fresh clone of github `repo` at `ref` (its default branch when unset) holds. The clone already
- * there is kept when it is exactly that: on the commit and branch the remote names now, nothing in its files changed,
- * added or ignored. Otherwise a new clone replaces it. When the remote cannot be reached, an untouched clone is kept
- * and the warning says so; a changed one cannot stand for a fresh clone, so the new clone is attempted and its failure
- * stops the start.
+ * Bring the clone of github `repo` at `ref` (its default branch when unset) in `dir` up to date, without ever losing
+ * what was done in it: a clone is replaced only when replacing it loses nothing.
+ * - None yet: cloned. A failure stops the start.
+ * - Changes of its own (files changed, added or ignored, or commits since it was cloned): kept as it is, and the
+ *   warning says it is not brought up to date. Merging it with the remote is git's, the agent's or the user's.
+ * - Untouched: kept when it is on the commit and branch the remote names now, cloned again when the remote moved, and
+ *   kept with a warning when the remote cannot be reached.
  */
-export async function freshClone(
+export async function refreshClone(
   repo: string,
   ref: string | undefined,
   dir: string,
@@ -131,8 +142,15 @@ export async function freshClone(
   if (repo.startsWith("-") || ref?.startsWith("-")) {
     throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
   }
-  const current = existsSync(dir) ? untouched(dir) : undefined;
-  if (current !== undefined) {
+  if (existsSync(dir)) {
+    const own = ownChanges(dir);
+    if (own !== undefined) {
+      return {
+        cloned: false,
+        warning: `the clone has ${own}: kept as it is, not brought up to date with github ${repo}`,
+      };
+    }
+    const current = untouched(dir);
     let remote: Checkout | undefined;
     try {
       remote = await remoteCheckout(githubUrl(repo), ref, dirname(dir));
@@ -147,12 +165,31 @@ export async function freshClone(
   return { cloned: true };
 }
 
-/** The clone in `dir` as a fresh one would show it, or undefined when anything in its files differs from its commit. */
-function untouched(dir: string): Checkout | undefined {
-  if (gitAnswer(["status", "--porcelain", "--ignored"], dir) !== "") return undefined;
+/** Where a clone records the commit it was made at, inside its own `.git`: what tells a commit of the agent's apart. */
+const CLONED_AT = "fastagent-cloned-at";
+
+/**
+ * What in the clone `dir` would be lost by replacing it, or undefined when nothing would: changed, added or ignored
+ * files, or a commit other than the one it was cloned at. A clone that cannot say what it was cloned at is treated as
+ * having changes, since replacing it is what cannot be undone.
+ */
+function ownChanges(dir: string): string | undefined {
+  const status = gitAnswer(["status", "--porcelain", "--ignored"], dir);
+  if (status === undefined) return "no git checkout in it";
+  if (status !== "") return "changes in its files";
+  const clonedAt = join(dir, ".git", CLONED_AT);
+  if (!existsSync(clonedAt)) return "no record of the commit it was cloned at";
+  return gitAnswer(["rev-parse", "HEAD"], dir) === readFileSync(clonedAt, "utf8").trim()
+    ? undefined
+    : "commits of its own";
+}
+
+/** The checkout of an untouched clone. */
+function untouched(dir: string): Checkout {
   const commit = gitAnswer(["rev-parse", "HEAD"], dir);
   const branch = gitAnswer(["rev-parse", "--abbrev-ref", "HEAD"], dir);
-  return commit !== undefined && branch !== undefined ? { commit, branch } : undefined;
+  if (commit === undefined || branch === undefined) throw new Error(`${dir} is not a git checkout`);
+  return { commit, branch };
 }
 
 /**
@@ -188,7 +225,7 @@ async function remoteCheckout(url: string, ref: string | undefined, cwd: string)
 /**
  * Clone github `repo` at `ref` into `dir`, replacing whatever is there. The clone is built beside `dir` and renamed
  * into place under a lock in its parent, so another process reads the old clone or the new one, never half of either.
- * Shallow: it is made afresh, not kept up to date.
+ * Shallow: a starting point to work from, not a history.
  */
 async function cloneInto(repo: string, ref: string | undefined, dir: string): Promise<void> {
   const parent = dirname(dir);
@@ -215,6 +252,7 @@ async function cloneInto(repo: string, ref: string | undefined, dir: string): Pr
           `git's own credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH)`,
       );
     }
+    writeFileSync(join(next, ".git", CLONED_AT), await runGit(["rev-parse", "HEAD"], next));
     await replaceDirectory(next, dir, old);
   } finally {
     rmSync(next, { recursive: true, force: true });
