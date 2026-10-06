@@ -510,8 +510,9 @@ A served command settles the invoke:
 
 Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
 
-**Extensions are live.** `extensions/` is listed again for every session, and when any file under it changed (an
-edited extension, a module it imports from there, an added one), the next session loads the code as it is now; no
+**Extensions are live.** When any file under `extensions/` changed (an edited extension, a module it imports from
+there, an added one), whatever loads the extensions next loads the code as it is now: the next session, the `/` menu,
+the model catalog (so a model an extension declares is listed and selectable in session control) and `chat`. No
 restart, in `dev` or `start`. So an agent can give itself a tool or a command by writing an extension. Code it
 imports from outside `extensions/` is reloaded only when something under `extensions/` changes too. What an
 extension starts when it LOADS (a timer, a socket opened at import) keeps running across a reload; start such

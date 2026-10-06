@@ -402,9 +402,9 @@ export async function createPiAgentFromDir(
     // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building the registry reads
     // credentials and is not. Resolved only when the boundary is wired, so an ordinary serve does not pay for it.
     const boundary = publish
-      ? await assembly.engine().then(({ modelRuntime, model }) => ({
+      ? await assembly.engine().then(({ model }) => ({
           lease: assembly.lease,
-          models: modelRuntime,
+          models: () => models.current(),
           sessionFactory: assembly.sessionFactory,
           defaults: { ...(model ? { model } : {}), thinkingLevel: assembly.thinkingLevel },
         }))

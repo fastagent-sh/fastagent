@@ -1993,7 +1993,7 @@ describe("session control: boundary mutations", () => {
           sessions,
           boundary: {
             lease: inProcessLease(),
-            models: modelRuntime,
+            models: () => modelRuntime,
             sessionFactory,
             defaults: { model, thinkingLevel },
           },
@@ -2376,7 +2376,7 @@ describe("session control: boundary mutations", () => {
       },
       boundary: {
         lease: inProcessLease(),
-        models,
+        models: () => models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
@@ -2437,7 +2437,7 @@ describe("session control: boundary mutations", () => {
       },
       boundary: {
         lease: inProcessLease(),
-        models,
+        models: () => models,
         sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
@@ -2604,7 +2604,7 @@ describe("session control: boundary mutations", () => {
           sessions,
           boundary: {
             lease,
-            models,
+            models: () => models,
             defaults: { model: faux.getModel(), thinkingLevel: "medium" },
             sessionFactory: async () => session,
           },
@@ -2651,7 +2651,7 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
+        models: () => models,
         defaults: { model: faux.getModel(), thinkingLevel: "medium" },
         sessionFactory: async () => {
           throw new Error("must not bind");
@@ -2708,7 +2708,7 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
+        models: () => models,
         defaults: { model: faux.getModel(), thinkingLevel: "medium" },
         sessionFactory: async () => session,
       },
@@ -3119,7 +3119,7 @@ describe("session control: boundary mutations", () => {
       sessions,
       boundary: {
         lease: inProcessLease(),
-        models,
+        models: () => models,
         defaults: { model: faux.getModel(), thinkingLevel: "medium" },
         sessionFactory: async () => session,
       },
@@ -3250,7 +3250,7 @@ describe("session control: boundary mutations", () => {
     const broke = makeFaux();
     const boundary: PiBoundaryWiring = {
       lease,
-      models: broke.models,
+      models: () => broke.models,
       defaults: { model: broke.faux.getModel(), thinkingLevel: "medium" },
       sessionFactory: async () => {
         throw new Error("no session for you");

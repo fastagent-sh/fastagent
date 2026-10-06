@@ -274,7 +274,9 @@ class Subscriber {
  *  invoke). Every other write needs a record that exists. */
 export interface PiBoundaryWiring {
   lease: Lease;
-  models: Models;
+  /** The registry as it is now: it is rebuilt when the definition's extensions change what they declare, so the
+   *  plane reads it at each use rather than holding one. */
+  models: () => Models;
   sessionFactory: PiAgentSessionFactory;
   /** The assembly's configured PAIR — what a session with no overrides runs on. One field because
    *  model and thinking level are one setting: which levels exist is a property of the model, so a
@@ -400,7 +402,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // The registry is a deployment fact (any session may be pointed at any of it). Each model carries the levels
         // a session on it accepts, so a picker can offer them before the session runs on that model;
         // `state().availableThinkingLevels` answers for the model the session is on.
-        ...(b ? { allowedModels: describeModels(b.models.getModels()) } : {}),
+        ...(b ? { allowedModels: describeModels(b.models().getModels()) } : {}),
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: true, // state().usage, and state_changed{usage} after each run and compaction
       };
@@ -422,11 +424,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       let usage: SessionState["usage"];
       if (!opened) {
         // An id with no record is an empty conversation at the defaults: its first turn would run on these.
-        if (b) settings = resolveSessionSettings([], b.models, b.defaults);
+        if (b) settings = resolveSessionSettings([], b.models(), b.defaults);
       } else {
         try {
           const path = activePath(opened);
-          if (b) settings = resolveSessionSettings(path, b.models, b.defaults);
+          if (b) settings = resolveSessionSettings(path, b.models(), b.defaults);
           const selected = settings?.model;
           const latest =
             selected?.api === "pi-virtual"
@@ -440,7 +442,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   )
                   .at(-1)
               : undefined;
-          const physical = latest?.role === "assistant" ? b?.models.getModel(latest.provider, latest.model) : undefined;
+          const physical =
+            latest?.role === "assistant" ? b?.models().getModel(latest.provider, latest.model) : undefined;
           usage = sessionUsage(path as unknown as PiSessionEntry[], opened, (physical ?? selected)?.contextWindow);
         } catch (error) {
           log.warn(`[fastagent] session ${session}: state unreadable (entry chain): ${String(error)}`);
@@ -748,7 +751,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         let model: AnyModel | undefined;
         if (patch.model !== undefined) {
           const slash = patch.model.indexOf("/");
-          model = slash > 0 ? b.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
+          model =
+            slash > 0 ? b.models().getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
           if (!model) {
             return invalid(`unknown model "${patch.model}" — capabilities().allowedModels lists the accepted models`);
           }
@@ -791,7 +795,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // moves to can carry a model override of its own — validating on the path being left would
             // reject a level the destination supports, and accept one it does not.
             const path = existing ? activePath(existing, patch.leafEntryId) : [];
-            resolved = resolveSessionSettings(path, b.models, b.defaults);
+            resolved = resolveSessionSettings(path, b.models(), b.defaults);
           } catch (error) {
             return failed(error);
           }
@@ -838,7 +842,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           let settings: ReturnType<typeof resolveSessionSettings> | undefined;
           if (applied.path) {
             try {
-              settings = resolveSessionSettings(applied.path, b.models, b.defaults);
+              settings = resolveSessionSettings(applied.path, b.models(), b.defaults);
             } catch (error) {
               // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
               // the position without it and let the next invoke — which walks the same path — be where

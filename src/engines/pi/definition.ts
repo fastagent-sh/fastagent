@@ -4,7 +4,7 @@
  * its own AGENTS.md, and what its contexts provide: each one's root AGENTS.md and its skills, named `<context>/<skill>`.
  * docs/design/agent-model.md §2 is the rule this follows.
  */
-import { type Dirent, readdirSync, realpathSync, statSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   BACKGROUND_CONTEXT,
@@ -252,31 +252,6 @@ async function readFirstFile(
 async function ignoredPaths(e: ExecutionEnv, root: string): Promise<LoadedDefinition["ignored"]> {
   const path = join(root, ".pi", "extensions");
   return (await exists(e, path)) ? [{ path, reason: "not loaded: a definition's extensions live in extensions/" }] : [];
-}
-
-/**
- * What `extensions/` holds now, as one string that changes when any file under it does (its path, size or modification
- * time). Sessions compare it at each bind to know when pi's extension cache holds stale code. Node's filesystem, not
- * the definition's `ExecutionEnv`: it decides only when to reload, and a reload reads through pi as always.
- */
-export function extensionsFingerprint(agentDir: string): string {
-  const dir = join(agentDir, "extensions");
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(dir, { recursive: true, withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
-  return entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const path = join(entry.parentPath, entry.name);
-      const { size, mtimeMs } = statSync(path);
-      return `${path}\t${size}\t${mtimeMs}`;
-    })
-    .sort()
-    .join("\n");
 }
 
 /** A warning about `extensions/` is said once per process: the directory is listed again for every session. */

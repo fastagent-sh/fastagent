@@ -121,7 +121,7 @@ export async function fauxControlledAgent(
         ? undefined
         : {
             lease,
-            models: modelRuntime,
+            models: () => modelRuntime,
             sessionFactory,
             defaults: {
               ...(options.noDefaultModel ? {} : { model }),

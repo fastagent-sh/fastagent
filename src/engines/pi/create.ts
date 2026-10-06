@@ -350,19 +350,14 @@ function assemblePi(opts: {
   const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   const createModelRuntime = opts.models;
-  let registry: Promise<ModelRuntime> | undefined;
-  const modelRuntime = () => {
-    registry ??= opts.catalog();
-    return registry;
-  };
-  let engine: Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }> | undefined;
+  // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
+  const modelRuntime = opts.catalog;
   const resolveEngine = () => {
     const spec = opts.model;
-    engine ??= modelRuntime().then((runtime) => ({
+    return modelRuntime().then((runtime) => ({
       modelRuntime: runtime,
       ...(spec ? { model: resolveModel(runtime, spec) } : {}),
     }));
-    return engine;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);

@@ -92,17 +92,22 @@ export default async function (api) {
       });
       return fauxAssistantMessage("ok");
     };
-    faux.setResponses([reply, reply, reply]);
+    faux.setResponses([reply, reply, reply, reply]);
     const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
     await collect(agent.invoke({ session: "s" }, { text: "1" }));
     await writeFile(join(dir, "extensions", "a.ts"), ext("tool_v2", true));
     await writeFile(join(dir, "extensions", "lib", "label.ts"), 'export const label = "LABEL_V2";\n');
     await collect(agent.invoke({ session: "s" }, { text: "2" }));
     await writeFile(join(dir, "extensions", "b.ts"), ext("tool_added"));
-    await collect(agent.invoke({ session: "s" }, { text: "3" }));
+    // Two sessions bound at once after the edit: neither may load what the cache held before it.
+    await Promise.all([
+      collect(agent.invoke({ session: "s" }, { text: "3" })),
+      collect(agent.invoke({ session: "t" }, { text: "3" })),
+    ]);
     expect(seen).toEqual([
       { tools: ["tool_v1"], label: "v1" },
       { tools: ["tool_v2"], label: "v2" },
+      { tools: ["tool_added", "tool_v2"], label: "v2" },
       { tools: ["tool_added", "tool_v2"], label: "v2" },
     ]);
   });
@@ -364,6 +369,29 @@ describe("definition: the served `/` menu lists what sessions load", () => {
     const names = (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
     expect(names).toEqual(["early", "late"]);
   });
+
+  it("lists an edited extension's commands as the next session registers them, not the cached ones", async () => {
+    // The menu asks the same "is the cached code current" the sessions ask: a renamed command must not linger in the
+    // menu, where sending it would reach the model as plain text.
+    const dir = await agentDirWith({
+      "fastagent.config.ts": 'export default { model: "mygw/m1" };\n',
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: { baseUrl: "http://gw.invalid/v1", api: "openai-completions", apiKey: "k", models: [{ id: "m1" }] },
+        },
+      }),
+      "extensions/early.ts": 'export default (pi) => pi.registerCommand("early", { handler: async () => {} });\n',
+    });
+    const { sessionControl } = await createPiAgentFromDir(dir, { serving: true });
+    const names = async () =>
+      (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
+    expect(await names()).toEqual(["early"]);
+    await writeFile(
+      join(dir, "extensions", "early.ts"),
+      'export default (pi) => pi.registerCommand("renamed", { handler: async () => {} });\n',
+    );
+    expect(await names()).toEqual(["renamed"]);
+  });
 });
 
 describe("definition: chat runs the definition's extensions in full", () => {
@@ -489,6 +517,40 @@ export default async function (pi) {
 });
 
 describe("definition: an extension can define the model chat runs on", () => {
+  it("the catalog follows an edited extension's models, as the next session would run them", async () => {
+    // What the control plane lists and lets a session select is the catalog; a model an edited extension now
+    // declares must be in it, and one it no longer declares must not.
+    const provider = (id: string) =>
+      `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: ${JSON.stringify(id)}, name: "m", contextWindow: 1000, maxTokens: 100 }] });`;
+    const dir = await agentDirWith({ "extensions/provider.ts": provider("first") });
+    const models = agentModels(dir);
+    const ids = async () =>
+      (await models.runtime())
+        .getProvider("acme")
+        ?.getModels()
+        .map((m) => m.id);
+    expect(await ids()).toEqual(["first"]);
+    await writeFile(join(dir, "extensions", "provider.ts"), provider("second"));
+    expect(await ids()).toEqual(["second"]);
+  });
+
+  it("the control plane's allowed models follow it too, from the first read after the edit", async () => {
+    const provider = (id: string) =>
+      `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: ${JSON.stringify(id)}, name: "m", contextWindow: 1000, maxTokens: 100 }] });`;
+    const dir = await agentDirWith({
+      "fastagent.config.ts": 'export default { model: "acme/first" };\n',
+      "extensions/provider.ts": provider("first"),
+    });
+    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
+    const allowed = () => JSON.stringify(sessionControl?.capabilities().allowedModels);
+    expect(allowed()).toContain("first");
+    await writeFile(join(dir, "extensions", "provider.ts"), provider("second"));
+    // Any reader that loads the extensions sees the edit first (here the menu); the catalog is rebuilt from it.
+    await sessionControl?.commands();
+    await vi.waitFor(() => expect(allowed()).toContain("second"));
+    expect(allowed()).not.toContain("first");
+  });
+
   it("joins registration refreshes even when the SDK's final refresh finishes first", async () => {
     const dir = await agentDirWith({
       "extensions/provider.ts": `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: "test", name: "test", contextWindow: 1000, maxTokens: 100 }] });`,

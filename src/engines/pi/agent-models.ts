@@ -7,6 +7,8 @@
  */
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
+import { log } from "../../log.ts";
+import { liveExtensions } from "./live-extensions.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { definitionServices } from "./agent-session-factory.ts";
 import { loadExtensionPaths } from "./definition.ts";
@@ -53,9 +55,15 @@ export interface AgentModels {
   /**
    * The registry: pi's built-ins, plus (with a directory) the agent's `models.json` and model catalog over the
    * machine's, plus `providers` and extension model declarations. An unbound catalog, built on first use and shared
-   * after; session bindings use createRuntime and their own extension instances.
+   * until the extensions' code changes, when it is built again; session bindings use createRuntime and their own
+   * extension instances.
    */
   runtime(): Promise<ModelRuntime>;
+  /**
+   * The catalog {@link runtime} last finished building, for a reader that cannot wait (the control plane's
+   * `capabilities()`). Throws before the first build has finished: such a reader must await {@link runtime} once.
+   */
+  current(): ModelRuntime;
   /** A session-local registry, before its extensions are loaded. Credentials remain shared. */
   createRuntime(): Promise<ModelRuntime>;
   /**
@@ -65,9 +73,10 @@ export interface AgentModels {
    */
   authStatus(provider: string, modelId?: string): Promise<AuthStatus>;
   /**
-   * The definition's extension entry points, listed afresh on every call: what this catalog registers models from (its
-   * first call) and what each session of the assembly built over it loads, so an extension added while the agent runs
-   * is loaded from the next session on. Empty without a directory.
+   * The definition's extension entry points, listed afresh on every call and answered only once pi's cache holds the
+   * code on disk (live-extensions.ts): what this catalog registers models from and what each session of the assembly
+   * built over it loads, so an extension added or edited while the agent runs is loaded from the next session on.
+   * Empty without a directory.
    */
   extensionPaths(): Promise<readonly string[]>;
 }
@@ -130,27 +139,52 @@ export function agentModels(
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
-  const extensionPaths = (): Promise<readonly string[]> =>
-    agentDir ? loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}) : Promise.resolve([]);
-  let registry: Promise<ModelRuntime> | undefined;
-  const runtime = (): Promise<ModelRuntime> => {
-    registry ??= createRuntime().then(async (models) => {
-      if (agentDir) {
-        await definitionServices({
-          cwd: agentDir,
-          modelRuntime: models,
-          definition: { skills: [] },
-          extensionPaths: await extensionPaths(),
-        });
-      }
-      return models;
-    });
-    return registry;
+  // Only a definition has extensions/; the low-level paths (no directory) load none and watch nothing.
+  const live = agentDir
+    ? liveExtensions(
+        agentDir,
+        () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}),
+        // The code changed: rebuild the catalog now, so a reader of `current()` sees the new models without having
+        // to be the one that asks first. Its failure is said here, since nobody awaits this build.
+        () =>
+          void runtime().catch((error: unknown) =>
+            log.error(`[fastagent] rebuilding the model catalog after an extensions/ edit failed: ${String(error)}`),
+          ),
+      )
+    : undefined;
+  const extensionPaths = (): Promise<readonly string[]> => live?.paths() ?? Promise.resolve([]);
+  // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
+  // plane lists and lets a session select is what a session would load (a model an edited extension declares).
+  let registry: { generation: number; runtime: Promise<ModelRuntime> } | undefined;
+  let latest: ModelRuntime | undefined;
+  const runtime = async (): Promise<ModelRuntime> => {
+    const paths = await extensionPaths();
+    const generation = live?.generation() ?? 0;
+    if (registry?.generation !== generation) {
+      const built = createRuntime().then(async (models) => {
+        if (agentDir)
+          await definitionServices({
+            cwd: agentDir,
+            modelRuntime: models,
+            definition: { skills: [] },
+            extensionPaths: paths,
+          });
+        // Only the newest build publishes: an older one finishing late must not replace it.
+        if (registry?.runtime === built) latest = models;
+        return models;
+      });
+      registry = { generation, runtime: built };
+    }
+    return registry.runtime;
   };
   return {
     ...(files ? { auth: files } : {}),
     credentials,
     runtime,
+    current() {
+      if (!latest) throw new Error("the model catalog has not been built yet: await runtime() first");
+      return latest;
+    },
     createRuntime,
     extensionPaths,
     async authStatus(provider, modelId) {
