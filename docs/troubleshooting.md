@@ -140,7 +140,8 @@ Fixes depend on the channel:
 ## Tool, channel or schedule failed to load
 
 If an enabled file under `tools/` or `channels/` cannot import, is missing a declared secret, or has an invalid
-export, or a file under `schedules/` is not a valid schedule, `dev` / `start` fails and names every such file.
+export, `dev` / `start` fails and names every such file. A file under `schedules/` that is not a valid schedule does
+not stop the serve: it is logged (`is not a valid schedule`) and not armed, and `fastagent info` reports it.
 
 Fix the reported files and environment. To intentionally disable one without deleting it, rename it so
 it no longer ends in `.ts`, `.js`, or `.mjs`, for example:

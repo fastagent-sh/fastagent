@@ -78,6 +78,12 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
     expect(plan.runbook.join("\n")).toContain("stop-runtime-session");
+    // A manual deploy passes the ingress secret, and activates the container THROUGH THE FORWARDER: that is what
+    // tells it where to set its alarms (an invoke-agent-runtime call goes through IAM and carries no address).
+    expect(plan.runbook.join("\n")).toContain("FastagentIngressSecret=<another random string>");
+    expect(plan.runbook.join("\n")).toContain(
+      `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
+    );
     expect(plan.runbook.join("\n")).toContain("fastagent deploy agentcore");
     expect(plan.runbook.join("\n")).toContain("fastagent logs agentcore --follow");
     expect(plan.runbook.join("\n")).toContain("--source forwarder");

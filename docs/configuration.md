@@ -562,8 +562,9 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   can be that same `/<name>`.
 - **Edits take effect within 30 seconds, without a restart**: the clock re-reads `schedules/`, arming an added or
   changed schedule from its next instant and disarming a removed one. A file that stops being valid keeps its last
-  definition and is logged; at start, it refuses the serve. The agent can write a schedule this way too; a release
-  replaces it like any file in the definition.
+  definition and is logged; at start, it is logged and not armed. It never stops the serve, since the agent writes
+  schedules too and one it got wrong must not take the agent down at its next start; `fastagent info` reports it, and
+  `deploy --run` refuses to ship one. A release replaces an agent-written schedule like any file in the definition.
 
 `fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
 agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve

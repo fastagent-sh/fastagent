@@ -140,18 +140,21 @@ interface PreflightInput {
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
   force: boolean;
-  /** The target delivers cron slots from an external clock and holds no resident process (AgentCore). */
-  externalClock?: boolean;
+  /**
+   * The target holds no resident process (AgentCore): what wakes it is outside it (webhooks, alarms), so the notes
+   * about keeping one machine running do not apply.
+   */
+  noResidentProcess?: boolean;
   /**
    * Does this target publish the serve at a URL anyone can dial? True for every host that mints one (Fly, Railway,
    * a Docker box); false for AgentCore, where the container is reachable only through the Runtime's IAM and the
-   * forwarder's shared secret. Kept apart from {@link externalClock} on purpose — they happen to agree on AgentCore
+   * forwarder's shared secret. Kept apart from {@link noResidentProcess} on purpose — they happen to agree on AgentCore
    * today, and answering two questions with one boolean is how the answer to one of them goes wrong later.
    */
   publicUrl?: boolean;
   /**
    * Does every deployment start this host's storage over (AgentCore)? Then a clone the instance made, and anything the
-   * agent did in it, does not outlive a release. Its own question, apart from {@link externalClock}.
+   * agent did in it, does not outlive a release. Its own question, apart from {@link noResidentProcess}.
    */
   storageResets?: boolean;
 }
@@ -176,7 +179,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, force, externalClock, publicUrl = true, storageResets = false } = input;
+  const { agentDir, config, force, noResidentProcess, publicUrl = true, storageResets = false } = input;
   // The release manifest carries this name into the container, where it is joined onto the storage root — so `init`'s
   // "one path segment" is not enough here.
   if (!isReleaseAgentName(basename(agentDir))) {
@@ -281,13 +284,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // A FAILED file still counts, on the conservative side: it may well be a valid schedule tomorrow, and a plan that
   // scaled to zero because the file did not parse would hide that behind silence.
   const hasCron = loadedSchedules.schedules.length > 0 || loadedSchedules.failures.length > 0;
-  if (longConnectionChannels.length > 0 && !externalClock) {
+  if (longConnectionChannels.length > 0 && !noResidentProcess) {
     report.note(
       `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     );
   }
-  if (hasCron && !externalClock) {
+  if (hasCron && !noResidentProcess) {
     report.note(
       `schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );

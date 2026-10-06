@@ -11,7 +11,7 @@ import { text } from "./channels/respond.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
-import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
+import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
@@ -217,17 +217,13 @@ export function mountSessionControl(
 }
 
 /**
- * Load the agent's `schedules/`, refusing a file that is not a valid schedule: it is a declaration, so serving without
- * it would announce a ready service whose schedule never fires. Separate from {@link startSchedules} so the refusal
- * happens with the rest of the definition's, before anything is served; the clock starts later, inside the service's
- * scope.
+ * Load the agent's `schedules/` for the clock. A file that is not a valid schedule does NOT refuse the serve, unlike a
+ * broken tool or channel: the agent writes these files too (they are armed while it runs), and one it got wrong must
+ * not stop the next start, when nobody is talking to it to fix it. The clock says what is wrong with it and leaves it
+ * unarmed; `fastagent info` reports it, and `deploy --run` refuses the author's own.
  */
-export async function loadServingSchedules(agentDir: string): Promise<Schedule[]> {
-  // Thrown, not exited on: this runs inside an embedder's app as well as the CLI, and a library that calls
-  // process.exit takes a decision (degrade? retry? stop?) that belongs to its host.
-  const { schedules, failures } = await loadSchedules(agentDir);
-  refuseBrokenDeclarations(failures);
-  return schedules;
+export async function loadServingSchedules(agentDir: string): Promise<ScheduleLoad> {
+  return loadSchedules(agentDir);
 }
 
 /**
@@ -239,14 +235,17 @@ export function startSchedules(
   agent: Agent,
   stateRoot: string,
   agentDir: string,
-  schedules: readonly Schedule[],
-  options: { onChange?: () => void } = {},
+  loaded: ScheduleLoad,
+  options: { onChange?: () => void; localClock?: boolean } = {},
 ): Pick<Scheduler, "current" | "stop"> {
+  const { schedules, failures } = loaded;
   const scheduler = Effect.runSync(
     createScheduler({
       agent,
       stateRoot,
       schedules,
+      failures,
+      ...(options.localClock === false ? { localClock: false } : {}),
       reload: () => loadSchedules(agentDir),
       ...(options.onChange ? { onChange: options.onChange } : {}),
     }),
@@ -343,7 +342,7 @@ export async function mountAgentService(
   const corsOrigins = opened.http?.cors;
   if (corsOrigins) assertCorsOrigins(corsOrigins, "mountAgentService: http.cors");
 
-  // Loaded with the rest of the definition, so a broken schedule refuses the serve before anything is published.
+  // A schedule that is not valid is the clock's to report (it never refuses the serve: see loadServingSchedules).
   const schedules = await loadServingSchedules(agentDir);
   const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http });
   const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);

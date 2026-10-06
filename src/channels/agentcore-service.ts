@@ -138,12 +138,16 @@ export async function mountAgentcoreService(
     );
   }
 
-  // Started here, not deferred to an envelope. The clock runs while the container does; the alarms wake it for an
-  // instant it would otherwise sleep through (`armAlarms`), and a redelivered or doubled fire claims its slot once.
-  const schedules = await loadServingSchedules(agentDir);
+  // Started here, not deferred to an envelope. No resident timers: each instant arrives as its own fire from the
+  // alarms the container sets (`armAlarms`), ONE path per instant, so the reply to that delivery says whether it ran.
+  // The clock still re-reads schedules/ and pumps wake-ups; a redelivered fire claims its slot once.
+  const loaded = await loadServingSchedules(agentDir);
   let scheduled: Pick<Scheduler, "current" | "stop"> | undefined;
-  const mirror = armAlarms(stateRoot, () => scheduled?.current() ?? schedules);
-  scheduled = startSchedules(agent, stateRoot, agentDir, schedules, mirror ? { onChange: mirror } : {});
+  const mirror = armAlarms(stateRoot, () => scheduled?.current() ?? loaded.schedules);
+  scheduled = startSchedules(agent, stateRoot, agentDir, loaded, {
+    localClock: false,
+    ...(mirror ? { onChange: mirror } : {}),
+  });
   const armed = scheduled;
 
   const lazyChannels = async (): Promise<RouteSurface> => {

@@ -385,6 +385,18 @@ describe("schedule/wake-alarm: helpers", () => {
     expect(toAlarms(entries, [], now)).toEqual([{ id: "future", at: "2026-07-28T11:00:00.000Z" }]);
   });
 
+  it("a schedule's instant too near to set is set just past the margin, still naming its instant", () => {
+    // The alarm is the only thing that fires a schedule there: leaving one out because it is close would lose it.
+    const now = new Date("2026-07-28T10:00:58Z");
+    expect(toAlarms([], [{ name: "tick", cron: "* * * * *", prompt: "p" }], now)).toEqual([
+      {
+        id: "schedule:tick",
+        at: "2026-07-28T10:01:04.000Z",
+        fire: { name: "tick", occurrence: "2026-07-28T10:01:00.000Z" },
+      },
+    ]);
+  });
+
   it("toAlarms adds each schedule's NEXT instant, carrying the fire it delivers, keyed by the schedule", () => {
     const now = new Date("2026-07-28T10:00:00Z");
     const schedules = [

@@ -784,6 +784,48 @@ describe("schedule/scheduler: schedules/ re-read while running", () => {
     s.stop();
   });
 
+  it("a file not valid at start is said once, at start, and not again by a re-read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const failure = { label: "schedules/bad.md", file: "/x/schedules/bad.md", message: "no closing ---" };
+    const s = createScheduler({
+      agent: recordingAgent().agent,
+      stateRoot: await freshRoot(),
+      schedules: [hourly()],
+      failures: [failure],
+      reload: async () => ({ schedules: [hourly()], failures: [failure] }),
+    });
+    s.start();
+    const said = () => logs.filter((l) => /schedules\/bad\.md is not a valid schedule .* — not armed/.test(l));
+    expect(said()).toHaveLength(1); // at start, before any re-read
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(said()).toHaveLength(1);
+    s.stop();
+  });
+
+  it("without a local clock (AgentCore's alarms deliver each instant) it arms no timer, and still re-reads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-07-07T10:59:30Z"));
+    const { agent, calls } = recordingAgent();
+    let loaded: ScheduleLoad = { schedules: [hourly()], failures: [] };
+    const s = createScheduler({
+      agent,
+      stateRoot: await freshRoot(),
+      schedules: [hourly()],
+      localClock: false,
+      reload: async () => loaded,
+    });
+    s.start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000); // past 11:00
+    expect(calls).toEqual([]);
+    loaded = { schedules: [hourly({ name: "other" })], failures: [] };
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(s.current().map((x) => x.name)).toEqual(["other"]);
+    s.stop();
+  });
+
   it("a re-read that fails keeps everything armed, and says so", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(new Date("2026-07-07T10:00:30Z"));

@@ -1,6 +1,7 @@
 /**
- * A cron on a host with NO resident clock: EventBridge holds the timer, and the fire arrives as an
- * envelope the container has to accept.
+ * A cron on a host with NO resident clock: the container mirrors each schedule's next instant into a one-shot
+ * EventBridge alarm (schedule/wake-alarm.ts), and the fire arrives as an envelope the container has to accept. The
+ * container runs no timer of its own there, so the delivery's reply is the one record of whether the instant ran.
  *
  * WHY THIS NEEDS A LIVE PROBE. Offline, everything about this delivery is ours — a fake clock, a
  * faked EventBridge, a handler called directly. Here the timer, the forwarder and the container are
@@ -10,13 +11,11 @@
  *   model turn and the forwarder's own timeout all happen inside one invocation, and a non-200 would
  *   be invisible from inside an agent that simply never ran.
  *
- * WHAT IT NO LONGER HAS TO PROVE, and why. The design's other load-bearing fact — that EventBridge
- * repeats `<aws.scheduler.scheduled-time>` byte-identically across a redelivery, which is what lets
- * the container tell a retry from a new occurrence — was measured directly by a standalone spike
- * (EventBridge Scheduler → a Lambda that failed on purpose): 17 deliveries over 7 occurrences, up to 3
- * per occurrence, every redelivery carrying an identical payload, backoff at +60s and +186s. That is a
- * property of the SERVICE, not of this deployment, so it does not belong in a probe that also builds
- * a container. The numbers are recorded in schedule/run.ts, where the design reads them.
+ * WHAT IT NO LONGER HAS TO PROVE, and why. That EventBridge repeats a schedule's input byte-identically across a
+ * redelivery, which is what lets the container claim an instant once, was measured by a standalone spike
+ * (EventBridge Scheduler → a Lambda that failed on purpose): 17 deliveries over 7 occurrences, up to 3 per
+ * occurrence, every redelivery carrying an identical payload, backoff at +60s and +186s. That is a property of the
+ * SERVICE, not of this deployment. The alarm's input names the instant the container computed, so the same holds.
  *
  * WHAT IT OBSERVES, and from where. The forwarder logs one line per delivery —
  * `schedule-fire <name> (<occurrence>): <status> <body>` (deploy/agentcore/forwarder.js). That is the
@@ -24,8 +23,9 @@
  *
  * The cron is every-minute so the wait is bounded; EventBridge Scheduler's floor is one minute.
  *
- * WHAT IT MEASURED, ap-southeast-1, 2026-09-21 — recorded so the next reader does not have to deploy
- * to learn it. Seven consecutive deliveries of a `* * * * *` schedule, read from the forwarder's log:
+ * WHAT IT MEASURED, ap-southeast-1, 2026-09-21, under the earlier deploy-time RULE (the alarm path has not been
+ * measured live yet) — recorded so the next reader does not have to deploy to learn it. Seven consecutive deliveries
+ * of a `* * * * *` schedule, read from the forwarder's log:
  *
  *     occurrence (clock)     container slot             status     lag     turn
  *     2026-09-21T07:39:00Z   2026-09-21T07:39:00.000Z   200      49.9s   3224ms   fired=true
@@ -37,11 +37,11 @@
  * turn — i.e. the delivery lands some 40s after the instant, never before it, which is what a claim-keeping
  * clock has to account for.
  *
- * Every `slot` in the reply equals the `<aws.scheduler.scheduled-time>` the rule sent, which is the
- * design's whole claim: the clock names the occurrence and the container does not recompute it.
+ * Every `slot` in the reply equals the occurrence the delivery named, which is the design's whole claim: the clock
+ * names the occurrence and the container does not recompute it.
  *
- * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and an EventBridge
- * rule) and one real model turn per minute it is up. Teardown is the shared
+ * COSTS REAL RESOURCES (a full AgentCore stack with a forwarder, a Function URL and the alarms it sets) and one real
+ * model turn per minute it is up. Teardown is the shared
  * {@link destroyAgentcoreDeployment}.
  *
  * Needs the same IAM as `agentcore-deploy`, plus `logs:FilterLogEvents` on the forwarder group.
@@ -84,8 +84,8 @@ beforeAll(async () => {
   await writeFile(join(agentDir, "SYSTEM.md"), "You are terse. Answer in as few words as possible.\n");
   await writeFile(join(agentDir, "fastagent.config.ts"), `export default { model: ${JSON.stringify(MODEL)} };\n`);
   await stageModelKey(agentDir, MODEL);
-  // The ONE line that decides this deployment's topology: a schedule puts a forwarder, a Function URL
-  // and an EventBridge rule into the template (plan.ts agentcoreTopology).
+  // The schedule: armed by the alarm the container sets once the deploy's probe has reached it through the forwarder
+  // (every stack has one, for the alarms).
   await writeFile(join(agentDir, "schedules", `${SCHEDULE}.md`), `---\ncron: "${CRON}"\n---\nReply with just: tick\n`);
   await writeFile(
     join(agentDir, "package.json"),

@@ -7,9 +7,10 @@
 // Webhooks (Function URL) and EventBridge Scheduler fires are forwarded as envelopes to the
 // AgentCore Runtime over SigV4 InvokeAgentRuntime, all on ONE fixed ingress session (fastagent
 // channel state is single-writer; one session = at most one microVM). This
-// Lambda also OWNS the wake alarms: the container POSTs its pending wake-ups to /__fastagent/
-// wake-alarm (shared secret) and each becomes a self-deleting one-shot EventBridge schedule that
-// pokes this Lambda — which wakes the container, whose wake pump fires the due entry.
+// Lambda also OWNS the alarms: the container POSTs its pending wake-ups and each schedule's next
+// instant to /__fastagent/wake-alarm (shared secret), and each becomes a self-deleting one-shot
+// EventBridge schedule that calls this Lambda back — a wake-up's pokes the container, whose wake pump
+// fires the due entry; a schedule's delivers that instant's fire.
 // CommonJS on purpose: the deployment package's entry lands as index.js, where ESM import is invalid.
 "use strict";
 const crypto = require("node:crypto");

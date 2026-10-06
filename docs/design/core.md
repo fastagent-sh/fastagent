@@ -604,8 +604,10 @@ tools.
 
 **Edits are armed while the agent runs.** The clock re-reads `schedules/` every 30 seconds: an added or changed
 schedule is armed from its next instant (an edit is not a missed run to catch up), a removed one is disarmed, and a
-file that stops being valid keeps the definition it last had, said once in the log. At start an invalid file still
-refuses the serve. So an agent can schedule work in its definition and have it run without a restart; a release
+file that stops being valid keeps the definition it last had, said once in the log. At start an invalid file is
+logged and not armed, unlike a broken tool or channel, which refuses the serve: the agent writes schedules, and one it
+got wrong must not keep the next start (a crash, a scaled-to-zero host waking, AgentCore reclaiming idle compute) from
+serving at all, when nobody is talking to it to fix it. The deploy pre-flight still refuses the author's. So an agent can schedule work in its definition and have it run without a restart; a release
 replaces the file like anything else the agent wrote there. `dev` does not restart on `schedules/`.
 
 **Nothing runs a schedule by name.** Work a caller starts is `POST /invoke`, and a prompt it reuses is a prompt

@@ -480,8 +480,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       ...secrets.map((s) => `#      ${s.name}: ${s.hint}`),
     );
   }
-  const wakeSecretHint = " FastagentWakeSecret=<any random string>";
+  const wakeSecretHint = " FastagentWakeSecret=<any random string> FastagentIngressSecret=<another random string>";
   runbook.push(`#      FastagentWakeSecret: the wake-alarm shared secret — any random string (\`--run\` mints one)`);
+  runbook.push(
+    `#      FastagentIngressSecret: what proves an envelope came from the forwarder — another random string, kept for the activation below`,
+  );
   runbook.push(
     `aws cloudformation deploy --stack-name ${stack} --template-file ${TEMPLATE_FILE} \\`,
     `  --capabilities CAPABILITY_IAM \\`,
@@ -534,8 +537,11 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Schedules and wake-ups are EventBridge-backed: the container mirrors each pending wake-up and each schedule's`,
     `#   next instant (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
     `#   schedule (fa-${name}-wk-*) that wakes it at the right instant, even when the compute is reclaimed. So a`,
-    `#   schedule written or edited on the runtime gets its alarm without a deploy. The container sets them once it`,
-    `#   has been invoked after a deploy (\`--run\` probes it); after a manual deploy, invoke it once.`,
+    `#   schedule written or edited on the runtime gets its alarm without a deploy. The container sets them only`,
+    `#   once an envelope has reached it THROUGH THE FORWARDER, which tells it where the forwarder is; an`,
+    `#   invoke-agent-runtime call does not (that door is IAM's, and does not carry it). \`--run\` does this with its`,
+    `#   probe. After a manual deploy, do it once, or no schedule fires until a webhook arrives:`,
+    `curl -fsS -X POST "<ForwarderUrl>/__fastagent/probe" -d '{"auth":"<FastagentIngressSecret>"}'`,
   );
 
   runbook.push(

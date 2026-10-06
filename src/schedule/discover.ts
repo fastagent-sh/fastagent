@@ -9,7 +9,6 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
-import { log } from "../log.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { cronError } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";
@@ -61,12 +60,13 @@ export async function loadSchedules(dir: string): Promise<{ schedules: Schedule[
     if (!dirent.name.endsWith(".md")) continue;
     const label = `schedules/${dirent.name}`;
     const file = join(scheduleDir, dirent.name);
+    const fail = (message: string) => failures.push({ label, file, message });
     if (!dirent.isFile()) {
-      log.warn(`[fastagent] ${label} is not a regular file — schedules must be real files inside the agent dir`);
+      // A failure like any other, so a re-read reports it once rather than on every pass.
+      fail("it is not a regular file — schedules must be real files inside the agent dir");
       continue;
     }
     const name = dirent.name.slice(0, -".md".length);
-    const fail = (message: string) => failures.push({ label, file, message });
     // The name becomes a path segment (the fired-slot claims live under `claims/<name>/`).
     if (!isSafeScheduleName(name)) {
       fail('a schedule name cannot be empty, ".", ".." or contain a path separator');

@@ -50,19 +50,21 @@ const SYNC_TIMEOUT_MS = 10_000;
 const DUE_MARGIN_MS = 5_000;
 
 /**
- * Pending wake-ups and each schedule's next instant → the desired alarm set, minus what is already due (see
- * {@link DUE_MARGIN_MS}): the container is awake for those, and its own clock fires them. A schedule's alarm is keyed
- * by the schedule, so mirroring again moves it to the next instant rather than adding one.
+ * Pending wake-ups and each schedule's next instant → the desired alarm set. A wake-up already due is left out (see
+ * {@link DUE_MARGIN_MS}): the container is awake for it, and its wake pump fires it. A schedule's alarm is the ONLY
+ * thing that fires its instant (the container runs no timer of its own there), so one too near to set is set just
+ * past the margin, still naming its instant. Keyed by the schedule, so mirroring again moves it rather than adding one.
  */
 export function toAlarms(pending: Wakeup[], schedules: readonly Schedule[], now: Date): WakeAlarm[] {
-  const future = (at: number) => at > now.getTime() + DUE_MARGIN_MS;
+  const earliest = now.getTime() + DUE_MARGIN_MS;
   return [
-    ...pending.filter((w) => future(Date.parse(w.fireAt))).map((w) => ({ id: w.id, at: w.fireAt })),
+    ...pending.filter((w) => Date.parse(w.fireAt) > earliest).map((w) => ({ id: w.id, at: w.fireAt })),
     ...schedules.flatMap((s) => {
       const next = nextRun(s.cron, s.tz, now);
-      if (!next || !future(next.getTime())) return [];
-      const at = next.toISOString();
-      return [{ id: `schedule:${s.name}`, at, fire: { name: s.name, occurrence: at } }];
+      if (!next) return [];
+      const occurrence = next.toISOString();
+      const at = next.getTime() > earliest ? occurrence : new Date(earliest + 1000).toISOString();
+      return [{ id: `schedule:${s.name}`, at, fire: { name: s.name, occurrence } }];
     }),
   ];
 }
@@ -159,8 +161,10 @@ export function createWakeAlarmSink(options: {
         }
         if (failures >= MAX_SYNC_ATTEMPTS) {
           log.error(
-            `[schedule] wake alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups have no ` +
-              `external alarm until the next store change or boot re-mirrors them`,
+            `[schedule] alarm sync FAILED after ${MAX_SYNC_ATTEMPTS} attempts — pending wake-ups and the schedules' ` +
+              `next instants have no alarm until something wakes this container again and re-mirrors them (an ` +
+              `invocation, a webhook, a store change). A deployment with nothing else to wake it stays asleep ` +
+              `through every instant after this one`,
           );
         }
       });
