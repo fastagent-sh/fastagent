@@ -31,8 +31,8 @@ Commands that take an agent take `[agent]`: the path to an agent directory, the 
 | Anything else | Refused: pass the agent's path, or create one with `fastagent init` |
 
 Agents live in their own directories, not inside the projects they work on ([agent model](agent-model.md) §2), so
-there is nothing to search for below the current directory: no scan for agents inside a directory, no environment
-variable that selects one, and nothing for a generated Dockerfile to pin.
+there is nothing to search for below the current directory: no scan for agents inside a directory, and no
+environment variable that chooses among several; a generated Dockerfile names the one directory it ships.
 
 ## 2. The local instance
 
