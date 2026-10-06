@@ -146,8 +146,12 @@ pi run there treats it as a project and loads the same `.pi/` files and `.agents
 `.pi/SYSTEM.md` makes the author's development session the agent, and a development skill kept in
 `.agents/skills/` ("how to write a fastagent tool") ships with the agent. The root spellings (`SYSTEM.md`,
 `skills/`, `prompts/`) are invisible to pi as a coding agent, which is what keeps the two readers apart; `.pi/`
-and `.agents/skills/` are read for compatibility at that cost. An author who develops the agent with pi keeps
-what is meant for the agent at the root, and what is meant for the development session in `AGENTS.md`.
+and `.agents/skills/` are read for compatibility at that cost. `AGENTS.md` is the one file both readers share: the
+development session reads it as its working directory's, and the agent loads it every turn (above). So it holds
+what both need, how this agent is built and how to change it, which is a development note too now that the agent
+changes itself. What only the development session should read goes where pi looks and FastAgent does not: an
+`AGENTS.md` in a directory above the agent's (one for all the agents kept there), or the machine's
+`~/.pi/agent/AGENTS.md`.
 
 ### They are kept apart
 

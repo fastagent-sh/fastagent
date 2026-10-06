@@ -6,8 +6,8 @@ status: current
 
 # Configuration
 
-- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`), `skills/`, `prompts/`, `tools/`, and
-  what its contexts provide: each one's `AGENTS.md` and skills.
+- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`,
+  `tools/`, and what its contexts provide: each one's `AGENTS.md` and skills.
 - What it works on and knows is declared in `fastagent.config.ts` as `contexts`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
@@ -264,8 +264,8 @@ declare it as `github`.
 ## The system prompt
 
 pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from each context's `AGENTS.md`, the skills, and the working directory. Two files in the agent directory
-change it, both re-read every turn:
+is), the project context from the agent directory's `AGENTS.md` and then each context's, the skills, and the working
+directory. Two more files in the agent directory change it, both re-read every turn like the `AGENTS.md` files:
 
 | File | Effect |
 |---|---|
@@ -344,8 +344,8 @@ project scope is read from a context.
 
 ### The prompt lives in the session record
 
-pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or a
-context's `AGENTS.md` is appended
+pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or an
+`AGENTS.md` (the agent's own or a context's) is appended
 as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
 others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
 

@@ -278,7 +278,7 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, a context's `AGENTS.md`, skills and prompt
+`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md`, skills and prompt
 templates are
 read on the next turn.
 With watching enabled, changes under the agent's `tools/`, `channels/`, `routines/`, and `extensions/`
