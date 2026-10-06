@@ -276,8 +276,8 @@ for the user.
 // From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent context` run.
 function createAgent(
   dir: string,
-  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean },
-): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[] }>;
+  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean; install?: (dir: string) => Promise<void> },
+): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[]; repository: string }>;
 function listContexts(agentDir: string): Promise<ResolvedContext[]>;
 function addContext(agentDir: string, declaration: ContextDeclaration): Promise<{ name: string; contexts: ResolvedContext[] }>;
 function removeContext(agentDir: string, name: string): Promise<{ name: string; contexts: ResolvedContext[] }>;
@@ -287,7 +287,10 @@ class ContextNameError extends Error {}
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
 every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
 removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
-`init` adds) the agent imports nothing at run time and runs without `npm install`. `addContext` names the context
+`init` adds) the agent imports nothing at run time and runs without `npm install`; `install`, when given, runs after
+the scaffold so the lockfile is in the first commit. The agent is then a git repository whose first commit is the
+scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
+no commit identity), as a sentence to show. `addContext` names the context
 after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.
 Both rewrite only the literal `contexts` list, under the config file's lock, so concurrent edits apply one after the
 other; each returns the name it acted on with the contexts after the edit. A name that cannot name a context, is
