@@ -1,6 +1,6 @@
 /**
  * WHERE each declared context is, for THIS instance: the one answer the prompt, the coding tools, skills, authored
- * tools, `info` and `deploy` all read (docs/design/agent-model-implementation.md §2). Reads the declaration and the
+ * tools, `info` and `deploy` all read (docs/design/core.md §2). Reads the declaration and the
  * disk (git included); never the network, never a write. Making a clone real is `cloneContext`'s, and only a process
  * that runs the agent asks for it.
  */
