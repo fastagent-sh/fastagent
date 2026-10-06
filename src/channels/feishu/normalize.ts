@@ -72,6 +72,39 @@ function renderNodes(nodes: unknown, resources?: DecodedFeishuResource[]): strin
   return parts.join("").trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Text components of a Card 2.0, whose `content` is what a reader sees. */
+const CARD_V2_TEXT_TAGS = new Set(["markdown", "plain_text", "lark_md"]);
+
+/**
+ * A Card 2.0's visible text, in reading order: the header title, then every text component in the body, through the
+ * containers (columns, panels, forms) that nest them. An image says it is there; controls with no text say nothing.
+ */
+function cardV2Lines(card: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const header = isRecord(card.header) ? card.header : undefined;
+  const title = isRecord(header?.title) ? nonEmptyString(header.title.content) : undefined;
+  if (title) lines.push(title);
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!isRecord(node)) return;
+    const content = nonEmptyString(node.content)?.trim();
+    if (typeof node.tag === "string" && CARD_V2_TEXT_TAGS.has(node.tag) && content) lines.push(content);
+    else if (node.tag === "img") lines.push("[image]");
+    const label = isRecord(node.text) ? nonEmptyString(node.text.content)?.trim() : undefined;
+    if (label) lines.push(label);
+    for (const key of ["elements", "columns", "fields"]) visit(node[key]);
+  };
+  visit((card.body as Record<string, unknown>).elements);
+  return lines;
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
@@ -117,6 +150,11 @@ export function decodeFeishuContent(
     // A CARD, as the platform hands it BACK.
     case "interactive":
     case "card": {
+      // Card 2.0 as SENT (`card_msg_content_type=user_card_content`): every answer this channel streams.
+      if (isRecord(content.body)) {
+        const lines = cardV2Lines(content);
+        return { text: lines.length > 0 ? lines.join("\n") : `[${rawType} message]`, resources };
+      }
       const lines: string[] = [];
       const title = nonEmptyString(content.title);
       if (title) lines.push(title);
