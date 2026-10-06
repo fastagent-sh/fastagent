@@ -91,7 +91,7 @@ export async function checkAgentScopes(input: {
 export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
-  ingress: FeishuSubscriptionMode = "webhook",
+  ingress: FeishuSubscriptionMode,
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);

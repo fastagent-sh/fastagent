@@ -147,6 +147,13 @@ export async function runAddChannel(
   process.exit(0);
 }
 
+/**
+ * Feishu/Lark ingress when the author did not choose one. WebSocket: no public URL or tunnel, and no
+ * `application:application:patch`, which some tenants review and which then holds a new app in review. It runs on
+ * every host but AgentCore, which has no resident process; webhook is for AgentCore and for scale-to-zero.
+ */
+const DEFAULT_FEISHU_INGRESS: FeishuSubscriptionMode = "websocket";
+
 async function resolveIngress(
   kind: ChannelKind,
   file: string,
@@ -187,24 +194,24 @@ async function resolveIngress(
   if (requested) return requested;
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     console.error(
-      `[fastagent] no interactive terminal — defaulting ${kind} ingress to webhook (use --ingress websocket)`,
+      `[fastagent] no interactive terminal — defaulting ${kind} ingress to ${DEFAULT_FEISHU_INGRESS} ` +
+        "(pass --ingress webhook for AgentCore or scale-to-zero)",
     );
-    return "webhook";
+    return DEFAULT_FEISHU_INGRESS;
   }
   const answer = await select<FeishuSubscriptionMode>({
     message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
-    // The default must match the non-interactive branch above.
-    initialValue: "webhook",
+    initialValue: DEFAULT_FEISHU_INGRESS,
     options: [
+      {
+        value: "websocket",
+        label: "WebSocket long connection (recommended)",
+        hint: "no public URL; runs locally, on Docker, Fly and Railway with one always-on process",
+      },
       {
         value: "webhook",
         label: "Webhook endpoint",
-        hint: "works on every deploy target; supports scale-to-zero; requires a public HTTPS URL",
-      },
-      {
-        value: "websocket",
-        label: "WebSocket long connection",
-        hint: "no public URL; needs an always-on process (not on AgentCore)",
+        hint: "for AgentCore or scale-to-zero; needs a public HTTPS URL and the app-config permission",
       },
     ],
   });

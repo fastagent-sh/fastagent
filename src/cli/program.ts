@@ -252,7 +252,7 @@ const start: CommandSpec = {
 
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
-  description: "Feishu/Lark ingress: websocket or webhook (interactive when omitted)",
+  description: "Feishu/Lark ingress: websocket (default) or webhook (AgentCore, scale-to-zero)",
 };
 const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",

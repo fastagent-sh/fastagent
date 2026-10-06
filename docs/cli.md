@@ -249,7 +249,7 @@ fastagent add telegram [agent]
 fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
-                             # feishu/lark take --ingress websocket|webhook (asked when omitted)
+                             # feishu/lark take --ingress websocket|webhook (asked when omitted; websocket by default)
 ```
 
 Writes `channels/<kind>.ts` (yours after that) and a companion send tool (`tools/<kind>-send.ts`, rewritten on

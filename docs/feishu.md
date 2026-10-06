@@ -58,19 +58,30 @@ then checks what the app actually holds and names any scope your tenant withheld
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
 credentials.
 
-The ingress choice is persisted in `channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding `*WebSocketChannel` factory):
+WebSocket is the default ingress. Choose webhook (`--ingress webhook`) to deploy to AgentCore, which has no
+resident process, or to let a Fly/Railway machine scale to zero. An agent with a schedule keeps its machine up
+anyway (see [deploy](deploy.md)), so WebSocket costs it nothing more. The choice is persisted in
+`channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding
+`*WebSocketChannel` factory):
 
-| | WebSocket | Webhook |
+| | WebSocket (default) | Webhook |
 |---|---|---|
 | Public URL / `--tunnel` | Not needed | Required |
 | Runtime credentials | App ID + Secret | App ID + Secret + Verification Token; Encrypt Key optional |
+| Deploy targets | local, Docker, Fly, Railway — one always-on process | all, AgentCore included |
 | Scale-to-zero / App Sleeping | Not supported; keep one process running | Supported when no other always-on producer exists |
+| App-config permission (`application:application:patch`) | Not requested | Requested: it registers the Request URL on every `dev --tunnel` and `deploy --run`; a tenant that reviews it holds the new app in review |
 | Platform configuration | Long connection + publish | Webhook mode + Request URL + publish |
 
 This is an **app-level onboarding choice**, not a runtime failover switch. The platform delivers through
 one subscription mode at a time. To migrate later, change the channel factory and the console mode
-together, then publish a version; changing only one side makes the bot deaf. Use separate apps when dev
-and production intentionally use different modes.
+together, then publish a version; changing only one side makes the bot deaf.
+
+**Use one app per environment** (your laptop's `dev`, each deployment). Two processes on one app take each
+other's messages, in either mode: two WebSocket clients split the events between them rather than each
+receiving all of them, and a webhook `dev --tunnel` re-registers the Request URL to itself, so the deployment
+stops receiving any. `dev` and `deploy` read the same `.secrets/.env` unless `FASTAGENT_SECRETS_DIR` points one
+of them at another directory; put the second app's App ID and Secret there.
 
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work.
