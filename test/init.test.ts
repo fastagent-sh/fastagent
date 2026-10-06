@@ -255,7 +255,7 @@ describe("init: scaffoldAgent", () => {
     );
     const mine = join(base, "mine");
     expect(git(["rev-parse", "--show-toplevel"], mine)).toBe(mine);
-    expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent init");
+    expect(git(["log", "--format=%s"], mine)).toBe("Create the agent with fastagent");
     expect(git(["status", "--porcelain"], mine)).toBe(""); // all of it committed
     expect(git(["ls-files"], mine).split("\n")).toEqual(
       expect.arrayContaining(["fastagent.config.ts", "APPEND_SYSTEM.md", ".gitignore", ".secrets/.env.example"]),

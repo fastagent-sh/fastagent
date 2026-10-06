@@ -288,7 +288,8 @@ The commands are thin wrappers over these, so a client and the CLI apply the sam
 every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
 removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
 `init` adds) the agent imports nothing at run time and runs without `npm install`; `install`, when given, runs after
-the scaffold so the lockfile is in the first commit. The agent is then a git repository whose first commit is the
+the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
+failed context write. The agent is then a git repository whose first commit is the
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
 no commit identity), as a sentence to show. `addContext` names the context
 after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.

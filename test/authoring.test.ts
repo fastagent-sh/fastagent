@@ -3,8 +3,8 @@
  * nesting, the literal-list rewrite) are tested where they live and through the CLI; this file owns what only the API
  * promises: an agent it creates runs as created, and its refusals are thrown, a name problem as its own class.
  */
-import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,27 @@ describe("authoring API", () => {
     expect(await createAndOpen(join(base, "example"), true)).toMatch(
       /tools\/fetch-url\.ts \(Cannot find package '@fastagent-sh\/fastagent'/,
     );
+  });
+
+  it("install runs before the first commit; a rejected install removes the scaffold", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-install-")));
+    // What an install writes (a lockfile) is in the first commit, so the history starts from what runs.
+    const installed = join(base, "installed");
+    await createAgent(installed, { install: async (dir) => writeFile(join(dir, "package-lock.json"), "{}\n") });
+    const tracked = execFileSync("git", ["ls-files"], { cwd: installed, env: withGitIdentity, encoding: "utf8" });
+    expect(tracked.split("\n")).toContain("package-lock.json");
+
+    // A rejection is a failed create, like a context write that fails: nothing is left, and a retry starts clean.
+    const failed = join(base, "failed");
+    await expect(
+      createAgent(failed, {
+        install: async () => {
+          throw new Error("registry unreachable");
+        },
+      }),
+    ).rejects.toThrow("registry unreachable");
+    expect(await readdir(failed).catch(() => [])).toEqual([]);
+    await expect(createAgent(failed)).resolves.toMatchObject({ dir: failed });
   });
 
   it("creates with contexts, edits them, and throws a name refusal as ContextNameError", async () => {

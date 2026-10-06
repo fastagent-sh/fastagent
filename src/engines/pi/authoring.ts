@@ -24,7 +24,9 @@ export interface CreateAgentOptions extends ScaffoldOptions {
   /**
    * Install the agent's dependencies, after the scaffold and before its first commit, so the lockfile is in that
    * commit. The CLI passes `npm install` (its scaffold carries the example tool); without `exampleTool` nothing needs
-   * installing.
+   * installing. A rejection is a failed create: the scaffold is removed again and the error thrown, as when writing
+   * the contexts fails, so the directory is empty for a retry. One that reports its failure some other way (the CLI's
+   * resolves, and says the install failed) leaves the agent created.
    */
   install?: (dir: string) => Promise<void>;
 }
@@ -63,7 +65,13 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
       throw error;
     });
   }
-  if (options.install) await options.install(agentDir);
+  if (options.install) {
+    const install = options.install;
+    await install(agentDir).catch(async (error: unknown) => {
+      await undo();
+      throw error;
+    });
+  }
   return { dir: agentDir, created, contexts, repository: await initRepository(agentDir) };
 }
 
