@@ -435,7 +435,7 @@ describe("github contexts: what a command's <source> declares", () => {
     }
   });
 
-  it("a checkout's root is its repository; a directory in it, or one asked to be copied, is itself", async () => {
+  it("a checkout's root is its repository; a directory in it is itself", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "src/index.ts": "x\n" });
     const { root } = await agent();
@@ -453,13 +453,9 @@ describe("github contexts: what a command's <source> declares", () => {
         `${join(checkout, "src")} is in a checkout of github acme/app: declare github:acme/app for the whole repository`,
       ],
     });
-    expect(declarationFor(checkout, root, { copy: true })).toEqual({
-      declaration: { local: checkout, copy: true },
-      notes: [],
-    });
-    expect(declarationFor("github:acme/docs", root, { ref: "v1", local: "docs", readonly: true, copy: true })).toEqual({
+    expect(declarationFor("github:acme/docs", root, { ref: "v1", local: "docs", readonly: true })).toEqual({
       declaration: { github: "acme/docs", local: join(root, "docs"), ref: "v1", readonly: true },
-      notes: ["github acme/docs is cloned on a host, so --copy does not apply to it"],
+      notes: [],
     });
     expect(() => declarationFor(join(checkout, "src"), root, { ref: "main" })).toThrow(
       /--ref applies to a repository, and .* is declared as a directory/,

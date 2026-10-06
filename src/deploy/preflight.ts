@@ -15,7 +15,7 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { loadRoutines } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../engines/pi/create.ts";
 import { loadAgentDefinition } from "../engines/pi/definition.ts";
-import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
+import { type DeclaredContext, WAYS_TO_A_HOST, declareContexts } from "../contexts/declare.ts";
 import { agentModels } from "../engines/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -101,7 +101,7 @@ export interface DeployReport {
 /**
  * What each context becomes on the host, one line each, and the refusal of every one that cannot reach it: an
  * instance never starts with a context silently missing (agent-model.md §3). A repository is cloned there, as on this
- * machine without a checkout; a directory reaches a host only as a copy in the image, which is not built yet.
+ * machine without a checkout; a directory of this machine does not reach one (agent-model.md §3).
  */
 function checkContexts(contexts: readonly DeclaredContext[], storageResets: boolean, report: DeployReport): void {
   const refused: string[] = [];
@@ -114,11 +114,8 @@ function checkContexts(contexts: readonly DeclaredContext[], storageResets: bool
       report.note(`${role} ${context.name}: github ${context.repo}${context.ref ? `@${context.ref}` : ""}, ${fate}`);
     } else {
       refused.push(
-        context.kind === "copy"
-          ? `context "${context.name}" (${context.path}) is to be copied to the host, which deploy does not do yet: ` +
-              `declare it as a github repository, or remove it`
-          : `context "${context.name}" (${context.path}) is a directory on this machine, which a host does not ` +
-              `have: declare it as a github repository, or remove it`,
+        `context "${context.name}" (${context.path}) is a directory on this machine, which a host does not have: ` +
+          WAYS_TO_A_HOST,
       );
     }
   }

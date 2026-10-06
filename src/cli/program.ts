@@ -57,10 +57,6 @@ const init: CommandSpec = {
         "a directory or github:owner/repo the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
       repeatable: true,
     },
-    {
-      flags: "--copy",
-      description: "with --context: a host gets its own copy of each directory (else deploying refuses)",
-    },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
   ],
   examples: [
@@ -76,7 +72,6 @@ const init: CommandSpec = {
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
       contexts: (f.context as string[] | undefined) ?? [],
-      copy: f.copy === true,
     }),
 };
 
@@ -453,7 +448,6 @@ const context: CommandSpec = {
       args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
-        { flags: "--copy", description: "a directory: a host gets its own copy (else deploying refuses)" },
         { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
         { flags: "--local <dir>", description: "github:owner/repo: its checkout on this machine" },
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
@@ -466,11 +460,11 @@ const context: CommandSpec = {
       notes:
         "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
         "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
-        "place at each start where git can do so without touching the agent's work. Any other directory is declared `{ local }`, and `--copy` gives a host its " +
-        "own copy. A context may not contain the agent directory, nor sit inside it.",
+        "place at each start where git can do so without touching the agent's work. Any other directory is " +
+        "declared `{ local }`: it stays on this machine, and deploying refuses it. A context may not contain " +
+        "the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
-          copy: f.copy === true,
           readonly: f.readonly === true,
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
           ...(typeof f.local === "string" ? { local: f.local } : {}),

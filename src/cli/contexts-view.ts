@@ -3,7 +3,7 @@ import type { ResolvedContext } from "../contexts/resolve.ts";
 
 /** What a context is, in the words the reports use. */
 function contextKind(c: ResolvedContext): string {
-  if (c.kind !== "github") return c.kind === "copy" ? "local, copied to a host" : "local, this machine only";
+  if (c.kind !== "github") return "local, this machine only";
   const github = `github ${c.repo}${c.ref ? `@${c.ref}` : ""}`;
   return c.clone ? `${github}, a clone brought up to date at each start` : `${github}, this checkout`;
 }

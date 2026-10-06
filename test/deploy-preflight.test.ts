@@ -387,12 +387,12 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const dir = await agent();
     const pre = await call(dir, {
       model: "openai/gpt-4o-mini",
-      contexts: [{ local: "/srv/app" }, { local: "/srv/docs", copy: true }, { github: "acme/handbook" }],
+      contexts: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
     });
     expect(pre.ok).toBe(false);
     if (!pre.ok) {
       expect(pre.gate).toMatch(
-        /context "app" \(\/srv\/app\) is a directory on this machine, which a host does not have: declare it as a github repository, or remove it; context "docs" \(\/srv\/docs\) is to be copied to the host, which deploy does not do yet/,
+        /context "app" \(\/srv\/app\) is a directory on this machine, which a host does not have: what the agent only reads goes in the agent directory, which every release carries; what it works on moves to a repository declared as github; context "docs" /,
       );
       expect(pre.gate).not.toContain("handbook");
     }

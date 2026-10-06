@@ -160,7 +160,7 @@ describe("one resolution", () => {
     const { root, agentDir, app, handbook } = await layout();
     await writeFile(
       join(agentDir, "fastagent.config.ts"),
-      `export default {\n  model: "openai-codex/gpt-5.5",\n  contexts: [\n    { local: "../app", copy: true },\n  ],\n};\n`,
+      `export default {\n  model: "openai-codex/gpt-5.5",\n  contexts: [\n    { local: "../app" },\n  ],\n};\n`,
     );
     const readers = async () => {
       const opened = await createPiAgentFromDir(agentDir);
@@ -168,22 +168,22 @@ describe("one resolution", () => {
       const list = JSON.parse((await cli(["context", "list", "--json"], agentDir)).stdout);
       return [opened.contexts, info.contexts, list];
     };
-    const first = [{ name: "app", kind: "copy", readonly: false, location: app, notices: [] }];
+    const first = [{ name: "app", kind: "local", readonly: false, location: app, notices: [] }];
     expect(await readers()).toEqual([first, first, first]);
 
-    const added = await cli(["context", "add", handbook, agentDir, "--readonly", "--copy"], root);
+    const added = await cli(["context", "add", handbook, agentDir, "--readonly"], root);
     expect(added.code, added.stderr).toBe(0);
-    expect(added.stderr).toContain(`knows handbook  ${handbook} (local, copied to a host)`);
-    const second = [...first, { name: "handbook", kind: "copy", readonly: true, location: handbook, notices: [] }];
+    expect(added.stderr).toContain(`knows handbook  ${handbook} (local, this machine only)`);
+    const second = [...first, { name: "handbook", kind: "local", readonly: true, location: handbook, notices: [] }];
     expect(await readers()).toEqual([second, second, second]);
     // The edit is the literal list, absolute, as `init` writes it; the hand-written relative path stays as written.
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
-      `    { local: "../app", copy: true },\n    { local: ${JSON.stringify(handbook)}, copy: true, readonly: true },\n`,
+      `    { local: "../app" },\n    { local: ${JSON.stringify(handbook)}, readonly: true },\n`,
     );
 
     const removed = await cli(["context", "remove", "APP", agentDir], root);
     expect(removed.code, removed.stderr).toBe(0);
-    const third = [{ name: "handbook", kind: "copy", readonly: true, location: handbook, notices: [] }];
+    const third = [{ name: "handbook", kind: "local", readonly: true, location: handbook, notices: [] }];
     expect(await readers()).toEqual([third, third, third]);
   });
 
@@ -209,7 +209,7 @@ describe("one resolution", () => {
       2,
       expect.stringMatching(/no context named "nope" \(this agent has: app\)/),
     ]);
-    // With a name of its own it is added, and without --copy a host gets none of it.
+    // With a name of its own it is added.
     const named = await cli(["context", "add", other, agentDir, "--name", "app2"], root);
     expect(named.code, named.stderr).toBe(0);
     expect(named.stderr).toContain(`works on app2  ${other} (local, this machine only)`);

@@ -21,14 +21,14 @@ describe("contexts: the declaration", () => {
       declareContexts(
         [
           { local: "/home/me/code/app" },
-          { local: "../notes", copy: true, readonly: true },
+          { local: "../notes", readonly: true },
           { github: "acme/handbook", ref: "main", local: "/home/me/src/handbook", name: "rules" },
         ],
         AGENT,
       ),
     ).toEqual([
       { name: "app", readonly: false, kind: "local", path: "/home/me/code/app" },
-      { name: "notes", readonly: true, kind: "copy", path: "/home/me/agents/notes" },
+      { name: "notes", readonly: true, kind: "local", path: "/home/me/agents/notes" },
       {
         name: "rules",
         readonly: false,
@@ -46,7 +46,11 @@ describe("contexts: the declaration", () => {
     ["no source", [{ name: "x" }], /contexts\[0\]: declare where it comes from/],
     ["an unknown key", [{ local: "/x", copyy: true }], /contexts\[0\]: unknown key "copyy"/],
     ["a subdirectory (later)", [{ github: "a/b", path: "docs" }], /"path" .* is not supported yet/],
-    ["copy on a repository", [{ github: "a/b", copy: true }], /"copy" applies to a local context/],
+    [
+      "a copy for a host",
+      [{ local: "/x", copy: true }],
+      /contexts\[0\]: "copy" is gone, since a copy on a host is not the same data: what the agent only reads goes in the agent directory/,
+    ],
     ["ref on a directory", [{ local: "/x", ref: "main" }], /"ref" applies to a github context/],
     ["a repository not owner/repo", [{ github: "acme" }], /"github" must be "owner\/repo"/],
     ["a ref git would read as an option", [{ github: "a/b", ref: "--upload-pack=x" }], /"ref" must name a branch/],
@@ -70,11 +74,10 @@ describe("contexts: the declaration", () => {
     expect(() => declareContexts(raw, AGENT)).toThrow(message);
   });
 
-  it("a command reads a directory as a local context, absolute, copied to a host only when asked", () => {
+  it("a command reads a directory as a local context, absolute", () => {
     expect(declarationFor("app", "/home/me/code").declaration).toEqual({ local: "/home/me/code/app" });
-    expect(declarationFor("/x", "/", { copy: true, readonly: true, name: "n" }).declaration).toEqual({
+    expect(declarationFor("/x", "/", { readonly: true, name: "n" }).declaration).toEqual({
       local: "/x",
-      copy: true,
       readonly: true,
       name: "n",
     });
@@ -92,8 +95,8 @@ describe("contexts: resolved for this instance", () => {
 
   it("a local context is its directory, on this machine", async () => {
     const { root, agentDir } = await layout();
-    expect(resolveContexts(agentDir, [{ local: "../app", copy: true, readonly: true }], "local")).toEqual([
-      { name: "app", kind: "copy", readonly: true, location: join(root, "app"), notices: [] },
+    expect(resolveContexts(agentDir, [{ local: "../app", readonly: true }], "local")).toEqual([
+      { name: "app", kind: "local", readonly: true, location: join(root, "app"), notices: [] },
     ]);
   });
 
@@ -104,7 +107,7 @@ describe("contexts: resolved for this instance", () => {
       /context "missing": .*missing does not exist/,
     );
     expect(() => resolveContexts(agentDir, [{ local: "../file" }], "local")).toThrow(/is not a directory/);
-    expect(() => resolveContexts(agentDir, [{ local: "../app", copy: true }], "host")).toThrow(
+    expect(() => resolveContexts(agentDir, [{ local: "../app" }], "host")).toThrow(
       /context "app": a deployment carries only github contexts yet, and this one is a directory/,
     );
     // A repository is cloned on a host, wherever the author's checkout is: no `local` of theirs is looked for there.
@@ -144,25 +147,18 @@ describe("contexts: the literal list in fastagent.config.ts", () => {
     `import type { FastagentConfig } from "x";\n\nexport default {\n${body}} satisfies FastagentConfig;\n`;
 
   it("replaces the literal list, keeping everything around it", () => {
-    const src = config(
-      `  // what it works on\n  contexts: [\n    { local: '/old', copy: true }, // mine\n  ],\n  model: "p/m",\n`,
-    );
-    expect(
-      rewriteContexts(src, [
-        { local: "/a", copy: true },
-        { readonly: true, local: "/b", name: "b" },
-      ]),
-    ).toBe(
+    const src = config(`  // what it works on\n  contexts: [\n    { local: '/old' }, // mine\n  ],\n  model: "p/m",\n`);
+    expect(rewriteContexts(src, [{ local: "/a" }, { readonly: true, local: "/b", name: "b" }])).toBe(
       config(
-        `  // what it works on\n  contexts: [\n    { local: "/a", copy: true },\n    { local: "/b", readonly: true, name: "b" },\n  ],\n  model: "p/m",\n`,
+        `  // what it works on\n  contexts: [\n    { local: "/a" },\n    { local: "/b", readonly: true, name: "b" },\n  ],\n  model: "p/m",\n`,
       ),
     );
     expect(rewriteContexts(config(`  contexts: [{ local: "/a" }],\n`), [])).toBe(config(`  contexts: [],\n`));
   });
 
   it("adds the list at the top of `export default {` when there is none", () => {
-    expect(rewriteContexts(config(`  model: "p/m",\n`), [{ local: "/a", copy: true }])).toBe(
-      config(`  contexts: [\n    { local: "/a", copy: true },\n  ],\n  model: "p/m",\n`),
+    expect(rewriteContexts(config(`  model: "p/m",\n`), [{ github: "acme/a", ref: "main" }])).toBe(
+      config(`  contexts: [\n    { github: "acme/a", ref: "main" },\n  ],\n  model: "p/m",\n`),
     );
   });
 
@@ -189,9 +185,9 @@ describe("contexts: the literal list in fastagent.config.ts", () => {
     await mkdir(agentDir);
     const path = join(agentDir, "fastagent.config.ts");
     await writeFile(path, `export default {\n  contexts: [],\n};\n`);
-    await writeContexts(agentDir, [{ local: join(root, "app"), copy: true }]);
+    await writeContexts(agentDir, [{ local: join(root, "app"), readonly: true }]);
     expect(await readFile(path, "utf8")).toBe(
-      `export default {\n  contexts: [\n    { local: ${JSON.stringify(join(root, "app"))}, copy: true },\n  ],\n};\n`,
+      `export default {\n  contexts: [\n    { local: ${JSON.stringify(join(root, "app"))}, readonly: true },\n  ],\n};\n`,
     );
 
     // The import is the check, not the text: a later spread that overrides the list makes the edit mean something

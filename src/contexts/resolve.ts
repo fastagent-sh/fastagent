@@ -22,8 +22,8 @@ export type ResolvedContext = {
   notices: string[];
 } & (
   | {
-      /** How it reaches an instance: a directory on this machine, or one a host gets a copy of. */
-      kind: "local" | "copy";
+      /** A directory of this machine, which a host does not have. */
+      kind: "local";
     }
   | {
       kind: "github";

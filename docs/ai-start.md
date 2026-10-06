@@ -407,7 +407,8 @@ the service assembly, Slack transport, or a separate scheduler. `ExecutionEnv` i
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
 A `github` context is cloned on the host (put `GITHUB_TOKEN` in `.secrets/.env` for a private repository or for
-pushes); a directory context does not reach a host yet, and `deploy` refuses it.
+pushes); a `local` context does not reach a host, and `deploy` refuses it. Reference material the agent only reads
+belongs in the agent directory, which every release ships.
 
 | Host | Generate only | Deploy after approval |
 |---|---|---|

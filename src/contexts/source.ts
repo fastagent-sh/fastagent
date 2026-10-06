@@ -8,8 +8,6 @@ import { type ContextDeclaration, isGithubRepo } from "./declare.ts";
 import { checkoutOf, githubRepoOf } from "./git.ts";
 
 export interface SourceOptions {
-  /** A host gets its own copy of a directory: its contents ship in an image, so never a default. */
-  copy?: boolean;
   readonly?: boolean;
   name?: string;
   /** A github context's branch, tag or commit. */
@@ -21,8 +19,8 @@ export interface SourceOptions {
 /**
  * The declaration for `source`, with what to tell the user about how it was read. The root of a checkout whose
  * `origin` is on GitHub is that repository, with the checkout as its `local`. Any other directory is itself, `{ local }`,
- * a subdirectory of such a checkout included (the note names the repository form, which is the whole repository); and
- * so is a checkout's root under `--copy`, which asks for exactly that. Paths are written absolute.
+ * a subdirectory of such a checkout included (the note names the repository form, which is the whole repository).
+ * Paths are written absolute.
  */
 export function declarationFor(
   source: string,
@@ -38,15 +36,14 @@ export function declarationFor(
     const repo = source.slice("github:".length);
     if (!isGithubRepo(repo)) throw new Error(`${source} names no repository: write github:owner/repo`);
     const local = options.local === undefined ? {} : { local: resolve(cwd, options.local) };
-    const notes = options.copy ? [`github ${repo} is cloned on a host, so --copy does not apply to it`] : [];
-    return { declaration: { github: repo, ...local, ...ref, ...treated }, notes };
+    return { declaration: { github: repo, ...local, ...ref, ...treated }, notes: [] };
   }
   const dir = resolve(cwd, source);
   if (options.local !== undefined) throw new Error("--local applies to a github:owner/repo source");
   const checkout = checkoutOf(dir);
   const repo = checkout?.origin === undefined ? undefined : githubRepoOf(checkout.origin);
   const atRoot = checkout !== undefined && realpathSync(dir) === realpathSync(checkout.root);
-  if (repo !== undefined && atRoot && !options.copy) {
+  if (repo !== undefined && atRoot) {
     return { declaration: { github: repo, local: (checkout as { root: string }).root, ...ref, ...treated }, notes: [] };
   }
   if (options.ref !== undefined) {
@@ -56,5 +53,5 @@ export function declarationFor(
     repo !== undefined && !atRoot
       ? [`${dir} is in a checkout of github ${repo}: declare github:${repo} for the whole repository`]
       : [];
-  return { declaration: { local: dir, ...(options.copy ? { copy: true } : {}), ...treated }, notes };
+  return { declaration: { local: dir, ...treated }, notes };
 }
