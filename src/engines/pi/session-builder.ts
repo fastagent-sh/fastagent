@@ -66,7 +66,12 @@ export async function buildAgentSessionRuntime(
     const { modelSpec, assembly, definition } = await assemblyFor(cwd);
     // Per session, NOT memoized with the assembly.
     const modelRuntime = await assembly.createModelRuntime();
-    const loaded = await definitionServices({ cwd, modelRuntime, definition, extensionPaths: assembly.extensionPaths });
+    const loaded = await definitionServices({
+      cwd,
+      modelRuntime,
+      definition,
+      extensionPaths: await assembly.extensionPaths(),
+    });
     // ...while the SESSION keeps pi's own file-backed settings, so `/settings` in the TUI still saves. pi persists by
     // re-reading the file under its lock and writing only the fields that changed, so `packages` there is untouched.
     const services = { ...loaded, settingsManager: SettingsManager.create(cwd, loaded.agentDir) };

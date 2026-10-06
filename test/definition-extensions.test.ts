@@ -62,7 +62,49 @@ describe("definition: one discovery of extensions/ for the catalog and the sessi
       model: "faux/faux-1",
       models: { ...models, extensionPaths: async () => [elsewhere] },
     });
-    expect(assembly.extensionPaths).toEqual([elsewhere]);
+    expect(await assembly.extensionPaths()).toEqual([elsewhere]);
+  });
+});
+
+describe("definition: extensions/ are live", () => {
+  it("an edited extension, the module it imports, and an added one take effect on the next turn", async () => {
+    // pi caches each extension's module per process; serving drops that cache when anything under extensions/
+    // changed, and lists the directory again, so an agent that writes an extension uses it without a restart.
+    const ext = (tool: string, withHelper = false) => `
+${withHelper ? 'import { label } from "./lib/label.ts";' : ""}
+export default async function (api) {
+  api.registerTool({ name: ${JSON.stringify(tool)}, label: "t", description: ${withHelper ? "label" : '"d"'},
+    parameters: { type: "object", properties: {} }, execute: async () => ({ output: "ok" }) });
+}`;
+    const dir = await agentDirWith({
+      "extensions/a.ts": ext("tool_v1", true),
+      "extensions/lib/label.ts": 'export const label = "LABEL_V1";\n',
+    });
+    const { faux } = makeFaux();
+    const seen: { tools: string[]; label: string }[] = [];
+    const reply = (context: Parameters<typeof sentTools>[0]) => {
+      const sent = JSON.stringify(context);
+      seen.push({
+        tools: sentTools(context)
+          .filter((name) => name.startsWith("tool_"))
+          .sort(),
+        label: sent.includes("LABEL_V2") ? "v2" : sent.includes("LABEL_V1") ? "v1" : "none",
+      });
+      return fauxAssistantMessage("ok");
+    };
+    faux.setResponses([reply, reply, reply]);
+    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+    await collect(agent.invoke({ session: "s" }, { text: "1" }));
+    await writeFile(join(dir, "extensions", "a.ts"), ext("tool_v2", true));
+    await writeFile(join(dir, "extensions", "lib", "label.ts"), 'export const label = "LABEL_V2";\n');
+    await collect(agent.invoke({ session: "s" }, { text: "2" }));
+    await writeFile(join(dir, "extensions", "b.ts"), ext("tool_added"));
+    await collect(agent.invoke({ session: "s" }, { text: "3" }));
+    expect(seen).toEqual([
+      { tools: ["tool_v1"], label: "v1" },
+      { tools: ["tool_v2"], label: "v2" },
+      { tools: ["tool_added", "tool_v2"], label: "v2" },
+    ]);
   });
 });
 
@@ -302,9 +344,9 @@ export default function (pi) {
 });
 
 describe("definition: the served `/` menu lists what sessions load", () => {
-  it("lists the extensions discovered at startup, not ones added while serving", async () => {
-    // A session loads the assembly's entry points, discovered once; `start` does not restart on an edit. A menu that
-    // rescanned `extensions/` would offer `/late`, and sending it would reach the model as plain text.
+  it("lists an extension added while serving, as the next session loads it", async () => {
+    // The menu and the session read one listing of `extensions/`, taken again for each: a menu that offered what a
+    // session would not load would send `/late` to the model as plain text, and one that lagged would hide it.
     const dir = await agentDirWith({
       "fastagent.config.ts": 'export default { model: "mygw/m1" };\n',
       "models.json": JSON.stringify({
@@ -320,7 +362,7 @@ describe("definition: the served `/` menu lists what sessions load", () => {
       'export default (pi) => pi.registerCommand("late", { handler: async () => {} });\n',
     );
     const names = (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
-    expect(names).toEqual(["early"]);
+    expect(names).toEqual(["early", "late"]);
   });
 });
 

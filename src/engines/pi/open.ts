@@ -53,7 +53,7 @@ import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts
 export async function agentCommands(
   agentDir: string,
   contexts: readonly ResolvedContext[],
-  served: { extensionPaths: readonly string[]; modelRuntime: () => Promise<ModelRuntime> },
+  served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
   // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
   // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
@@ -62,7 +62,7 @@ export async function agentCommands(
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(agentDir);
   const prompts = withMachine(own.prompts, machine.prompts);
-  const { extensionPaths } = served;
+  const extensionPaths = await served.extensionPaths();
   const extensionCommands = await servedExtensionCommands({
     cwd: agentDir,
     modelRuntime: await served.modelRuntime(),

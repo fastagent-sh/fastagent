@@ -65,8 +65,9 @@ export interface AgentModels {
    */
   authStatus(provider: string, modelId?: string): Promise<AuthStatus>;
   /**
-   * The definition's extension entry points, discovered once: what this catalog registers models from and what every
-   * session of the assembly built over it loads. Empty without a directory.
+   * The definition's extension entry points, listed afresh on every call: what this catalog registers models from (its
+   * first call) and what each session of the assembly built over it loads, so an extension added while the agent runs
+   * is loaded from the next session on. Empty without a directory.
    */
   extensionPaths(): Promise<readonly string[]>;
 }
@@ -129,11 +130,8 @@ export function agentModels(
       ...(providers ? { providers } : {}),
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
-  let discovered: Promise<readonly string[]> | undefined;
   const extensionPaths = (): Promise<readonly string[]> =>
-    (discovered ??= agentDir
-      ? loadExtensionPaths(agentDir, options.env ? { env: options.env } : {})
-      : Promise.resolve([]));
+    agentDir ? loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}) : Promise.resolve([]);
   let registry: Promise<ModelRuntime> | undefined;
   const runtime = (): Promise<ModelRuntime> => {
     registry ??= createRuntime().then(async (models) => {

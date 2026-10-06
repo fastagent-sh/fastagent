@@ -2,6 +2,7 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
+import { extensionsFingerprint } from "./definition.ts";
 import { dirname } from "node:path";
 import {
   BUILTIN_EXTENSIONS,
@@ -89,8 +90,8 @@ export interface PiAgentSessionFactoryOptions {
   cwd: string;
   /** What fastagent-defined tools see as `contexts`. */
   contexts?: readonly ResolvedContext[];
-  /** The definition's own extension entry points, loaded fresh for every bound session. */
-  extensionPaths?: string[];
+  /** The definition's own extension entry points, listed afresh for every bound session. */
+  extensionPaths?: () => Promise<readonly string[]>;
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
 }
@@ -506,8 +507,13 @@ export async function definitionServices(options: {
   modelRuntime: ModelRuntime;
   definition: PiSessionDefinition;
   extensionPaths: readonly string[];
+  /**
+   * The extension code changed since pi cached it: load it again. pi keeps each extension's module per process and
+   * clears that cache only when a loader reloads, so the session's loader reloads once more.
+   */
+  reloadExtensions?: boolean;
 }): Promise<AgentSessionServices> {
-  const { cwd, modelRuntime, definition, extensionPaths } = options;
+  const { cwd, modelRuntime, definition, extensionPaths, reloadExtensions = false } = options;
   const machine = await readMachine(cwd);
   const services = await withModelRegistration(modelRuntime, () =>
     createAgentSessionServices({
@@ -523,7 +529,8 @@ export async function definitionServices(options: {
         }),
         extensionsOverride: admissionFirst,
       },
-    }).then((services) => {
+    }).then(async (services) => {
+      if (reloadExtensions) await services.resourceLoader.reload();
       // AFTER the extensions: one that re-registers `openai` replaced the account-catalog wrapper.
       registerAccountModels(modelRuntime);
       return services;
@@ -562,12 +569,15 @@ export async function servedExtensionCommands(options: {
  * ONE LOADER PER SESSION, because pi's extension runtime belongs to its loader: a loader shared across concurrent
  * turns would let one conversation's extension act on another's session. It also makes the definition live with no
  * bookkeeping: every bind reads the prompt and skills this invoke read. The machine's half is the process's one read
- * (machine.ts). Extension CODE is imported once per process, so an edit to `extensions/` needs a restart, which is
- * what `dev` does on one.
+ * (machine.ts). Extensions are live too: `extensions/` is listed again for every bind, and when anything under it
+ * changed, pi's per-process module cache is dropped so the session loads the code as it is now. An extension that
+ * leaves something running when it loads (a timer, a socket) leaves it running across that reload.
  */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd } = options;
-  const extensionPaths = options.extensionPaths ?? [];
+  /** What `extensions/` looked like when pi last loaded it (the assembly loads it first): a difference is code pi has
+   *  cached stale. */
+  let extensionsSeen = extensionsFingerprint(cwd);
   const excludedToolNames = options.excludedToolNames ?? [];
   const tools = options.tools ?? [];
 
@@ -588,7 +598,11 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
     const { modelRuntime } = await options.engine();
-    const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
+    const extensionPaths = (await options.extensionPaths?.()) ?? [];
+    const fingerprint = extensionsFingerprint(cwd);
+    const reloadExtensions = fingerprint !== extensionsSeen;
+    extensionsSeen = fingerprint;
+    const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths, reloadExtensions });
     const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : undefined;
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and pi does not read
     // them back.

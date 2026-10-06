@@ -509,7 +509,13 @@ A served command settles the invoke:
 - if it throws, or a turn it starts cannot begin (no credentials, for example), the invoke fails with that error.
 
 Anyone who can send the agent a message can run its commands, and a command runs without the model deciding to.
-Extension code changes need a restart; `dev` restarts on its own.
+
+**Extensions are live.** `extensions/` is listed again for every session, and when any file under it changed (an
+edited extension, a module it imports from there, an added one), the next session loads the code as it is now; no
+restart, in `dev` or `start`. So an agent can give itself a tool or a command by writing an extension. Code it
+imports from outside `extensions/` is reloaded only when something under `extensions/` changes too. What an
+extension starts when it LOADS (a timer, a socket opened at import) keeps running across a reload; start such
+things in `session_start` and stop them in `session_shutdown`.
 
 ### More than one agent
 

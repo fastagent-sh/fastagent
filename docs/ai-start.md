@@ -281,7 +281,7 @@ fastagent dev
 `dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md`, skills and prompt
 templates are
 read on the next turn.
-With watching enabled, changes under the agent's `tools/`, `channels/`, `schedules/`, and `extensions/`
+With watching enabled, changes under the agent's `tools/`, `channels/` and `schedules/`
 restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
 `.env` (only when that file is inside the agent directory). The restart waits for the turns running in the worker
 to finish (at most 10 minutes), so editing your own `tools/` does not cut off the turn that made the edit; the

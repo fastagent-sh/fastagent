@@ -4,7 +4,7 @@
  * its own AGENTS.md, and what its contexts provide: each one's root AGENTS.md and its skills, named `<context>/<skill>`.
  * docs/design/agent-model.md §2 is the rule this follows.
  */
-import { realpathSync } from "node:fs";
+import { type Dirent, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   BACKGROUND_CONTEXT,
@@ -254,6 +254,39 @@ async function ignoredPaths(e: ExecutionEnv, root: string): Promise<LoadedDefini
   return (await exists(e, path)) ? [{ path, reason: "not loaded: a definition's extensions live in extensions/" }] : [];
 }
 
+/**
+ * What `extensions/` holds now, as one string that changes when any file under it does (its path, size or modification
+ * time). Sessions compare it at each bind to know when pi's extension cache holds stale code. Node's filesystem, not
+ * the definition's `ExecutionEnv`: it decides only when to reload, and a reload reads through pi as always.
+ */
+export function extensionsFingerprint(agentDir: string): string {
+  const dir = join(agentDir, "extensions");
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { recursive: true, withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const path = join(entry.parentPath, entry.name);
+      const { size, mtimeMs } = statSync(path);
+      return `${path}\t${size}\t${mtimeMs}`;
+    })
+    .sort()
+    .join("\n");
+}
+
+/** A warning about `extensions/` is said once per process: the directory is listed again for every session. */
+const warnedExtensions = new Set<string>();
+const warnExtensionOnce = (message: string): void => {
+  if (warnedExtensions.has(message)) return;
+  warnedExtensions.add(message);
+  log.warn(message);
+};
+
 /** Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none. */
 export async function loadExtensionPaths(agentDir: string, options: { env?: ExecutionEnv } = {}): Promise<string[]> {
   const e = options.env ?? new NodeExecutionEnv({ cwd: agentDir });
@@ -284,7 +317,7 @@ export async function loadExtensionPaths(agentDir: string, options: { env?: Exec
       paths.push(index.path);
     } else if (!index.refused) {
       // Silent when the index WAS found and refused for being a symlink.
-      log.warn(
+      warnExtensionOnce(
         `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
           `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
       );
@@ -312,7 +345,7 @@ async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ p
 }
 
 function warnSymlinkRefused(path: string): void {
-  log.warn(
+  warnExtensionOnce(
     `[fastagent] ${path} is a symlink and will not be loaded: an extension must be a real file inside ` +
       `the definition so it travels with the artifact — move it in. (If it is not an extension, ` +
       `keep it outside extensions/ to silence this.)`,

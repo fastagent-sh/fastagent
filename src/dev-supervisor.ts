@@ -19,8 +19,9 @@ import { declaredChannels } from "./channels/discover.ts";
 import { activeWork } from "./channels/busy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
-/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. */
-const CODE_INPUT_DIRS = ["tools", "channels", "schedules", "extensions"] as const;
+/** The agent-dir directories loaded ONCE per worker: a restart is their only re-read. (`extensions/` is reloaded by the
+ *  next session after an edit.) */
+const CODE_INPUT_DIRS = ["tools", "channels", "schedules"] as const;
 
 const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, models-store.json, .secrets/.env`;
 

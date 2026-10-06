@@ -110,7 +110,7 @@ export async function fauxControlledAgent(
     ...(options.noDefaultModel ? {} : { modelSpec: `${model.provider}/${model.id}` }),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
-    ...(options.extensionPaths ? { extensionPaths: options.extensionPaths } : {}),
+    ...(options.extensionPaths ? { extensionPaths: async () => options.extensionPaths ?? [] } : {}),
     readDefinition: () => ({ systemPrompt: options.systemPrompt ?? "test", skills: [] }),
     cwd,
   });

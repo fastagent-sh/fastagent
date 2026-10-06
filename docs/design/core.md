@@ -146,9 +146,14 @@ first line of its description. pi's default says the agent reads files, runs com
 context and skill edits take effect on the next turn; code modules are reloaded by
 the dev supervisor instead, and by a restart under `start`. That is also how an agent improves itself while it
 runs: a new capability is a skill whose script it runs through `bash` — read fresh every turn, executed in a new
-process every call, its failure in the same turn's output — and its own follow-up work is the `wake` tool,
-mounted on every serve. `tools/`, `schedules/` and `channels/` are the author's: they change with a restart or a
-release. (Reloading them in-process was built and removed — the design is #582, why it went is #600.) A skill the
+process every call, its failure in the same turn's output — a tool or command of its own is an extension, and its
+own follow-up work is the `wake` tool, mounted on every serve. Extensions are live: the session factory lists
+`extensions/` again for every bind and, when anything under it changed since pi last loaded it (a fingerprint of
+paths, sizes and modification times), reloads the session's resource loader once more, which is how pi drops its
+per-process module cache; jiti then imports the code afresh, relative imports included. `tools/`, `schedules/` and
+`channels/` are the author's: they change with a restart or a release. (Reloading `tools/` in-process was built and
+removed — the design is #582, why it went is #600: Node's own module cache, which jiti does not share, made it a
+list of limits.) A skill the
 agent writes lives in the definition, so it lasts until the next deployment replaces it; the deployed prompt says so
 and sends anything lasting to the author's release. The low-level `createPiAgent({ instructions })` path takes the prompt body
 without directory identity or project-context assembly; pi appends skills and cwd on both paths.
