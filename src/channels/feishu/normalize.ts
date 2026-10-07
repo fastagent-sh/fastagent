@@ -81,15 +81,42 @@ const CARD_TEXT_TAGS = new Set(["markdown", "plain_text", "lark_md"]);
 
 /**
  * Whether a card body is the card as SENT (`card_msg_content_type=user_card_content`): a Card 2.0 has `body`, a card
- * 1.0 has a `header` object or component objects in `elements`. The rendered-down shape is a string `title` and
- * `elements` of paragraph ARRAYS.
+ * 1.0 has a `header` object, component objects in `elements`, or per-locale `i18n_elements`. The rendered-down shape
+ * is a string `title` and `elements` of paragraph ARRAYS.
  */
 function isSentCard(card: Record<string, unknown>): boolean {
   return (
     isRecord(card.body) ||
     isRecord(card.header) ||
+    isRecord(card.i18n_elements) ||
     (Array.isArray(card.elements) && card.elements.some((element) => isRecord(element)))
   );
+}
+
+/**
+ * The locale a multi-language card is read in: the first of its `config.locales` it carries, else the first it
+ * carries. A card holds the same content once per locale; one of them is the content.
+ */
+function cardLocale(card: Record<string, unknown>): string | undefined {
+  const carried = isRecord(card.i18n_elements) ? Object.keys(card.i18n_elements) : [];
+  const declared = isRecord(card.config) && Array.isArray(card.config.locales) ? card.config.locales : [];
+  return (
+    declared.find((locale): locale is string => typeof locale === "string" && carried.includes(locale)) ?? carried[0]
+  );
+}
+
+/** A text field's value: `content`, else its per-locale form (1.0 `i18n`, 2.0 `i18n_content`) in `locale`. */
+function localizedText(node: Record<string, unknown>, locale: string | undefined): string | undefined {
+  const own = nonEmptyString(node.content)?.trim();
+  if (own) return own;
+  for (const key of ["i18n", "i18n_content"]) {
+    const forms = node[key];
+    if (!isRecord(forms)) continue;
+    const pick = (locale !== undefined ? forms[locale] : undefined) ?? Object.values(forms)[0];
+    const text = nonEmptyString(pick)?.trim();
+    if (text) return text;
+  }
+  return undefined;
 }
 
 /**
@@ -99,8 +126,9 @@ function isSentCard(card: Record<string, unknown>): boolean {
  */
 function sentCardLines(card: Record<string, unknown>): string[] {
   const lines: string[] = [];
+  const locale = cardLocale(card);
   const header = isRecord(card.header) ? card.header : undefined;
-  const title = isRecord(header?.title) ? nonEmptyString(header.title.content) : undefined;
+  const title = isRecord(header?.title) ? localizedText(header.title, locale) : undefined;
   if (title) lines.push(title);
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -108,14 +136,15 @@ function sentCardLines(card: Record<string, unknown>): string[] {
       return;
     }
     if (!isRecord(node)) return;
-    const content = nonEmptyString(node.content)?.trim();
+    const content = localizedText(node, locale);
     if (typeof node.tag === "string" && CARD_TEXT_TAGS.has(node.tag) && content) lines.push(content);
     else if (node.tag === "img") lines.push("[image]");
-    const label = isRecord(node.text) ? nonEmptyString(node.text.content)?.trim() : undefined;
+    const label = isRecord(node.text) ? localizedText(node.text, locale) : undefined;
     if (label) lines.push(label);
     for (const key of ["elements", "columns", "fields", "actions"]) visit(node[key]);
   };
-  visit(isRecord(card.body) ? card.body.elements : card.elements);
+  const i18nElements = isRecord(card.i18n_elements) && locale !== undefined ? card.i18n_elements[locale] : undefined;
+  visit(isRecord(card.body) ? card.body.elements : (card.elements ?? i18nElements));
   return lines;
 }
 
@@ -166,6 +195,11 @@ export function decodeFeishuContent(
     case "card": {
       // As SENT (`card_msg_content_type=user_card_content`, what every read asks for): a Card 2.0 (every answer this
       // channel streams) or a card 1.0 (what many CI and alert bots post).
+      // A card sent from a template is, as sent, a reference (`template_id` + variables), and its text was never in
+      // the message. Said in the prompt, so the model does not read the marker as an empty card.
+      if (content.type === "template") {
+        return { text: `[${rawType} message: a template card; its text cannot be read]`, resources };
+      }
       if (isSentCard(content)) {
         const lines = sentCardLines(content);
         return { text: lines.length > 0 ? lines.join("\n") : `[${rawType} message]`, resources };
