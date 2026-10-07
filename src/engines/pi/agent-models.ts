@@ -92,6 +92,12 @@ export interface AgentModelsOptions {
    * agent has, since neither ships.
    */
   machineLayer?: boolean;
+  /**
+   * The agent's default "provider/modelId": an edit of the model files that stops resolving it (the files before did)
+   * is refused like one that does not load, and the files read before are kept, since every turn on the default
+   * would fail on it. Not checked at a start: a default that resolves only after a login is a turn's error to report.
+   */
+  keepsModel?: string;
 }
 
 /**
@@ -123,7 +129,24 @@ export function agentModels(
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   // The model files as they are now, for every runtime this agent builds: a session's and the control plane's.
   const layering = { ...(agentDir ? { agentDir } : {}), ...(machineLayer !== undefined ? { machineLayer } : {}) };
-  const readModelFiles = liveModelFiles(modelFilePaths(layering), () => modelRuntimeFiles(layering));
+  // Whether the catalog `read` makes (with the extensions and account models a turn registers) resolves the default.
+  const { keepsModel } = options;
+  const keepsDefault = keepsModel
+    ? {
+        model: keepsModel,
+        holds: async (read: ModelFiles): Promise<boolean> => {
+          // Over THOSE files throughout: the store's project check reads model files too, and asking the live read
+          // from inside its own check would wait on itself.
+          const over = files
+            ? agentCredentialStore(files, async () => read, { providers, warn: source.warn })
+            : (source.credentialStore as CredentialStore);
+          const catalog = await buildCatalog(read, (await loadable()).paths, over);
+          const slash = keepsModel.indexOf("/");
+          return catalog.getModel(keepsModel.slice(0, slash), keepsModel.slice(slash + 1)) !== undefined;
+        },
+      }
+    : undefined;
+  const readModelFiles = liveModelFiles(modelFilePaths(layering), () => modelRuntimeFiles(layering), keepsDefault);
   const store: FastagentCredentialStore | undefined = files
     ? agentCredentialStore(files, readModelFiles, { providers, warn: source.warn })
     : undefined;
@@ -146,28 +169,33 @@ export function agentModels(
   // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
   // plane lists and lets a session select is what a session would load (a model an edited extension declares).
   // The same for the model files: one read of them, the one the sessions bind.
+  const buildCatalog = (
+    files: ModelFiles,
+    paths: readonly string[],
+    over: CredentialStore = credentials,
+  ): Promise<ModelRuntime> =>
+    createPiModelRuntime({
+      credentials: over,
+      files,
+      ...(agentDir ? { agentDir } : {}),
+      ...(providers ? { providers } : {}),
+      ...(machineLayer !== undefined ? { machineLayer } : {}),
+    }).then(async (models) => {
+      if (agentDir)
+        await definitionServices({
+          cwd: agentDir,
+          modelRuntime: models,
+          definition: { skills: [] },
+          extensionPaths: paths,
+        });
+      return models;
+    });
   let registry: { generation: number; files: ModelFiles; runtime: Promise<ModelRuntime> } | undefined;
   const runtime = async (): Promise<ModelRuntime> => {
     const { paths, generation } = await loadable();
     const files = await readModelFiles();
     if (registry?.generation !== generation || registry.files !== files) {
-      const built = createPiModelRuntime({
-        credentials,
-        files,
-        ...(agentDir ? { agentDir } : {}),
-        ...(providers ? { providers } : {}),
-        ...(machineLayer !== undefined ? { machineLayer } : {}),
-      }).then(async (models) => {
-        if (agentDir)
-          await definitionServices({
-            cwd: agentDir,
-            modelRuntime: models,
-            definition: { skills: [] },
-            extensionPaths: paths,
-          });
-        return models;
-      });
-      registry = { generation, files, runtime: built };
+      registry = { generation, files, runtime: buildCatalog(files, paths) };
     }
     return registry.runtime;
   };
@@ -261,12 +289,17 @@ function agentCredentialStore(
  * `fastagent models --refresh` in any process, is selectable without a restart. The same object comes back until
  * then, which is what the registries built from it are keyed by.
  *
- * A change that does not load (malformed JSON, an unreadable file) KEEPS the files last read, and says so once per
- * change: the agent can write its own `models.json`, and a turn that failed on every message would leave it no turn
+ * A change that cannot be used (malformed JSON, an unreadable file, or files that no longer resolve the agent's default
+ * model, {@link AgentModelsOptions.keepsModel}) KEEPS the files last read, and says so once per change: the agent can write its own `models.json`, and a turn that failed on every message would leave it no turn
  * to repair it with. With nothing read before, there is nothing to keep, and the read throws, as at any start.
  */
-function liveModelFiles(paths: readonly string[], read: () => Promise<ModelFiles>): () => Promise<ModelFiles> {
-  let current: { fingerprint: string; files: ModelFiles } | undefined;
+function liveModelFiles(
+  paths: readonly string[],
+  read: () => Promise<ModelFiles>,
+  keepsDefault?: { model: string; holds: (files: ModelFiles) => Promise<boolean> },
+): () => Promise<ModelFiles> {
+  /** `holdsDefault`: whether these files resolve the default, once a change has needed to know. */
+  let current: { fingerprint: string; files: ModelFiles; holdsDefault?: boolean } | undefined;
   /** The fingerprint of a change that did not load, so it is said, and tried, once. */
   let refused: string | undefined;
   let pending: Promise<ModelFiles> | undefined;
@@ -278,6 +311,12 @@ function liveModelFiles(paths: readonly string[], read: () => Promise<ModelFiles
       if (current && (fingerprint === current.fingerprint || fingerprint === refused)) return current.files;
       files = await read();
       await checkModelFiles(files);
+      // Only a REPLACEMENT is held to the default, and only to keep what it had: a start, or files that never
+      // resolved it, change nothing a turn could run on.
+      if (current && keepsDefault && !(await keepsDefault.holds(files))) {
+        current.holdsDefault ??= await keepsDefault.holds(current.files);
+        if (current.holdsDefault) throw new Error(`they no longer define the default model "${keepsDefault.model}"`);
+      }
     } catch (error) {
       // THE boundary between an edit and the turns running on the files before it: thrown at a start (nothing to
       // keep), said and kept from then on. A file that cannot even be stat'ed is said by its error, once.
@@ -285,7 +324,7 @@ function liveModelFiles(paths: readonly string[], read: () => Promise<ModelFiles
       const said = fingerprint ?? `unreadable: ${String(error)}`;
       if (said !== refused) {
         log.error(
-          `[fastagent] the model files changed and do not load, so the models read before are kept until they ` +
+          `[fastagent] the model files changed and cannot be used, so the models read before are kept until they ` +
             `are fixed: ${String(error)}`,
         );
       }

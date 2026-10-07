@@ -26,8 +26,8 @@ const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, .secrets/.env`;
 
 /**
- * Files a running worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
- * without: an edit restarts nothing while a worker runs, and starts one that is down. Unwatched, the edit that repairs
+ * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
+ * without: an edit restarts nothing while a worker serves, and starts (or restarts) one that is down or starting. Unwatched, the edit that repairs
  * a stopped worker's model file would not be the edit that brings it back.
  */
 export function revivesOnly(root: string, path: string): boolean {
@@ -92,6 +92,8 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
+  // Has THIS worker bound? One still starting has not read the model files yet, so an edit to them must restart it.
+  let serving = false;
   let timer: NodeJS.Timeout | undefined;
   // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save would mean a
   // new URL + re-registering the webhook on every edit).
@@ -105,9 +107,11 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
+    serving = false;
     w.on("message", (m: { type?: string; port?: number; routeChannels?: string[] }) => {
       if (m?.type !== "ready") return;
       everServed = true;
+      if (worker === w) serving = true;
       // Start the tunnel once, on the first worker that binds; reuse it across reloads.
       if (options.tunnel && !tunnel && typeof m.port === "number") {
         void startCloudflareTunnel(m.port).then((t) => {
@@ -124,6 +128,7 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     w.on("exit", (code, signal) => {
       if (worker !== w) return; // already superseded
       worker = undefined;
+      serving = false;
       if (reloadPending) {
         reloadPending = false;
         spawnWorker(); // restart requested: the old worker has exited, so the port is free
@@ -157,7 +162,8 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     ignored: devWatchIgnored(agentDir, dotEnvPath(agentDir)),
   });
   watcher.on("all", (_event, path) => {
-    if (worker && revivesOnly(agentDir, path)) return; // the running worker reads it itself
+    // A serving worker reads it itself; one still starting may be about to fail on the very file being fixed.
+    if (serving && revivesOnly(agentDir, path)) return;
     clearTimeout(timer);
     timer = setTimeout(triggerReload, 200);
   });

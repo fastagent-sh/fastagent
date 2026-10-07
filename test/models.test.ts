@@ -348,7 +348,7 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
       for (const runtime of [await models.runtime(), await models.createRuntime(), await models.runtime()]) {
         expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
       }
-      const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /do not load/.test(line));
+      const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /cannot be used/.test(line));
       expect(said).toHaveLength(1);
       expect(said[0]).toContain(join(dir, "models.json"));
       // Fixed: read again.
@@ -495,7 +495,7 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       for (let i = 0; i < 3; i++) expect(resolveModel(await models.runtime(), "localgw/m").baseUrl).toBe("http://m/v1");
-      expect(errors.mock.calls.filter((call) => /do not load/.test(call.join(" ")))).toHaveLength(1);
+      expect(errors.mock.calls.filter((call) => /cannot be used/.test(call.join(" ")))).toHaveLength(1);
     } finally {
       errors.mockRestore();
     }
@@ -573,6 +573,54 @@ describe("models.json while the agent runs (session control)", () => {
     await writeFile(join(dir, "models.json"), gateway(["a"]));
     expect(await listed()).toEqual(["mygw/a"]);
     expect((await sessionControl!.sessions.get("t").update({ model: "mygw/b" })).ok).toBe(false);
+  });
+
+  it("a default the files never resolved holds no edit back: there was nothing a turn could run on to keep", async () => {
+    // A ChatGPT model resolves only after its sign-in, so an agent can open on one before it.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-live-modelsjson-nodefault-"));
+    const gateway = (ids: string[]) =>
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://gw.invalid/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: ids.map((id) => ({ id })),
+          },
+        },
+      });
+    await writeFile(join(dir, "models.json"), gateway(["a"]));
+    const models = agentModels(dir, { authPath: join(dir, "auth.json") }, { keepsModel: "openai-codex/gpt-5.4" });
+    await models.runtime();
+    await writeFile(join(dir, "models.json"), gateway(["a", "b"]));
+    expect((await models.runtime()).getModel("mygw", "b")).toBeDefined();
+  });
+
+  it("an edit that drops the default model is refused like one that does not load: the turns keep running", async () => {
+    // Valid JSON, but the provider renamed: every turn on the default would fail, the agent's own included.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-live-modelsjson-default-"));
+    const gateway = (id: string) =>
+      JSON.stringify({
+        providers: {
+          [id]: { baseUrl: "http://gw.invalid/v1", api: "openai-completions", apiKey: "x", models: [{ id: "a" }] },
+        },
+      });
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/a" };`);
+    await writeFile(join(dir, "models.json"), gateway("mygw"));
+    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(join(dir, "models.json"), gateway("othergw"));
+      for (let i = 0; i < 2; i++) {
+        expect((await sessionControl!.sessions.get("s").state()).model).toBe("mygw/a");
+        expect((await sessionControl!.models()).map((m) => m.spec)).toContain("mygw/a");
+      }
+      const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /cannot be used/.test(line));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(/no longer define the default model "mygw\/a"/);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 

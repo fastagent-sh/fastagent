@@ -154,8 +154,9 @@ differences:
   instead (below).
 - A malformed `models.json` fails startup.
 - **Edits take effect while the agent runs.** Every reader (a turn, the model list, `update({ model })`) checks the
-  model files first, this agent's and the machine's, and reads them again when one changed. An edit that does not
-  load keeps the models read before and is logged once, until it is fixed: the agent can write its own
+  model files first, this agent's and the machine's, and reads them again when one changed. An edit that cannot be
+  used (it does not load, or it drops the agent's default model) keeps the models read before and is logged once,
+  until it is fixed: the agent can write its own
   `models.json`, and a broken one must not leave it unable to run a turn. The `chat` session already open keeps its
   models; the next one reads the edit.
 

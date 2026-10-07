@@ -365,7 +365,7 @@ When a change takes effect:
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
 | `extensions/` | On the next session: it is listed again, and changed code is loaded afresh |
-| `models.json`, `models-store.json` (the agent's and the machine's) | On the next read: a turn, the model list or `update({ model })`. An edit that does not load keeps the models read before |
+| `models.json`, `models-store.json` (the agent's and the machine's) | On the next read: a turn, the model list or `update({ model })`. An edit that does not load, or drops the default model, keeps the models read before |
 | `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the recurring EventBridge schedules itself) |
 | What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
