@@ -154,7 +154,7 @@ says "could not read the recent discussion here: <the platform's error>" instead
 
 | Phase | Scope | Done when |
 |---|---|---|
-| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`, records what the agent sends into that chat's buffer (#754) | a schedule's post is in the chat's next answered turn |
+| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session (#754) | a schedule's post is in the chat's next answered turn |
 | 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
 | 3. Slack | `history.ts`; buffer removed | the same, live |
 | 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
