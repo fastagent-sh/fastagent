@@ -1426,14 +1426,90 @@ describe("telegram channel", () => {
     await groupSettle();
     const p1 = calls[0]?.text ?? "";
     expect(p1).toContain(
-      `you (sent with telegram-send) (msg ${sent.messageIds[0]}): Digest: 1. deploys 2. incidents 3. hiring`,
+      `you (sent by the agent) (msg ${sent.messageIds[0]}): Digest: 1. deploys 2. incidents 3. hiring`,
     );
     // A digest keeps far more than a human line's bound, and says when it was cut.
     expect(p1).toMatch(/detail detail .* … \(truncated\)/);
 
     await ch(tgRequest(groupMsg(2, "alice", "/bot again")));
     await groupSettle();
-    expect(calls[1]?.text ?? "").not.toContain("sent with telegram-send"); // folded once, then in the session
+    expect(calls[1]?.text ?? "").not.toContain("sent by the agent"); // folded once, then in the session
+  });
+
+  it("records a sent message where the platform says it landed, the place its updates come from", async () => {
+    // The echo is the authority: `@channel` comes back as the number updates use, and a topic's thread id as the one
+    // its updates carry. A text and a file follow the same rule.
+    const { agent, calls } = replyingAgent("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const form = init?.body instanceof FormData ? init.body : undefined;
+        const body = form
+          ? Object.fromEntries(form)
+          : (JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        const chatId = body.chat_id === "@team" ? grp.id : Number(body.chat_id);
+        const thread =
+          body.message_thread_id === undefined ? {} : { message_thread_id: Number(body.message_thread_id) };
+        if (String(url).includes("/sendMessage") || String(url).includes("/sendDocument")) {
+          return Response.json({ ok: true, result: { message_id: 900, chat: { id: chatId }, ...thread } });
+        }
+        return Response.json({ ok: true, result: { message_id: 1 } });
+      }),
+    );
+    const home = freshStateDir();
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: onlyCommands,
+      stateDir: home,
+    });
+    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
+    const transport = telegramTransport("/any/agent/dir");
+
+    await transport.sendText({ chatId: "@team" }, "posted by channel name");
+    const file = join(home, "report.txt");
+    writeFileSync(file, "x");
+    await transport.sendFile({ chatId: grp.id, threadId: 7 }, { path: file, caption: "topic report" });
+
+    await ch(tgRequest(groupMsg(1, "alice", "/bot what was posted?")));
+    await groupSettle();
+    expect(calls[0]?.text ?? "").toContain("you (sent by the agent) (msg 900): posted by channel name");
+    expect(calls[0]?.text ?? "").not.toContain("topic report"); // that one is the topic's
+
+    await ch(
+      tgRequest({
+        update_id: 2,
+        message: {
+          message_id: 2,
+          text: "/bot and here?",
+          message_thread_id: 7,
+          chat: grp,
+          from: { id: 2, username: "alice" },
+        },
+      }),
+    );
+    await groupSettle();
+    expect(calls[1]?.text ?? "").toContain("you (sent by the agent) (msg 900): [document: report.txt] topic report");
+  });
+
+  it("a message the agent sent into a direct chat is in that chat's next turn", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { chat_id?: number };
+        return Response.json({ ok: true, result: { message_id: 77, chat: { id: body.chat_id } } });
+      }),
+    );
+    const home = freshStateDir();
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, stateDir: home });
+    vi.stubEnv("FASTAGENT_STATE_DIR", rootOfHome.get(home) as string);
+    await telegramTransport("/any/agent/dir").sendText({ chatId: 42 }, "your reminder: standup at 10");
+    await ch(tgRequest(MSG));
+    await groupSettle();
+    expect(calls[0]?.text ?? "").toContain("[recent discussion here:");
+    expect(calls[0]?.text ?? "").toContain("you (sent by the agent) (msg 77): your reminder: standup at 10");
   });
 
   it("a message that was sent but not recorded says so, and is not reported as unsent", async () => {

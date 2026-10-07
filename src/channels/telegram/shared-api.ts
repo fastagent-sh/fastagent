@@ -50,8 +50,19 @@ export function registerTelegramTransport(stateRoot: string, mounted: Required<M
   byStateRoot.set(stateRoot, mounted);
 }
 
-const NOT_MOUNTED =
-  "no telegram channel is mounted in this process (a `fastagent tool` or `invoke` run), so the chat's next turn will not see it";
+const NOT_MOUNTED = "no telegram channel is mounted in this process, so the chat's next turn will not see it";
+
+/**
+ * The place a sent message landed in, keyed by the same fields an update is keyed by (`chat.id`,
+ * `message_thread_id`): the platform's echo names the chat by number where the target named it `@channel`, and
+ * omits the thread id exactly where an update in that place would. The target stands in only for a reply that names
+ * no chat.
+ */
+function landedPlace(sent: { chat?: { id?: number }; message_thread_id?: number }, target: TelegramSendTarget): string {
+  return sent.chat?.id !== undefined
+    ? telegramPlaceKey(sent.chat.id, sent.message_thread_id)
+    : telegramPlaceKey(target.chatId, target.threadId);
+}
 
 /** The transport of the agent whose directory is `cwd` (a tool's `ctx.cwd`). */
 export function telegramTransport(cwd: string): TelegramTransport {
@@ -85,17 +96,13 @@ export function telegramTransport(cwd: string): TelegramTransport {
   return {
     async sendText(target, text) {
       const messageIds: number[] = [];
-      let landed: { chatId: number | string; threadId?: number } = target;
+      let place = telegramPlaceKey(target.chatId, target.threadId);
       for (const chunk of chunkText(text, { html: false })) {
         const sent = await callApi(apiBaseUrl, botToken, "sendMessage", { ...params(target), text: chunk });
         if (sent.message_id !== undefined) messageIds.push(sent.message_id);
-        // Where it landed, as the platform names it: `@channel` names a chat the updates call by number.
-        if (sent.chat?.id !== undefined) landed = { chatId: sent.chat.id, threadId: sent.message_thread_id };
+        place = landedPlace(sent, target);
       }
-      return {
-        messageIds,
-        notRecorded: remember(telegramPlaceKey(landed.chatId, landed.threadId), ownPostEntry(text, messageIds[0])),
-      };
+      return { messageIds, notRecorded: remember(place, ownPostEntry(text, messageIds[0])) };
     },
     async sendFile(target, file) {
       const form = new FormData();
@@ -108,7 +115,7 @@ export function telegramTransport(cwd: string): TelegramTransport {
       return {
         messageIds: sent.message_id !== undefined ? [sent.message_id] : [],
         notRecorded: remember(
-          telegramPlaceKey(sent.chat?.id ?? target.chatId, sent.message_thread_id ?? target.threadId),
+          landedPlace(sent, target),
           ownPostEntry(file.caption ? `${label} ${file.caption}` : label, sent.message_id),
         ),
       };

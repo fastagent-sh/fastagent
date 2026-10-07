@@ -70,12 +70,13 @@ export function collectAttachments(
 const OWN_POST_MAX_CHARS = 2000;
 
 /**
- * A message the agent sent with the send tool, as the place's discussion: the agent never receives its own messages
- * as updates (and the Bot API has no history read), so this is the only way the chat's next turn knows it was said.
+ * A message the agent sent itself (through `telegramTransport`), as the place's discussion: the agent never receives
+ * its own messages as updates (and the Bot API has no history read), so this is the only way the chat's next turn
+ * knows it was said. The label says only what the transport knows — the agent sent it — not which tool did.
  */
 export function ownPostEntry(body: string, messageId: number | undefined): BufferEntry {
   return {
-    sender: "you (sent with telegram-send)",
+    sender: "you (sent by the agent)",
     body: truncateCodePointPrefix(body.replace(/\s+/g, " ").trim(), OWN_POST_MAX_CHARS, " … (truncated)"),
     messageId,
   };

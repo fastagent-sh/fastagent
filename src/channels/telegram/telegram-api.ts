@@ -59,9 +59,6 @@ export interface DownloadedFile {
   size: number;
 }
 
-/** The methods this channel speaks and their result shapes — a hand-written slice of the Bot API
- *  schema. Adding a method = adding a row here, not writing a function. (If this table ever needs to
- *  grow past roughly ten rows, or entity-based formatting, adopt gramIO instead of growing it.) */
 /** The part of a sent Message this channel reads: where it landed. */
 interface SentMessage {
   message_id?: number;
@@ -69,6 +66,9 @@ interface SentMessage {
   message_thread_id?: number;
 }
 
+/** The methods this channel speaks and their result shapes — a hand-written slice of the Bot API
+ *  schema. Adding a method = adding a row here, not writing a function. (If this table ever needs to
+ *  grow past roughly ten rows, or entity-based formatting, adopt gramIO instead of growing it.) */
 interface Api {
   sendMessage: SentMessage;
   sendDocument: SentMessage;
