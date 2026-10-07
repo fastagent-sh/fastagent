@@ -56,10 +56,10 @@ describe("Feishu/Lark normalized webhook model", () => {
   });
 });
 
-describe("card (interactive) decoding — a card 1.0 as the platform renders it down", () => {
-  // What a query API hands back for a card 1.0: `title` + `elements` paragraphs of the same tagged
-  // nodes as `post`. A Card 2.0 (every answer this channel streams) comes back as an "upgrade your
-  // client" placeholder in this shape unless the read asks for `user_card_content` — see below.
+describe("card (interactive) decoding — a card as the platform renders it down", () => {
+  // What a read WITHOUT `user_card_content` returns for a card 1.0: `title` + `elements` paragraphs of
+  // the same tagged nodes as `post`. This channel's reads ask for the card as sent (below); this shape
+  // is still decoded wherever a card arrives rendered down.
   const card = {
     title: "需要先确认两项",
     elements: [
@@ -135,7 +135,7 @@ describe("card (interactive) decoding — a card 1.0 as the platform renders it 
   });
 });
 
-describe("Card 2.0 decoding — a card as it was SENT (`card_msg_content_type=user_card_content`)", () => {
+describe("card decoding — a card as it was SENT (`card_msg_content_type=user_card_content`)", () => {
   it("reads the agent's streamed answer, as the platform returned it for a real one", () => {
     // Verbatim from `GET /im/v1/messages/:id?card_msg_content_type=user_card_content` on a streamed answer card.
     const answer = {
@@ -173,6 +173,31 @@ describe("Card 2.0 decoding — a card as it was SENT (`card_msg_content_type=us
     const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) });
     expect(decoded.text).toBe("Daily digest\n1. deploys\n2. incidents\n[image]\nOpen report");
     expect(decoded.resources).toEqual([]); // a card's resources cannot be downloaded (see above)
+  });
+
+  it("reads a card 1.0 as it was sent: header title, div text, fields, notes and button labels", () => {
+    // The 1.0 shape a CI or alert bot sends; with `user_card_content` a read returns it as sent, not rendered down.
+    const card = {
+      config: { wide_screen_mode: true },
+      header: { title: { tag: "plain_text", content: "Build #42 failed" }, template: "red" },
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: "**main** · 3 tests failed" } },
+        { tag: "div", fields: [{ is_short: true, text: { tag: "lark_md", content: "owner: alice" } }] },
+        { tag: "hr" },
+        { tag: "note", elements: [{ tag: "plain_text", content: "from ci-bot" }] },
+        { tag: "action", actions: [{ tag: "button", text: { tag: "plain_text", content: "Open logs" } }] },
+      ],
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Build #42 failed\n**main** · 3 tests failed\nowner: alice\nfrom ci-bot\nOpen logs",
+    );
+  });
+
+  it("recognizes a card 1.0 as sent by either half: a header with no elements, or elements with no header", () => {
+    const decode = (card: unknown) =>
+      decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text;
+    expect(decode({ header: { title: { tag: "plain_text", content: "Deploy approved" } } })).toBe("Deploy approved");
+    expect(decode({ elements: [{ tag: "markdown", content: "disk at 91%" }] })).toBe("disk at 91%");
   });
 
   it("keeps the marker when a Card 2.0 renders to nothing", () => {

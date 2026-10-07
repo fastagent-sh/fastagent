@@ -76,14 +76,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Text components of a Card 2.0, whose `content` is what a reader sees. */
-const CARD_V2_TEXT_TAGS = new Set(["markdown", "plain_text", "lark_md"]);
+/** Text components of a card as sent, whose `content` is what a reader sees. */
+const CARD_TEXT_TAGS = new Set(["markdown", "plain_text", "lark_md"]);
 
 /**
- * A Card 2.0's visible text, in reading order: the header title, then every text component in the body, through the
- * containers (columns, panels, forms) that nest them. An image says it is there; controls with no text say nothing.
+ * Whether a card body is the card as SENT (`card_msg_content_type=user_card_content`): a Card 2.0 has `body`, a card
+ * 1.0 has a `header` object or component objects in `elements`. The rendered-down shape is a string `title` and
+ * `elements` of paragraph ARRAYS.
  */
-function cardV2Lines(card: Record<string, unknown>): string[] {
+function isSentCard(card: Record<string, unknown>): boolean {
+  return (
+    isRecord(card.body) ||
+    isRecord(card.header) ||
+    (Array.isArray(card.elements) && card.elements.some((element) => isRecord(element)))
+  );
+}
+
+/**
+ * A sent card's visible text, in reading order: the header title, then every text component, through the containers
+ * (columns, panels, forms, a 1.0 `div`'s fields, an action row) that nest them. An image says it is there; controls
+ * with no text say nothing. Card 2.0 keeps its components in `body.elements`, card 1.0 in `elements`.
+ */
+function sentCardLines(card: Record<string, unknown>): string[] {
   const lines: string[] = [];
   const header = isRecord(card.header) ? card.header : undefined;
   const title = isRecord(header?.title) ? nonEmptyString(header.title.content) : undefined;
@@ -95,13 +109,13 @@ function cardV2Lines(card: Record<string, unknown>): string[] {
     }
     if (!isRecord(node)) return;
     const content = nonEmptyString(node.content)?.trim();
-    if (typeof node.tag === "string" && CARD_V2_TEXT_TAGS.has(node.tag) && content) lines.push(content);
+    if (typeof node.tag === "string" && CARD_TEXT_TAGS.has(node.tag) && content) lines.push(content);
     else if (node.tag === "img") lines.push("[image]");
     const label = isRecord(node.text) ? nonEmptyString(node.text.content)?.trim() : undefined;
     if (label) lines.push(label);
-    for (const key of ["elements", "columns", "fields"]) visit(node[key]);
+    for (const key of ["elements", "columns", "fields", "actions"]) visit(node[key]);
   };
-  visit((card.body as Record<string, unknown>).elements);
+  visit(isRecord(card.body) ? card.body.elements : card.elements);
   return lines;
 }
 
@@ -150,9 +164,10 @@ export function decodeFeishuContent(
     // A CARD, as the platform hands it BACK.
     case "interactive":
     case "card": {
-      // Card 2.0 as SENT (`card_msg_content_type=user_card_content`): every answer this channel streams.
-      if (isRecord(content.body)) {
-        const lines = cardV2Lines(content);
+      // As SENT (`card_msg_content_type=user_card_content`, what every read asks for): a Card 2.0 (every answer this
+      // channel streams) or a card 1.0 (what many CI and alert bots post).
+      if (isSentCard(content)) {
+        const lines = sentCardLines(content);
         return { text: lines.length > 0 ? lines.join("\n") : `[${rawType} message]`, resources };
       }
       const lines: string[] = [];
