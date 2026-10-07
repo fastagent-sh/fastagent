@@ -63,9 +63,13 @@ interface PlatformMessage {
 }
 const platform: PlatformMessage[] = [];
 let platformClock = 1_700_000_000_000;
-function platformAdd(message: Omit<PlatformMessage, "create_time">): void {
-  if (platform.some((m) => m.message_id === message.message_id)) return;
-  platform.push({ ...message, create_time: String(++platformClock) });
+/** File a message (once per id) and return the create_time the platform stamped it with. */
+function platformAdd(message: Omit<PlatformMessage, "create_time">): string {
+  const filed = platform.find((m) => m.message_id === message.message_id);
+  if (filed) return filed.create_time;
+  const createTime = String(++platformClock);
+  platform.push({ ...message, create_time: createTime });
+  return createTime;
 }
 
 afterEach(async () => {
@@ -233,7 +237,7 @@ function messageEvent(over: {
   threadId?: string;
 }) {
   const senderId = over.senderId === null ? undefined : (over.senderId ?? "ou_alice");
-  platformAdd({
+  const createTime = platformAdd({
     message_id: over.id ?? "om_1",
     chat_id: over.chatId ?? "oc_1",
     ...(over.threadId ? { thread_id: over.threadId } : {}),
@@ -255,6 +259,7 @@ function messageEvent(over: {
       },
       message: {
         message_id: over.id ?? "om_1",
+        create_time: createTime,
         chat_id: over.chatId ?? "oc_1",
         chat_type: over.chatType ?? "p2p",
         message_type: over.msgType ?? "text",
@@ -2453,7 +2458,7 @@ describe("turn flow", () => {
           seq: 1,
           session: "oc_9",
           baseText: "what a prior run never finished",
-          bufferKey: "oc_9",
+          askAt: 1_700_000_000_000,
           chatId: "oc_9",
           images: [],
           files: [],

@@ -592,7 +592,8 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   [place-history.md](place-history.md)). A group turn reads its place's messages since the agent last
   answered there (`history.ts` over `GET /im/v1/messages`) and folds them into the prompt under the same
   peek→commit-on-`completed` invariant, the commit being a per-place cursor in `history.json`. The read
-  leaves out what the session holds: the ids the channel took as input (`seen.json`) and the ids a turn
+  ends at the turn's own ask, so a queued ask is never folded into an earlier turn, whatever state survived;
+  within it, it leaves out what the session holds: the ids a turn
   posted into the place, which the place keeps beside its cursor until a read passes them (recorded by a
   per-place client from `FeishuApi.recordingSends`, so a busy deployment cannot evict a quiet place's
   last answer). The send tool shares the plain client, so what the agent posts itself stays in the

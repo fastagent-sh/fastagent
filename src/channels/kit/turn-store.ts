@@ -66,10 +66,10 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
  *
  * Returns whether the answer became recoverable, so a caller does not claim a recovery that has nothing on disk.
  */
-export function commitAnsweredTurn<T extends TurnRecordBase, E>(
+export function commitAnsweredTurn<T extends TurnRecordBase, E, P>(
   store: TurnStore<T>,
-  discussion: Pick<DiscussionSource<E>, "commit">,
-  turn: { id: string; key: string; consumed: E[]; answer: string },
+  discussion: Pick<DiscussionSource<E, P>, "commit">,
+  turn: { id: string; key: P; consumed: E[]; answer: string },
 ): boolean {
   const recorded = store.answered(turn.id, turn.answer);
   discussion.commit(turn.key, turn.consumed);

@@ -3,10 +3,12 @@
  * in a chat or a thread since this agent last answered there. It replaces the context buffer, which only ever held
  * what was pushed — never the agent's own posts, and never what was said before the channel started.
  *
- * What the session already holds is left out: the messages that were turns (`isTurnInput`: every ask, answered or
- * queued) and the messages a turn posted into the place (`recordOutput`: answers, queue notices, stop feedback). A
- * place keeps its own outputs beside its cursor until a read has passed them, so a busy deployment cannot push a quiet
- * place's last answer out of a shared ring. What the agent sent itself from a send tool stays — that is what a later
+ * A turn reads up to and including its own ask (`FeishuPlaceRead.until`), so the ask itself, an ask queued behind it
+ * and anything said after it wait for their own turn; the next read starts at that ask. That bound needs no record and
+ * cannot be lost with state. Within it, what the session already holds is left out: the messages a turn posted into
+ * the place (`recordOutput`: answers, queue notices, stop feedback), which a place keeps beside its cursor until a read
+ * has passed them, so a busy deployment cannot push a quiet place's last answer out of a shared ring; and, as prompt
+ * shaping only, what this channel took as input (`isTurnInput`: an earlier `/stop`, another place's ask). What the agent sent itself from a send tool stays — that is what a later
  * "what did point 3 mean?" is about.
  */
 import { log } from "../../log.ts";
@@ -45,6 +47,16 @@ interface PlaceState {
   cursor?: PlaceCursor;
   /** Messages turns posted here that no read has passed yet. */
   outputs: string[];
+}
+
+/**
+ * What a turn reads: its place, up to and including its own ask. The bound is what keeps every later message out —
+ * an ask queued behind this one is its own turn, and folding it here would answer it twice — and it needs no record
+ * of which messages were asks, so a lost or cold state cannot break it.
+ */
+export interface FeishuPlaceRead {
+  key: string;
+  until: PlaceCursor;
 }
 
 /** One turn's read: where it reached, what it folded (whose attachments ride along), and which outputs it passed. */
@@ -100,7 +112,7 @@ export function collectFoldedAttachments(
   return { files: files.kept, images: images.kept, skipped: files.skipped + images.skipped };
 }
 
-export interface FeishuPlaceHistory extends DiscussionSource<FeishuDiscussion> {
+export interface FeishuPlaceHistory extends DiscussionSource<FeishuDiscussion, FeishuPlaceRead> {
   /** A message a turn posted into this place: in the session already, so the place's next read leaves it out. */
   recordOutput(key: string, messageId: string): void;
   /**
@@ -161,6 +173,7 @@ export function createFeishuPlaceHistory(deps: {
   /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
   const read = async (
     key: string,
+    until?: PlaceCursor,
   ): Promise<{ messages: PlaceMessage[]; newest?: PlaceCursor; earlier: boolean; outputsPassed: string[] }> => {
     const place = placeOf(key);
     const state = places.get(key);
@@ -169,6 +182,8 @@ export function createFeishuPlaceHistory(deps: {
     const listed = await api.listMessages(
       place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
       PAGE_SIZE,
+      // Seconds, inclusive: the same second's later messages still arrive, and are skipped below by time.
+      until ? Math.floor(until.at / 1000) : undefined,
     );
     const fresh: { item: FeishuListedMessage; id: string; at: number }[] = [];
     let reachedCursor = false;
@@ -176,6 +191,7 @@ export function createFeishuPlaceHistory(deps: {
       const id = item.message_id;
       const at = Number(item.create_time);
       if (!id || !Number.isFinite(at)) continue;
+      if (until && (id === until.id || at > until.at)) continue;
       if (cursor && (id === cursor.id || at < cursor.at)) {
         reachedCursor = true;
         break;
@@ -183,7 +199,8 @@ export function createFeishuPlaceHistory(deps: {
       fresh.push({ item, id, at });
       if (!cursor && fresh.length >= FIRST_READ) break;
     }
-    const newest = fresh[0] ? { at: fresh[0].at, id: fresh[0].id } : undefined;
+    // A bounded read has accounted for everything up to its bound, the ask included: the next read starts after it.
+    const newest = until ?? (fresh[0] ? { at: fresh[0].at, id: fresh[0].id } : undefined);
     const earlier = cursor
       ? !reachedCursor && (listed.hasMore || listed.items.length >= PAGE_SIZE)
       : fresh.length >= FIRST_READ && (listed.items.length > FIRST_READ || listed.hasMore);
@@ -233,9 +250,9 @@ export function createFeishuPlaceHistory(deps: {
   };
 
   return {
-    async peek(key) {
+    async peek({ key, until }) {
       try {
-        const { messages, newest, earlier, outputsPassed } = await read(key);
+        const { messages, newest, earlier, outputsPassed } = await read(key, until);
         const { text, folded } = foldPlace(messages, earlier);
         return { text, consumed: [{ ...(newest ? { cursor: newest } : {}), folded, outputsPassed }] };
       } catch (error) {
@@ -243,7 +260,7 @@ export function createFeishuPlaceHistory(deps: {
         return { text, consumed: [{ folded: [], outputsPassed: [] }] };
       }
     },
-    commit(key, consumed) {
+    commit({ key }, consumed) {
       const read = consumed[0];
       if (!read?.cursor) return;
       // Only the outputs this read passed: the turn's own answer came after it and waits for the next read.

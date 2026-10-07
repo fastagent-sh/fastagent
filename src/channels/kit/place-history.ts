@@ -11,12 +11,13 @@ import { truncateCodePointPrefix } from "./text.ts";
 
 /**
  * Where a turn's discussion comes from. `peek` snapshots what this turn folds; `commit` runs when the turn's answer
- * is recorded, so a failure or crash before then leaves the discussion to be folded again.
+ * is recorded, so a failure or crash before then leaves the discussion to be folded again. `P` names what is read: a
+ * buffer bucket's key, or a place plus where this turn's read ends.
  */
-export interface DiscussionSource<E> {
+export interface DiscussionSource<E, P = string> {
   /** Never rejects: a source that cannot read says so in `text`, and the turn proceeds without it. */
-  peek(key: string): { text: string; consumed: E[] } | Promise<{ text: string; consumed: E[] }>;
-  commit(key: string, consumed: E[]): void;
+  peek(place: P): { text: string; consumed: E[] } | Promise<{ text: string; consumed: E[] }>;
+  commit(place: P, consumed: E[]): void;
 }
 
 /** One message of a place, as the fold renders it. */

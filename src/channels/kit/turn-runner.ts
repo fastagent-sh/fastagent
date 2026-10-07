@@ -14,11 +14,11 @@ import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-
  */
 export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
 
-export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, E> {
+export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string> {
   label: string;
   store: TurnStore<S>;
   /** What a turn folds beyond its own ask: the context buffer, or the place's history read from the platform. */
-  discussion: DiscussionSource<E>;
+  discussion: DiscussionSource<E, P>;
   /** Delivery dedup by platform id, recorded post-persist (Slack, Feishu). */
   seen?: { add(id: string): void };
   /** The persisted intent for a pending turn — drops the live-only fields. */
@@ -26,7 +26,7 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   /** A recovered intent as a pending turn — live-only fields start absent. */
   fromStored(stored: S): R;
   /** The place this turn folds the discussion of (a buffer bucket, or a place to read); undefined folds nothing. */
-  discussionKey(rec: R): string | undefined;
+  discussionKey(rec: R): P | undefined;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
   /** Queue feedback when a turn is scheduled BEHIND an active one. */
@@ -69,8 +69,8 @@ export interface TurnRunner<R, S> {
   idle(): Promise<void>;
 }
 
-export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E>(
-  options: TurnRunnerOptions<R, S, E>,
+export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string>(
+  options: TurnRunnerOptions<R, S, E, P>,
   rec: R,
 ): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
@@ -179,7 +179,8 @@ export function createTurnRunner<
   R extends PendingBase<S> & { id: string; session: string },
   S extends TurnRecordBase,
   E,
->(options: TurnRunnerOptions<R, S, E>): TurnRunner<R, S> {
+  P = string,
+>(options: TurnRunnerOptions<R, S, E, P>): TurnRunner<R, S> {
   const { label, store, seen, onQueuedBehind } = options;
   const notices = new Map<string, { done: Fiber.Fiber<void>; cancel?: () => void }>();
   const queue = createTurnQueue<R>({

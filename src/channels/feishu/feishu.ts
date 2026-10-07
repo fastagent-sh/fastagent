@@ -22,6 +22,7 @@ import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   type FeishuDiscussion,
+  type FeishuPlaceRead,
   collectFoldedAttachments,
   createFeishuPlaceHistory,
   feishuHistoryKey,
@@ -83,6 +84,8 @@ interface StoredFeishuTurn extends TurnRecordBase {
   baseText: string;
   /** The place whose history this turn reads (the chat, or the thread it was asked in); absent outside a group. */
   historyKey?: string;
+  /** When the ask was created (ms): this turn's read of its place ends there. */
+  askAt: number;
   chatId: string;
   replyTo?: string;
   /** Source message to quote when queue feedback mounts. */
@@ -111,6 +114,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.session === "string" &&
     typeof r.baseText === "string" &&
     (r.historyKey === undefined || typeof r.historyKey === "string") &&
+    typeof r.askAt === "number" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
@@ -291,7 +295,8 @@ function createFeishuRuntimeFactory(
       isRecord: isStoredFeishuTurn,
       order: (a, b) => a.seq - b.seq,
     });
-    // Every message this channel took as input (a turn, a /stop): the dedup ring, and what a history read leaves out.
+    // Every message this channel took as input (a turn, a /stop): the dedup ring. A history read also leaves these out,
+    // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const history = createFeishuPlaceHistory({
       api,
@@ -329,14 +334,15 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuDiscussion>({
+    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuDiscussion, FeishuPlaceRead>({
       label,
       store,
       discussion: history,
       seen,
       toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
-      discussionKey: (rec) => rec.historyKey,
+      discussionKey: (rec) =>
+        rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
       // Queue feedback: mount that turn's preview early with a queue status.
       onQueuedBehind: (rec) => {
@@ -503,6 +509,10 @@ function createFeishuRuntimeFactory(
       // A group's discussion, under the default routing: a routed session's place is the router's to decide.
       const historyKey =
         route === undefined && m.chat_type === "group" ? feishuHistoryKey(normalized.conversation) : undefined;
+      // The platform stamps every message; acceptance time stands in only if a payload lacks it, and is still a bound
+      // the ask was created before.
+      const created = Number(m.create_time);
+      const askAt = Number.isFinite(created) && created > 0 ? created : Date.now();
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
       // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers, stay plain in an
@@ -542,6 +552,7 @@ function createFeishuRuntimeFactory(
           session,
           baseText,
           ...(historyKey !== undefined ? { historyKey } : {}),
+          askAt,
           chatId,
           replyTo,
           queueReplyTo,

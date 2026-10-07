@@ -146,6 +146,26 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(1); // one attempt, no backoff
   });
 
+  it("listMessages reads newest first, cards as sent, and ends where it is told", async () => {
+    const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }], has_more: true }));
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    expect(await api.listMessages({ type: "thread", id: "omt_1" }, 50, 1_791_357_412)).toEqual({
+      items: [{ message_id: "om_1" }],
+      hasMore: true,
+    });
+    const query = new URL(fx.calls().at(-1)?.url ?? "").searchParams;
+    expect(Object.fromEntries(query)).toMatchObject({
+      container_id_type: "thread",
+      container_id: "omt_1",
+      sort_type: "ByCreateTimeDesc",
+      page_size: "50",
+      end_time: "1791357412",
+      card_msg_content_type: "user_card_content",
+    });
+    await api.listMessages({ type: "chat", id: "oc_1" }, 50);
+    expect(new URL(fx.calls().at(-1)?.url ?? "").searchParams.has("end_time")).toBe(false);
+  });
+
   it("getMessage pins user_id_type=open_id, and asks for a card as it was sent", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });

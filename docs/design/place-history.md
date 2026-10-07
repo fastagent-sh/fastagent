@@ -105,18 +105,23 @@ derivation that must not drift. The seam is where the platforms actually differ.
 
 ### The fold (Feishu, `history.ts` + `foldPlace`)
 
-1. Read the place's messages after its cursor. With no cursor, the newest 20.
-2. **Drop what the session holds**, by message id: every message the channel took as input (`seen.json`: a turn,
-   answered or queued, or a `/stop`) and every message a turn posted into the place (answers, queue notices, stop
-   feedback). The second is recorded per place, beside its cursor in `history.json`, by a client the turn posts
+1. Read the place's messages after its cursor **and up to the turn's own ask** (`end_time` server-side, then
+   `(create_time, message_id)`). With no cursor, the newest 20 before the ask. The cursor then moves to the ask. The
+   bound is what keeps this turn's ask, an ask queued behind it in the same session (its own turn: folding it here
+   would answer it twice) and anything said after it out of this turn; it needs no record of which messages were asks,
+   so a cold instance or a lost state file cannot break it.
+2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers, queue notices,
+   stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The second is recorded per place, beside its cursor in `history.json`, by a client the turn posts
    through (`FeishuApi.recordingSends`), and forgotten once a read has passed it: a shared bounded ring would let a
    busy deployment evict a quiet place's last answer. `feishu-send` shares the plain client, so the agent's other
    posts (a digest, a post into another chat) stay: they are what #633 is about.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
 3. Drop system and deleted messages. Label each sender: a human by name, `you` for this
    app, `bot <app_id>` for another.
-4. Bound newest-first by a character budget. The agent's own posts get a larger per-message cap, because a digest is
-   thousands of characters. What the budget cut is said ("N earlier messages not shown"), never dropped silently.
+4. Bound newest-first by a character budget, so the discussion closest to the ask is what survives. The agent's own
+   posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
+   ("N earlier messages not shown"), and so is what the read never reached ("earlier messages not shown", without a
+   count: counting would mean reading every page), never dropped silently.
 5. Advance the cursor when the turn's answer is recorded (`onAnswered`, before it is delivered): the buffer's
    commit-on-`completed` rule, in place of consume-by-identity. An answer that is then not delivered is re-delivered
    from the turn store, not re-run, so its discussion is not owed to another turn.

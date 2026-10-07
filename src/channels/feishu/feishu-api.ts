@@ -188,6 +188,8 @@ export interface FeishuApi {
   listMessages(
     container: { type: "chat" | "thread"; id: string },
     pageSize: number,
+    /** Seconds since the epoch, inclusive: list nothing created after this second. */
+    endTime?: number,
   ): Promise<{ items: FeishuListedMessage[]; hasMore: boolean }>;
   /** A chat's members by name, keyed by open_id (needs `im:chat.members:read`). */
   chatMemberNames(chatId: string): Promise<Map<string, string>>;
@@ -415,7 +417,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         );
         return sent(data.data?.message_id);
       },
-      async listMessages(container, pageSize) {
+      async listMessages(container, pageSize, endTime) {
         const query = new URLSearchParams({
           container_id_type: container.type,
           container_id: container.id,
@@ -425,6 +427,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
           // A Card 2.0 (every streamed answer, a feishu-send digest) otherwise reads as "please upgrade the client".
           card_msg_content_type: "user_card_content",
         });
+        if (endTime !== undefined) query.set("end_time", String(endTime));
         const data = await call<ApiBody & { data?: { items?: FeishuListedMessage[]; has_more?: boolean } }>(
           "listMessages",
           "GET",
