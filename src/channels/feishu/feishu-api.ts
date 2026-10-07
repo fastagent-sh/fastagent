@@ -196,6 +196,7 @@ export interface FeishuApi {
     pageSize: number,
     /** Seconds since the epoch, inclusive: list nothing created after this second. */
     endTime?: number,
+    opts?: CallOptions,
   ): Promise<{ items: FeishuListedMessage[]; hasMore: boolean }>;
   /**
    * Names for `wanted` open_ids among a chat's members (needs `im:chat.members:read`). Pages until every wanted id is
@@ -205,6 +206,7 @@ export interface FeishuApi {
   chatMemberNames(
     chatId: string,
     wanted: ReadonlySet<string>,
+    opts?: CallOptions,
   ): Promise<{ names: Map<string, string>; complete: boolean }>;
   /** Fetch one message (the reply-referent path). Undefined when the API returns no item.
    *
@@ -430,7 +432,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         );
         return sent(data.data?.message_id);
       },
-      async listMessages(container, pageSize, endTime) {
+      async listMessages(container, pageSize, endTime, opts) {
         const query = new URLSearchParams({
           container_id_type: container.type,
           container_id: container.id,
@@ -445,10 +447,12 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
           "listMessages",
           "GET",
           `/open-apis/im/v1/messages?${query}`,
+          undefined,
+          opts,
         );
         return { items: data.data?.items ?? [], hasMore: data.data?.has_more === true };
       },
-      async chatMemberNames(chatId, wanted) {
+      async chatMemberNames(chatId, wanted, opts) {
         const names = new Map<string, string>();
         let pageToken: string | undefined;
         for (let page = 0; page < MEMBER_PAGES; page++) {
@@ -458,7 +462,13 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
             ApiBody & {
               data?: { items?: { member_id?: string; name?: string }[]; has_more?: boolean; page_token?: string };
             }
-          >("chatMemberNames", "GET", `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?${query}`);
+          >(
+            "chatMemberNames",
+            "GET",
+            `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?${query}`,
+            undefined,
+            opts,
+          );
           for (const member of data.data?.items ?? []) {
             if (member.member_id && member.name && wanted.has(member.member_id))
               names.set(member.member_id, member.name);

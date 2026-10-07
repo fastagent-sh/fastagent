@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FeishuListedMessage } from "../src/channels/feishu/feishu-api.ts";
+import type { FeishuApi, FeishuListedMessage } from "../src/channels/feishu/feishu-api.ts";
 import { type FeishuPlaceRead, createFeishuPlaceHistory, feishuHistoryKey } from "../src/channels/feishu/history.ts";
+import { CONTEXT_READ } from "../src/channels/kit/transport.ts";
 import { log } from "../src/log.ts";
 
 const roots: string[] = [];
@@ -25,10 +26,7 @@ function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}):
 }
 
 /** A place whose messages the test appends to (oldest first); the fake lists them newest first, as the platform does. */
-type MemberNames = (
-  chatId: string,
-  wanted: ReadonlySet<string>,
-) => Promise<{ names: Map<string, string>; complete: boolean }>;
+type MemberNames = FeishuApi["chatMemberNames"];
 
 function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string } = {}) {
   const messages: FeishuListedMessage[] = [];
@@ -154,6 +152,7 @@ describe("Feishu place history", () => {
       { type: "chat", id: "oc_1" },
       50,
       Math.floor(second.until.at / 1000),
+      CONTEXT_READ,
     );
   });
 
@@ -308,6 +307,7 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_1", "hi"), msg("om_2", "hello", bob));
     expect(await answeredTurn(place)).toBe("Alice (msg om_1): hi\nuser ou_bob (msg om_2): hello");
     expect(place.chatMemberNames.mock.calls[0]?.[1]).toEqual(new Set(["ou_alice", "ou_bob"]));
+    expect(place.chatMemberNames.mock.calls[0]?.[2]).toBe(CONTEXT_READ);
     expect(warn.mock.calls.join("\n")).toContain("1 speaker(s) are shown by open_id");
 
     // Both are known now (one by name, one as unnameable): the next turn reads no names.

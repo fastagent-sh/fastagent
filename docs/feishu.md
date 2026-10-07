@@ -289,7 +289,8 @@ schedule for example, stays, labelled `you`, so a later "what did point 3 mean?"
   leaves out is counted in the prompt. A place with more than 50 messages since its last answer says earlier ones
   are not shown.
 - A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
-  a warning is logged, and the next turn reads the same messages again.
+  a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
+  the turn waits for it.
 - Direct messages and turns from a custom `route` read no history.
 
 ## Threads and sessions

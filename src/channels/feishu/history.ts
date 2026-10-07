@@ -14,6 +14,7 @@ import {
   type PlaceRead,
   createPlaceHistory,
 } from "../kit/place-history.ts";
+import { CONTEXT_READ } from "../kit/transport.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
 
@@ -109,7 +110,7 @@ export function createFeishuPlaceHistory(deps: {
     const unknown = new Set([...speakers].filter((id) => !entry.named.has(id) && !entry.unnamed.has(id)));
     if (unknown.size === 0) return entry.named;
     try {
-      const { names: found, complete } = await api.chatMemberNames(chatId, unknown);
+      const { names: found, complete } = await api.chatMemberNames(chatId, unknown, CONTEXT_READ);
       for (const [id, name] of found) entry.named.set(id, name);
       const missing = [...unknown].filter((id) => !found.has(id));
       for (const id of missing) entry.unnamed.add(id);
@@ -138,6 +139,7 @@ export function createFeishuPlaceHistory(deps: {
       PAGE_SIZE,
       // Seconds, inclusive: the same second's later messages still arrive, and are skipped below by time.
       until ? Math.floor(until.at / 1000) : undefined,
+      CONTEXT_READ,
     );
     const fresh: { item: FeishuListedMessage; id: string; at: number }[] = [];
     let reachedCursor = false;

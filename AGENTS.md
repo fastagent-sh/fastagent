@@ -115,7 +115,7 @@ src/
 │   │   ├── event-stream.ts # typed, demand-driven Agent iterator acquisition and scoped cleanup
 │   │   ├── invoke-turn-kit.ts # resolve inputs → ask the agent; the background tier's degradation; busy wait;
 │   │   │                   # the prompt manifest wording
-│   │   ├── transport.ts    # whether a write is worth waiting out a rate limit for (DROPPABLE_FRAME)
+│   │   ├── transport.ts    # whether a call is worth waiting out a rate limit for (DROPPABLE_FRAME, CONTEXT_READ)
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
 │   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)

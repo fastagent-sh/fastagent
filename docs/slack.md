@@ -217,15 +217,16 @@ answer is left out of the place it lands in: the Agent answers a top-level ask i
 belongs to that thread. What the Agent posted itself, with `slack-send` from a schedule for example, stays, labelled
 `you`, so a later "what did point 3 mean?" has it.
 
-- People are shown by user id (`user U…`), other bots by name (`bot <name>`). Slack's own messages (joins, topic
-  changes) are left out.
+- People are shown by user id (`user U…`), other bots by name (`bot <name>`), with what an integration put in legacy
+  attachments. Slack's own messages (joins, topic changes) and messages with nothing to show are left out.
 - A post written as Markdown (every answer and `slack-send` post) is read from its blocks, tables included; Slack's
   plain-text rendering of such a post drops its tables.
 - The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it
   leaves out is counted in the prompt. A place with more than 50 messages since its last answer says earlier ones
   are not shown.
 - A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
-  a warning is logged, and the next turn reads the same messages again.
+  a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
+  the turn waits for it.
 - Direct messages and turns from a custom `route` read no history.
 
 This deliberately lets the app read messages in channels where it is installed; invite it only to channels

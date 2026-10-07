@@ -10,6 +10,7 @@ import {
   slackPlaceOf,
 } from "../src/channels/slack/history.ts";
 import type { SlackApi, SlackListedMessage } from "../src/channels/slack/slack-api.ts";
+import { CONTEXT_READ } from "../src/channels/kit/transport.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -100,13 +101,14 @@ describe("Slack place history", () => {
     place.messages.push(said);
     const first = place.ask();
     expect(await answeredTurn(place, first)).toBe(`user U1 (msg ${said.ts}): deploy failed`);
-    expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { latest: first.until, limit: 20 });
+    // A context read: a rate limit costs the turn its discussion, never a wait before the turn starts.
+    expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { latest: first.until, limit: 20 }, CONTEXT_READ);
 
     const later = msg("fixed now");
     place.messages.push(later);
     const second = place.ask();
     expect(await answeredTurn(place, second)).toBe(`user U1 (msg ${later.ts}): fixed now`);
-    expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { latest: second.until, limit: 50 });
+    expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { latest: second.until, limit: 50 }, CONTEXT_READ);
   });
 
   it("labels the agent's own posts, other bots and people, reads a markdown post as written, and drops the platform's", async () => {
@@ -207,6 +209,34 @@ describe("Slack place history", () => {
     ]);
   });
 
+  it("reads what an integration says in legacy attachments, and leaves out a message with nothing to show", async () => {
+    const place = setup();
+    place.messages.push(
+      msg("", {
+        user: undefined,
+        bot_id: "BGH",
+        subtype: "bot_message",
+        username: "github",
+        attachments: [
+          { pretext: "1 new commit", title: "fix the cache", text: "a1b2c3 by dana", fallback: "[repo] 1 new commit" },
+        ],
+      }),
+      msg("", {
+        user: undefined,
+        bot_id: "BALERT",
+        subtype: "bot_message",
+        username: "alerts",
+        attachments: [{ fallback: "CPU 95% on api-1" }],
+      }),
+      msg("", { user: "U2" }),
+    );
+    const text = await answeredTurn(place, place.ask());
+    expect(text.split("\n")).toEqual([
+      expect.stringMatching(/^bot github \(msg [\d.]+\): 1 new commit fix the cache a1b2c3 by dana$/),
+      expect.stringMatching(/^bot alerts \(msg [\d.]+\): CPU 95% on api-1$/),
+    ]);
+  });
+
   it("a thread's read is its newest page before the ask, cut at the cursor", async () => {
     const place = setup();
     const root = msg("incident thread");
@@ -222,6 +252,7 @@ describe("Slack place history", () => {
       expect.stringMatching(/: reply 26$/),
     ]);
     expect(first).toMatch(/: reply 45$/);
+    expect(place.threadReplies).toHaveBeenLastCalledWith("C1", root.ts, expect.any(Object), CONTEXT_READ);
 
     // Past the cursor: the root is not discussion again, and a busy stretch says what it did not reach.
     for (let i = 46; i <= 105; i++) place.messages.push(msg(`reply ${i}`, { thread_ts: root.ts }));

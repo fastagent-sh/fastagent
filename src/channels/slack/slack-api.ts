@@ -106,6 +106,8 @@ export interface SlackListedMessage {
   bot_profile?: { name?: string };
   text?: string;
   blocks?: unknown[];
+  /** Legacy attachments: where many integrations (CI, alerts) put all they say, with an empty `text`. */
+  attachments?: { fallback?: string; pretext?: string; title?: string; text?: string }[];
   files?: SlackFile[];
 }
 
@@ -129,12 +131,17 @@ export interface SlackApi {
    */
   recordingSends(onSent: OnSent): SlackApi;
   /** A channel's top-level messages in `range`, NEWEST first (`conversations.history`). */
-  channelHistory(channelId: string, range: SlackRange): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
+  channelHistory(
+    channelId: string,
+    range: SlackRange,
+    opts?: CallOptions,
+  ): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
   /** A thread's replies in `range`, OLDEST first, after its root, which Slack lists whatever the range. */
   threadReplies(
     channelId: string,
     threadTs: string,
     range: SlackRange,
+    opts?: CallOptions,
   ): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
   authTest(): Promise<{ teamId?: string; userId?: string; botId?: string }>;
   postMessage(target: SlackTarget, text: string): Promise<string>;
@@ -371,19 +378,21 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
 
   const api: SlackApi = {
     recordingSends: (record) => slackClient({ botToken, baseUrl }, record),
-    async channelHistory(channelId, range) {
+    async channelHistory(channelId, range, opts) {
       const data = await call<SlackBody & { messages?: SlackListedMessage[]; has_more?: boolean }>(
         "conversations.history",
         { channel: channelId, ...range },
         "GET",
+        opts,
       );
       return { messages: data.messages ?? [], hasMore: data.has_more === true };
     },
-    async threadReplies(channelId, threadTs, range) {
+    async threadReplies(channelId, threadTs, range, opts) {
       const data = await call<SlackBody & { messages?: SlackListedMessage[]; has_more?: boolean }>(
         "conversations.replies",
         { channel: channelId, ts: threadTs, ...range },
         "GET",
+        opts,
       );
       return { messages: data.messages ?? [], hasMore: data.has_more === true };
     },

@@ -14,6 +14,7 @@ import {
   type PlaceRead,
   createPlaceHistory,
 } from "../kit/place-history.ts";
+import { CONTEXT_READ } from "../kit/transport.ts";
 import { slackMessageText } from "./parse.ts";
 import type { SlackApi, SlackListedMessage } from "./slack-api.ts";
 
@@ -169,12 +170,17 @@ const BLOCKS: Record<string, BlockReader> = {
 /**
  * What a message says. A Markdown post (every answer and `slack-send` post) is stored as blocks, and its `text` is a
  * rendering that drops a table to ", with interactive elements" (measured), so the blocks are read when this knows them
- * all, and `text` otherwise.
+ * all, and `text` otherwise. Legacy attachments follow: an integration often says everything there.
  */
 function spokenText(message: SlackListedMessage): string {
   const blocks = list(message.blocks);
   const read = joined(blocks, (block) => BLOCKS[String(block.type)]?.(block), "\n");
-  return blocks.length > 0 && read !== undefined ? read : (message.text ?? "");
+  const body = blocks.length > 0 && read !== undefined ? read : (message.text ?? "");
+  const attached = (message.attachments ?? []).map((attachment) => {
+    const parts = [attachment.pretext, attachment.title, attachment.text].filter(Boolean);
+    return parts.length > 0 ? parts.join("\n") : (attachment.fallback ?? "");
+  });
+  return [body, ...attached].filter((part) => part.trim() !== "").join("\n");
 }
 
 export function createSlackPlaceHistory(deps: {
@@ -197,15 +203,17 @@ export function createSlackPlaceHistory(deps: {
     const range = { ...(until ? { latest: until } : {}), limit: cursor ? PAGE_SIZE : FIRST_READ };
     const page =
       place.threadTs === undefined
-        ? await api.channelHistory(place.channelId, range).then(({ messages, hasMore }) => ({
+        ? await api.channelHistory(place.channelId, range, CONTEXT_READ).then(({ messages, hasMore }) => ({
             messages: messages.reverse(),
             hasMore,
           }))
-        : await api.threadReplies(place.channelId, place.threadTs, range).then(({ messages, hasMore }) => ({
-            // The root comes first whatever the range: it is this place's discussion only on a first read.
-            messages: messages.filter((message) => message.ts !== place.threadTs || cursor === undefined),
-            hasMore,
-          }));
+        : await api
+            .threadReplies(place.channelId, place.threadTs, range, CONTEXT_READ)
+            .then(({ messages, hasMore }) => ({
+              // The root comes first whatever the range: it is this place's discussion only on a first read.
+              messages: messages.filter((message) => message.ts !== place.threadTs || cursor === undefined),
+              hasMore,
+            }));
     const after = (ts: string): boolean => cursor === undefined || compareSlackTs(ts, cursor) > 0;
     const listed = page.messages.filter(
       (message): message is SlackListedMessage & { ts: string } => message.ts !== undefined,
@@ -221,7 +229,7 @@ export function createSlackPlaceHistory(deps: {
           (message.subtype === undefined || SPOKEN_SUBTYPES.has(message.subtype)) &&
           !drop(message.ts),
       )
-      .map((message): PlaceMessage => {
+      .map((message): PlaceMessage | undefined => {
         const own =
           (message.user !== undefined && message.user === self.userId) ||
           (message.bot_id !== undefined && message.bot_id === self.botId);
@@ -230,18 +238,22 @@ export function createSlackPlaceHistory(deps: {
           : message.bot_id !== undefined
             ? { kind: "bot", label: `bot ${message.bot_profile?.name ?? message.username ?? message.bot_id}` }
             : { kind: "human", label: `user ${message.user ?? "unknown"}` };
+        const text = slackMessageText({ text: spokenText(message), files: message.files });
+        // No text, attachment or file to show: an empty line would only spend the fold's budget.
+        if (text.trim() === "") return undefined;
         return {
           id: message.ts,
           at: Number(message.ts) * 1000,
           from,
-          text: slackMessageText({ text: spokenText(message), files: message.files }),
+          text,
           images: [],
           // Whether a file is an image is `files.info`'s answer, read when the turn loads it.
           files: (message.files ?? []).flatMap((file) =>
             file.id ? [{ key: file.id, ...(file.name ? { name: file.name } : {}) }] : [],
           ),
         };
-      });
+      })
+      .filter((message) => message !== undefined);
     const newest = fresh.at(-1)?.ts;
     return {
       covered: fresh.map((message) => message.ts),

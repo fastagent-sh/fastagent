@@ -26,3 +26,9 @@ export interface CallOptions {
 
 /** A write the next one supersedes: never wait out a rate limit for it. */
 export const DROPPABLE_FRAME: CallOptions = { retries: 0 };
+
+/**
+ * A read that only adds context to a turn (a place's history, its speakers' names): the turn runs without it and says
+ * so, and the asker sees nothing until it ends, so it never waits out a rate limit either.
+ */
+export const CONTEXT_READ: CallOptions = { retries: 0 };

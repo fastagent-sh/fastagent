@@ -138,7 +138,8 @@ derivation that must not drift. The seam is where the platforms actually differ.
    commit-on-`completed` rule, in place of consume-by-identity. An answer that is then not delivered is re-delivered
    from the turn store, not re-run, so its discussion is not owed to another turn.
 6. **A failed read is said**, in the prompt ("could not read the recent discussion here: …") and as a `warn`. The turn
-   proceeds: context is not the ask.
+   proceeds: context is not the ask. For the same reason a read is never retried through a rate limit
+   (`CONTEXT_READ`): the asker sees nothing, not even the 👀, until it ends.
 
 **A lost cursor** (a deleted state file, a new instance) falls back to the place's last N messages. That costs
 repetition the session may already hold (the agent's earlier answers among them, labelled `you`), and never loses a
