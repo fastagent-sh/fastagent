@@ -173,6 +173,40 @@ describe("Slack place history", () => {
     ]);
   });
 
+  it("reads a message's blocks as separate paragraphs, and its text when a block holds something unknown", async () => {
+    const place = setup();
+    const section = (text: string) => ({ type: "rich_text_section", elements: [{ type: "text", text }] });
+    place.messages.push(
+      // As the Slack client stores "see below", a code block and "then run it": no newline between the three.
+      msg("see below\n```npm test```\nthen run it", {
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              section("see below"),
+              { type: "rich_text_preformatted", elements: [{ type: "text", text: "npm test" }] },
+              section("then run it"),
+            ],
+          },
+        ],
+      }),
+      // A quote holding an inline element this does not know: the whole message falls back to its text.
+      msg("> ask <!subteam^S1> first", {
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [{ type: "rich_text_quote", elements: [{ type: "text", text: "ask " }, { type: "team" }] }],
+          },
+        ],
+      }),
+    );
+    const text = await answeredTurn(place, place.ask());
+    expect(text.split("\n")).toEqual([
+      expect.stringMatching(/: see below npm test then run it$/),
+      expect.stringMatching(/: > ask <!subteam\^S1> first$/),
+    ]);
+  });
+
   it("a thread's read is its newest page before the ask, cut at the cursor", async () => {
     const place = setup();
     const root = msg("incident thread");

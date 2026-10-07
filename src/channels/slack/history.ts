@@ -122,8 +122,10 @@ function richText(block: Record<string, unknown>): string | undefined {
         case "rich_text_section":
         case "rich_text_preformatted":
           return runs(element);
-        case "rich_text_quote":
-          return `> ${runs(element) ?? ""}`;
+        case "rich_text_quote": {
+          const run = runs(element);
+          return run === undefined ? undefined : `> ${run}`;
+        }
         case "rich_text_list": {
           // A list split by other blocks continues its numbering from `offset`.
           const first = typeof element.offset === "number" ? element.offset + 1 : 1;
@@ -142,7 +144,8 @@ function richText(block: Record<string, unknown>): string | undefined {
           return undefined;
       }
     },
-    "",
+    // Each element is a block (a paragraph, a list, a quote, code): Slack does not always end one with a newline.
+    "\n",
   );
 }
 

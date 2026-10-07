@@ -84,7 +84,11 @@ function foldPlace(messages: readonly PlaceMessage[], earlier: boolean): { text:
   return { text: folded.length > 0 || cut > 0 ? lines.join("\n") : "", folded };
 }
 
-/** Places kept, least recently used dropped: a dropped place costs one re-read of its newest messages. */
+/**
+ * Places kept. A dropped place costs one re-read of its newest messages, its earlier answers among them. Places no turn
+ * has read yet go first: Slack records an answer to a top-level ask in the thread it opens, and most such threads are
+ * never asked in again, so they must not push out a quiet place's cursor.
+ */
 const MAX_PLACES = 2000;
 
 /**
@@ -163,14 +167,18 @@ export function createPlaceHistory<C>(deps: {
 }): PlaceHistory<C> {
   const { label, path } = deps;
   const places = loadPlaces(path, label, deps.isCursor);
-  /** Mark `key` most recently used (the map's order is the eviction order) and persist every place. */
+  /**
+   * Mark `key` most recently used (the map's order is the eviction order) and persist every place. Over the bound, the
+   * least recently used place without a cursor goes, else the least recently used; never `key` itself.
+   */
   const save = (key: string, state: PlaceState<C>, lost: string): void => {
     places.delete(key);
     places.set(key, state);
     while (places.size > MAX_PLACES) {
-      const oldest = places.keys().next().value;
-      if (oldest === undefined) break;
-      places.delete(oldest);
+      const others = [...places].filter(([other]) => other !== key);
+      const victim = (others.find(([, place]) => place.cursor === undefined) ?? others[0])?.[0];
+      if (victim === undefined) break;
+      places.delete(victim);
     }
     try {
       saveStateFile(path, Object.fromEntries(places));
