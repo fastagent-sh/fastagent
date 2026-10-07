@@ -296,11 +296,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, SlackBufferEntry>({
       label,
       store,
-      buffer,
+      discussion: buffer,
       seen,
       toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),
-      bufferKey: (turn) => turn.bufferKey,
+      discussionKey: (turn) => turn.bufferKey,
       where: (turn) => `channel=${turn.channelId}`,
       onQueuedBehind(turn) {
         const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");

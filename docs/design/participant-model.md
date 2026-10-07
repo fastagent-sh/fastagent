@@ -54,9 +54,11 @@ implement the participant.
 
 > A participant hears everything said in the room, and speaks only when addressed.
 
-The two capabilities are independent, and FastAgent implements them separately: everything heard but
-not addressed to the agent is buffered as context (`channels/kit/context-buffer.ts`) and folded into
-the next answered turn in that place; speaking is governed by rule 1.
+The two capabilities are independent, and FastAgent implements them separately: everything said but
+not addressed to the agent is folded into the next answered turn in that place, and speaking is
+governed by rule 1. Where the platform can be read (Feishu/Lark), that turn reads the place's history
+from it (`channels/feishu/history.ts`, design: `place-history.md`); elsewhere the channel keeps what it
+heard in a context buffer (`channels/kit/context-buffer.ts`).
 
 This is what the platform's sensitive group-message scope actually buys. It does not grant the right
 to speak — it grants the ability to *hear*. Onboarding asks for it on every app; a tenant that withholds
@@ -137,8 +139,8 @@ The agent is a participant of a thread once it has answered in it, so bootstrapp
 social move: mention it once inside the thread. (A thread's root message lives in the main timeline,
 so the root does not establish participation.)
 
-**Mentioning only other people is not addressing the agent.** Such a message is discussion; it is
-buffered, never answered.
+**Mentioning only other people is not addressing the agent.** Such a message is discussion: folded
+into the next answered turn, never answered.
 
 ## 4. Rule 2 — where to speak
 
@@ -208,7 +210,7 @@ A thread must start from something. Four rungs, increasing in cost:
 |---|---|---|---|
 | 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound | rejected |
 | **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** | implemented |
-| **3** | **room-buffer fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | implemented |
+| **3** | **room-discussion fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | implemented |
 | **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | implemented |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
@@ -229,8 +231,8 @@ Telegram's update embeds exactly one `reply_to_message` object and Slack carries
 also resolves the referent's reply CHAIN: the ancestors above the quoted message, walked to the
 platform-defined root and rendered oldest-first as context. Ancestors are context, not the ask, and
 every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS` budget across
-the whole chain, their attachments share the buffered tier's `BUFFER_ATTACH_MAX` budget with the
-context buffer (chain refs take slots first), and an unloadable one costs a note, never the turn. Any
+the whole chain, their attachments share the background tier's `BUFFER_ATTACH_MAX` budget with the
+folded discussion (chain refs take slots first), and an unloadable one costs a note, never the turn. Any
 walk that ends short of the root — the 8-ancestor IO cap, an exhausted budget, an unreadable ancestor,
 a cycle in corrupt data — leaves the same visible truncation line, because a chain rendered without it
 would read as complete and the model would take the oldest fetched node for the original ask. One cost
@@ -256,11 +258,11 @@ budget. Every edge (missing parent, oversize journal, torn tail line) fails towa
 with a warn.
 
 **The two rungs carry different halves.** The fork carries what the room's SESSION knew; a room's
-session only advances when the agent is summoned, so discussion since its last answered turn sits in
-the context buffer, absorbed by nothing. The thread's FIRST turn folds that bucket into its prompt,
-read-only — the room's own next answered turn still commits it, so each place sees the discussion
-exactly once in its own memory, and the fold's attachments cross as real attachments on the buffered
-tier rather than as marker lines.
+session only advances when the agent is summoned, so discussion since its last answered turn is
+absorbed by nothing. The thread's FIRST turn folds that discussion into its prompt, read-only — the
+room's own next answered turn still reads it, so each place sees the discussion exactly once in its
+own memory, and the fold's attachments cross as real attachments on the background tier rather than
+as marker lines.
 
 **Once, not per turn**, and this is not an optimisation: a prompt lands in the session, so the thread's
 second turn already has the first turn's fold in its context. Re-folding puts a second identical copy

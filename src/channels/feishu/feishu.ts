@@ -3,6 +3,7 @@
  * → stream a live card.
  */
 import { isAbsolute, join } from "node:path";
+import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
@@ -20,12 +21,12 @@ import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
-  type FeishuBufferEntry,
-  collectFeishuBufferedAttachments,
-  createFeishuContextBuffer,
-  feishuBufferPlaceKey,
-  feishuBufferText,
-} from "./context-buffer.ts";
+  type FeishuDiscussion,
+  type FeishuPlaceRead,
+  collectFoldedAttachments,
+  createFeishuPlaceHistory,
+  feishuHistoryKey,
+} from "./history.ts";
 import { decryptEvent, verifySignature } from "./crypto.ts";
 import { feishuTurnStream } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
@@ -42,7 +43,6 @@ import {
   feishuEnvelope,
   placeKey,
   senderId,
-  senderLabel,
 } from "./parse.ts";
 import {
   type FeishuFailure,
@@ -82,8 +82,10 @@ interface StoredFeishuTurn extends TurnRecordBase {
   // `id` is the message_id (the platform delivery identity); `seq` carries arrival order.
   seq: number;
   baseText: string;
-  /** Context-buffer bucket to fold at dequeue (main chat, or this message's thread root). */
-  bufferKey: string;
+  /** The place whose history this turn reads (the chat, or the thread it was asked in); absent outside a group. */
+  historyKey?: string;
+  /** When the ask was created (ms): this turn's read of its place ends there. */
+  askAt: number;
   chatId: string;
   replyTo?: string;
   /** Source message to quote when queue feedback mounts. */
@@ -92,8 +94,8 @@ interface StoredFeishuTurn extends TurnRecordBase {
   parentId?: string;
   /** The place this thread branched from (§5 lineage). */
   parentSession?: string;
-  /** The ROOM's bucket to fold read-only into this turn (§8). */
-  roomBufferKey?: string;
+  /** The ROOM whose history this thread's first turn reads, read-only (§8). */
+  roomKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
 }
@@ -111,14 +113,15 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.seq === "number" &&
     typeof r.session === "string" &&
     typeof r.baseText === "string" &&
-    typeof r.bufferKey === "string" &&
+    (r.historyKey === undefined || typeof r.historyKey === "string") &&
+    typeof r.askAt === "number" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
     (r.parentSession === undefined || typeof r.parentSession === "string") &&
-    (r.roomBufferKey === undefined || typeof r.roomBufferKey === "string") &&
+    (r.roomKey === undefined || typeof r.roomKey === "string") &&
     refs(r.images) &&
     refs(r.files) &&
     typeof r.attempts === "number"
@@ -257,7 +260,13 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
+    if (!isAbsolute(stateRoot)) {
+      throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
+    }
+    const stateHome = join(stateRoot, "channels", kind);
+    ensureStateHome(stateHome); // the files below may carry chat content; the agent .gitignore covers .state/
+    // Shared with the send tools (registered below). A turn's own posts go through `placeApi`.
+    const api = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     void api.listAppScopes().then(
       (scopes) => {
@@ -274,13 +283,6 @@ function createFeishuRuntimeFactory(
       },
       (error) => log.warn(`${label} could not inspect the app's permissions: ${String(error)}`),
     );
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/<kind>` (engine state at the
-    // root, channel state under `channels/<kind>/`).
-    if (!isAbsolute(stateRoot)) {
-      throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
-    }
-    const stateHome = join(stateRoot, "channels", kind);
-    ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
     const botOpenId = createBotIdentity({ api, appId, label, botFile: join(stateHome, "bot.json") });
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId: botOpenId() }));
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
@@ -288,13 +290,28 @@ function createFeishuRuntimeFactory(
     // The SAME identity the session uses (`placeKey`) — a thread's place.
     const threadKey = (chatId: string, threadId: string): string =>
       placeKey(kind, { chat_id: chatId, thread_id: threadId });
-    const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,
       order: (a, b) => a.seq - b.seq,
     });
+    // Every message this channel took as input (a turn, a /stop): the dedup ring. A history read also leaves these out,
+    // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    const history = createFeishuPlaceHistory({
+      api,
+      appId,
+      label,
+      path: join(stateHome, "history.json"),
+      isTurnInput: (id) => seen.has(id),
+    });
+    /**
+     * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
+     * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
+     * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     */
+    const placeApi = (historyKey: string | undefined): FeishuApi =>
+      historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
@@ -312,19 +329,20 @@ function createFeishuRuntimeFactory(
     // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
+      void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), r.preview, body).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
       );
     };
 
-    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuBufferEntry>({
+    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, FeishuDiscussion, FeishuPlaceRead>({
       label,
       store,
-      buffer,
+      discussion: history,
       seen,
       toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
-      bufferKey: (rec) => rec.bufferKey,
+      discussionKey: (rec) =>
+        rec.historyKey === undefined ? undefined : { key: rec.historyKey, until: { at: rec.askAt, id: rec.id } },
       where: (rec) => `chat=${rec.chatId}`,
       // Queue feedback: mount that turn's preview early with a queue status.
       onQueuedBehind: (rec) => {
@@ -335,7 +353,7 @@ function createFeishuRuntimeFactory(
         });
         const mount = (): void => {
           fired = true;
-          mountFeishuPreview(api, queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
+          mountFeishuPreview(placeApi(rec.historyKey), queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
             .then(
               (preview) => {
                 rec.preview = preview;
@@ -361,56 +379,62 @@ function createFeishuRuntimeFactory(
       // honest delayed status.
       onDeferred: (rec) => {
         if (rec.preview !== undefined) {
-          void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
-            log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
+          void settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch(
+            (e) => log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
           );
         }
       },
       notifyDropped,
       // `rec.preview`: the queue card THIS process mounted if the record waited behind another turn.
-      deliverAnswer: (rec, answer) => portJoin(() => settleFeishuPreview(api, targetOf(rec), rec.preview, answer)),
-      execute: (rec, discussion, onAnswered) => {
-        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
-        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold the room's
-        // snapshot before either commits it. That fan-out loses nothing; claiming by buffer key would instead couple
-        // otherwise-independent root sessions and require failure rollback.
-        const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
-        const roomBlock = room?.text
-          ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
-          : "";
-        const prompt = `${roomBlock}${discussionBlock(discussion.text)}${rec.baseText}`;
-        // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own attachments win the
-        // slots.
-        const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...discussion.consumed], {
-          images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
-          files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
-        });
-        // Recorded at ingress (see submit) — never re-derived from the session key, which may be a routed OPAQUE id
-        // that only looks like a place key.
-        const parentSession = rec.parentSession;
-        return feishuReply(
-          feishuTurnStream(
-            agent,
-            rec.session,
-            prompt,
-            {
-              api,
-              chatId: rec.chatId,
-              filesDir: attachmentsDir(stateHome),
+      deliverAnswer: (rec, answer) =>
+        portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, answer)),
+      execute: (rec, discussion, onAnswered) =>
+        Effect.promise(async () =>
+          // Read-only: the room's own next answered turn still reads it into the room's memory (§8).
+          rec.roomKey !== undefined ? history.room(rec.roomKey) : undefined,
+        ).pipe(
+          Effect.flatMap((room) => {
+            const roomBlock = room?.text
+              ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
+              : "";
+            const prompt = `${roomBlock}${discussionBlock(discussion.text)}${rec.baseText}`;
+            // Room messages FIRST: the collector keeps the TAIL under its cap, so the thread's own attachments win the
+            // slots.
+            const buffered = collectFoldedAttachments(
+              [...(room?.folded ?? []), ...discussion.consumed.flatMap((read) => read.folded)],
+              {
+                images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
+                files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key })),
+              },
+            );
+            // Recorded at ingress (see submit) — never re-derived from the session key, which may be a routed OPAQUE id
+            // that only looks like a place key.
+            const parentSession = rec.parentSession;
+            const turnApi = placeApi(rec.historyKey);
+            return feishuReply(
+              feishuTurnStream(
+                agent,
+                rec.session,
+                prompt,
+                {
+                  api: turnApi,
+                  chatId: rec.chatId,
+                  filesDir: attachmentsDir(stateHome),
+                  label,
+                  appId,
+                  ...(parentSession !== undefined ? { parentSession } : {}),
+                },
+                { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
+              ),
+              turnApi,
+              targetOf(rec),
+              formatError,
+              rec.preview,
               label,
-              appId,
-              ...(parentSession !== undefined ? { parentSession } : {}),
-            },
-            { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
-          ),
-          api,
-          targetOf(rec),
-          formatError,
-          rec.preview,
-          label,
-          onAnswered,
-        );
-      },
+              onAnswered,
+            );
+          }),
+        ),
     });
     registerFeishuApi(stateRoot, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
@@ -449,7 +473,6 @@ function createFeishuRuntimeFactory(
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
       if (!normalized) return;
-      const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
       // Listening is not speaking: every message the channel can see refines who takes part in its thread, whether or
       // not it is answered.
@@ -467,37 +490,8 @@ function createFeishuRuntimeFactory(
         r = {};
       }
       if (!r) {
-        if (route === undefined && isHumanGroup) {
-          const bodyText = feishuBufferText(normalized.content.text);
-          if (bodyText) {
-            const resources = normalized.content.resources;
-            const images = resources
-              .filter((resource) => resource.kind === "image")
-              .map((resource) => ({ messageId: resource.messageId, key: resource.key }));
-            const files = resources
-              .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
-              .map((resource) => ({
-                messageId: resource.messageId,
-                key: resource.key,
-                name: resource.name,
-              }));
-            // A write failure escapes this boundary.
-            buffer.push(bufferKey, {
-              sender: senderLabel(event.sender) ?? "someone",
-              body: bodyText,
-              messageId: m.message_id,
-              replyTo: m.parent_id,
-              files: files.length ? files : undefined,
-              images: images.length ? images : undefined,
-            });
-            seen.add(m.message_id);
-            log.debug(`${label} buffered unsummoned group message ${m.message_id} (place ${bufferKey})`);
-          } else {
-            log.debug(`${label} not summoned — ignoring empty message ${m.message_id} (chat ${m.chat_id})`);
-          }
-        } else {
-          log.debug(`${label} not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
-        }
+        // Not lost: the turn that is summoned here reads it from the place's history.
+        log.debug(`${label} not summoned — message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
         return;
       }
 
@@ -508,10 +502,17 @@ function createFeishuRuntimeFactory(
       const parentSession =
         routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
       // Read BEFORE this turn records its own participation below, or it is always true.
-      const roomBufferKey =
+      const roomKey =
         parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
-          ? feishuBufferPlaceKey({ chatId: m.chat_id })
+          ? feishuHistoryKey({ chatId: m.chat_id })
           : undefined;
+      // A group's discussion, under the default routing: a routed session's place is the router's to decide.
+      const historyKey =
+        route === undefined && m.chat_type === "group" ? feishuHistoryKey(normalized.conversation) : undefined;
+      // The platform stamps every message; acceptance time stands in only if a payload lacks it, and is still a bound
+      // the ask was created before.
+      const created = Number(m.create_time);
+      const askAt = Number.isFinite(created) && created > 0 ? created : Date.now();
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
       // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers, stay plain in an
@@ -525,7 +526,11 @@ function createFeishuRuntimeFactory(
         seen.add(m.message_id);
         sideTasks.track(
           dispatchStop(control, session, label)
-            .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
+            .then((feedback) =>
+              placeApi(historyKey)
+                .sendText({ chatId, replyTo, replyInThread }, feedback)
+                .then(() => undefined),
+            )
             .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
         );
         return;
@@ -546,7 +551,8 @@ function createFeishuRuntimeFactory(
           seq: ++seqCounter, // arrival order; the turn store replays by it
           session,
           baseText,
-          bufferKey,
+          ...(historyKey !== undefined ? { historyKey } : {}),
+          askAt,
           chatId,
           replyTo,
           queueReplyTo,
@@ -555,7 +561,7 @@ function createFeishuRuntimeFactory(
           // always loaded.
           parentId: m.parent_id,
           ...(parentSession !== undefined ? { parentSession } : {}),
-          ...(roomBufferKey !== undefined ? { roomBufferKey } : {}),
+          ...(roomKey !== undefined && historyKey !== undefined ? { roomKey } : {}),
           images,
           files,
         },

@@ -32,8 +32,8 @@ export function scopeSatisfied(entry: FeishuScopeRequest, predicate: (name: stri
  * agent takes part in its rooms like a colleague (participant-model.md), so every app gets all of it, requested at
  * creation in the one round a tenant may want to approve. What a scope is for is the agent's, not only the channel's:
  * the agent can call the Open API with the app's credentials. A scope belongs here only once something uses it:
- * `im:message.group_msg.include_bot:read` (other bots' group messages) is an event-delivery scope, and the channel
- * drops every non-user sender, so it waits for the channel to read bot messages.
+ * `im:message.group_msg.include_bot:read` (other bots' group messages) is an event-delivery scope. The channel reads
+ * other bots' messages from a chat's history, which does not need it (measured), and drops every non-user event.
  */
 export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   {
@@ -43,11 +43,12 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   {
     request: "im:message:readonly",
     supersets: ["im:message"], // the read/write superset
-    withoutIt: "a message quoted by an ask cannot be read and degrades to a marker in the prompt",
+    withoutIt:
+      "the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker",
   },
   {
     request: "im:chat.members:read",
-    withoutIt: "the agent cannot list a chat's members by name (events carry only open_ids)",
+    withoutIt: "people in the discussion the agent reads are shown by open_id, not by name",
   },
 ];
 
