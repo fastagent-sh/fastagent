@@ -245,6 +245,34 @@ describe("card decoding — a card as it was SENT (`card_msg_content_type=user_c
     );
   });
 
+  it("reads a control's placeholder and a div's extra, and says a table is there", () => {
+    const card = {
+      elements: [
+        {
+          tag: "div",
+          text: { tag: "lark_md", content: "Deploy v2?" },
+          extra: { tag: "button", text: { tag: "plain_text", content: "Approve" } },
+        },
+        { tag: "action", actions: [{ tag: "select_static", placeholder: { tag: "plain_text", content: "选一个" } }] },
+      ],
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Deploy v2?\nApprove\n选一个",
+    );
+    const table = {
+      schema: "2.0",
+      body: {
+        elements: [
+          { tag: "markdown", content: "Latency by region" },
+          { tag: "table", columns: [{ name: "region", display_name: "Region" }], rows: [{ region: "eu" }] },
+        ],
+      },
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(table) }).text).toBe(
+      "Latency by region\n[table]",
+    );
+  });
+
   it("says a template card cannot be read, rather than leaving a bare marker", () => {
     const template = { type: "template", data: { template_id: "ctp_1", template_variable: { build: "42" } } };
     expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(template) }).text).toBe(

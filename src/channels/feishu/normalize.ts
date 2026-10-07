@@ -123,8 +123,8 @@ function localizedText(node: Record<string, unknown>, locales: readonly string[]
 
 /**
  * A sent card's visible text, in reading order: the header title, then every text component, through the containers
- * (columns, panels, forms, a 1.0 `div`'s fields, an action row) that nest them. An image says it is there; controls
- * with no text say nothing. Card 2.0 keeps its components in `body.elements`, card 1.0 in `elements`.
+ * (columns, panels, forms, a 1.0 `div`'s fields and `extra`, an action row) that nest them, with a control's label or
+ * placeholder. An image or a table says it is there; controls with no text say nothing. Card 2.0 keeps its components in `body.elements`, card 1.0 in `elements`.
  */
 function sentCardLines(card: Record<string, unknown>): string[] {
   const lines: string[] = [];
@@ -145,9 +145,14 @@ function sentCardLines(card: Record<string, unknown>): string[] {
     const content = localizedText(node, locales);
     if (typeof node.tag === "string" && CARD_TEXT_TAGS.has(node.tag) && content) lines.push(content);
     else if (node.tag === "img") lines.push("[image]");
-    const label = isRecord(node.text) ? localizedText(node.text, locales) : undefined;
-    if (label) lines.push(label);
-    for (const key of ["elements", "columns", "fields", "actions"]) visit(node[key]);
+    // Rows of typed cells, not text components: said, so the rest of the card does not read as the whole of it.
+    else if (node.tag === "table") lines.push("[table]");
+    // A control's visible words: a button's or a div's `text`, a picker's `placeholder`.
+    for (const key of ["text", "placeholder"]) {
+      const label = isRecord(node[key]) ? localizedText(node[key], locales) : undefined;
+      if (label) lines.push(label);
+    }
+    for (const key of ["elements", "columns", "fields", "actions", "extra"]) visit(node[key]);
   };
   const i18nElements = isRecord(card.i18n_elements) ? pickLocale(card.i18n_elements, locales) : undefined;
   visit(isRecord(card.body) ? card.body.elements : (card.elements ?? i18nElements));
