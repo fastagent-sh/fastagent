@@ -67,7 +67,7 @@ Measured on 2026-10-07 with read-only calls, except for a handful of `spike test
 | System messages | `msg_type = "system"`, empty sender |
 | **Ordinary group** | the chat's history holds a thread's root only; its replies are not in it. `container_id_type=thread` with the `thread_id` returns root plus replies |
 | **Topic group** (`chat_mode = "topic"`) | the chat's history holds **every** message, each with its `thread_id`. A proactive post there opens a topic of its own |
-| Reading after a point | `start_time` (seconds), `sort_type=ByCreateTimeAsc` |
+| Reading after a point | `start_time` is in seconds and inclusive, so it is not Slack's `inclusive=false`: as a cursor it re-reads the cursor's own second every time. Read newest first (`sort_type=ByCreateTimeDesc`) and stop at the cursor, a `(create_time ms, message_id)` pair, instead |
 | Names | events and history carry open_ids only; `GET /im/v1/chats/:id/members` (`im:chat.members:read`, in every created app since #748) maps them to names |
 | Rate limit | 1000/min, 50/s |
 | Latency from a laptop in China | 310–410 ms per read |
@@ -86,14 +86,16 @@ One seam (where a place's messages come from) and one shared fold (what of them 
 ```
 channels/kit/place-history.ts        engine-neutral, the only fold
   PlaceMessage   { id, at, sender: { kind: "human" | "agent" | "bot", id, name? }, text, replyTo?, attachments? }
-  PlaceHistory   { read(place, { after?: Cursor, limit }): Promise<PlaceMessage[]> }
+  PlaceHistory   { read(place, { after?: Cursor, limit }): Promise<{ messages: PlaceMessage[]; more: boolean }> }
+                 newest first: the `limit` newest messages after the cursor, and whether older ones were left unread
   recentDiscussion(history, place, marks) → { text, attachments, notes, next: Cursor }
   PlaceMarks     per place: the read cursor + the ids of the answers this channel delivered (a cache)
 
-channels/feishu/history.ts           im/v1/messages (chat | thread), user_card_content, members → names
+channels/feishu/history.ts           im/v1/messages (chat | thread), ByCreateTimeDesc, user_card_content, members → names
 channels/slack/history.ts            conversations.history | conversations.replies
-channels/telegram/history.ts         a local log: every message received + every message the agent sent
 ```
+
+Telegram has no source here yet: it keeps its buffer (see "What it replaces" below).
 
 Considered: each channel doing it its own way. Then "since my last turn here" is derived three times, which is the
 derivation that must not drift. The seam is where the platforms actually differ.
@@ -101,12 +103,19 @@ derivation that must not drift. The seam is where the platforms actually differ.
 ### The fold, `recentDiscussion`
 
 1. Read the place's messages after its cursor.
-2. **Drop the answers this channel delivered**, by message id. They are in the session already. The agent's other
-   posts (a digest, a post into another chat) stay: they are what #633 is about. The drop is by id, not time: a
-   message that arrives during a turn can be older than the answer that ends it.
+2. **Drop what the session holds or will hold**, by message id:
+   - every message the channel accepted as a turn: this turn's ask (already the prompt) and asks still queued in the
+     same session (each is its own turn; folding one into an earlier turn would answer it twice). The channel already
+     records these ids when it accepts them (its delivery dedup), so the fold reads that record;
+   - the answers this channel delivered. `PlaceMarks` keeps their ids.
+
+   The agent's other posts (a digest, a post into another chat) stay: they are what #633 is about. The drop is by id,
+   not time: a message that arrives during a turn can be older than the answer that ends it.
 3. Drop system messages. Label each sender: a human by name, `you (agent)` for this app, `bot <name>` for another.
-4. Bound newest-first by a character budget. The agent's own posts get a larger per-message cap, because a digest is
-   thousands of characters. What the budget cut is said ("N earlier messages not shown"), never dropped silently.
+4. Bound newest-first by a character budget, so the discussion closest to the ask is what survives. The agent's own
+   posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
+   ("N earlier messages not shown"), and so is what the read never reached ("earlier messages not shown", without a
+   count: counting would mean reading every page), never dropped silently.
 5. Advance the cursor when the turn's answer is delivered: the buffer's commit-on-`completed` rule, in place of
    consume-by-identity.
 6. **A failed read is said**, in the prompt ("could not read the recent discussion here: …") and as a `warn`. The turn
@@ -146,7 +155,7 @@ app cannot read this chat's history" instead of folding nothing.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`, records what the agent sends into that chat's buffer (#754) | a schedule's post is in the chat's next answered turn |
+| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session (#754) | a schedule's post is in the chat's next answered turn |
 | 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; `include_bot:read` requested; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
 | 3. Slack | `history.ts`; buffer removed | the same, live |
 | 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
