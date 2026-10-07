@@ -1,6 +1,6 @@
 ---
 title: Agent service
-description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, the world an agent acts in (environment, contexts, connectors), credentials, invoke as a durable unit of work, the interfaces, the architecture, and deployment."
+description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, the world an agent acts in (environment, contexts, connectors), credentials, invoke as work that outlives its caller, the interfaces, the architecture, and deployment."
 type: design-doc
 status: proposed
 ---
@@ -9,15 +9,15 @@ status: proposed
 
 **Status: proposed, not implemented.** It extends the [agent model](agent-model.md), changes the
 [Agent Handler SPEC](../SPEC.md) (§7.6 lists the sections), and answers
-[#688](https://github.com/fastagent-sh/fastagent/issues/688) (what `Scope` means). §14 lists the decisions already
-made in review; everything else is a proposal to settle before implementation.
+[#688](https://github.com/fastagent-sh/fastagent/issues/688) (what `Scope` means). §14 lists the decisions made in
+review; everything else is a proposal to settle before implementation.
 
 Three things are hard, and this design spends itself on them:
 
-1. **Durable work.** Work that is nondeterministic, has side effects and arrives from many entry points must outlive
-   a connection, a restart and a deploy.
+1. **Work that outlives its caller.** Work arrives from many entry points, has side effects, and keeps running when
+   the caller goes away. Surviving a restart or a deploy as well needs a harness that checkpoints its runs (§9.3).
 2. **A definition two parties change.** People and the agent itself edit an agent, and every change must be
-   reviewable and revertible.
+   reviewable and revertible (§2).
 3. **The agent's world on a host.** The environment it runs in, the contexts and connectors it uses, and the
    credentials each of them needs must be reproduced in the cloud.
 
@@ -32,7 +32,7 @@ they already work: chat, their own apps, other agents.
 |---|---|
 | Develop together | An agent is a directory in git. Every change to it, including the agent's own, can be reviewed and reverted |
 | Use together | Members reach the agents from team channels and apps, and who asked matters |
-| Run continuously | Work outlives a connection, a restart and a deploy |
+| Run continuously | An agent runs on no one's machine, scales to zero when idle, and its work outlives the connection that started it |
 | Share infrastructure | The knowledge, code and integrations a team's agents work with are shared, not copied |
 
 | Role | Does | Through |
@@ -55,13 +55,18 @@ Outside FastAgent:
 ```text
 init → dev (locally, on the team's channels) → deploy → the team uses it
   ↑                                                         │
-  └──── review and merge ←── a change, by a person or the agent
+  └──── a change, by a person or by the agent, committed to the agent's repository
 ```
 
-- Git is the only source of a deploy. A deploy is a commit, and a rollback deploys an earlier one.
-- What an agent changes in its own directory must reach git as a pull request, so the team sees and reviews it.
-  Today a deploy replaces the definition on the box, and what the agent changed there is lost;
-  [#605](https://github.com/fastagent-sh/fastagent/issues/605) designs how the change returns to git first.
+- Git holds every change to the definition, a person's or the agent's. That is what makes a change reviewable and
+  revertible, and what a deploy builds from. A rollback deploys an earlier commit.
+- The deployed definition stays writable, because an agent changing itself is the point. What it writes to its live
+  inputs takes effect where it runs (§3.4).
+- The agent's half of the loop is missing: committing what it changed to its repository, putting a change that needs
+  a restart into service, and doing both without losing its work or breaking itself. Today a deploy replaces the
+  definition on the box, and on AgentCore resets all of its storage, so what the agent changed there is lost.
+  [#605](https://github.com/fastagent-sh/fastagent/issues/605) designs it, and the agent's prompt will carry the
+  whole procedure.
 
 ## 3. The model
 
@@ -88,7 +93,7 @@ everything an agent touches, and they do not overlap.
 | Lifetime | Disposable; rebuilt from its declaration | Persistent and versioned | The other system's |
 | A write can be undone | Holds no durable data | Yes: it has history, and it can be reviewed and reverted | Often not: a sent email, a payment |
 | Access | None needed | Read and write, plus the credentials to sync it | Authority delegated per action (OAuth, API keys), scoped |
-| Credentials (§6) | Supplied at start, never built in; declared by the commands that read them | Declared by the context | Declared by the connector |
+| Credentials (§6) | Supplied at start, never built in | Declared by the context | Declared by the connector |
 | Shared across a team's agents | The declaration; each agent runs its own instance | The same state: a team asset | The same integration, with per-agent scopes |
 | Fails as | A missing command, said at start | Unreachable, or a conflicting write | Authorization, rate limits, an effect whose outcome is unknown |
 
@@ -137,57 +142,46 @@ They are uses of the three, not further categories.
 
 ### 3.4 The agent's own directory
 
-An agent's directory is both its definition and its first, writable context. This is where it improves itself
+An agent's directory is both its definition and its first, writable context, on a host as much as locally. This is
+where it improves itself
 ([#605](https://github.com/fastagent-sh/fastagent/issues/605)): what an agent changes in itself is versioned and
 reviewable like any other context (§2).
 
 ### 3.5 Sessions and triggers
 
 A **session** is a conversation's continuity: the invokes of one session share its history. It is named by the
-caller, optional on `invoke` (§7.2), and may start as a fork of another session. A session is a conversation's
+caller (§7.2), and may start as a fork of another session. A session is a conversation's
 memory; what should outlast a conversation belongs in a context.
 
 A **trigger** is where an invoke comes from: a request (HTTP, another agent), a message (a channel), an event (a
 webhook), time (a schedule), or the agent itself (`wake`, a subagent). A channel is a trigger and a connector of one
 system: messages arrive through it, and the agent's send tool posts through it.
 
-## 4. The environment is declared
+## 4. The deployed environment is declared
 
-Today an agent inherits the machine it runs on, the way `bash` inherits the `PATH`, and nothing compares that machine
-with a deployment; `deploy.apt` only adds apt packages to the generated image. A team's cloud agents need a
-reproducible environment:
-
-- the definition declares what it needs: commands (`git`, `ffmpeg`) and runtimes (node 22, python);
-- `dev` checks the machine against it and says what is missing at start;
-- `deploy` installs it into the image;
-- a context may declare its own needs (a repository that requires node 22), and the agent's environment is the union
-  of its own declaration and its contexts', the way contexts already contribute skills.
-
-A possible shape, to settle (§13):
+Today an agent inherits the machine it runs on, the way `bash` inherits the `PATH`, and `deploy.apt` adds apt packages
+to the generated image. The image is the environment a team's cloud agent runs in, so what it installs belongs to the
+agent rather than to one deploy:
 
 ```ts
 export default {
-  environment: {
-    commands: ["git", "gh", "rg"],   // checked by dev and at start: each must be on PATH
-    apt: ["gh", "ripgrep"],          // how deploy installs what the base image lacks (today's deploy.apt)
-    secrets: ["GH_TOKEN"],           // what those commands read from the environment (§6.1)
-  },
+  environment: { apt: ["gh", "ripgrep"] },   // today's deploy.apt: what deploy installs into the image
 };
 ```
 
-This reverses a working rule: "the machine lends the agent an environment" in AGENTS.md, "the machine is an
-environment, not a dependency" in [principles.md](../principles.md), and "nobody is told their local `ffmpeg` is not
-in the image". Both change when this is implemented.
+Locally the machine still lends the agent its environment, and nothing compares the two. A check of the machine
+against the declaration waits for a case that needs it: an apt package is not the command it installs (`ripgrep`
+installs `rg`), so the check would need a second list.
 
 ## 5. Connectors are declared
 
 Today a connector is a code tool in `tools/` or a channel's send tool. Pi's MCP extension is not loaded when serving,
 because its server connections live as long as a session and a served session lives one turn
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed:
+([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed, on pi 1.0.4 (§12):
 
-- connectors are declared in the definition beside contexts: MCP servers here, and the code tools in `tools/`, which
-  already declare what they need;
-- each connector declares its credential (§6);
+- MCP servers are declared in the definition beside contexts; the code tools in `tools/` already declare what they
+  need;
+- a connector declares its credential as a value (§6). An OAuth grant for an MCP server comes when a server needs one;
 - an MCP connection lives as long as the process or the conversation, not one turn, which is #678.
 
 ## 6. Credentials
@@ -196,13 +190,13 @@ A credential is proof of authority over another system. Three questions decide h
 
 1. **Who uses it**: the model's provider client, a tool's code, a channel, a connector, git for a context, or a
    command the agent runs in its environment. The model itself never needs one.
-2. **How it is obtained**: as a value, as an interactive grant, or from the host's own identity.
+2. **How it is obtained**: as a value, or as an interactive grant.
 3. **On whose authority**: the agent's own, or the member who asked.
 
 ### 6.1 Declared by what uses it
 
-Every credential is declared next to the thing that uses it, the way `defineTool` and `defineChannel` declare
-`secrets` today.
+A credential that code or configuration uses is declared next to it, the way `defineTool` and `defineChannel` declare
+`secrets` today. The commands the agent runs are the exception: they read the process environment.
 
 | Used by | Declared as | Today |
 |---|---|---|
@@ -210,8 +204,8 @@ Every credential is declared next to the thing that uses it, the way `defineTool
 | A code tool | `defineTool({ secrets })` | Exists |
 | A channel | `defineChannel({ secrets })` | Exists |
 | A context | Its kind's credential: a `github` context reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| A connector | `auth`: a value (`{ bearer: "LINEAR_API_KEY" }`) or a grant (`"login"`) | No connectors yet |
-| Commands in the environment (`gh`, `aws`) | `environment.secrets` | Read from the process environment; not declared |
+| A connector | `auth: { bearer: "LINEAR_API_KEY" }`, a value | No connectors yet |
+| A command the agent runs (`gh`, `aws`) | Nothing: it reads the process environment, which holds every value | As today |
 
 A declaration does what it does for tools and channels today:
 
@@ -225,22 +219,19 @@ A declaration does what it does for tools and channels today:
 | Obtained as | Examples | Stored | Provided locally | On a deployed host | Renewed |
 |---|---|---|---|---|---|
 | A value | API keys, bot tokens, signing secrets, a GitHub App's private key | `.secrets/.env`, by env-var name | Written by the author, or by `add <channel>` | `deploy` carries the value file | Rotated by hand |
-| A grant | OAuth to a model subscription or an MCP server | `.secrets/auth.json`, by provider or connector name | `fastagent login <name>` | `fastagent login <name> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
-| The host's identity | An IAM role on AgentCore | Nothing | The author's own cloud login | `deploy` grants the permission to the host's role | By the host |
+| A grant | OAuth to a model subscription; to an MCP server when one needs it | `.secrets/auth.json`, by provider or connector name | `fastagent login <name>` | `fastagent login <name> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
 
 - Values keep env-var names because every SDK and CLI reads them (`GITHUB_TOKEN`, `OPENAI_API_KEY`). Two
   declarations of one name share one value; two parts that need different values declare different names
   (`ACME_GITHUB_TOKEN`).
-- Grants exist today for model providers, including the machine-wide store `login -g` writes. Connectors reuse the
-  same flow and the same file.
-- The host's identity is not supported yet. It is listed because it completes the three ways a credential is
-  obtained.
+- Grants exist today for model providers, including the machine-wide store `login -g` writes. An MCP server that
+  needs one will reuse the same flow and the same file.
 
 ### 6.3 On whose authority
 
 Every credential today carries the agent's own authority: a bot, a service account, a team token. Acting as the member
 who asked (their calendar, their mailbox) needs a consent flow started from a channel and grants stored per
-principal. It builds on `principal` (§9.5) and is designed when a use needs it.
+principal. It needs a structured principal, which comes with permissions (§9.5).
 
 ### 6.4 The trust boundary
 
@@ -251,29 +242,32 @@ that read them and protect nothing, so the shell keeps inheriting the process en
 
 Isolation needs a boundary: the environment in a sandbox that holds no credentials, and the calls that need one made by
 the service outside it. That is a later level, on the harness's execution-environment seam (pi-durable runs its
-built-in tools through a pluggable `ExecutionEnv`). The declarations in §6.1 already name what would cross the
-boundary: `environment.secrets`.
+built-in tools through a pluggable `ExecutionEnv`).
 
 Until then, give an agent only credentials you would hand it directly, scoped as narrowly as the other system allows:
 fine-grained, and read-only where possible.
 
 ## 7. Invoke
 
-`invoke(scope, prompt)` keeps its name and its shape, and it stays the only way to start work. What one invoke means
-changes: it becomes a durable unit of work, an **invocation**, which the service owns once it accepts it.
+`invoke(scope, prompt)` keeps its name and its shape, and it stays the only way to start work. What changes is who
+owns the work: once the service takes an invoke, its **run** is the service's, and the caller may go away. A run is
+the unit the session plane already reports, with its `runId`.
 
 ### 7.1 What changes
 
 | | Today | Proposed |
 |---|---|---|
-| Ownership | A caller that stops reading aborts the work (SPEC MUST 3) | Once accepted, the work is the service's. A dropped connection detaches; `cancel` stops the work |
-| Identity | None on the data plane; the observation plane reports a `runId` | The service mints an invocation id and reports it in the first event. It is the run id the observation plane already reports |
-| Reattach | Impossible | Any client attaches by id, from a cursor |
-| Retries | A retry can run the work twice | `idempotencyKey`: the same key returns the same invocation |
-| A busy session | Fails with `session_busy`. Channels queue their own turns and poll while another caller's run holds the session; schedules skip; wake-ups retry | The invoke says what its message is: `followUp` (the default) runs it next, `steer` joins the running invocation, `reject` answers `busy` (§7.4) |
-| How it ends | Two terminal events, `completed` and `failed` | One `settled` event: the outcome and the usage |
+| Ownership | A caller that stops reading aborts the run (SPEC MUST 3) | The run continues when the caller goes away; cancelling the session stops it |
+| Identity | None on the data plane; the observation plane reports a `runId` | The stream's first event says how the invoke was taken, and `run_started` names the run |
+| A busy session | Fails with `session_busy`. Channels queue their own turns and poll while another caller's run holds the session; schedules skip; wake-ups retry | The invoke says what its message is: `followUp` (the default) runs it next, `steer` joins the running run, `reject` answers `busy` (§7.4) |
+| How it ends | `completed` or `failed` | One terminal event, `run_settled`, carrying the outcome and the usage |
+| Events | Two vocabularies: the invoke stream's (`text`, `completed`) and the session stream's (`message_delta`, `run_settled`) | One: the session stream's (§7.3) |
 
 Steering and following up become ways to invoke, and aborting becomes cancelling (§7.4, §7.5).
+
+A caller that went away and comes back observes the session, as it can today: it subscribes to `events()`, waits for
+the subscription to be ready, then reads `entries()` and `state()`. pi-durable reconnects the same way, from the
+current view, without replaying.
 
 ### 7.2 Scope
 
@@ -284,45 +278,40 @@ interface Agent {
 
 /** Facts the caller asserts about this invoke. Never a choice among the agent's options. */
 interface Scope {
-  /** The conversation to continue. Absent: a new one, named in the `accepted` event. */
-  session?: string;
-  /** Where a new session starts. Applied when the session has no turns yet; `at` is an entry id the service gave out. */
+  /** The conversation, named by the caller. */
+  session: string;
+  /** Where a new session starts. Applied when the session has no turns yet; how `at` names the point is open (§13). */
   fork?: { from: string; at?: string };
-  /** Who is asking, as the entry point (a channel, a trusted gateway) authenticated them (§9.5). */
-  principal?: Principal;
 }
 
 interface InvokeOptions {
-  idempotencyKey?: string;
-  /** What this message is when the session is running another invocation (§7.4). Default: "followUp". */
+  /** What this message is when the session is running another run (§7.4). Default: "followUp". */
   whenBusy?: "followUp" | "steer" | "reject";
 }
 
-/**
- * Begins with `accepted` (the invocation id, the session, and whether it runs now, waits as a follow-up, or joined the
- * running invocation) and ends with `settled`.
- */
-type Invocation = AsyncIterable<InvokeEvent>;
+/** Session events: first how the invoke was taken (it runs now, waits as a follow-up, or joined the running run),
+ *  last `run_settled`. */
+type Invocation = AsyncIterable<SessionEvent>;
 ```
 
 - **Facts, not choices.** Choices among the agent's options, such as a session's model and thinking level, are session
   properties set on the control plane, where the options can be listed (`models()`).
 - **Whoever creates a thing names it.** Callers name sessions, because they map their places to conversations. The
-  service names invocations and entries, and a session it creates for a caller that named none, and gives the names
-  back: an entry id comes from a settled outcome's `leafEntryId` or from `entries()`.
+  service names runs and entries, and gives the names back: an entry id comes from `run_settled`'s `leafEntryId` or
+  from `entries()`.
 
 ### 7.3 Outcome, events, errors
 
 ```ts
-/** The `settled` event's data. */
-interface Settled {
+/** `run_settled`'s data. */
+interface RunSettled {
   outcome: Outcome;
   /** What the run spent, as the harness reports it: tokens and cost. */
   usage: Usage;
 }
 
 type Outcome =
-  | { status: "completed"; leafEntryId: string; result?: Json }
+  | { status: "completed"; leafEntryId: string }
   | { status: "failed"; error: AgentError; leafEntryId?: string }
   | { status: "canceled"; leafEntryId?: string }
   | { status: "rejected"; error: AgentError };        // nothing ran and nothing was recorded
@@ -336,30 +325,33 @@ interface AgentError {
 ```
 
 `rejected` and `failed` are separate on purpose: a rejected invoke is safe to send again, while a failed one may have
-recorded entries or run tools. A rejected invoke never becomes an invocation: its stream is a single `settled`, with
-no `accepted`, and over HTTP it is an error status instead of a stream.
+recorded entries or run tools. A rejected invoke starts no run: its stream holds only the terminal event, and over
+HTTP it is an error status instead of a stream.
 
-One event vocabulary serves the invocation's stream and a session's observation stream, so the same thing has one
-name in both. Proposed: `accepted`, `user_message`, `text_delta`, `thinking_delta`, `message_finished`,
-`tool_started`, `tool_progress`, `tool_finished`, `queue_changed` (the session's pending follow-ups and the running invocation's steering messages),
-`retry_scheduled` and `settled`; a session's stream adds `state_changed` and the compaction events.
+The invoke stream adopts the session stream's vocabulary, so the same thing has one name in both: `run_started`,
+`user_message`, `message_started`, `message_delta`, `message_finished`, `tool_started`, `tool_progress`,
+`tool_finished`, `retry_scheduled` and `run_settled`. A session's stream adds `queue_changed`, `state_changed` and the
+compaction events. The one thing missing is added: how a busy invoke was taken.
 
 Proposed error codes, one set for every call: `invalid_request`, `unsupported`, `not_found`, `busy` (its `details`
-carry the running invocation's id), `nothing_to_compact`, `missing_model`, `auth_required`,
-`model_error`, `interrupted` (§9.3), `partial_update`, `unavailable`, `internal`. An engine may add codes under its
-own prefix; a client that meets an unknown code acts on `retryable`.
+carry the running run's id), `nothing_to_compact`, `missing_model`, `auth_required`, `model_error`, `partial_update`,
+`unavailable`, `internal`. An engine may add codes under its own prefix; a client that meets an unknown code acts on
+`retryable`.
+
+A process that stops takes its runs with it: their streams end without `run_settled`, and what they recorded stays in
+the session (§9.3).
 
 ### 7.4 A busy session
 
-A session runs one invocation at a time, because each turn extends the history the next one reads. What a message that
+A session runs one run at a time, because each turn extends the history the next one reads. What a message that
 arrives meanwhile means (an addition, a correction, or something that only makes sense right now) is the caller's to
 say, on each invoke:
 
-| `whenBusy` | When the session is running another invocation |
+| `whenBusy` | When the session is running another run |
 |---|---|
-| `followUp` (the default) | Accepted and pending. It runs as the session's next invocation when the running one ends, in arrival order |
-| `steer` | Joins the running invocation after its current tool round. The invoke returns that invocation, from this point on |
-| `reject` | Rejected with `busy` (retryable; nothing ran and nothing was recorded), carrying the running invocation's id |
+| `followUp` (the default) | Taken and pending. It runs as the session's next run when the running one ends, in arrival order |
+| `steer` | Joins the running run after its current tool round. The invoke's stream continues with that run's events from there |
+| `reject` | Rejected with `busy` (retryable; nothing ran and nothing was recorded), carrying the running run's id |
 
 An idle session runs the invoke at once, whatever `whenBusy` says. pi's SDK refuses a prompt to a busy session that
 does not say which, rather than guess; pi-durable's `submit` offers the same three choices and defaults to a
@@ -368,53 +360,52 @@ follow-up, and so does this, because a follow-up never disturbs work already run
 The service decides, because only it can decide without a race: a caller that hears `busy` and then follows up can
 find the run ended in between, and every caller would write its own wait loop, as channels and wake-ups each do today.
 
-What the service holds stays small. Pending follow-ups are kept in memory beside the running invocation and share the
-process's fate: a restart settles them `interrupted`, with nothing run (§9.3). There is no durable queue, no recovery,
-and nothing to coordinate across instances.
+What the service holds stays small. Pending follow-ups are kept in memory beside the running run and share the
+process's fate: a restart loses them with the run (§9.3). There is no durable queue, no recovery, and nothing to
+coordinate across instances.
 
-- When an invocation settles, however it ended, the session's next pending follow-up starts. pi-durable's inbox keeps
-  them after a failed run until the next submission; the difference is revisited when moving to it.
-- `cancel(id)` stops one invocation: a running one is stopped, a pending one is withdrawn.
+- When a run settles, however it ended, the session's next pending follow-up starts. pi-durable's inbox keeps them
+  after a failed run until the next submission; the difference is revisited when moving to it.
+- A session holds at most 20 pending follow-ups, the cap a conversation's wake-ups already have; past it, an invoke is
+  rejected with `busy`. `/invoke` is open by default and a run outlives its caller, so without a cap one caller could
+  queue thousands of runs and leave.
 - Cancelling a session, which a chat's stop command does, stops everything the session is doing at once: the running
-  invocation, every pending follow-up and a manual compaction, so no follow-up starts in between. pi's own abort
-  likewise returns queued messages to the editor. It reports what it stopped, so a stop command can say when nothing
-  was running.
+  run, every pending follow-up and a manual compaction, so no follow-up starts in between. pi's own abort likewise
+  returns queued messages to the editor. It reports what it stopped, so a stop command can say when nothing was
+  running.
 - A steer the running turn can no longer take, because the turn ended first, is taken as a follow-up instead, behind
-  those already pending; `accepted` says how it was taken.
-- A steer's message is recorded as a user entry with its own principal. The run's usage stays with the invocation it
-  joined, so nothing is counted twice.
+  those already pending; the stream's first event says how it was taken.
+- A steer's message is recorded as a user entry. The run's usage stays with the run it joined, so nothing is counted
+  twice.
 - A session whose run another process holds cannot be followed or steered from this one: the invoke is rejected with
-  `busy`, whatever `whenBusy` says. That is rare, with one process per agent or one microVM per session.
+  `busy`, whatever `whenBusy` says. That is rare: one process per agent on a resident host, and one fixed runtime
+  session for every entry point on AgentCore (§10.2).
 
 `steer` and `followUp` leave the session control plane: `invoke` becomes the one way to hand a session a message.
 
 | Caller | `whenBusy` | What changes |
 |---|---|---|
-| Channels | `followUp`; a channel may offer `steer` | Their busy wait, which polls every 5 seconds, goes. Whether they keep their own queue (`turn-queue`) is decided in step 3 (§12) by what it removes; their turn store stays, because it is what they owe the chat |
+| Channels | `followUp`; a channel may offer `steer` | Their busy wait, which polls every 5 seconds, goes. Whether they keep their own queue (`turn-queue`) is decided when they move (§12); their turn store stays, because it is what they owe the chat |
 | Schedules | `reject` | Nothing: an occurrence on a busy session is skipped |
-| Wake-ups | `followUp` | One that fires into a busy session runs right after the running invocation, instead of retrying |
+| Wake-ups | `followUp` | One that fires into a busy session runs right after the running run, instead of retrying |
 | duang and other clients | Their choice | `session.steer` becomes `invoke` with `steer` |
 
 ### 7.5 Control plane
 
-Added, by invocation: `attach(id, { after? })`, `cancel(id)` and a list of invocations by session and status, so a team
-can see what its agents are doing and what it cost. A caller that stops reading detaches; only cancelling stops the
-work.
+`cancel` is the one way to stop work, and it stops everything a session is doing at once (§7.4); a manual compaction,
+which has no run, stops with it. Cancelling a single pending follow-up waits for a client that needs it.
 
-`cancel` is the one way to stop work, at two scopes: an invocation, or a session (§7.4). The session needs a scope of
-its own because stopping everything has to happen at once, and a manual compaction has no invocation id to cancel by.
-The session operations become `state`, `entries`, `update`, `cancel`, `compact`, `fork` and `delete`: `steer` and
-`followUp` become `invoke` options, and `abort` becomes the session's `cancel`. `no_active_run` goes with them, since
-only those three returned it.
+`steer` and `followUp` become `invoke` options, and `abort` becomes `cancel`. `no_active_run` goes with them, since
+only those three returned it. The other session operations are unchanged.
 
 ### 7.6 SPEC changes (v1)
 
 | Section | Change |
 |---|---|
-| §2 | `invoke` returns an invocation stream that begins with `accepted`; accepted work belongs to the service |
-| §3 | The `Scope` rule (facts, never choices); `session` optional; `fork`; `principal` |
-| §5 | The event vocabulary above; one terminal event, `settled` |
-| §6 | MUST 1 becomes "exactly one `settled`". MUST 3 changes: a caller that stops reading detaches, and `cancel` stops the work. Portable conformance is unchanged |
+| §2 | `invoke`'s stream starts with how the invoke was taken and ends with `run_settled`; the run outlives its caller |
+| §3 | The `Scope` rule (facts, never choices); `fork` |
+| §5 | One event vocabulary, the session stream's (§7.3) |
+| §6 | MUST 1 becomes "exactly one `run_settled`, unless the process stops". MUST 3 changes: a caller that stops reading detaches, and cancelling the session stops the run. Portable conformance is unchanged |
 | §8 | The lineage, identity and source rows are replaced by §7.2; the mid-turn steering row by `whenBusy` (§7.4) and `cancel` (§7.5) |
 | New | The harness port (§9.1): what an engine implements, beside what a caller uses |
 
@@ -444,9 +435,9 @@ The shapes of `environment` and `connectors` are drafts (§13):
 ```ts
 export default {
   model: "openai-codex/gpt-5.5",
-  environment: { commands: ["git", "gh"], apt: ["gh"], secrets: ["GH_TOKEN"] },
+  environment: { apt: ["gh"] },
   contexts: [{ github: "acme/handbook", readonly: true }, { github: "acme/app" }],
-  connectors: [{ mcp: "linear", url: "https://mcp.linear.app/mcp", auth: "login" }],
+  connectors: [{ mcp: "linear", url: "https://mcp.linear.app/mcp", auth: { bearer: "LINEAR_API_KEY" } }],
 } satisfies FastagentConfig;
 ```
 
@@ -454,10 +445,10 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `connector add/list/remove` |
-| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | `dev` and `info` check the environment; `invoke --session`, `--when-busy`, `--detach`, and `--url` for a running agent; `invocations` (list, attach, cancel) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the environment into the image; `login <connector>` for a connector's grant |
-| Operate | `start`, `logs`, `destroy`, `schedules list` | `invocations --url` for a deployed agent: what it is doing and what it cost |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | Unchanged |
+| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | `invoke --session` and `--when-busy` |
+| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` installs `environment.apt` |
+| Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 In code
 
@@ -465,15 +456,8 @@ An agent opened in this process (`createAgentService`) and one reached over HTTP
 interface. Today the remote side is two clients, `connectAgent` and `connectSessionControl`; they become one.
 
 ```ts
-type InvocationStatus = "pending" | "running" | "completed" | "failed" | "canceled";
-
 interface Agent {
   invoke(scope: Scope, prompt: Prompt, options?: InvokeOptions): Invocation;
-  invocations: {
-    attach(id: string, options?: { after?: string }): Invocation;
-    cancel(id: string): Promise<{ ok: true } | { ok: false; error: AgentError }>;
-    list(query?: { session?: string; status?: InvocationStatus[] }): Promise<InvocationSummary[]>;
-  };
   sessions: SessionControl;   // today's, with cancel in place of steer, followUp and abort (§7.5)
 }
 ```
@@ -482,10 +466,7 @@ interface Agent {
 
 | Route | Does | Served |
 |---|---|---|
-| `POST /invoke` | Starts work: SSE whose first event is `accepted`. A rejected invoke answers with an error status. The key goes in `Idempotency-Key`, `whenBusy` in the body | With `http.invoke` (on by default) |
-| `GET /invocations/{id}/events?after=` | Attaches from a cursor | With `/invoke`: the id cannot be guessed, and holding it is the permission |
-| `POST /invocations/{id}/cancel` | Cancels | With `/invoke` |
-| `GET /invocations?session=&status=` | Lists what is running and what finished | With `/control/*` (`sessionControl`) |
+| `POST /invoke` | Starts work: an SSE stream of session events (§7.2). A rejected invoke answers with an error status; `whenBusy` goes in the body | With `http.invoke` (on by default) |
 | `/control/sessions/*` | Session control; a `cancel` action replaces `steer`, `follow_up` and `abort` | With `/control/*`, as today |
 
 ### 8.5 Channels
@@ -496,26 +477,24 @@ A channel turns a platform message into an invoke:
 |---|---|
 | The place it was posted (a chat, a thread) | `session` |
 | Where a thread began | `fork` |
-| The platform account that posted it | `principal` |
-| The platform message id | `idempotencyKey` |
 
-Channels keep their turn store and their redelivery dedup; whether they keep their own queue is decided in step 3
-(§7.4).
+Channels keep their turn store and their redelivery dedup; whether they keep their own queue is decided when they move
+to `whenBusy` (§12).
 
 ### 8.6 Clients
 
-A client such as duang shows conversations by session and a work list by invocation: what is running, what finished,
-and what it cost. Clients live outside this repository.
+A client such as duang shows conversations by session: what each is running, from `state()`, and what it cost, from its
+entries. Clients live outside this repository.
 
 ## 9. Architecture
 
 ### 9.1 Two contracts: the agent and the harness
 
 ```text
-Callers ──► Agent (SPEC v1)      invoke → invocation; invocations; sessions
-              │  the invocation layer: ids, idempotency, busy, attach, cancel, settle. Written once
+Callers ──► Agent (SPEC v1)      invoke; sessions
+              │  the run layer: whenBusy, cancel, a run outliving its caller, the terminal event. Written once
               ▼
-            Harness (the port)   run one turn on a session; the session operations
+            Harness (the port)   run one turn on a session and steer it; the session operations
               │
               ▼
             pi today; pi-durable, the Claude Agent SDK or Codex later
@@ -523,16 +502,16 @@ Callers ──► Agent (SPEC v1)      invoke → invocation; invocations; sessi
 
 The agent's semantics are written once, above a port that a harness implements. Two ways to place them:
 
-| | A: the invocation layer above a harness port | B: each harness implements invocations |
+| | A: the run layer above a harness port | B: each harness implements it |
 |---|---|---|
-| Invocation semantics | Written once, the same on every harness | Written per harness, and the copies drift |
+| The semantics | Written once, the same on every harness | Written per harness, and the copies drift |
 | A harness without durability, which is most of them | Works as it is | Needs the same layer written for it anyway |
-| A durable harness (pi-durable) | Plugs in below; its recovery from a checkpoint is added to the port when it is designed | Fits directly |
+| A durable harness (pi-durable) | Plugs in below; recovering a run from a checkpoint is added to the port when it is designed | Fits directly |
 
 A wins. Today's `Agent`, where `invoke` runs one turn and a caller that stops reading aborts it, plus the session
 control plane, is already close to the port: the pi implementation and its conformance suite become the first
-harness, and the invocation layer is new code above them. The port's turn operation gets its own name (`run`), so
-`invoke` keeps one meaning.
+harness, and the run layer is new code above them. The port's turn operation gets its own name (`run`), so `invoke`
+keeps one meaning.
 
 A running turn offers the layer one operation, `steer`. Follow-ups are the layer's, run as the next turn, and stopping
 a turn is the `AbortSignal` passed to `run`. Steering stays in the port because only the loop knows where its turns
@@ -544,54 +523,48 @@ follow-up.
 ```text
 Entry points    CLI · SDK · HTTP/SSE · channels · schedules · wake
                   ↓ every one calls invoke(scope, prompt, options)
-Agent           the invocation layer · session control · triggers (the scheduler) · the environment check · credentials
+Agent           the run layer · session control · triggers (the scheduler) · credentials
                   ↓ the harness port
 Harness         pi today; others later
                   ↓ storage: the state root (a filesystem today)
 The world       Environment (the image, or the machine) · Contexts (.contexts/ clones) · Connectors (tools, MCP)
 ```
 
-### 9.3 The invocation layer
+### 9.3 The run layer
 
-It keeps three things:
+It keeps nothing on disk. In memory, per session, it holds the running run, to steer and cancel it, and the pending
+follow-ups (§7.4).
 
-- **A record per accepted invocation**: id, session, idempotency key, principal, status, outcome, usage and times, in
-  the state root, kept for a retention window after it settles (§13).
-- **While it runs, its events in memory**, so an attach replays them from a cursor. A settled invocation answers an
-  attach with its `settled` event, and its content is in the session's entries.
-- **Pending follow-ups, in memory**: their prompts, per session, in arrival order (§7.4).
+Memory is enough because a run lives in one process, and a session's calls reach the process that runs it (SPEC
+MUST 6): one process per agent on a resident host, and one fixed runtime session for every entry point on AgentCore.
+Scaling out would need the same session affinity (§10.2).
 
-Memory is enough for both because a running invocation lives in one process, and after a restart neither it nor what
-waits behind it can continue anyway. Location independence (SPEC MUST 6) holds because a session's calls reach the process that runs it:
-one process per agent on a resident host, one microVM per session on AgentCore (`runtimeSessionId`). Scaling a
-resident host out would need the same session affinity.
-
-| What happens | A running invocation | A pending follow-up |
+| What happens | The running run | A pending follow-up |
 |---|---|---|
-| The caller disconnects | Continues; any client attaches by id | Stays pending, and runs in its turn |
-| `cancel` | Stops, and settles `canceled` | Withdrawn, and settles `canceled` |
+| The caller goes away | Continues | Stays pending, and runs in its turn |
 | Cancelling the session | Stops, and settles `canceled` | Withdrawn, and settles `canceled` |
-| The process restarts, or a deploy replaces it | Settles `failed` with `interrupted` (retryable); what it recorded stays | Settles `failed` with `interrupted` (retryable); nothing ran |
+| The process stops: a restart or a deploy | Its stream ends without `run_settled`; what it recorded stays | Lost |
 
-The service never reruns an interrupted invocation: its tools may already have had effects (§3.1, invariant 3). A
-caller that owes an answer may invoke again; the channels already bound their replays.
+The service never reruns anything: a run's tools may already have had effects (§3.1, invariant 3). A caller that owes
+an answer may invoke again; the channels do, from their turn stores, and bound their replays. A run that survives a
+restart needs a harness that checkpoints it, such as pi-durable (§13).
 
 ### 9.4 Where state lives
 
 | Where | Holds | In git, and on a deploy |
 |---|---|---|
 | The definition | Identity, behavior, skills, tools, triggers, the config | In git; built into the image |
-| `.state/` | Session records, invocation records, schedule claims, channel state | Not in git; on the host's volume |
+| `.state/` | Session records, schedule claims, wake-ups, channel state | Not in git; on the host's storage (§10.2) |
 | `.contexts/` | Clones of the agent's contexts | Not in git; cloned on the host at start |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
 
-- A channel asserts the platform account, because the platform's signature has already authenticated the message.
-- Over HTTP, FastAgent authenticates nobody, so it accepts a principal only from a trusted gateway configured for it,
-  and otherwise there is none.
-- v1 uses it for attribution (recorded on the invocation and its user entry) and in the prompt (who is asking).
-  Permissions are designed later.
+Deferred. Channels already write the sender into the prompt, which is what the agent needs today. A structured
+principal comes with permissions, when they are designed, and is then asserted this way:
+
+- a channel asserts the platform account, because the platform's signature has already authenticated the message;
+- over HTTP, FastAgent authenticates nobody, so it accepts one only from a trusted gateway configured for it.
 
 ### 9.6 Agents calling agents
 
@@ -602,88 +575,106 @@ trigger. No further concept is needed.
 
 ### 10.1 What a deploy builds
 
-An image holds the base runtime, the environment (§4), the definition, its dependencies, and a release manifest. It
-holds no credential, no state and no context: values reach the box through the host's secret store, grants are made
-on the box (`login --deployment`), and contexts are cloned there at start, which preflight checks.
+An image holds the base runtime, the environment (§4), the definition, and a release manifest; the agent's
+dependencies are installed on the host's storage. It holds no credential, no state and no context: values reach the
+box through the host's secret store, grants are made on the box (`login --deployment`), and contexts are cloned there
+at start, which preflight checks.
 
 ### 10.2 Two kinds of host
 
-| | Resident (Docker, Fly, Railway) | No resident process (AgentCore) |
+| | Resident (Docker, Fly, Railway) | AgentCore |
 |---|---|---|
-| Process | One per agent, holding the storage lease | One microVM per session, recycled after 180 idle seconds by default |
-| Storage | A volume that outlives deploys | Reset on every deploy |
+| Process | One per agent, holding the storage lease | One microVM: every entry point uses one fixed runtime session. It scales to zero after 180 idle seconds by default |
+| Storage | A volume that outlives deploys | SessionStorage: it survives scaling to zero; AWS resets it on every deploy and after 14 idle days |
 | Clock | The local scheduler | EventBridge |
-| Invocation records | On the volume | In the session's storage: they do not survive a deploy |
-| Reaching an invocation | Any request reaches the one process | A request names its session, which routes it to the microVM (§13) |
+
+AgentCore is where most agents run: an idle agent costs nothing, and the platform is built for agents. Two of its
+limits shape this design and are being worked on (§13):
+
+- a deploy resets the storage, so sessions, wake-ups and what the agent wrote into its definition start blank;
+- one fixed runtime session means one microVM, so an agent scales to zero but not yet out.
 
 ### 10.3 Operations
 
-`logs` shows what the service printed, and `invocations` what it did: what is running, what finished, and what each
-cost. A `settled` event carries the usage, so cost sums per invocation, per session and per agent.
+`logs` shows what the service printed. What an agent is doing is each session's `state()`, and what it cost is in its
+entries, where the harness records each answer's usage.
 
 ## 11. What changes in FastAgent
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | Inherits the machine; `deploy.apt` | Declared; checked by `dev`; installed by `deploy` (§4) |
+| Environment | `deploy.apt` | `environment.apt`, installed by `deploy` (§4) |
 | Contexts | `local` and `github` | Unchanged; later, more storage kinds; writable contexts as long-term memory |
-| Connectors | `tools/`, channel send tools; MCP off when serving | Declared; #678 (§5) |
-| Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one; values and grants, connectors included (§6) |
-| `invoke` | A function call that ends with its stream | A durable invocation (§7) |
+| Connectors | `tools/`, channel send tools; MCP off when serving | Declared MCP servers with value credentials; #678 (§5) |
+| Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
+| `invoke` | A function call that ends with its stream | A run that outlives its caller; one terminal event; one event vocabulary (§7) |
 | A busy session | Rejected; each caller waits its own way | `whenBusy`, `followUp` by default (§7.4) |
+| Stopping and steering | `abort`, `steer` and `followUp` on the session | `cancel` on the session; steering through `invoke` (§7.5) |
 | The engine boundary | `Agent` is both what callers use and what pi implements | Two contracts: the agent above, the harness port below (§9.1) |
+| The agent's own changes on a host | Lost at the next deploy | Committed to its repository (§2, #605) |
 
 ## 12. Order of work
 
-| Step | Work | Needs |
-|---|---|---|
-| 0 | Upgrade to pi 1.0.4 | None |
-| 1 | The SPEC v1 draft, and the harness port drawn out of today's `Agent` without changing behavior | 0 |
-| 2 | The invocation layer: `accepted` and `settled`, ids, detaching, attach, cancel, idempotency, `whenBusy` (follow-ups, steer, reject), `interrupted`; conformance tests | 1 |
-| 3 | HTTP, `connectAgent` and the CLI; channels, schedules and wake-ups on `whenBusy`; duang follows | 2 |
-| 4 | The declared environment | None; parallel to 2 and 3 |
-| 5 | Credential declarations for contexts and the environment; connectors, with MCP (#678) and grants | 0 |
-| 6 | pi-durable as a second harness; the self-change loop (#605); more context kinds | 2 |
+| Step | Work |
+|---|---|
+| 0 | Finish this design |
+| 1 | Upgrade to pi 1.0.4 |
+| 2 | MCP connectors (#678), on pi 1.0.4 |
+| 3 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
+| 4 | The agent's update loop (#605) |
+| Later | Evaluation; pi-durable as a harness; AgentCore state across deploys and scaling out; more context kinds |
 
 ## 13. Open questions
 
 1. The declaration shapes: `environment`, `connectors`, and naming a context's credential.
-2. What the machine lends pi today (skills, prompt templates, engine settings) once the environment is declared.
-3. The exact event vocabulary and error-code set, in the SPEC v1 draft.
-4. How long an invocation record is kept, and the scope of an idempotency key: the agent, or the session.
-5. On AgentCore, how a remote client reaches an invocation: attaching has to name the session to be routed.
-6. What the port adds for a durable harness to recover from a checkpoint instead of settling `interrupted`.
-7. How a deploy treats the agent's changes that are not merged yet (#605).
-8. Context kinds that are not directories, such as S3.
-9. Acting as the member who asked (§6.3).
-10. Whether a session needs a cap on its pending follow-ups.
+2. How `fork.at` names the point a thread starts from: an entry id the service gave out, which each channel would map
+   its messages to, or the platform message id, which the service would record on the entry it belongs to. Feishu,
+   the only user, holds message ids; today it finds the point by searching the parent's text for them.
+3. The exact event vocabulary and error codes, in the SPEC v1 draft.
+4. The agent's update loop (#605): committing and pushing what it changed, putting a change that needs a restart into
+   service, not breaking itself, and the prompt that explains all of it.
+5. AgentCore: state that survives a deploy, and scaling out past one runtime session.
+6. What the port adds for a harness that checkpoints its runs, so a run survives a restart (pi-durable).
+7. Context kinds that are not directories, such as S3.
+8. Acting as the member who asked (§6.3), with permissions.
 
 ## 14. Decisions made in review
 
 - `Scope` carries facts the caller asserts. Choices among the agent's options are made on the control plane.
-- Whoever creates a thing names it: callers name sessions; the service names invocations and entries.
+- Whoever creates a thing names it: callers name sessions; the service names runs and entries.
 - `invoke` keeps its name and shape; its semantics change as in §7.
 - No new waiting states for human input: steering, follow-ups and cancelling cover it.
 - A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through contexts and
   connectors.
 - The world an agent acts in is environment, contexts and connectors, separated by the test in §3.2.
-- The environment is declared, reversing the rule that an agent inherits the machine and that nothing compares the
-  two.
+- The deployed environment is declared (`environment.apt`); locally the machine still lends its environment (§4).
 - A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
   follow-ups live in memory and share the process's fate (§7.4).
 - `invoke` is the one way to hand a session a message: `steer` and `followUp` leave the session control plane (§7.4).
 - Cancelling a session withdraws its pending follow-ups (§7.4).
 - After a failed run, pending follow-ups start as usual, until the move to pi-durable revisits it (§7.4).
-- Channels drop their busy wait. Whether they keep their own queue is decided in step 3; their turn store stays
+- Channels drop their busy wait. Whether they keep their own queue is decided when they move; their turn store stays
   (§7.4).
-- `cancel` replaces `abort`, at two scopes: one invocation, or everything a session is doing (§7.5). A running turn
-  offers the harness port only `steer`; stopping it is the `AbortSignal` given to `run` (§9.1).
+- `cancel` replaces `abort` and stops everything a session is doing (§7.5). A running turn offers the harness port
+  only `steer`; stopping it is the `AbortSignal` given to `run` (§9.1).
 - Steering and follow-ups move into `invoke` as `whenBusy`, reversing the SPEC §8 "Mid-turn steering" row, which kept
   them on the session control plane (§7.6).
-- Credentials are declared by whatever uses them and stored by how they are obtained (§6). The shell keeps inheriting
+- Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The shell keeps inheriting
   the process environment; isolation waits for a sandboxed environment (§6.4).
 - The agent's semantics are written once, above a harness port, so another harness can be added (§9.1).
-- `principal`: channels assert the platform account; HTTP accepts one only from a trusted gateway (§9.5).
-- Attach and cancel are served with `/invoke`, holding the id being the permission; the invocation list is served with
-  `/control/*` (§8.4).
+- Removed or deferred after a first-principles review, because nothing needs them yet:
+  - a ledger of invocations, listing them, and attaching to one by id with replay: a client reconnects by observing
+    the session (§7.1);
+  - idempotency keys: pi-durable's `requestId` provides them when a caller needs them;
+  - marking runs a restart interrupted;
+  - `principal`, until permissions are designed (§9.5);
+  - an optional `session`, and a structured `result`;
+  - the environment's secrets, runtimes and contexts' needs, and a check of the local machine;
+  - the host-identity credential, OAuth for connectors, and connector commands;
+  - cancelling one pending follow-up.
+- The deployed definition stays writable: an agent changing itself is the point. What is missing is its update loop
+  (§2, #605).
+- AgentCore is the main host, because an idle agent costs nothing there. Its limits are worked on (§10.2).
+- Evaluation comes later.
+- The order: finish this design, upgrade to pi 1.0.4, then MCP (#678) (§12).
 - No field is reserved for a use nobody has designed.
