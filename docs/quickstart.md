@@ -40,15 +40,18 @@ my-agent/
 [mattpocock/skills](https://github.com/mattpocock/skills)) shows how. Add skills with
 `fastagent add skill <owner/repo/path>`.
 
-`extensions/web-access.ts` gives the agent `web_search`, `fetch_content` (readable pages, PDFs, GitHub repositories)
-and `get_search_content`, from `@fastagent-sh/pi-web-access`: fastagent's build of the pi package
+`extensions/web-access.ts` gives the agent `web_search`, `fetch_content` (readable pages, PDFs, GitHub repositories),
+`get_search_content` and `source_check`, from `@fastagent-sh/pi-web-access`: fastagent's build of the pi package
 [pi-web-access](https://pi.dev/packages/pi-web-access) that keeps each conversation's results its own when the agent
-serves several at once ([fork](https://github.com/fastagent-sh/pi-web-access); the fix is proposed upstream). It needs
-no key: searches go to Exa, or to OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and
-reserved addresses are blocked by default. More providers and keys go in `~/.pi/agent/web-search.json` on the machine
-that serves the agent. The file loads the package's tools only: its terminal commands (`/websearch`, `/curator`,
-`/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not offered to
-callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
+serves several at once ([fork](https://github.com/fastagent-sh/pi-web-access); the fix is proposed upstream). Where the
+model can add tools mid-conversation, a session starts with `web_enable` only, and the model calls it to make the
+others available, so a turn's first web tool event is often `web_enable`. It needs no key: searches go to Exa, or to
+OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and reserved addresses are blocked by
+default. For more providers, put their keys (`BRAVE_API_KEY`, `EXA_API_KEY`, `GEMINI_API_KEY`, … see the package
+README) in `.secrets/.env`, which travels with a deploy; `~/.pi/agent/web-search.json` on the serving machine works
+too, but stays on that machine. The file loads the package's tools only: its terminal commands (`/websearch`,
+`/curator`, `/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not
+offered to callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
 
 **To have it work on a project**, declare the project as a context: `fastagent init my-agent --context ~/code/app`,
 or later `fastagent context add ~/code/app`. The agent stays in its own directory and is told where the project is;
