@@ -63,7 +63,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       content: packageJson(
         toPackageName(dir),
         await fastagentVersion(),
-        options.webAccess ? { [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.version } : {},
+        options.webAccess ? { [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.range } : {},
       ),
     },
   ];

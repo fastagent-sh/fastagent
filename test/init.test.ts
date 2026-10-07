@@ -112,7 +112,7 @@ describe("init: scaffoldAgent", () => {
     ).version;
     expect(pkg.dependencies).toEqual({
       "@fastagent-sh/fastagent": `^${realVersion}`,
-      [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.version, // what extensions/web-access.ts loads
+      [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.range, // what extensions/web-access.ts loads
     });
     expect(await readFile(join(dir, "extensions", "web-access.ts"), "utf8")).toContain(
       `from "${WEB_ACCESS_PACKAGE.name}"`,

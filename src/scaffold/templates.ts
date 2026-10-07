@@ -21,11 +21,11 @@ export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
 /**
- * The package `extensions/web-access.ts` loads, and the version a new agent depends on: fastagent's build of
- * pi-web-access, which keeps each session's results its own (upstream: nicobailon/pi-web-access#521). Pinned exactly,
- * so a new agent gets the build this release was tested with. Back to `pi-web-access` once upstream ships the fix.
+ * The package `extensions/web-access.ts` loads, and the range a new agent depends on: fastagent's build of
+ * pi-web-access, which keeps each session's results its own (upstream: nicobailon/pi-web-access#521). We publish it, so
+ * a patch reaches agents without a fastagent release. Back to `pi-web-access` once upstream ships the fix.
  */
-export const WEB_ACCESS_PACKAGE = { name: "@fastagent-sh/pi-web-access", version: "0.37.0-fastagent.1" } as const;
+export const WEB_ACCESS_PACKAGE = { name: "@fastagent-sh/pi-web-access", range: "^0.37.0" } as const;
 
 /** package.json for the complete agent: fastagent at this build's version, plus `extra` dependencies. */
 export function packageJson(name: string, version: string, extra: Record<string, string> = {}): string {
