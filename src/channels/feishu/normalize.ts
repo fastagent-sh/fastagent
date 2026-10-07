@@ -72,6 +72,93 @@ function renderNodes(nodes: unknown, resources?: DecodedFeishuResource[]): strin
   return parts.join("").trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Text components of a card as sent, whose `content` is what a reader sees. */
+const CARD_TEXT_TAGS = new Set(["markdown", "plain_text", "lark_md"]);
+
+/**
+ * Whether a card body is the card as SENT (`card_msg_content_type=user_card_content`): a Card 2.0 has `body`, a card
+ * 1.0 has a `header` object, component objects in `elements`, or per-locale `i18n_elements`. The rendered-down shape
+ * is a string `title` and `elements` of paragraph ARRAYS.
+ */
+function isSentCard(card: Record<string, unknown>): boolean {
+  return (
+    isRecord(card.body) ||
+    isRecord(card.header) ||
+    isRecord(card.i18n_elements) ||
+    (Array.isArray(card.elements) && card.elements.some((element) => isRecord(element)))
+  );
+}
+
+/** A card's declared `config.locales`, in order: the locales a multi-language card is read in, first carried wins. */
+function declaredLocales(card: Record<string, unknown>): string[] {
+  const declared = isRecord(card.config) && Array.isArray(card.config.locales) ? card.config.locales : [];
+  return declared.filter((locale): locale is string => typeof locale === "string");
+}
+
+/**
+ * One locale's form out of per-locale `forms`: the first declared locale it carries, else the first it carries. A card
+ * holds the same content once per locale; one of them is the content.
+ */
+function pickLocale(forms: Record<string, unknown>, locales: readonly string[]): unknown {
+  const declared = locales.find((locale) => locale in forms);
+  return declared !== undefined ? forms[declared] : Object.values(forms)[0];
+}
+
+/** A text field's value: `content`, else its per-locale form (1.0 `i18n`, 2.0 `i18n_content`). */
+function localizedText(node: Record<string, unknown>, locales: readonly string[]): string | undefined {
+  const own = nonEmptyString(node.content)?.trim();
+  if (own) return own;
+  for (const key of ["i18n", "i18n_content"]) {
+    const forms = node[key];
+    if (!isRecord(forms)) continue;
+    const text = nonEmptyString(pickLocale(forms, locales))?.trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
+/**
+ * A sent card's visible text, in reading order: the header title, then every text component, through the containers
+ * (columns, panels, forms, a 1.0 `div`'s fields and `extra`, an action row) that nest them, with a control's label or
+ * placeholder. An image or a table says it is there; controls with no text say nothing. Card 2.0 keeps its components in `body.elements`, card 1.0 in `elements`.
+ */
+function sentCardLines(card: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const locales = declaredLocales(card);
+  const titleOf = (header: unknown): string | undefined =>
+    isRecord(header) && isRecord(header.title) ? localizedText(header.title, locales) : undefined;
+  const title = titleOf(card.header);
+  if (title) lines.push(title);
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!isRecord(node)) return;
+    // A collapsible panel's title is the one line it shows folded.
+    const panelTitle = titleOf(node.header);
+    if (panelTitle) lines.push(panelTitle);
+    const content = localizedText(node, locales);
+    if (typeof node.tag === "string" && CARD_TEXT_TAGS.has(node.tag) && content) lines.push(content);
+    else if (node.tag === "img") lines.push("[image]");
+    // Rows of typed cells, not text components: said, so the rest of the card does not read as the whole of it.
+    else if (node.tag === "table") lines.push("[table]");
+    // A control's visible words: a button's or a div's `text`, a picker's `placeholder`.
+    for (const key of ["text", "placeholder"]) {
+      const label = isRecord(node[key]) ? localizedText(node[key], locales) : undefined;
+      if (label) lines.push(label);
+    }
+    for (const key of ["elements", "columns", "fields", "actions", "extra"]) visit(node[key]);
+  };
+  const i18nElements = isRecord(card.i18n_elements) ? pickLocale(card.i18n_elements, locales) : undefined;
+  visit(isRecord(card.body) ? card.body.elements : (card.elements ?? i18nElements));
+  return lines;
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
@@ -117,6 +204,17 @@ export function decodeFeishuContent(
     // A CARD, as the platform hands it BACK.
     case "interactive":
     case "card": {
+      // As SENT (`card_msg_content_type=user_card_content`, what every read asks for): a Card 2.0 (every answer this
+      // channel streams) or a card 1.0 (what many CI and alert bots post).
+      // A card sent from a template is, as sent, a reference (`template_id` + variables), and its text was never in
+      // the message. Said in the prompt, so the model does not read the marker as an empty card.
+      if (content.type === "template") {
+        return { text: `[${rawType} message: a template card; its text cannot be read]`, resources };
+      }
+      if (isSentCard(content)) {
+        const lines = sentCardLines(content);
+        return { text: lines.length > 0 ? lines.join("\n") : `[${rawType} message]`, resources };
+      }
       const lines: string[] = [];
       const title = nonEmptyString(content.title);
       if (title) lines.push(title);

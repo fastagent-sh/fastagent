@@ -1543,9 +1543,20 @@ describe("turn flow", () => {
                 message_id: "om_bot_card",
                 msg_type: "interactive",
                 parent_id: "om_original_ask", // the chain's next link — walked
+                // The agent's streamed answer as the read returns it (`user_card_content`): a Card 2.0 as sent.
                 body: {
                   content: JSON.stringify({
-                    elements: [[{ tag: "text", text: "确认后我会给出方案；批准后再实现 SVG 足球页面。" }]],
+                    schema: "2.0",
+                    config: { streaming_mode: false },
+                    body: {
+                      elements: [
+                        {
+                          tag: "markdown",
+                          element_id: "answer",
+                          content: "确认后我会给出方案；批准后再实现 SVG 足球页面。",
+                        },
+                      ],
+                    },
                   }),
                 },
                 sender: { id: "cli_self", id_type: "app_id", sender_type: "app" }, // THIS app
@@ -1759,7 +1770,12 @@ describe("turn flow", () => {
                 message_id: "om_other_bot",
                 msg_type: "interactive",
                 parent_id: "om_stranger_ask", // no shared prefix with om_other_bot — feishuFetch matches by substring
-                body: { content: JSON.stringify({ elements: [[{ tag: "text", text: "another bot's card" }]] }) },
+                body: {
+                  content: JSON.stringify({
+                    schema: "2.0",
+                    body: { elements: [{ tag: "markdown", content: "another bot's card" }] },
+                  }),
+                },
                 sender: { id: "cli_someone_else", id_type: "app_id", sender_type: "app" },
               },
             ],

@@ -146,11 +146,13 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(1); // one attempt, no backoff
   });
 
-  it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
+  it("getMessage pins user_id_type=open_id, and asks for a card as it was sent", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.getMessage("om_1");
     expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
+    // Without it a Card 2.0 (every streamed answer) reads as "please upgrade the client" (measured).
+    expect(fx.calls().at(-1)?.url).toContain("card_msg_content_type=user_card_content");
   });
 
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {
