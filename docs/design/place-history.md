@@ -193,9 +193,11 @@ short list, a bounded read.
 - **A thread id is checked against the room.** Slack reads `conversations.replies` in the room's channel, so a thread
   is in it by construction. A Feishu `thread_id` names a thread in any chat, so the read refuses items whose `chat_id`
   is not the room's, for the history read as well.
-- **The list** is threads among the room's newest messages, most recently active first, at most 20: Slack's 100
-  newest (`reply_count`, `latest_reply`); Feishu's 50 newest, since it has no thread list (an ordinary group lists
-  roots without a reply count, a topic group every message).
+- **The list** is threads among the room's newest messages, newest first by the one time it can vouch for, at most
+  20: Slack's 100 newest, by `latest_reply`; Feishu's 50 newest, since it has no thread list. A topic group lists
+  every message, so a thread with a reply in view shows its last activity; an ordinary group lists roots only, so a
+  thread there shows when it `started`, and the list says it may have gone on since. Calling a root's time "last
+  active" would rank a thread resolved yesterday by when it opened, and #374's question is exactly whether it was.
 - **The read** is the history fold over the thread with no cursor and nothing left out: another session's asks and
   answers are what that thread said. A failed read is the tool's error, for the model to see.
 - An agent created before this gets the tools with `fastagent add <channel> --no-onboard`, which keeps the channel

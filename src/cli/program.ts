@@ -256,7 +256,9 @@ const INGRESS: FlagSpec = {
 };
 const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
-  description: "Slack: scaffold only; skip internal-app creation/OAuth",
+  description:
+    "scaffold only: write the channel file (if missing) and its tools, and skip the app onboarding " +
+    "(Slack: internal-app creation/OAuth; Feishu/Lark: app creation and credential capture)",
 };
 const REPLACE_CONFIG: FlagSpec = {
   flags: "--replace-config",
@@ -275,7 +277,8 @@ const channelSub = (
   summary,
   description,
   args: [AGENT_ARG],
-  flags: kind === "feishu" || kind === "lark" ? [INGRESS] : kind === "slack" ? [NO_ONBOARD, REPLACE_CONFIG] : [],
+  flags:
+    kind === "feishu" || kind === "lark" ? [INGRESS, NO_ONBOARD] : kind === "slack" ? [NO_ONBOARD, REPLACE_CONFIG] : [],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
@@ -302,7 +305,7 @@ const add: CommandSpec = {
     channelSub(
       "slack",
       "scaffold the Slack Events API channel (files, threads, context, live preview)",
-      "Scaffold channels/slack.ts plus slack-send.ts, create a single-workspace " +
+      "Scaffold channels/slack.ts plus its tools (slack-send.ts, slack-threads.ts), create a single-workspace " +
         "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
         "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
       "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +

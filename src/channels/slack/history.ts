@@ -284,7 +284,7 @@ export function createSlackPlaceHistory(deps: {
         ? [
             {
               id: message.ts,
-              latestAt: Number(message.latest_reply ?? message.ts) * 1000,
+              time: { at: Number(message.latest_reply ?? message.ts) * 1000, is: "last active" as const },
               replies: message.reply_count as number,
               first: { label: speaker(message).label, text: spokenText(message) },
             },

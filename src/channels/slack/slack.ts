@@ -289,12 +289,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         return seen.has(`${place.teamId}:${place.channelId}:${ts}`);
       },
     });
-    /**
-     * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
-     * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
-     * top-level ask lands in the thread it opens. The send tool uses the plain client, so what the agent posts itself
-     * stays discussion. A place-less turn (a DM, a routed one) reads no history.
-     */
     // A group turn's room, for the thread-reading tool (`slackThreads`): the channel it was asked in, and its threads.
     const rooms = createRoomThreads({
       list: (room) => history.threads(room),
@@ -310,6 +304,12 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       },
     });
     registerRoomThreads("slack", stateRoot, rooms);
+    /**
+     * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
+     * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
+     * top-level ask lands in the thread it opens. The send tool uses the plain client, so what the agent posts itself
+     * stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     */
     const placeApi = (turn: { historyKey?: string; teamId: string }): SlackApi =>
       turn.historyKey === undefined
         ? api

@@ -242,11 +242,12 @@ export function createFeishuPlaceHistory(deps: {
     const summaries = [...byThread].map(([id, seen]): ThreadSummary => {
       const opener = seen.at(-1) as (typeof seen)[number];
       const message = placeMessage(opener.item, opener.id, opener.at, people);
-      return {
-        id,
-        latestAt: (seen[0] as (typeof seen)[number]).at,
-        first: { label: message.from.label, text: message.text },
-      };
+      // A reply is the thread's last activity this read saw; a root alone may have replies the listing omits.
+      const newest = seen[0] as (typeof seen)[number];
+      const time = newest.item.root_id
+        ? { at: newest.at, is: "last active" as const }
+        : { at: opener.at, is: "started" as const };
+      return { id, time, first: { label: message.from.label, text: message.text } };
     });
     return threadList(summaries, `this chat's newest ${PAGE_SIZE} messages`);
   };

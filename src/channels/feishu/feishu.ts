@@ -307,11 +307,6 @@ function createFeishuRuntimeFactory(
       path: join(stateHome, "history.json"),
       isTurnInput: (id) => seen.has(id),
     });
-    /**
-     * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
-     * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
-     * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
-     */
     // A group turn's room, for the thread-reading tool (`feishuThreads`): the chat it was asked in, and its threads.
     const rooms = createRoomThreads({
       list: (chatId) => history.threads(chatId),
@@ -320,6 +315,11 @@ function createFeishuRuntimeFactory(
         `(thread ${threadId} shows no messages)`,
     });
     registerRoomThreads(kind, stateRoot, rooms);
+    /**
+     * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
+     * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
+     * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     */
     const placeApi = (historyKey: string | undefined): FeishuApi =>
       historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.

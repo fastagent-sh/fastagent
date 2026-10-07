@@ -72,8 +72,11 @@ export function roomThreads(
 /** One thread of a room, as a list shows it. */
 export interface ThreadSummary {
   id: string;
-  /** Milliseconds since the epoch: the newest message of the thread the read saw. */
-  latestAt: number;
+  /**
+   * The one time a list can vouch for, in milliseconds since the epoch: its newest message, or only when it started
+   * where its replies are not visible (a Feishu ordinary group lists a thread's root only).
+   */
+  time: { at: number; is: "last active" | "started" };
   /** When the platform says (Slack); Feishu's listing does not. */
   replies?: number;
   /** Its first message the read saw: the thread's opener, wherever the platform lists it. */
@@ -84,15 +87,19 @@ export interface ThreadSummary {
 const MAX_THREADS = 20;
 const PREVIEW_CHARS = 160;
 
-/** The list a tool returns: newest first, each with the id that reads it, and what was left out said. */
+/**
+ * The list a tool returns: newest first by the time each line shows, each with the id that reads it, and what was
+ * left out said. A thread shown by when it started may have gone on since, and the list says so, since whether a
+ * problem was resolved is what a reader most often wants to know.
+ */
 export function threadList(threads: readonly ThreadSummary[], scanned: string): string {
   if (threads.length === 0) return `No threads among ${scanned}.`;
-  const shown = [...threads].sort((a, b) => b.latestAt - a.latestAt).slice(0, MAX_THREADS);
+  const shown = [...threads].sort((a, b) => b.time.at - a.time.at).slice(0, MAX_THREADS);
   const when = (ms: number): string => `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
   const lines = shown.map((thread) => {
     const meta = [
       thread.replies === undefined ? undefined : `${thread.replies} repl${thread.replies === 1 ? "y" : "ies"}`,
-      `last active ${when(thread.latestAt)}`,
+      `${thread.time.is} ${when(thread.time.at)}`,
     ]
       .filter(Boolean)
       .join(", ");
@@ -100,8 +107,10 @@ export function threadList(threads: readonly ThreadSummary[], scanned: string): 
     return `- thread ${thread.id} (${meta}): ${thread.first.label}: ${text}`;
   });
   const more = threads.length - shown.length;
+  const startedOnly = shown.some((thread) => thread.time.is === "started");
   return [
-    `Threads in this room, most recently active first (among ${scanned}). Pass a thread's id to read it.`,
+    `Threads in this room, newest first by the time shown (among ${scanned}). Pass a thread's id to read it.`,
+    ...(startedOnly ? ["A thread shown by when it started may have later replies this list cannot see: read it."] : []),
     ...lines,
     ...(more > 0 ? [`(${more} more not listed)`] : []),
   ].join("\n");

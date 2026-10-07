@@ -302,8 +302,10 @@ in that topic.
 
 - Only the group the turn was asked in: the tool takes no chat id, and a thread id from another chat is refused. In a
   DM, a scheduled turn or a turn from a custom `route` it answers that it cannot read threads.
-- The list is the threads among the group's newest 50 messages, most recently active first, at most 20. Feishu lists
-  an ordinary group's thread by its first message only, so a long-running thread started earlier may not appear.
+- The list is the threads among the group's newest 50 messages, newest first, at most 20. Feishu lists an ordinary
+  group's thread by its first message only, so the list shows when such a thread started, not its last reply (it may
+  have gone on since, and the list says so), and a thread started before those 50 messages does not appear. A topic
+  group lists every message, so there a thread shows its last activity.
 - A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
 - An agent created before this release gets the tool with `fastagent add feishu --no-onboard`: it keeps the channel
   file and writes the package's tools.

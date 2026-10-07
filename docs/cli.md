@@ -28,7 +28,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `invoke <message> [agent]` | Run one turn and exit. |
 | `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
 | `tool <name> <json> [agent]` | Run one tool directly. |
-| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. |
+| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel. `add slack` creates an internal app (Manifest API + OAuth; `--no-onboard` skips it). `add feishu` scan-creates the app. `add lark` guides and validates credentials. With `--no-onboard`, each writes only the channel (if missing) and its tools, which is how an existing agent picks up a new tool. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
@@ -251,12 +251,13 @@ fastagent add slack [agent]    # create/install an internal app; --no-onboard sc
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
                              # feishu/lark take --ingress websocket|webhook (asked when omitted; websocket by default)
+                             # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
 ```
 
-Writes `channels/<kind>.ts` (yours after that) and a companion send tool (`tools/<kind>-send.ts`, rewritten on
-every `add`), appends variables to `.secrets/.env.example`, and writes generated secrets such as
-`TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run `add <kind>` after upgrading the package to refresh the send
-tool.
+Writes `channels/<kind>.ts` (yours after that) and the channel's companion tools (`tools/<kind>-send.ts`, and
+`tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
+`.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
+`add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
 
 Slack:
 

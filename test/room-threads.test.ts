@@ -50,10 +50,10 @@ describe("room threads: what a thread tool may read", () => {
     );
   });
 
-  it("lists threads most recently active first, at most 20, saying how many it left out", () => {
+  it("lists threads newest first by the time shown, at most 20, saying how many it left out", () => {
     const thread = (i: number, over: Partial<ThreadSummary> = {}): ThreadSummary => ({
       id: `t${i}`,
-      latestAt: Date.UTC(2026, 9, 7, 12, i),
+      time: { at: Date.UTC(2026, 9, 7, 12, i), is: "last active" },
       first: { label: "Alice", text: `topic\n${i}` },
       ...over,
     });
@@ -63,11 +63,30 @@ describe("room threads: what a thread tool may read", () => {
       "this channel's newest 100 messages",
     ).split("\n");
     expect(lines[0]).toBe(
-      "Threads in this room, most recently active first (among this channel's newest 100 messages). Pass a thread's id to read it.",
+      "Threads in this room, newest first by the time shown (among this channel's newest 100 messages). Pass a thread's id to read it.",
     );
     expect(lines[1]).toBe("- thread t3 (2 replies, last active 2026-10-07 12:03 UTC): Alice: topic 3");
     expect(lines[2]).toBe("- thread t1 (1 reply, last active 2026-10-07 12:01 UTC): Alice: topic 1");
     expect(lines).toHaveLength(1 + 20 + 1);
     expect(lines.at(-1)).toBe("(2 more not listed)");
+  });
+
+  it("a thread known only by when it started says so, and the list warns that it may have gone on", () => {
+    const lines = threadList(
+      [
+        {
+          id: "old",
+          time: { at: Date.UTC(2026, 9, 4), is: "started" },
+          first: { label: "Alice", text: "deploy failed" },
+        },
+        { id: "new", time: { at: Date.UTC(2026, 9, 6), is: "started" }, first: { label: "Bob", text: "lunch?" } },
+      ],
+      "this chat's newest 50 messages",
+    ).split("\n");
+    expect(lines.slice(1)).toEqual([
+      "A thread shown by when it started may have later replies this list cannot see: read it.",
+      "- thread new (started 2026-10-06 00:00 UTC): Bob: lunch?",
+      "- thread old (started 2026-10-04 00:00 UTC): Alice: deploy failed",
+    ]);
   });
 });

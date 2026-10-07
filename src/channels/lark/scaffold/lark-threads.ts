@@ -7,7 +7,7 @@ import { larkThreads } from "@fastagent-sh/fastagent/lark";
 export default defineTool({
   description:
     "Read the threads (topics) of the Lark group chat you are answering in. Without `threadId`, list its recent " +
-    "threads, most recently active first, each with its id; with a `threadId` from that list, read that thread. Use " +
+    "threads, newest first, each with its id; with a `threadId` from that list, read that thread. Use " +
     "it when a question here concerns something discussed in a thread, such as whether a problem raised there was " +
     "resolved: the answer is often what a person wrote in the thread. Only this chat's threads can be read, and " +
     "only in a group chat turn.",

@@ -360,12 +360,14 @@ describe("Feishu place history", () => {
     const list = await place.history.threads("oc_1");
     expect(list.split("\n")).toEqual([
       expect.stringContaining(
-        "Threads in this room, most recently active first (among this chat's newest 50 messages)",
+        "Threads in this room, newest first by the time shown (among this chat's newest 50 messages)",
       ),
+      "A thread shown by when it started may have later replies this list cannot see: read it.",
+      // A reply seen in the listing (a topic group) is the thread's last activity; a root alone is only its start.
       expect.stringMatching(
         /^- thread omt_1 \(last active \d{4}-\d\d-\d\d \d\d:\d\d UTC\): Alice: deploy failed on staging$/,
       ),
-      expect.stringMatching(/^- thread omt_2 \(last active .+\): user ou_bob: lunch plans$/),
+      expect.stringMatching(/^- thread omt_2 \(started .+\): user ou_bob: lunch plans$/),
     ]);
     // A tool's read leaves nothing out: what the session holds elsewhere is what this thread said.
     place.history.recordOutput(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }), "om_t1_reply");

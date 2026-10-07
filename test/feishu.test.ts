@@ -766,7 +766,7 @@ describe("turn flow", () => {
     await handler(feishuRequest(messageEvent({ id: "om_dm", text: "any threads?" })));
     await idle();
     vi.unstubAllEnvs();
-    expect(seen[0]).toMatch(/^- thread omt_1 \(last active .+ UTC\): Bob: deploy failed$/m);
+    expect(seen[0]).toMatch(/^- thread omt_1 \(started .+ UTC\): Bob: deploy failed$/m);
     expect(seen[1]).toBe(
       "refused: this turn was not asked in a feishu group chat: threads are read only from the group a turn was asked in",
     );

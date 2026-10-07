@@ -12,6 +12,7 @@ import {
   readdir,
   realpath,
   rename,
+  rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -458,6 +459,22 @@ describe("add: fastagent add <channel>", () => {
     expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m); // …with a real value in place
     expect(envFile).toContain("OPENAI_API_KEY=sk-x");
+  });
+
+  it("--no-onboard upgrades an existing Feishu or Lark agent's tools without touching its app", async () => {
+    for (const kind of ["feishu", "lark"]) {
+      const dir = await readyAgent();
+      expect(await cliInit(["add", kind, "--no-onboard"], dir)).not.toMatch(/Error|creating the Feishu app/);
+      // An agent from an earlier release: its channel edited, and no thread tool yet.
+      const channel = join(dir, "channels", `${kind}.ts`);
+      const authored = `${await readFile(channel, "utf8")}// edited\n`;
+      await writeFile(channel, authored);
+      await rm(join(dir, "tools", `${kind}-threads.ts`));
+      const out = await cliInit(["add", kind, "--no-onboard"], dir);
+      expect(out).not.toMatch(/Error|creating the Feishu app/);
+      expect(await readFile(channel, "utf8")).toBe(authored);
+      expect(await readFile(join(dir, "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
+    }
   });
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {

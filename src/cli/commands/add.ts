@@ -72,7 +72,7 @@ export async function runAddChannel(
     })
       .then(() => undefined)
       .catch(failStartup);
-  } else if (channelKind === "feishu" || channelKind === "lark") {
+  } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
     created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress);
@@ -83,7 +83,8 @@ export async function runAddChannel(
           // No line about the Request URL: the `dev --tunnel` line below is the whole instruction, and FastAgent sets
           // that URL itself when the agent first runs.
           "invite the app to each channel it should read",
-          "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
+          // The tool lines are the scaffold's (one list), whichever path set the app up.
+          ...setup.steps.filter((step) => step.includes("{tools}/")),
         ]
       : setup.steps;
   const generated = Object.fromEntries(
