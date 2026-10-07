@@ -2,7 +2,7 @@
  * A schedule: a prompt the definition runs on a cron, written as `schedules/<name>.md` — the cron and its timezone in
  * the frontmatter, the prompt as the body. Plain data, like a skill or a prompt template, so an author, a client or the
  * agent itself writes one without touching TypeScript. The running clock re-reads `schedules/` (scheduler.ts), and on
- * AgentCore the container sets each one's alarm itself (wake-alarm.ts), so a schedule written or edited while the
+ * AgentCore the container sets each one's recurring EventBridge schedule itself (wake-alarm.ts), so a schedule written or edited while the
  * agent runs is armed within half a minute, with no restart and no deploy. Like any file in the definition, a release
  * replaces it.
  *

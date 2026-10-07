@@ -114,20 +114,18 @@ describe("mountAgentcore", () => {
     });
   });
 
-  it("binds schedule fires by name; skips stale alarms; every delivery, a failed one too, mirrors the alarms again", async () => {
+  it("binds schedule fires by name; skips a fire an edit has not reached EventBridge for; a claim fault is a 500", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-fire-"));
     // schedule-fire is an INTERNAL kind: without the ingress secret the adapter 403s it before
     // routing (see the adapter's authentication boundary), so the mount must carry it.
     process.env.FASTAGENT_INGRESS_SECRET = "ingress-s3cret";
-    const onFired = vi.fn();
     const routes = mountAgentcore({
       agent,
       stateRoot: dir,
       schedules: () => [schedule],
-      onFired,
       channels: () => ({ routes: {} }),
     });
-    // The instant the container set the alarm for: a grid point of the hourly cron.
+    // An instant EventBridge fires for: a grid point of the hourly cron.
     // (a schedule's fire history is claimed by occurrence — schedule/scheduler.ts).
     const hour = new Date();
     hour.setUTCMinutes(0, 0, 0);
@@ -139,23 +137,18 @@ describe("mountAgentcore", () => {
           body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name, occurrence }),
         }),
       );
-    // Not errors: an alarm outlives the edit that made it stale, and a 4xx would have EventBridge retry it.
+    // Not errors: EventBridge can fire before an edit reaches it, and a 4xx would have it retry.
     const gone = await fire("nope");
     expect(gone.status).toBe(200);
     expect(await gone.json()).toMatchObject({ fired: false, skippedReason: "no such schedule any more" });
-    // Every delivery spends its alarm, so every one mirrors the alarms again, however it ended: a chain only a
-    // successful fire extended would end at the first fault.
-    expect(onFired).toHaveBeenCalledOnce();
     const res = await fire("job");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
-    expect(onFired).toHaveBeenCalledTimes(2);
     occurrence = new Date(hour.getTime() + 60_000).toISOString(); // 00:01 is no instant of "0 * * * *"
     expect(await (await fire("job")).json()).toMatchObject({
       fired: false,
       skippedReason: expect.stringMatching(/not an instant of its cron/),
     });
-    expect(onFired).toHaveBeenCalledTimes(3);
     // A claim-state fault (the state root is a file): a 500 EventBridge retries, and still a mirror.
     const broken = join(dir, "not-a-dir");
     await writeFile(broken, "");
@@ -163,7 +156,6 @@ describe("mountAgentcore", () => {
       agent,
       stateRoot: broken,
       schedules: () => [schedule],
-      onFired,
       channels: () => ({ routes: {} }),
     });
     occurrence = hour.toISOString();
@@ -173,8 +165,7 @@ describe("mountAgentcore", () => {
         body: JSON.stringify({ auth: "ingress-s3cret", kind: "schedule-fire", name: "job", occurrence }),
       }),
     );
-    expect(failed.status).toBe(500);
-    expect(onFired).toHaveBeenCalledTimes(4);
+    expect(failed.status).toBe(500); // EventBridge retries it: nothing was claimed
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
   });
 });

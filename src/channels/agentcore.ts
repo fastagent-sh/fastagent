@@ -42,10 +42,10 @@ export interface AgentcoreAdapterOptions {
   /**
    * Fire ONE declared schedule for the occurrence EventBridge named — the claim/run/settle the resident clock uses.
    *
-   * The container set the alarm for this instant and the forwarder relays it behind the ingress secret, so this
-   * caller is one we produced and authenticated, which is what makes a claim (and therefore dedup across
-   * EventBridge's redeliveries, a fire history and the overlap policy) mean anything. Always present: a schedule can
-   * be added while the container runs, and an alarm for one since removed is answered by it, as skipped.
+   * The container set the recurring schedule that names this instant and the forwarder relays it behind the ingress
+   * secret, so this caller is one we produced and authenticated, which is what makes a claim (and therefore dedup
+   * across EventBridge's redeliveries, a fire history and the overlap policy) mean anything. Always present: a
+   * schedule can be added while the container runs, and a fire for one since removed is answered by it, as skipped.
    */
   fireSchedule: (name: string, occurrence: Date) => Promise<Response>;
   /** FASTAGENT_INGRESS_SECRET: what makes an envelope the FORWARDER's rather than any IAM principal's. */

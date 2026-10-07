@@ -7,10 +7,10 @@
 // Webhooks (Function URL) and EventBridge Scheduler fires are forwarded as envelopes to the
 // AgentCore Runtime over SigV4 InvokeAgentRuntime, all on ONE fixed ingress session (fastagent
 // channel state is single-writer; one session = at most one microVM). This
-// Lambda also OWNS the alarms: the container POSTs its pending wake-ups and each schedule's next
-// instant to /__fastagent/wake-alarm (shared secret), and each becomes a self-deleting one-shot
-// EventBridge schedule that calls this Lambda back — a wake-up's pokes the container, whose wake pump
-// fires the due entry; a schedule's delivers that instant's fire.
+// Lambda also OWNS the alarms: the container POSTs its schedules and pending wake-ups to
+// /__fastagent/wake-alarm (shared secret). Each schedule becomes a RECURRING EventBridge cron schedule
+// that delivers each instant's fire on EventBridge's own clock; each wake-up becomes a self-deleting
+// one-shot that pokes the container, whose wake pump fires the due entry.
 // CommonJS on purpose: the deployment package's entry lands as index.js, where ESM import is invalid.
 "use strict";
 const crypto = require("node:crypto");
@@ -53,23 +53,24 @@ async function invoke(envelope) {
   return { status: res.statusCode ?? 200, body };
 }
 
-// Mirror the container's pending wake-ups and its schedules' next instants into one-shot schedules: at(fireAt),
-// poke me (or deliver the schedule's fire), delete after firing. Upsert (create → conflict → update): an id names one
-// instant, so the update is the same alarm mirrored again, never a spent one moved. The container pre-filters DUE alarms (it is
-// awake handling those), so every failure here is REAL — counted and propagated: a swallowed error
-// would leave a pending wake with no alarm, exactly the reliability hole this mechanism closes.
-// Cancelled wakes are NOT deleted here: their poke fires, finds nothing due, and the schedule
+/** The EventBridge name for one alarm id: prefix + a stable hash of the WHOLE id. */
+const mintedName = (prefix, id) => prefix + crypto.createHash("sha256").update(id).digest("hex").slice(0, 16);
+
+// Mirror the container's pending wake-ups into one-shot schedules: at(fireAt), poke me, delete after firing. Upsert
+// (create → conflict → update): an id names one instant, so the update is the same alarm mirrored again, never a
+// spent one moved. The container pre-filters DUE alarms (it is awake handling those), so every failure here is REAL —
+// counted and propagated: a swallowed error would leave a pending wake with no alarm, exactly the reliability hole
+// this mechanism closes. Cancelled wakes are NOT deleted here: their poke fires, finds nothing due, and the schedule
 // self-deletes (lazy cleanup by design).
-async function syncAlarms(alarms, ctx) {
-  const { SchedulerClient, CreateScheduleCommand, UpdateScheduleCommand } = require("@aws-sdk/client-scheduler");
-  const sch = new SchedulerClient({});
+async function syncAlarms(sch, alarms, ctx) {
+  const { CreateScheduleCommand, UpdateScheduleCommand } = require("@aws-sdk/client-scheduler");
   let failed = 0;
   // Alarm name = a stable hash of the WHOLE alarm id. A prefix of the id would collide (two alarms
   // sharing 8 hex chars), and a collision is INDISTINGUISHABLE from the legitimate re-mirror below:
   // the second alarm would "update" the first and silently steal its fire time.
   const names = new Map();
   for (const a of alarms) {
-    const name = process.env.WAKE_PREFIX + crypto.createHash("sha256").update(a.id).digest("hex").slice(0, 16);
+    const name = mintedName(process.env.WAKE_PREFIX, a.id);
     if (names.has(name)) {
       failed += 1;
       console.log(`alarm name collision ${name}: ${names.get(name)} vs ${a.id}`);
@@ -82,12 +83,8 @@ async function syncAlarms(alarms, ctx) {
       ScheduleExpressionTimezone: "UTC",
       FlexibleTimeWindow: { Mode: "OFF" },
       ActionAfterCompletion: "DELETE",
-      // A schedule's alarm delivers its fire; a wake-up's only wakes the container, whose pump fires what is due.
-      Target: {
-        Arn: ctx.invokedFunctionArn,
-        RoleArn: process.env.WAKE_ROLE_ARN,
-        Input: a.fire ? JSON.stringify({ scheduleFire: a.fire }) : '{"wakePoke":true}',
-      },
+      // It only wakes the container, whose pump fires what is due.
+      Target: { Arn: ctx.invokedFunctionArn, RoleArn: process.env.WAKE_ROLE_ARN, Input: '{"wakePoke":true}' },
     };
     try {
       await sch.send(new CreateScheduleCommand(p));
@@ -99,6 +96,80 @@ async function syncAlarms(alarms, ctx) {
         failed += 1;
         console.log(`alarm ${p.Name}: ${u}`);
       }
+    }
+  }
+  return failed;
+}
+
+// Make the recurring schedules exactly the container's set: create what is missing, update what differs, delete what
+// it no longer has. Declarative, so a delete that failed is retried by the next sync, and the update is skipped when
+// nothing changed (every sync carries the whole set, and a sync follows every wake-up too). Only names this Lambda
+// mints are deleted: a prefix alone also matches a sibling agent named `<name>-sc-…`.
+async function syncSchedules(sch, schedules, ctx) {
+  const {
+    CreateScheduleCommand,
+    UpdateScheduleCommand,
+    GetScheduleCommand,
+    DeleteScheduleCommand,
+    ListSchedulesCommand,
+  } = require("@aws-sdk/client-scheduler");
+  const prefix = process.env.SCHEDULE_PREFIX;
+  const held = new Set();
+  let NextToken;
+  do {
+    const page = await sch.send(new ListSchedulesCommand({ NamePrefix: prefix, NextToken }));
+    for (const s of page.Schedules || []) {
+      if (s.Name.startsWith(prefix) && /^[0-9a-f]{16}$/.test(s.Name.slice(prefix.length))) held.add(s.Name);
+    }
+    NextToken = page.NextToken;
+  } while (NextToken);
+  let failed = 0;
+  const wanted = new Set();
+  for (const s of schedules) {
+    const p = {
+      Name: mintedName(prefix, s.name),
+      ScheduleExpression: s.expression,
+      ScheduleExpressionTimezone: s.tz,
+      FlexibleTimeWindow: { Mode: "OFF" },
+      State: "ENABLED",
+      // <aws.scheduler.scheduled-time> is the clock's NAME for this occurrence: EventBridge repeats it byte-identical
+      // on every redelivery, which is what makes the container's claim work.
+      Target: {
+        Arn: ctx.invokedFunctionArn,
+        RoleArn: process.env.WAKE_ROLE_ARN,
+        Input: JSON.stringify({ scheduleFire: { name: s.name, occurrence: "<aws.scheduler.scheduled-time>" } }),
+      },
+    };
+    wanted.add(p.Name);
+    try {
+      if (!held.has(p.Name)) {
+        await sch.send(new CreateScheduleCommand(p));
+        continue;
+      }
+      const now = await sch.send(new GetScheduleCommand({ Name: p.Name }));
+      // Every field this Lambda sets. RoleArn too: the role's name is CloudFormation's, so a stack recreated over a
+      // schedule left behind gives it a new one, and a schedule still naming the old role never fires again.
+      const same =
+        now.ScheduleExpression === p.ScheduleExpression &&
+        now.ScheduleExpressionTimezone === p.ScheduleExpressionTimezone &&
+        now.State === p.State &&
+        now.Target?.Input === p.Target.Input &&
+        now.Target?.Arn === p.Target.Arn &&
+        now.Target?.RoleArn === p.Target.RoleArn;
+      if (!same) await sch.send(new UpdateScheduleCommand(p));
+    } catch (e) {
+      failed += 1;
+      console.log(`schedule ${s.name} (${p.Name}): ${e}`);
+    }
+  }
+  for (const name of held) {
+    if (wanted.has(name)) continue;
+    try {
+      await sch.send(new DeleteScheduleCommand({ Name: name }));
+    } catch (e) {
+      if (e.name === "ResourceNotFoundException") continue;
+      failed += 1;
+      console.log(`schedule ${name} (delete): ${e}`);
     }
   }
   return failed;
@@ -145,9 +216,14 @@ exports.handler = async (event, ctx) => {
   if (event.rawPath === "/__fastagent/wake-alarm") {
     const req = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body || "{}");
     if (!secretEq(req.secret, process.env.WAKE_SECRET)) return { statusCode: 403, body: "forbidden\n" };
-    const failed = await syncAlarms(req.alarms || [], ctx);
+    const { SchedulerClient } = require("@aws-sdk/client-scheduler");
+    const sch = new SchedulerClient({});
+    // A sync request names the WHOLE schedule set; one without it is not a sync, and deleting every schedule on it
+    // would be the wrong answer.
+    if (!Array.isArray(req.schedules)) return { statusCode: 400, body: "schedules: expected the whole set\n" };
+    const failed = (await syncAlarms(sch, req.alarms || [], ctx)) + (await syncSchedules(sch, req.schedules, ctx));
     // Partial failure IS failure: the container retries the whole (idempotent) set until every
-    // pending wake really has its alarm.
+    // schedule and pending wake really has its EventBridge schedule.
     if (failed > 0) return { statusCode: 500, body: `${failed} alarm(s) failed\n` };
     return { statusCode: 200, body: "ok\n" };
   }

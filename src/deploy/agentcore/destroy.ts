@@ -8,9 +8,9 @@
  *   the runtime's image from them), so they cannot be stack resources;
  * - the forwarder's log group is created by AWS on the Lambda's first WRITE, so no template ever mentions it —
  *   and the deploy put a 14-day retention on it, i.e. it holds data;
- * - a wake alarm is minted at RUNTIME by the container. `ActionAfterCompletion: DELETE` only runs once one
- *   FIRES, so anything stopped between the wake call and the fire leaves a schedule that retries into a deleted
- *   Lambda for weeks.
+ * - the EventBridge schedules are minted at RUNTIME by the container: a recurring one per `schedules/` file, which
+ *   nothing ever deletes but the container's next sync, and a one-shot per pending wake-up, whose
+ *   `ActionAfterCompletion: DELETE` only runs once it FIRES. Either left behind retries into a deleted Lambda.
  *
  * This file is the RESOURCE LIST, the order the dependencies demand, and one policy decision per resource for
  * what to do when AWS cannot answer. What an AWS answer MEANS — there, gone, or unreadable — belongs to
@@ -29,6 +29,7 @@ import {
   deploymentBucketName,
   forwarderLogGroup,
   runtimeLogGroupPrefix,
+  recurringSchedulePrefix,
   toRuntimeName,
   wakeAlarmPrefix,
 } from "./plan.ts";
@@ -134,21 +135,35 @@ export async function destroyAgentcoreDeployment(
 
   // ---- What is out there. Each read gets its own policy for "AWS could not answer". ----
 
-  // The alarm ids are minted inside the container, so the PREFIX is all we can ask for. Unreadable is a gate
-  // here: an alarm nobody deleted keeps firing at a Lambda that is about to stop existing.
-  const prefix = wakeAlarmPrefix(plan.name);
-  const listed = await aws.read(
-    ["scheduler", "list-schedules", "--name-prefix", prefix, "--output", "json"],
-    parseScheduleNames,
-  );
-  if ("unreadable" in listed) return gate(`could not list wake alarms under ${prefix}: ${listed.unreadable}`);
-  // THE FULL SHAPE, not just the prefix. The forwarder mints every alarm as prefix + sha256(wakeId)[:16]
+  // The schedule names are minted inside the container, so the PREFIXES are all we can ask for. Unreadable is a gate
+  // here: a schedule nobody deleted keeps firing at a Lambda that is about to stop existing.
+  const minted = [
+    { what: "wake alarm", prefix: wakeAlarmPrefix(plan.name) },
+    { what: "schedule", prefix: recurringSchedulePrefix(plan.name) },
+  ];
+  // THE FULL SHAPE, not just the prefix. The forwarder mints every name as prefix + sha256(id)[:16]
   // (plan.ts / forwarder.js), and a prefix alone is ambiguous between sibling agents: an agent directory literally
   // named `<name>-wk-abc` produces `fa-<name>-wk-abc-wk-<hash>`, which starts with THIS deployment's prefix.
-  // Deleting it would take a live deployment's pending wake-ups, and a wake-up is not re-created.
-  const isMintedAlarm = (alarm: string) =>
-    alarm.startsWith(prefix) && /^[0-9a-f]{16}$/.test(alarm.slice(prefix.length));
-  const alarms = ("ok" in listed ? listed.ok : []).filter(isMintedAlarm);
+  // Deleting it would take a live deployment's pending wake-ups or schedules.
+  const listMinted = async (prefix: string) => {
+    const listed = await aws.read(
+      ["scheduler", "list-schedules", "--name-prefix", prefix, "--output", "json"],
+      parseScheduleNames,
+    );
+    if ("unreadable" in listed) return listed;
+    const names = "ok" in listed ? listed.ok : [];
+    return {
+      ok: names.filter((name) => name.startsWith(prefix) && /^[0-9a-f]{16}$/.test(name.slice(prefix.length))),
+    };
+  };
+  const held: { what: string; prefix: string; names: string[] }[] = [];
+  for (const kind of minted) {
+    const listed = await listMinted(kind.prefix);
+    if ("unreadable" in listed) {
+      return gate(`could not list ${kind.what}s under ${kind.prefix}: ${listed.unreadable}`);
+    }
+    held.push({ ...kind, names: listed.ok });
+  }
 
   // A GATE for these three, because they decide whether the REPORT is true. `delete-stack` answers 0 for a
   // stack that does not exist, so "deleted: stack X" for a stack nobody deployed — or "nothing left to delete"
@@ -242,7 +257,9 @@ export async function destroyAgentcoreDeployment(
   const logGroups = "unreadable" in forwarderRead ? [forwarderGroup, ...listedGroups] : listedGroups;
 
   const found: string[] = [];
-  if (alarms.length > 0) found.push(`${alarms.length} wake alarm(s) under ${prefix}`);
+  for (const kind of held) {
+    if (kind.names.length > 0) found.push(`${kind.names.length} ${kind.what}(s) under ${kind.prefix}`);
+  }
   if (stackExists) found.push(`stack ${stack}`);
   if (bucketExists) found.push(`bucket ${bucket} (${keys.length} object version(s))`);
   if (repoExists) found.push(`repository ${repo}`);
@@ -278,13 +295,13 @@ export async function destroyAgentcoreDeployment(
   };
 
   const swept = new Set<string>();
-  const sweepAlarms = async (names: string[]) => {
-    for (const alarm of names.filter((name) => !swept.has(name))) {
-      swept.add(alarm);
-      await attempt(`wake alarm ${alarm}`, ["scheduler", "delete-schedule", "--name", alarm]);
+  const sweep = async (what: string, names: string[]) => {
+    for (const name of names.filter((name) => !swept.has(name))) {
+      swept.add(name);
+      await attempt(`${what} ${name}`, ["scheduler", "delete-schedule", "--name", name]);
     }
   };
-  await sweepAlarms(alarms);
+  for (const kind of held) await sweep(kind.what, kind.names);
 
   if (stackExists) {
     announce(`deleting stack ${stack} (this waits for CloudFormation)…`);
@@ -312,17 +329,13 @@ export async function destroyAgentcoreDeployment(
     }
     removed.push(`stack ${stack}`);
 
-    // AGAIN, NOW. The container served the whole deletion and holds `scheduler:CreateSchedule`, so a wake-up
-    // taken in those minutes minted an alarm after the first sweep read the list — an alarm whose target is the
-    // Lambda we just deleted, retrying into nothing for weeks.
-    const after = await aws.read(
-      ["scheduler", "list-schedules", "--name-prefix", prefix, "--output", "json"],
-      parseScheduleNames,
-    );
-    if ("unreadable" in after) {
-      failures.push(`re-listing wake alarms under ${prefix}: ${after.unreadable}`);
-    } else {
-      await sweepAlarms(("ok" in after ? after.ok : []).filter(isMintedAlarm));
+    // AGAIN, NOW. The container served the whole deletion and could create schedules, so a wake-up taken or a
+    // schedule written in those minutes minted one after the first sweep read the list — one whose target is the
+    // Lambda we just deleted, retrying into nothing.
+    for (const kind of minted) {
+      const after = await listMinted(kind.prefix);
+      if ("unreadable" in after) failures.push(`re-listing ${kind.what}s under ${kind.prefix}: ${after.unreadable}`);
+      else await sweep(kind.what, after.ok);
     }
   }
 

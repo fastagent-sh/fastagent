@@ -87,26 +87,32 @@ export interface WebhookReply {
   bodyB64: string;
 }
 
-/** One desired alarm: mirror of a pending wake-up (id names the EventBridge schedule; at = fireAt). */
+/** One desired one-shot alarm: a pending wake-up's next instant, which pokes the container. */
 export interface WakeAlarm {
-  /** One per INSTANT (`<wake id or schedule:name>@<instant>`), so mirroring again never rewrites a spent alarm. */
+  /** One per INSTANT (`<wake id>@<instant>`), so mirroring again never rewrites a spent alarm. */
   id: string;
   at: string;
-  /** A schedule's alarm: the fire it delivers when it goes off (a wake-up's only pokes). */
-  fire?: ScheduleFireEvent["scheduleFire"];
-}
-
-/** The wire shape the wake sink POSTs to {@link RESERVED_PATHS.wakeAlarm} (the forwarder validates `secret`). */
-export interface WakeAlarmRequest {
-  secret: string;
-  alarms: WakeAlarm[];
 }
 
 /**
- * What EventBridge hands the forwarder when a schedule's alarm goes off: which schedule, and which instant of it.
- * The container named the instant when it set the alarm, and EventBridge repeats the input byte-identical on every
- * redelivery, which is what lets the container claim it once.
+ * One desired RECURRING schedule: a `schedules/` file as an EventBridge cron schedule, which EventBridge fires on its
+ * own clock. Each fire delivers `{scheduleFire: {name, occurrence: <aws.scheduler.scheduled-time>}}`, the instant it
+ * was scheduled for, repeated byte-identical on every redelivery, which is what lets the container claim it once.
  */
-interface ScheduleFireEvent {
-  scheduleFire: { name: string; occurrence: string };
+export interface RecurringSchedule {
+  name: string;
+  /** EventBridge's `cron(...)` (schedule/eventbridge-cron.ts). */
+  expression: string;
+  /** IANA zone the expression is evaluated in. */
+  tz: string;
+}
+
+/**
+ * The wire shape the wake sink POSTs to {@link RESERVED_PATHS.wakeAlarm} (the forwarder validates `secret`). The
+ * schedules are the WHOLE desired set: the forwarder deletes a recurring schedule it holds that is not in it.
+ */
+export interface WakeAlarmRequest {
+  secret: string;
+  alarms: WakeAlarm[];
+  schedules: RecurringSchedule[];
 }

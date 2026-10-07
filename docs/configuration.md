@@ -554,7 +554,12 @@ Generate today's digest and send it with slack-send to channel C0123456789.
 - **The same guard as a recurring wake-up**, since the agent can write these files too: no two instants of a
   schedule may be under 10 minutes apart, which also refuses the six-field per-second form and a year field. This is
   judged on the expression alone, so `0,5 9 * * *` is refused at any hour. At most 20 schedules are armed, the first
-  20 by name, counting an old definition kept for a file that broke. A file refused for any reason is logged and not
+  20 by name, counting an old definition kept for a file that broke.
+- **A cron AgentCore can run, on every host.** AgentCore's clock is EventBridge, which cannot express a few cron
+  forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms,
+  and nicknames such as `@daily`. Such a file is refused everywhere, so a schedule that runs locally also runs
+  there. One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of
+  the US) is skipped on AgentCore and run an hour later elsewhere. A file refused for any reason is logged and not
   armed; it never stops a serve, and `deploy --run` refuses to ship one.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.
@@ -565,8 +570,8 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
   next instant arrives makes that one `skipped`.
 - **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each
-  schedule's next instant into a one-shot EventBridge alarm that wakes it, once it has run after a deploy (`deploy
-  --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
+  schedule into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container,
+  once an envelope has reached it through the forwarder after a deploy (`deploy --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
   ([Deploy](deploy.md#scale-to-zero)).
 - **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
   prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body

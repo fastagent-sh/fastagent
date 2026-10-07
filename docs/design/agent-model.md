@@ -365,7 +365,7 @@ When a change takes effect:
 |---|---|
 | `SYSTEM.md`, `APPEND_SYSTEM.md`, skills in the agent directory and its contexts, prompt templates in the agent directory, `AGENTS.md`, scripts, project files | On the next turn |
 | `extensions/` | On the next session: it is listed again, and changed code is loaded afresh |
-| `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the alarms itself) |
+| `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the recurring EventBridge schedules itself) |
 | What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts` (its `contexts` included), `models.json`, `models-store.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
