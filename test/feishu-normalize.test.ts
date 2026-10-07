@@ -200,6 +200,38 @@ describe("card decoding — a card as it was SENT (`card_msg_content_type=user_c
     expect(decode({ elements: [{ tag: "markdown", content: "disk at 91%" }] })).toBe("disk at 91%");
   });
 
+  it("reads a multi-language card in its declared locale, title included", () => {
+    const decode = (card: unknown) =>
+      decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text;
+    const card10 = {
+      config: { locales: ["en_us", "zh_cn"] },
+      header: { title: { tag: "plain_text", i18n: { zh_cn: "构建失败", en_us: "Build failed" } } },
+      i18n_elements: {
+        zh_cn: [{ tag: "div", text: { tag: "lark_md", content: "3 个测试失败" } }],
+        en_us: [{ tag: "div", text: { tag: "lark_md", content: "3 tests failed" } }],
+      },
+    };
+    expect(decode(card10)).toBe("Build failed\n3 tests failed");
+    // No declared locales: the first the card carries.
+    expect(decode({ ...card10, config: {} })).toBe("构建失败\n3 个测试失败");
+    // Per-locale elements alone mark a card as sent: no header needed.
+    expect(decode({ i18n_elements: card10.i18n_elements })).toBe("3 个测试失败");
+    // Card 2.0 spells a per-locale text `i18n_content`.
+    const card20 = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", i18n_content: { en_us: "Alert" } } },
+      body: { elements: [{ tag: "markdown", i18n_content: { en_us: "disk at 91%" } }] },
+    };
+    expect(decode(card20)).toBe("Alert\ndisk at 91%");
+  });
+
+  it("says a template card cannot be read, rather than leaving a bare marker", () => {
+    const template = { type: "template", data: { template_id: "ctp_1", template_variable: { build: "42" } } };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(template) }).text).toBe(
+      "[interactive message: a template card; its text cannot be read]",
+    );
+  });
+
   it("keeps the marker when a Card 2.0 renders to nothing", () => {
     const controlsOnly = { schema: "2.0", body: { elements: [{ tag: "button" }] } };
     expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(controlsOnly) }).text).toBe(
