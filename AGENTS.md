@@ -203,7 +203,9 @@ src/
 │   ├── discover.ts         # schedules/<name>.md discovery: a strict cron/tz frontmatter over the prompt
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
-│   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
+│   ├── wake-alarm.ts       # the EXTERNAL-clock form of both: schedules as recurring EventBridge schedules,
+│   │                       # wake-ups as one-shots
+│   ├── eventbridge-cron.ts # a cron in EventBridge's dialect; discovery refuses what it cannot express
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── engines/pi/             # the pi reference implementation

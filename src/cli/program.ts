@@ -499,8 +499,8 @@ const destroy: CommandSpec = {
     "AgentCore only, and it exists because `aws cloudformation delete-stack` is not enough: the S3 " +
     "artifact bucket and the ECR repository have to exist BEFORE the stack that reads from them, BOTH " +
     "log groups (the forwarder's and the runtime's own stdout) are created by AWS on first write so no " +
-    "template mentions them, and a wake alarm is minted at runtime by the container — a schedule that " +
-    "keeps retrying into a deleted Lambda. " +
+    "template mentions them, and the EventBridge schedules (one per schedules/ file, one per pending wake-up) " +
+    "are minted at runtime by the container — left behind, they keep firing into a deleted Lambda. " +
     "Derives the same names from the agent directory that deploy did. Without --run it deletes nothing and reports what " +
     "is out there.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],

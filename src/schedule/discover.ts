@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { recurringCronError } from "./cron.ts";
+import { toEventBridgeCron } from "./eventbridge-cron.ts";
 import type { Schedule } from "./schedule.ts";
 import { isSafeScheduleName } from "./state.ts";
 import { MAX_PENDING_WAKEUPS } from "./wakeups.ts";
@@ -101,6 +102,12 @@ export async function loadSchedules(dir: string): Promise<{ schedules: Schedule[
     const invalid = recurringCronError(cron, tz);
     if (invalid) {
       fail(invalid);
+      continue;
+    }
+    // One rule on every host, so a schedule that runs locally also runs on AgentCore, whose clock is EventBridge.
+    const translated = toEventBridgeCron(cron);
+    if ("error" in translated) {
+      fail(`AgentCore's clock (EventBridge) cannot express this cron: ${translated.error}`);
       continue;
     }
     if (parsed.body === "") {

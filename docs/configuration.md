@@ -153,6 +153,12 @@ differences:
 - pi's own `~/.pi/agent/models.json` is not read. The machine's endpoints live in `~/.fastagent/models.json`
   instead (below).
 - A malformed `models.json` fails startup.
+- **Edits take effect while the agent runs.** Every reader (a turn, the model list, `update({ model })`) checks the
+  model files first, this agent's and the machine's, and reads them again when one changed. An edit that cannot be
+  used (it does not load, or it drops the agent's default model) keeps the models read before and is logged once,
+  until it is fixed: the agent can write its own
+  `models.json`, and a broken one must not leave it unable to run a turn. The `chat` session already open keeps its
+  models; the next one reads the edit.
 
 ### Endpoints for this machine: `~/.fastagent/models.json`
 
@@ -164,9 +170,8 @@ provider's key can be stored instead of written into the file.
 - The agent's own `models.json` wins a provider id: an agent that pins an endpoint keeps it.
 - A malformed file fails startup, naming the file.
 - It is plain JSON (no comments), and while it exists so must the agent's own `models.json` be: fastagent merges
-  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. A running process keeps the snapshot it
-  started with, so an edit to either file takes effect on the next start (in `chat`, `/model` does not pick it
-  up). Snapshots are never pruned; delete the directory while no fastagent process runs.
+  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. An edit to either file makes a new snapshot,
+  read from the next turn on. Snapshots are never pruned; delete the directory while no fastagent process runs.
 - It does not ship, and neither does a key written into it. `fastagent info` lists the providers the agent
   inherits from it and marks a model whose endpoint comes from it. `deploy` refuses a model whose provider exists
   only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
@@ -190,7 +195,7 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
   `refreshMachineModelCatalog` ([API reference](api-reference.md)).
 - An entry no newer than the installed pi's bundled catalog is ignored, so after a pi upgrade the bundled metadata
   takes over again.
-- A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.
+- A refresh takes effect in a running agent from its next turn, whichever process ran it, without a restart.
 
 ## Contexts
 
@@ -554,7 +559,12 @@ Generate today's digest and send it with slack-send to channel C0123456789.
 - **The same guard as a recurring wake-up**, since the agent can write these files too: no two instants of a
   schedule may be under 10 minutes apart, which also refuses the six-field per-second form and a year field. This is
   judged on the expression alone, so `0,5 9 * * *` is refused at any hour. At most 20 schedules are armed, the first
-  20 by name, counting an old definition kept for a file that broke. A file refused for any reason is logged and not
+  20 by name, counting an old definition kept for a file that broke.
+- **A cron AgentCore can run, on every host.** AgentCore's clock is EventBridge, which cannot express a few cron
+  forms: both day fields restricted at once (`0 9 15 * WED`, "the 15th or any Wednesday"), `L` and `#` day forms,
+  and nicknames such as `@daily`. Such a file is refused everywhere, so a schedule that runs locally also runs
+  there. One difference remains: on the day a DST change skips a local hour, a time inside it (02:30 in most of
+  the US) is skipped on AgentCore and run an hour later elsewhere. A file refused for any reason is logged and not
   armed; it never stops a serve, and `deploy --run` refuses to ship one.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.
@@ -565,8 +575,8 @@ Generate today's digest and send it with slack-send to channel C0123456789.
   one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the
   next instant arrives makes that one `skipped`.
 - **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each
-  schedule's next instant into a one-shot EventBridge alarm that wakes it, once it has run after a deploy (`deploy
-  --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
+  schedule into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container,
+  once an envelope has reached it through the forwarder after a deploy (`deploy --run` probes it). A schedule keeps one Fly or Railway machine running; to scale to zero, a clock of your own replaces it
   ([Deploy](deploy.md#scale-to-zero)).
 - **Nothing runs a schedule by name.** Work started on demand is `POST /invoke` (or `fastagent invoke`) with its
   prompt. A prompt kept as a template in `prompts/<name>.md` is reused by sending `/<name>`, and a schedule's body

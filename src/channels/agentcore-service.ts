@@ -139,7 +139,8 @@ export async function mountAgentcoreService(
   }
 
   // Started here, not deferred to an envelope. No resident timers: each instant arrives as its own fire from the
-  // alarms the container sets (`armAlarms`), ONE path per instant, so the reply to that delivery says whether it ran.
+  // recurring schedule the container sets (`armAlarms`), ONE path per instant, so the reply to that delivery says
+  // whether it ran.
   // The clock still re-reads schedules/ and pumps wake-ups; a redelivered fire claims its slot once.
   const loaded = await loadServingSchedules(agentDir);
   let scheduled: Pick<Scheduler, "current" | "stop"> | undefined;
@@ -167,7 +168,7 @@ export async function mountAgentcoreService(
     agent,
     stateRoot,
     schedules: () => armed.current(),
-    ...(mirror ? { onStateReady: mirror, onFired: mirror } : {}),
+    ...(mirror ? { onStateReady: mirror } : {}),
     channels: lazyChannels,
   });
   // SELF-VERIFYING, not unverified: both paths are reached only through `InvokeAgentRuntime`, which AWS gates with
@@ -205,45 +206,38 @@ export function mountAgentcore(options: {
   /** The schedules armed now (they follow edits to `schedules/`). */
   schedules: () => readonly Schedule[];
   onStateReady?: () => void;
-  /** After every schedule-fire delivery, however it ended: that alarm is spent, so the alarms are mirrored again. */
-  onFired?: () => void;
   /** The channel surface, initialized once by the adapter on trusted ingress. */
   channels: AgentcoreAdapterOptions["channels"];
 }): Routes {
-  const { agent, stateRoot, schedules, onStateReady, onFired, channels } = options;
-  // OCCURRENCE SEMANTICS, because this host's clock is ours: the container set the alarm for this instant and the
-  // forwarder relays it behind the ingress secret, so a claim means something (dedup across redeliveries and against
-  // the clock running in this container, a fire history, the overlap policy).
+  const { agent, stateRoot, schedules, onStateReady, channels } = options;
+  // OCCURRENCE SEMANTICS, because this host's clock is ours: the container set the recurring schedule that names this
+  // instant and the forwarder relays it behind the ingress secret, so a claim means something (dedup across
+  // EventBridge's redeliveries, a fire history, the overlap policy).
   const fireSchedule = async (name: string, occurrence: Date): Promise<Response> => {
     const schedule = schedules().find((s) => s.name === name);
-    // An alarm outlives an edit until it fires: one for a schedule since removed, or for an instant its cron no
-    // longer has, is answered as skipped, not run — and not as an error the forwarder would make EventBridge retry.
+    // EventBridge can fire what an edit has not reached yet (a mirror still in flight, or one that failed): a fire for
+    // a schedule since removed, or for an instant its cron no longer has, is answered as skipped, not run — and not
+    // as an error the forwarder would make EventBridge retry.
     const skip = (why: string) => {
       log.info(`[schedule] ${name}: alarm for ${occurrence.toISOString()} skipped — ${why}`);
       return Response.json({ slot: occurrence.toISOString(), fired: false, skippedReason: why, ms: 0 });
     };
-    // This alarm is spent whatever happens below, so the alarms are mirrored again whatever happens below: a skip, a
-    // failure and a fire alike. A chain that only a successful fire extended would end at the first fault.
-    try {
-      if (!schedule) return skip("no such schedule any more");
-      if (nextRun(schedule.cron, schedule.tz, new Date(occurrence.getTime() - 1))?.getTime() !== occurrence.getTime()) {
-        return skip(`not an instant of its cron "${schedule.cron}" any more`);
-      }
-      const outcome = await Effect.runPromise(
-        fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
-      ).catch((cause: unknown) => {
-        // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
-        // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
-        log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
-        return undefined;
-      });
-      if (outcome === undefined) {
-        return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
-      }
-      return Response.json({ slot: occurrence.toISOString(), ...outcome });
-    } finally {
-      onFired?.();
+    if (!schedule) return skip("no such schedule any more");
+    if (nextRun(schedule.cron, schedule.tz, new Date(occurrence.getTime() - 1))?.getTime() !== occurrence.getTime()) {
+      return skip(`not an instant of its cron "${schedule.cron}" any more`);
     }
+    const outcome = await Effect.runPromise(
+      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+    ).catch((cause: unknown) => {
+      // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
+      // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.
+      log.error(`[schedule] firing "${name}" for ${occurrence.toISOString()} failed: ${String(cause)}`);
+      return undefined;
+    });
+    if (outcome === undefined) {
+      return text(`schedule "${name}": claim state unavailable, nothing was claimed — retry\n`, 500);
+    }
+    return Response.json({ slot: occurrence.toISOString(), ...outcome });
   };
   return agentcoreRoutes({
     channels,
@@ -258,8 +252,8 @@ export function mountAgentcore(options: {
 }
 
 /**
- * The alarm mirror: the pending wake-ups and each schedule's next instant, as one-shot EventBridge schedules the
- * forwarder sets (schedule/wake-alarm.ts), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
+ * The alarm mirror: each schedule as a recurring EventBridge schedule and each pending wake-up as a one-shot one, set
+ * by the forwarder (schedule/wake-alarm.ts), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
  * clock starts: the first wake poll may advance a recurring entry, and that save must already re-arm its alarm.
  * Without the wake secret there is no way to set one, which is said.
  */

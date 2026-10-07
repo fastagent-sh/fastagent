@@ -79,6 +79,14 @@ export function wakeAlarmPrefix(name: string): string {
   return `fa-${name}-wk-`;
 }
 
+/**
+ * Where the forwarder puts the recurring schedule for each `schedules/` file. Set at runtime by the container (the
+ * set follows edits), so like the wake alarms it is no stack resource, and this prefix is the handle on them.
+ */
+export function recurringSchedulePrefix(name: string): string {
+  return `fa-${name}-sc-`;
+}
+
 /** Account-suffixed artifact bucket for S3's global namespace. */
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
@@ -332,10 +340,16 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `                Resource:`,
     `                  - !GetAtt Runtime.AgentRuntimeArn`,
     `                  - !Sub "\${Runtime.AgentRuntimeArn}/*"`,
-    `              - Effect: Allow # alarms: mirror pending wake-ups and schedules' next instants into one-shot schedules`,
+    `              - Effect: Allow # wake alarms: mirror pending wake-ups into one-shot schedules`,
     `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule]`,
     `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${wakeAlarmPrefix(input.name)}*`,
-    `              - Effect: Allow # hand the poke schedules their invoke role`,
+    `              - Effect: Allow # schedules: one recurring schedule per schedules/ file, and delete what is gone`,
+    `                Action: [scheduler:CreateSchedule, scheduler:UpdateSchedule, scheduler:GetSchedule, scheduler:DeleteSchedule]`,
+    `                Resource: !Sub arn:aws:scheduler:\${AWS::Region}:\${AWS::AccountId}:schedule/default/${recurringSchedulePrefix(input.name)}*`,
+    `              - Effect: Allow # find the recurring schedules to delete (ListSchedules takes no resource)`,
+    `                Action: scheduler:ListSchedules`,
+    `                Resource: "*"`,
+    `              - Effect: Allow # hand the alarm schedules their invoke role`,
     `                Action: iam:PassRole`,
     `                Resource: !GetAtt WakeSchedulerRole.Arn`,
     `              - Effect: Allow # self-resolve callback URL for state-URL refresh / wake alarms`,
@@ -362,6 +376,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `          WAKE_SECRET: !Ref FastagentWakeSecret`,
     `          WAKE_ROLE_ARN: !GetAtt WakeSchedulerRole.Arn`,
     `          WAKE_PREFIX: ${wakeAlarmPrefix(input.name)}`,
+    `          SCHEDULE_PREFIX: ${recurringSchedulePrefix(input.name)}`,
     `          INGRESS_SECRET: !Ref FastagentIngressSecret`,
     `          MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES}"`,
     `      # A content-hashed key makes code changes visible to CloudFormation.`,
@@ -402,7 +417,7 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
   );
   lines.push(
     ``,
-    `  # The role the wake-poke schedules assume to invoke the forwarder. Its policy names the`,
+    `  # The role the alarm schedules (wake pokes and schedule fires) assume to invoke the forwarder. Its policy names the`,
     `  # function by CONSTRUCTED arn (not !Ref) — the forwarder's env references this role, so a`,
     `  # !Ref back would be a circular dependency.`,
     `  WakeSchedulerRole:`,
@@ -534,10 +549,10 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
 
   runbook.push(
     ``,
-    `# Schedules and wake-ups are EventBridge-backed: the container mirrors each pending wake-up and each schedule's`,
-    `#   next instant (via the forwarder, authenticated by FastagentWakeSecret) into a self-deleting one-shot`,
-    `#   schedule (fa-${name}-wk-*) that wakes it at the right instant, even when the compute is reclaimed. So a`,
-    `#   schedule written or edited on the runtime gets its alarm without a deploy. The container sets them only`,
+    `# Schedules and wake-ups are EventBridge-backed: the container mirrors (via the forwarder, authenticated by`,
+    `#   FastagentWakeSecret) each schedule into a recurring EventBridge schedule (${recurringSchedulePrefix(name)}*) and each pending`,
+    `#   wake-up into a self-deleting one-shot (${wakeAlarmPrefix(name)}*), which wake it even when the compute is reclaimed.`,
+    `#   So a schedule written or edited on the runtime takes effect without a deploy. The container sets them only`,
     `#   once an envelope has reached it THROUGH THE FORWARDER, which tells it where the forwarder is; an`,
     `#   invoke-agent-runtime call does not (that door is IAM's, and does not carry it). \`--run\` does this with its`,
     `#   probe. After a manual deploy, do it once, or no schedule fires until a webhook arrives:`,

@@ -74,7 +74,8 @@ export interface SchedulerOptions {
   failures?: readonly ModuleLoadFailure[];
   /**
    * Run a resident timer per schedule (default). Off where something outside the process delivers each instant as
-   * its own fire (AgentCore's alarms): one path per instant, so its delivery's reply says whether it ran.
+   * its own fire (AgentCore's recurring EventBridge schedules): one path per instant, so its delivery's reply says
+   * whether it ran.
    */
   localClock?: boolean;
   /**
@@ -82,8 +83,7 @@ export interface SchedulerOptions {
    * armed, re-armed or disarmed without a restart. Absent, the start's set is fixed.
    */
   reload?: () => Promise<ScheduleLoad>;
-  /** Told when the armed set or a next instant changed: a re-read changed it, or a schedule fired (AgentCore mirrors
-   *  it into alarms). */
+  /** Told when a re-read changed the armed set (AgentCore mirrors it into EventBridge). */
   onChange?: () => void;
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
   now?: () => Date;
@@ -320,8 +320,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             Effect.uninterruptible,
           );
           due = nextRun(s.cron, s.tz, now());
-          // Its next instant moved: whoever mirrors the armed set (AgentCore's alarms) hears it.
-          onChange?.();
         }
       });
 

@@ -39,6 +39,8 @@ describe("schedule/discover", () => {
       // The floor a recurring wake-up is held to: the agent writes these files too.
       "frequent.md": md('cron: "*/5 * * * *"'),
       "per-second.md": md('cron: "* * * * * *"'),
+      // A cron AgentCore's EventBridge cannot express, refused on every host: the 15th OR any Wednesday.
+      "or-days.md": md('cron: "0 9 15 * WED"'),
       "bad-tz.md": md('cron: "0 * * * *"\ntz: Mars/Olympus'),
       "unknown-key.md": md('cron: "0 * * * *"\nsession: mine'),
       "twice.md": md('cron: "0 * * * *"\ncron: "0 1 * * *"'),
@@ -54,6 +56,9 @@ describe("schedule/discover", () => {
       "schedules/empty.md": expect.stringMatching(/has no prompt/),
       "schedules/frequent.md": expect.stringMatching(/too frequent — it must fire at most every 10 minutes/),
       "schedules/per-second.md": expect.stringMatching(/too frequent/),
+      "schedules/or-days.md": expect.stringMatching(
+        /^AgentCore's clock \(EventBridge\) cannot express this cron: .*BOTH/,
+      ),
       "schedules/no-cron.md": expect.stringMatching(/needs a "cron"/),
       "schedules/no-front.md": expect.stringMatching(/must start with a "---" frontmatter/),
       "schedules/not-kv.md": expect.stringMatching(/is not "key: value"/),

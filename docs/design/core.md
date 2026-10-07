@@ -793,7 +793,7 @@ existence alone cannot authorize reuse.
 is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute is per-session microVMs,
 reclaimed when idle). The generated CloudFormation stack therefore carries a forwarder Lambda (public
 Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`) fronting the webhooks,
-and no per-schedule resource: the container sets its own alarms (below). Inside the container,
+and no per-schedule resource: the container sets its own EventBridge schedules (below). Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
@@ -874,21 +874,27 @@ missing file reads as "not configured yet".
 
 A live session keeps its old compute (and the old image) until reclaimed, so `--run` stops the ingress
 session after a successful deploy. Wake-ups and schedules are EventBridge-backed the same way: every wakeups-store
-mutation, every change the schedule clock sees and every fire notifies a sink (`schedule/wake-alarm.ts`) that POSTs
-the pending wake-ups and each schedule's next instant to the forwarder's reserved path (shared secret), and the
-forwarder mirrors each into a self-deleting one-shot EventBridge schedule. A wake-up's pokes the container, whose
-ordinary wake pump fires the due entry; a schedule's carries `{scheduleFire: {name, occurrence}}`, which the
-container claims and runs. The container runs no resident timer for schedules, so the alarm is the one path that
-fires an instant and its reply is the record of what happened. Every alarm is keyed by its INSTANT, never by the
-schedule or wake-up: an alarm deletes itself once it has fired, and mirroring runs right after a fire, so an id
-reused for the next instant would update the alarm EventBridge is about to delete. Mirroring again is therefore
-idempotent, and it runs after every delivery however it ended (fired, skipped, failed) and every 5 minutes for as
-long as the container lives, which also repairs a sync that gave up and an alarm lost where no sync sees. An alarm
-that outlived an edit (a schedule removed, an instant its cron no longer has) is answered as skipped. Because the
-container sets the alarms, a schedule written on the runtime is armed without a deploy. The costs: the alarms exist
-only once an envelope has reached the container through the forwarder (`--run` probes it; the manual runbook prints
-the probe), and only a living container repairs them. A deployment whose alarms were lost after its container was
-reclaimed, with nothing else to wake it, sleeps until something does. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+mutation and every change the schedule clock sees notifies a sink (`schedule/wake-alarm.ts`) that POSTs the whole
+desired set to the forwarder's reserved path (shared secret). The forwarder makes EventBridge equal to it:
+- **a schedule is a RECURRING cron schedule** (`fa-<name>-sc-<hash>`), the way AWS runs any recurring job: its cron
+  translated to EventBridge's dialect (`schedule/eventbridge-cron.ts`), in its zone. Created, updated only when it
+  differs, deleted when the set no longer has it. Each fire carries `{scheduleFire: {name, occurrence:
+  <aws.scheduler.scheduled-time>}}`, which the container claims and runs. The container runs no resident timer for
+  schedules, so that fire is the one path per instant and its reply is the record of what happened. A fire an edit
+  has not reached yet (a schedule removed, an instant its cron no longer has) is answered as skipped.
+- **a pending wake-up is a self-deleting one-shot** (`fa-<name>-wk-<hash>`) that pokes the container, whose ordinary
+  wake pump fires the due entry. Keyed by its INSTANT: an alarm deletes itself shortly after it fires, and a recurring
+  wake-up's next instant is mirrored right after, so an id reused for it would update the alarm about to be deleted.
+
+The recurring schedule is why a fault costs an edit, never the schedule: nothing has to happen after a fire for the
+next one, so a sync that fails (retried with backoff, then every 5 minutes while the container lives, then at its
+next start) delays a change and leaves what EventBridge holds firing. One rule follows from EventBridge being this
+host's clock: discovery refuses, on every host, a cron it cannot express (both day fields restricted, `L`/`#`,
+nicknames), so what runs locally runs here. One difference remains, at a DST change: a local time the spring
+change removes is skipped by EventBridge and run an hour later by croner. Because the container sets the schedules, one
+written on the runtime takes effect without a deploy; the cost is that they are set only once an envelope has
+reached the container through the forwarder (`--run` probes it; the manual runbook prints the probe). They are no
+stack resources, so `destroy` deletes both prefixes itself. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
 template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
 callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
 run, because nothing can restore their ingress when compute is reclaimed.

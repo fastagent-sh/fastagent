@@ -68,7 +68,7 @@ Measured on 2026-10-07 with read-only calls, except for a handful of `spike test
 | System messages | `msg_type = "system"`, empty sender |
 | **Ordinary group** | the chat's history holds a thread's root only; its replies are not in it. `container_id_type=thread` with the `thread_id` returns root plus replies |
 | **Topic group** (`chat_mode = "topic"`) | the chat's history holds **every** message, each with its `thread_id`. A proactive post there opens a topic of its own |
-| Reading after a point | `start_time` is in seconds, too coarse for a cursor. The channel lists newest first (`ByCreateTimeDesc`, one page of 50) and stops at the cursor, a `(create_time ms, message_id)` pair |
+| Reading after a point | `start_time` is in seconds and inclusive, so it is not Slack's `inclusive=false`: as a cursor it would re-read the cursor's own second every time. The channel lists newest first (`ByCreateTimeDesc`, one page of 50, `end_time` at the ask's second) and stops at the cursor, a `(create_time ms, message_id)` pair |
 | **Other bots** | listed in the history read, `sender_type = "app"` with their App ID, without `include_bot:read` |
 | Names | events and history carry open_ids only; `GET /im/v1/chats/:id/members` (`im:chat.members:read`, in every created app since #748) maps them to names |
 | Rate limit | 1000/min, 50/s |
@@ -109,7 +109,7 @@ derivation that must not drift. The seam is where the platforms actually differ.
    `(create_time, message_id)`). With no cursor, the newest 20 before the ask. The cursor then moves to the ask. The
    bound is what keeps this turn's ask, an ask queued behind it in the same session (its own turn: folding it here
    would answer it twice) and anything said after it out of this turn; it needs no record of which messages were asks,
-   so a cold instance or a lost state file cannot break it.
+   so a cold instance or a lost state file cannot break it. (Slack, in phase 3: `latest`.)
 2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers, queue notices,
    stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The first is recorded per place, beside its cursor in `history.json`, by a client the turn posts
    through (`FeishuApi.recordingSends`), and forgotten once a read has passed it: a shared bounded ring would let a
@@ -122,7 +122,9 @@ derivation that must not drift. The seam is where the platforms actually differ.
    posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
    ("N earlier messages not shown"), and so is what the read never reached ("earlier messages not shown", without a
    count: counting would mean reading every page), never dropped silently.
-5. Advance the cursor when the turn's answer is recorded (`onAnswered`, before it is delivered): the buffer's
+5. Advance the cursor when the turn's answer is recorded (`onAnswered`, before it is delivered), and only forward:
+   turns in a place can finish out of ask order (a redelivered ask, a deferred turn), and an earlier ask's commit must
+   not pull the cursor back over what a later turn already folded. This is the buffer's
    commit-on-`completed` rule, in place of consume-by-identity. An answer that is then not delivered is re-delivered
    from the turn store, not re-run, so its discussion is not owed to another turn.
 6. **A failed read is said**, in the prompt ("could not read the recent discussion here: …") and as a `warn`. The turn
