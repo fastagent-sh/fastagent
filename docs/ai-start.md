@@ -85,7 +85,7 @@ cd my-agent
 my-agent/                         # the agent directory; run FastAgent commands here
 ├── APPEND_SYSTEM.md
 ├── skills/writing-great-skills/
-├── extensions/web-access.ts      # web search + page fetching (pi-web-access)
+├── extensions/web-access.ts      # web search + page fetching (@fastagent-sh/pi-web-access)
 ├── fastagent.config.ts
 ├── package.json                  # type: module; FastAgent is a local dependency
 ├── .secrets/.env.example

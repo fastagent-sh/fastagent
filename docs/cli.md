@@ -49,7 +49,7 @@ fastagent init <dir> [--context <source>]... [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
-example skill, `extensions/web-access.ts` (web search and page fetching from the pi package `pi-web-access`, which
+example skill, `extensions/web-access.ts` (web search and page fetching from `@fastagent-sh/pi-web-access`, which
 `package.json` depends on), `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
 `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
 repository whose first commit is the scaffold, so a change the agent makes to itself can be reviewed and undone. It

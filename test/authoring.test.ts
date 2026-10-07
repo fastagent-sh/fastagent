@@ -51,7 +51,7 @@ describe("authoring API", () => {
   });
 
   it("an agent createAgent makes opens without npm install, web access or not", async () => {
-    // An extension loads when a session starts, so an uninstalled pi-web-access costs the web tools on the first
+    // An extension loads when a session starts, so an uninstalled @fastagent-sh/pi-web-access costs the web tools on the first
     // turn (warned, left out: extensions' own tests), never the open.
     const base = await mkdtemp(join(tmpdir(), "fa-authoring-"));
     expect(await createAndOpen(join(base, "plain"), false)).toBe("opened");

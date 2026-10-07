@@ -48,7 +48,7 @@ export interface CreatedAgent {
 /**
  * Create an agent in `dir`, which must be new or empty. Every context is checked before anything is written, and the
  * scaffold is removed again when writing the contexts fails. It runs without `npm install`; with `webAccess`, its web
- * tools load only once `npm install` has installed `pi-web-access`, and until then are left out with a warning. The
+ * tools load only once `npm install` has installed `@fastagent-sh/pi-web-access`, and until then are left out with a warning. The
  * agent is then a git repository whose first commit is what was written:
  * it changes itself, and version control is how its author goes back to a version that worked.
  */

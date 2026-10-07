@@ -23,7 +23,7 @@ import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../s
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
-import { PI_WEB_ACCESS_RANGE } from "../src/scaffold/templates.ts";
+import { WEB_ACCESS_PACKAGE } from "../src/scaffold/templates.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -112,9 +112,11 @@ describe("init: scaffoldAgent", () => {
     ).version;
     expect(pkg.dependencies).toEqual({
       "@fastagent-sh/fastagent": `^${realVersion}`,
-      "pi-web-access": PI_WEB_ACCESS_RANGE, // what extensions/web-access.ts loads
+      [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.version, // what extensions/web-access.ts loads
     });
-    expect(await readFile(join(dir, "extensions", "web-access.ts"), "utf8")).toContain('from "pi-web-access"');
+    expect(await readFile(join(dir, "extensions", "web-access.ts"), "utf8")).toContain(
+      `from "${WEB_ACCESS_PACKAGE.name}"`,
+    );
     const standing = await readFile(join(dir, "APPEND_SYSTEM.md"), "utf8");
     expect(standing).toContain("Use only the tools actually listed in your system prompt");
     expect(standing).not.toMatch(/workspace/i);

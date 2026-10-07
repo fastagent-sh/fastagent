@@ -47,7 +47,7 @@ const init: CommandSpec = {
   description:
     "Create an agent in dir, which must be new or empty, then run npm install there. Content is a " +
     "self-iterating agent: APPEND_SYSTEM.md (its standing instructions), a writing-great-skills " +
-    "example skill, web access (pi-web-access), config, package.json, .gitignore.",
+    "example skill, web access (@fastagent-sh/pi-web-access), config, package.json, .gitignore.",
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
     {

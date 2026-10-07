@@ -29,7 +29,7 @@ cd my-agent
 my-agent/
 ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
-├── extensions/web-access.ts       # web search and page fetching (pi-web-access)
+├── extensions/web-access.ts       # web search and page fetching (@fastagent-sh/pi-web-access)
 ├── fastagent.config.ts            # model, contexts, http
 ├── package.json
 ├── .secrets/.env.example          # secrets live here, never committed
@@ -41,17 +41,14 @@ my-agent/
 `fastagent add skill <owner/repo/path>`.
 
 `extensions/web-access.ts` gives the agent `web_search`, `fetch_content` (readable pages, PDFs, GitHub repositories)
-and `get_search_content`, from the pi package [pi-web-access](https://pi.dev/packages/pi-web-access). It needs no key:
-searches go to Exa, or to OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and
+and `get_search_content`, from `@fastagent-sh/pi-web-access`: fastagent's build of the pi package
+[pi-web-access](https://pi.dev/packages/pi-web-access) that keeps each conversation's results its own when the agent
+serves several at once ([fork](https://github.com/fastagent-sh/pi-web-access); the fix is proposed upstream). It needs
+no key: searches go to Exa, or to OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and
 reserved addresses are blocked by default. More providers and keys go in `~/.pi/agent/web-search.json` on the machine
-that serves the agent. To go without it, delete the file and `npm uninstall pi-web-access`.
-
-The file loads the package's tools only. Its terminal commands (`/websearch`, `/curator`, `/google-account`,
-`/search`) open a browser on the serving machine or rewrite its config, so they are not offered to callers. One limit
-when serving: the package keeps stored results in the process, shared by every conversation, and clears them when any
-conversation starts or ends. While another conversation runs, a `get_search_content` for a result fetched earlier in
-the turn can answer `No stored results for responseId …`, and the agent fetches again. What `web_search` and
-`fetch_content` return directly is not affected.
+that serves the agent. The file loads the package's tools only: its terminal commands (`/websearch`, `/curator`,
+`/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not offered to
+callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
 
 **To have it work on a project**, declare the project as a context: `fastagent init my-agent --context ~/code/app`,
 or later `fastagent context add ~/code/app`. The agent stays in its own directory and is told where the project is;

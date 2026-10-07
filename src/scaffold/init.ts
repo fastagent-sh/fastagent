@@ -2,7 +2,7 @@
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
-import { PI_WEB_ACCESS_RANGE, baseTemplate, packageJson, toPackageName } from "./templates.ts";
+import { WEB_ACCESS_PACKAGE, baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 import { GitNotInstalled, gitFor } from "../git.ts";
 
@@ -25,8 +25,8 @@ const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
 
 export interface ScaffoldOptions {
   /**
-   * Give the agent web access: `extensions/web-access.ts`, which loads the pi package `pi-web-access`, and that package
-   * in `package.json`. The agent runs without it installed; its web tools load only once `npm install` has installed
+   * Give the agent web access: `extensions/web-access.ts`, which loads {@link WEB_ACCESS_PACKAGE}, and that package in
+   * `package.json`. The agent runs without it installed; its web tools load only once `npm install` has installed
    * it, and until then are left out with a warning.
    */
   webAccess?: boolean;
@@ -63,7 +63,7 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
       content: packageJson(
         toPackageName(dir),
         await fastagentVersion(),
-        options.webAccess ? { "pi-web-access": PI_WEB_ACCESS_RANGE } : {},
+        options.webAccess ? { [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.version } : {},
       ),
     },
   ];

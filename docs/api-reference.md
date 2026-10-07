@@ -287,7 +287,7 @@ class ContextNameError extends Error {}
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
 every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
 removes the scaffold again when writing the contexts fails. The agent runs without `npm install`. `webAccess` adds
-what `init` adds: `extensions/web-access.ts` and `pi-web-access` in `package.json`, whose web tools load only once
+what `init` adds: `extensions/web-access.ts` and `@fastagent-sh/pi-web-access` in `package.json`, whose web tools load only once
 it is installed (until then they are left out with a warning); `install`, when given, runs after
 the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
 failed context write. The agent is then a git repository whose first commit is the
