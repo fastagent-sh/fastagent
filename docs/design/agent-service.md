@@ -1,6 +1,6 @@
 ---
 title: Agent service
-description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, the world an agent acts in (environment, contexts, connectors), credentials, invoke as work that outlives its caller, the interfaces, the architecture, and deployment."
+description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, the agent's context (content, connectors, environment), credentials, invoke as work that outlives its caller, disposable boxes, the interfaces, the architecture, and deployment."
 type: design-doc
 status: proposed
 ---
@@ -12,16 +12,18 @@ status: proposed
 [#688](https://github.com/fastagent-sh/fastagent/issues/688) (what `Scope` means). §14 lists the decisions made in
 review; everything else is a proposal to settle before implementation.
 
-Three things are hard, and this design spends itself on them:
+Three things are hard in serving an agent, and this design spends itself on them:
 
 1. **Work that outlives its caller.** Work arrives from many entry points, has side effects, and keeps running when
-   the caller goes away. Surviving a restart or a deploy as well needs a harness that checkpoints its runs (§9.3).
-2. **A definition two parties change.** People and the agent itself edit an agent, and every change must be
-   reviewable and revertible (§2).
-3. **The agent's world on a host.** The environment it runs in, the contexts and connectors it uses, and the
-   credentials each of them needs must be reproduced in the cloud.
+   the caller goes away. Surviving a restart as well needs a harness that checkpoints its runs (§9.3).
+2. **Disposable boxes.** A deploy wipes a box, and scaling out adds boxes and removes them. So the program comes from
+   the image, what has to last lives in the agent's context outside the box, and each conversation reaches the box
+   that holds it (§10.2).
+3. **The agent's context on a host.** The content it works on, the connectors it uses, the environment it runs in,
+   and the credentials each of them needs must be reproduced in the cloud (§3).
 
-Models, the agent loop and hosting are not on the list: FastAgent uses existing ones.
+Models, the agent loop and hosting are not on the list: FastAgent uses existing ones. An agent changing its own
+definition is designed later ([#605](https://github.com/fastagent-sh/fastagent/issues/605)).
 
 ## 1. Who it is for
 
@@ -32,7 +34,7 @@ they already work: chat, their own apps, other agents.
 |---|---|
 | Develop together | An agent is a directory in git. Every change to it, including the agent's own, can be reviewed and reverted |
 | Use together | Members reach the agents from team channels and apps, and who asked matters |
-| Run continuously | An agent runs on no one's machine, scales to zero when idle, and its work outlives the connection that started it |
+| Run continuously | An agent runs on no one's machine, scales to zero when idle and out under load, and its work outlives the connection that started it |
 | Share infrastructure | The knowledge, code and integrations a team's agents work with are shared, not copied |
 
 | Role | Does | Through |
@@ -40,12 +42,12 @@ they already work: chat, their own apps, other agents.
 | Builder | Writes, tests and ships agents, often through a coding agent | The directory and the CLI |
 | Member | Hands work to agents and follows it | Team chat, the team's own apps, clients such as duang |
 | Operator | Deploys, watches and rolls back; in a small team, the builder | The CLI and the host's console |
-| The agent | Changes its own definition and writes to writable contexts | Its own directory |
+| The agent | Writes to its writable content, its own definition included | Its own directory |
 
 Outside FastAgent:
 
 - a unit above agents: a team, its members, shared secrets, one deployment target. Sharing happens through the
-  contexts and connectors that several agents declare;
+  context several agents declare (§3);
 - the model and the agent loop, which a harness provides (§9.1);
 - a hosting platform of its own: agents deploy to existing hosts (§10);
 - waiting states for human input: steering, follow-ups and cancelling cover it.
@@ -55,59 +57,61 @@ Outside FastAgent:
 ```text
 init → dev (locally, on the team's channels) → deploy → the team uses it
   ↑                                                         │
-  └──── a change, by a person or by the agent, committed to the agent's repository
+  └──────────────── a change, committed to the agent's repository
 ```
 
-- Git holds every change to the definition, a person's or the agent's. That is what makes a change reviewable and
-  revertible, and what a deploy builds from. A rollback deploys an earlier commit.
-- The deployed definition stays writable, because an agent changing itself is the point. What it writes to its live
-  inputs takes effect where it runs (§3.4).
-- The agent's half of the loop is missing: committing what it changed to its repository, putting a change that needs
-  a restart into service, and doing both without losing its work or breaking itself. Today a deploy replaces the
-  definition on the box, and on AgentCore resets all of its storage, so what the agent changed there is lost.
-  [#605](https://github.com/fastagent-sh/fastagent/issues/605) designs it, and the agent's prompt will carry the
-  whole procedure.
+- Git holds every change to the definition. That is what makes a change reviewable and revertible, and what a deploy
+  builds from. A rollback deploys an earlier commit.
+- The deployed definition stays writable, and what the agent writes to its live inputs takes effect where it runs.
+  How such a change returns to git and comes into service is designed later, in
+  [#605](https://github.com/fastagent-sh/fastagent/issues/605); until then a deploy replaces it.
 
 ## 3. The model
 
 ```text
-Agent = model + harness + definition    who it is and how it works (identity, behavior, skills, tools)
-  runs in        Environment            compute
-  works on       Contexts               state
-  acts through   Connectors             effects
-  remembers in   Sessions               conversations
-  started by     Triggers               requests, messages, events, time, itself
+Agent = model + harness + context
+  model          how it reasons
+  harness        the loop that runs it: pi
+  context        everything it works with, of three kinds:
+    content        files and repositories it works on and knows; its own definition comes first
+    connectors     connections to other systems: APIs, tools, MCP servers
+    environment    what the deployment provides to run in: commands and runtimes
+  remembers in   sessions: conversations
+  started by     triggers: requests, messages, events, time, itself
 ```
 
-### 3.1 Why three: every action has three parts
+Keeping the context apart from the program that runs it is what lets a box be wiped and rebuilt (§10.2), and what
+lets a team share what its agents work with (§1).
+
+### 3.1 Why three kinds: every action has three parts
 
 Everything an agent does outside its model is an action: a tool call. An action has exactly three parts: **where it
 executes**, **which state it reads or changes**, and **which other system it affects**. A skill script, for example,
-runs `git` in the environment, edits files in a context, and opens a ticket through a connector. So these three cover
-everything an agent touches, and they do not overlap.
+runs `git` in the environment, edits files in its content, and opens a ticket through a connector. So the three kinds
+cover everything an agent touches, and they do not overlap.
 
-| | Environment | Context | Connector |
+| | Environment | Content | Connector |
 |---|---|---|---|
-| Is | Compute: the agent's body | State the team owns | Another system's operations |
+| Is | Compute: the agent's body | Work the team owns: documents, data, code | Another system's operations |
 | Examples | node 22, git, ffmpeg, a sandbox | A directory, a git repository, an S3 bucket used as a workspace | GitHub issues, Jira, email, payments, a company API, an MCP server |
 | Lifetime | Disposable; rebuilt from its declaration | Persistent and versioned | The other system's |
 | A write can be undone | Holds no durable data | Yes: it has history, and it can be reviewed and reverted | Often not: a sent email, a payment |
 | Access | None needed | Read and write, plus the credentials to sync it | Authority delegated per action (OAuth, API keys), scoped |
-| Credentials (§6) | Supplied at start, never built in | Declared by the context | Declared by the connector |
-| Shared across a team's agents | The declaration; each agent runs its own instance | The same state: a team asset | The same integration, with per-agent scopes |
+| Credentials (§6) | Supplied at start, never built in | Declared with the content | Declared by the connector |
+| Shared across a team's agents | The declaration; each agent runs its own instance | The same content: a team asset | The same integration, with per-agent scopes |
 | Fails as | A missing command, said at start | Unreachable, or a conflicting write | Authorization, rate limits, an effect whose outcome is unknown |
 
 Three invariants follow:
 
 1. **An environment is reproducible.** It is rebuilt from its declaration and holds no durable data. Credentials are
    supplied when it starts and never built into it.
-2. **A context is stateful and versioned.** Long-term memory and work products live there, where people can review
-   and revert them.
+2. **Content is stateful and versioned.** Long-term memory and work products live there, where people can review and
+   revert them.
 3. **A connector is an external effect.** It may not be repeatable, so the service never repeats one behind the
-   caller's back (§9.3), and its authority is scoped per agent. Merging connectors into contexts would govern a
+   caller's back (§9.3), and its authority is scoped per agent. Merging connectors into content would govern a
    payment like a file edit, or a file edit like a payment.
 
-### 3.2 Context or connector: the test
+### 3.2 Content or connector: the test
 
 Local or remote does not separate the two, and neither does storage or API: S3 is an API, and GitHub has both files
 and issues. Ownership and reversibility do. Two questions:
@@ -115,43 +119,41 @@ and issues. Ownership and reversibility do. Two questions:
 1. Can the agent work on the data directly, with generic operations (list, read, write, compare), and see all of it?
 2. Can the team review and revert what the agent writes?
 
-Yes to both: a context. Otherwise: a connector. One system can provide both.
+Yes to both: content. Otherwise: a connector. One system can provide both.
 
 | Example | Is | Because |
 |---|---|---|
-| The files of a git repository | Context | Generic reads and writes, with history |
+| The files of a git repository | Content | Generic reads and writes, with history |
 | GitHub issues, pull requests, comments | Connector | Reached only through GitHub's API; what is posted is an external effect |
-| A team's own S3 bucket used as a workspace | Context | Generic get, put and list, and the team owns it |
-| Notion or Google Drive used through their API | Connector | Synced to files, the same content is a context |
+| A team's own S3 bucket used as a workspace | Content | Generic get, put and list, and the team owns it |
+| Notion or Google Drive used through their API | Connector | Synced to files, the same pages are content |
 | A production database behind a business API | Connector | The state and its rules belong to the other system |
 | Feishu, Slack | The channel is a trigger; the agent's send tool is a connector | One system, two relationships |
 
-Knowledge and long-term memory prefer file contexts, such as markdown in git: people can read, review and revert
+Knowledge and long-term memory prefer content in files, such as markdown in git: people can read, review and revert
 them, and they travel with a deployment. A memory service such as a vector store is a connector.
 
 ### 3.3 What knowledge, memory, skills and tools are
 
-They are uses of the three, not further categories.
+They are uses of the three kinds, not further categories.
 
 | Term | Is |
 |---|---|
-| Knowledge | Reading contexts, and querying connectors (a search) |
-| Memory | Long-term: writing to a writable context. A conversation's: its session (§3.5) |
-| Skill | Know-how stored in a context, executed in the environment, possibly calling connectors |
-| Tool | How an action is presented to the model. `read`, `write` and `bash` act on the environment and contexts; MCP tools and code tools are usually connectors |
+| Knowledge | Reading content, and querying connectors (a search) |
+| Memory | Long-term: writing to writable content. A conversation's: its session (§3.5) |
+| Skill | Know-how stored in content, executed in the environment, possibly calling connectors |
+| Tool | How an action is presented to the model. `read`, `write` and `bash` act on the environment and content; MCP tools and code tools are usually connectors |
 
 ### 3.4 The agent's own directory
 
-An agent's directory is both its definition and its first, writable context, on a host as much as locally. This is
-where it improves itself
-([#605](https://github.com/fastagent-sh/fastagent/issues/605)): what an agent changes in itself is versioned and
-reviewable like any other context (§2).
+An agent's directory is both its definition and its first content. It stays writable on a host as on a laptop; how
+what the agent changes there is kept is designed later (§2).
 
 ### 3.5 Sessions and triggers
 
 A **session** is a conversation's continuity: the invokes of one session share its history. It is named by the
-caller (§7.2), and may start as a fork of another session. A session is a conversation's
-memory; what should outlast a conversation belongs in a context.
+caller (§7.2), and may start as a fork of another session. A session is the agent's working memory of a
+conversation: what should outlast it belongs in content, and a chat place's own history is the platform's (§10.2).
 
 A **trigger** is where an invoke comes from: a request (HTTP, another agent), a message (a channel), an event (a
 webhook), time (a schedule), or the agent itself (`wake`, a subagent). A channel is a trigger and a connector of one
@@ -179,7 +181,7 @@ Today a connector is a code tool in `tools/` or a channel's send tool. Pi's MCP 
 because its server connections live as long as a session and a served session lives one turn
 ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed, on pi 1.0.4 (§12):
 
-- MCP servers are declared in the definition beside contexts; the code tools in `tools/` already declare what they
+- MCP servers are declared in the definition beside the content; the code tools in `tools/` already declare what they
   need;
 - a connector declares its credential as a value (§6). An OAuth grant for an MCP server comes when a server needs one;
 - an MCP connection lives as long as the process or the conversation, not one turn, which is #678.
@@ -188,7 +190,7 @@ because its server connections live as long as a session and a served session li
 
 A credential is proof of authority over another system. Three questions decide how one is handled:
 
-1. **Who uses it**: the model's provider client, a tool's code, a channel, a connector, git for a context, or a
+1. **Who uses it**: the model's provider client, a tool's code, a channel, a connector, git for content, or a
    command the agent runs in its environment. The model itself never needs one.
 2. **How it is obtained**: as a value, or as an interactive grant.
 3. **On whose authority**: the agent's own, or the member who asked.
@@ -203,7 +205,7 @@ A credential that code or configuration uses is declared next to it, the way `de
 | The model's provider | `model`, then its provider's env key or a `login` grant | Exists |
 | A code tool | `defineTool({ secrets })` | Exists |
 | A channel | `defineChannel({ secrets })` | Exists |
-| A context | Its kind's credential: a `github` context reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
+| Content | Its kind's credential: a `github` repository reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
 | A connector | `auth: { bearer: "LINEAR_API_KEY" }`, a value | No connectors yet |
 | A command the agent runs (`gh`, `aws`) | Nothing: it reads the process environment, which holds every value | As today |
 
@@ -378,8 +380,7 @@ coordinate across instances.
 - A steer's message is recorded as a user entry. The run's usage stays with the run it joined, so nothing is counted
   twice.
 - A session whose run another process holds cannot be followed or steered from this one: the invoke is rejected with
-  `busy`, whatever `whenBusy` says. That is rare: one process per agent on a resident host, and one fixed runtime
-  session for every entry point on AgentCore (§10.2).
+  `busy`, whatever `whenBusy` says. That is rare, because a session's calls reach one process (§9.3).
 
 `steer` and `followUp` leave the session control plane: `invoke` becomes the one way to hand a session a message.
 
@@ -425,19 +426,22 @@ my-agent/
   extensions/                                 pi extensions
   channels/                                   triggers: messages
   schedules/<name>.md                         triggers: time
-  fastagent.config.ts                         the model, the agent's world, serving and deploy options
+  fastagent.config.ts                         the model, the context, serving and deploy options
   .secrets/ · .state/ · .contexts/            machinery, never in git
 ```
 
-Behavior is written in markdown, code in `tools/` and `channels/`, and the agent's world is declared in the config.
-The shapes of `environment` and `connectors` are drafts (§13):
+Behavior is written in markdown, code in `tools/` and `channels/`, and the context is declared in the config, as one
+group with a key per kind. The group mirrors `Agent = model + harness + context`, and a team can share it as one value
+its agents import. The shape is a draft (§13); today's `contexts` becomes `context.content`:
 
 ```ts
 export default {
   model: "openai-codex/gpt-5.5",
-  environment: { apt: ["gh"] },
-  contexts: [{ github: "acme/handbook", readonly: true }, { github: "acme/app" }],
-  connectors: [{ mcp: "linear", url: "https://mcp.linear.app/mcp", auth: { bearer: "LINEAR_API_KEY" } }],
+  context: {
+    content: [{ github: "acme/handbook", readonly: true }, { github: "acme/app" }],
+    connectors: [{ mcp: "linear", url: "https://mcp.linear.app/mcp", auth: { bearer: "LINEAR_API_KEY" } }],
+    environment: { apt: ["gh"] },
+  },
 } satisfies FastagentConfig;
 ```
 
@@ -527,7 +531,7 @@ Agent           the run layer · session control · triggers (the scheduler) · 
                   ↓ the harness port
 Harness         pi today; others later
                   ↓ storage: the state root (a filesystem today)
-The world       Environment (the image, or the machine) · Contexts (.contexts/ clones) · Connectors (tools, MCP)
+The context     Content (.contexts/ clones) · Connectors (tools, MCP) · Environment (the image, or the machine)
 ```
 
 ### 9.3 The run layer
@@ -536,8 +540,8 @@ It keeps nothing on disk. In memory, per session, it holds the running run, to s
 follow-ups (§7.4).
 
 Memory is enough because a run lives in one process, and a session's calls reach the process that runs it (SPEC
-MUST 6): one process per agent on a resident host, and one fixed runtime session for every entry point on AgentCore.
-Scaling out would need the same session affinity (§10.2).
+MUST 6): one process per agent on a resident host, and on AgentCore the microVM of the runtime session the call
+names. Scaling out keeps that affinity by giving each conversation its own runtime session (§10.2).
 
 | What happens | The running run | A pending follow-up |
 |---|---|---|
@@ -555,7 +559,7 @@ restart needs a harness that checkpoints it, such as pi-durable (§13).
 |---|---|---|
 | The definition | Identity, behavior, skills, tools, triggers, the config | In git; built into the image |
 | `.state/` | Session records, schedule claims, wake-ups, channel state | Not in git; on the host's storage (§10.2) |
-| `.contexts/` | Clones of the agent's contexts | Not in git; cloned on the host at start |
+| `.contexts/` | Clones of the agent's content | Not in git; cloned on the host at start |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
@@ -576,23 +580,31 @@ trigger. No further concept is needed.
 ### 10.1 What a deploy builds
 
 An image holds the base runtime, the environment (§4), the definition, and a release manifest; the agent's
-dependencies are installed on the host's storage. It holds no credential, no state and no context: values reach the
-box through the host's secret store, grants are made on the box (`login --deployment`), and contexts are cloned there
+dependencies are installed on the host's storage. It holds no credential, no state and no content: values reach the
+box through the host's secret store, grants are made on the box (`login --deployment`), and content is cloned there
 at start, which preflight checks.
 
 ### 10.2 Two kinds of host
 
 | | Resident (Docker, Fly, Railway) | AgentCore |
 |---|---|---|
-| Process | One per agent, holding the storage lease | One microVM: every entry point uses one fixed runtime session. It scales to zero after 180 idle seconds by default |
-| Storage | A volume that outlives deploys | SessionStorage: it survives scaling to zero; AWS resets it on every deploy and after 14 idle days |
+| Process | One per agent, holding the storage lease | One microVM per runtime session. Today every entry point uses one fixed runtime session, so one microVM. It scales to zero after 180 idle seconds by default |
+| Storage | A volume that outlives deploys | SessionStorage, one per runtime session: it survives scaling to zero; AWS resets it on every deploy and after 14 idle days |
 | Clock | The local scheduler | EventBridge |
 
-AgentCore is where most agents run: an idle agent costs nothing, and the platform is built for agents. Two of its
-limits shape this design and are being worked on (§13):
+AgentCore is where most agents run: an idle agent costs nothing, and the platform is built for agents.
 
-- a deploy resets the storage, so sessions, wake-ups and what the agent wrote into its definition start blank;
-- one fixed runtime session means one microVM, so an agent scales to zero but not yet out.
+A box is disposable by design. The program comes from the image; the content is cloned, the connectors connect and
+the environment is installed from the agent's declaration; a chat place's history is read from the platform
+([place history](place-history.md)). So a deploy may wipe the box, and what it wipes is only what the box held:
+sessions, the agent's working memory of each conversation, and channel state. Two consequences are open (§13): a
+pending wake-up is a commitment and is wiped with them, and a platform whose history cannot be read (Telegram) keeps
+its own record on the box.
+
+Scaling out is the serving goal on AgentCore: a runtime session per conversation instead of one for all, so
+conversations run on separate microVMs, and each scales to zero on its own. It needs the ingress to route each message
+to its conversation's runtime session, and what spans conversations (redelivery dedup, the session list, schedules) to
+live outside any one of them (§13).
 
 ### 10.3 Operations
 
@@ -604,14 +616,15 @@ entries, where the harness records each answer's usage.
 | Area | Today | Proposed |
 |---|---|---|
 | Environment | `deploy.apt` | `environment.apt`, installed by `deploy` (§4) |
-| Contexts | `local` and `github` | Unchanged; later, more storage kinds; writable contexts as long-term memory |
+| Content | `contexts`: `local` and `github` | The same kinds under the `context` group (§13); later, more storage kinds; writable content as long-term memory |
 | Connectors | `tools/`, channel send tools; MCP off when serving | Declared MCP servers with value credentials; #678 (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
 | `invoke` | A function call that ends with its stream | A run that outlives its caller; one terminal event; one event vocabulary (§7) |
 | A busy session | Rejected; each caller waits its own way | `whenBusy`, `followUp` by default (§7.4) |
 | Stopping and steering | `abort`, `steer` and `followUp` on the session | `cancel` on the session; steering through `invoke` (§7.5) |
 | The engine boundary | `Agent` is both what callers use and what pi implements | Two contracts: the agent above, the harness port below (§9.1) |
-| The agent's own changes on a host | Lost at the next deploy | Committed to its repository (§2, #605) |
+| AgentCore | One fixed runtime session for every entry point | A runtime session per conversation (§10.2) |
+| The agent's own changes on a host | Lost at the next deploy | Designed later (#605) |
 
 ## 12. Order of work
 
@@ -621,21 +634,22 @@ entries, where the harness records each answer's usage.
 | 1 | Upgrade to pi 1.0.4 |
 | 2 | MCP connectors (#678), on pi 1.0.4 |
 | 3 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
-| 4 | The agent's update loop (#605) |
-| Later | Evaluation; pi-durable as a harness; AgentCore state across deploys and scaling out; more context kinds |
+| 4 | Scaling out on AgentCore: a runtime session per conversation (§10.2) |
+| Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more content kinds |
 
 ## 13. Open questions
 
-1. The declaration shapes: `environment`, `connectors`, and naming a context's credential.
+1. The declaration shapes: the `context` group, the names of its kinds, `connectors`, and naming a repository's
+   credential.
 2. How `fork.at` names the point a thread starts from: an entry id the service gave out, which each channel would map
    its messages to, or the platform message id, which the service would record on the entry it belongs to. Feishu,
    the only user, holds message ids; today it finds the point by searching the parent's text for them.
 3. The exact event vocabulary and error codes, in the SPEC v1 draft.
-4. The agent's update loop (#605): committing and pushing what it changed, putting a change that needs a restart into
-   service, not breaking itself, and the prompt that explains all of it.
-5. AgentCore: state that survives a deploy, and scaling out past one runtime session.
+4. Scaling out on AgentCore: how the ingress routes each message to its conversation's runtime session, and where what
+   spans conversations lives (redelivery dedup, the session list, schedules).
+5. What on a box is a commitment that must outlive a deploy, such as a pending wake-up, and where it lives instead.
 6. What the port adds for a harness that checkpoints its runs, so a run survives a restart (pi-durable).
-7. Context kinds that are not directories, such as S3.
+7. Content that is not a directory, such as S3.
 8. Acting as the member who asked (§6.3), with permissions.
 
 ## 14. Decisions made in review
@@ -644,12 +658,14 @@ entries, where the harness records each answer's usage.
 - Whoever creates a thing names it: callers name sessions; the service names runs and entries.
 - `invoke` keeps its name and shape; its semantics change as in §7.
 - No new waiting states for human input: steering, follow-ups and cancelling cover it.
-- A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through contexts and
-  connectors.
-- The world an agent acts in is environment, contexts and connectors, separated by the test in §3.2.
+- A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through the context
+  several agents declare.
+- `Agent = model + harness + context`. The context is everything the agent works with, of three kinds: content
+  (files and repositories), connectors (other systems) and environment (what the deployment provides). The test in
+  §3.2 separates content from connectors.
 - The deployed environment is declared (`environment.apt`); locally the machine still lends its environment (§4).
 - A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
-  follow-ups live in memory and share the process's fate (§7.4).
+  follow-ups live in memory, at most 20 per session, and share the process's fate (§7.4).
 - `invoke` is the one way to hand a session a message: `steer` and `followUp` leave the session control plane (§7.4).
 - Cancelling a session withdraws its pending follow-ups (§7.4).
 - After a failed run, pending follow-ups start as usual, until the move to pi-durable revisits it (§7.4).
@@ -669,12 +685,15 @@ entries, where the harness records each answer's usage.
   - marking runs a restart interrupted;
   - `principal`, until permissions are designed (§9.5);
   - an optional `session`, and a structured `result`;
-  - the environment's secrets, runtimes and contexts' needs, and a check of the local machine;
+  - the environment's secrets, runtimes and content's needs, and a check of the local machine;
   - the host-identity credential, OAuth for connectors, and connector commands;
   - cancelling one pending follow-up.
-- The deployed definition stays writable: an agent changing itself is the point. What is missing is its update loop
-  (§2, #605).
-- AgentCore is the main host, because an idle agent costs nothing there. Its limits are worked on (§10.2).
+- The deployed definition stays writable. The agent's update loop is designed later, in #605 (§2); the core now is
+  serving.
+- AgentCore is the main host, because an idle agent costs nothing there. A box is disposable by design: the program
+  comes from the image and what lasts lives in the context, so a deploy wiping the box is expected. Scaling out, a
+  runtime session per conversation, is the serving goal (§10.2).
 - Evaluation comes later.
-- The order: finish this design, upgrade to pi 1.0.4, then MCP (#678) (§12).
+- The order: finish this design, upgrade to pi 1.0.4, then MCP (#678); the update loop and evaluation come later
+  (§12).
 - No field is reserved for a use nobody has designed.
