@@ -72,18 +72,18 @@ init → dev (locally, on the team's channels) → deploy → the team uses it
 Agent = model + harness + context, composed by a definition
   model          what it thinks with, from a model provider
   harness        the loop that runs it: pi (§9.1)
-  context        what it works with, from outside, declared side by side as:
-    contexts       the data it works on and knows: directories and repositories (contexts.json)
-    connectors     the other systems it reaches: APIs, tools, MCP servers (mcp.json, tools/)
-    environment    what it runs in: the commands and runtimes the deployment provides
+  contexts       the data it works on and knows: directories and repositories (contexts.json)
+  connectors     the other systems it reaches: APIs, tools, MCP servers (mcp.json, tools/)
+  environment    what it runs in: the commands and runtimes the deployment provides
   definition     its own directory: who it is and how it works, and which model and context it uses
   remembers in   sessions: conversations
   started by     triggers: requests, messages, events, time, itself
 ```
 
 The formula is the [agent model](agent-model.md)'s. Each of the three is supplied by someone else: the model by a
-model provider, the harness by pi, the context by the repositories, clouds and MCP servers the agent works with.
-FastAgent defines the agent and composes the three, in its definition, and serves the result. Declaring the context
+model provider, the harness by pi, and the context, which is the agent's contexts, connectors and environment, by the
+repositories, clouds and MCP servers it works with. FastAgent defines the agent and composes the three, in its
+definition, and serves the result. Declaring the context
 apart from the definition is what lets a box be wiped and rebuilt from the declarations (§10.2), and what lets a team
 share it across its agents (§1).
 
