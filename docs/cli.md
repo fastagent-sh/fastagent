@@ -49,7 +49,8 @@ fastagent init <dir> [--context <source>]... [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
-example skill, a `fetch-url` example tool, `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
+example skill, `extensions/web-access.ts` (web search and page fetching from `@fastagent-sh/pi-web-access`, which
+`package.json` depends on), `fastagent.config.ts`, `package.json`, `.secrets/.env.example`,
 `.gitignore` and `.secrets/.gitignore`. It runs `npm install` unless `--no-install`, then makes the directory a git
 repository whose first commit is the scaffold, so a change the agent makes to itself can be reviewed and undone. It
 says when it does not: the directory is already inside a git repository that tracks it (one that ignores it, such as
@@ -236,7 +237,7 @@ Runs one tool directly, without a model or server. It gets the agent directory a
 but no session.
 
 ```bash
-fastagent tool fetch-url '{"url":"https://example.com"}'
+fastagent tool reverse '{"text":"hello"}'
 ```
 
 The result goes to stdout; stderr reports its size in model tokens. See

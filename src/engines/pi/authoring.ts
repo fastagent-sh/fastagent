@@ -23,7 +23,7 @@ export interface CreateAgentOptions extends ScaffoldOptions {
   contexts?: ContextDeclaration[];
   /**
    * Install the agent's dependencies, after the scaffold and before its first commit, so the lockfile is in that
-   * commit. The CLI passes `npm install` (its scaffold carries the example tool); without `exampleTool` nothing needs
+   * commit. The CLI passes `npm install` (its scaffold carries web access); without `webAccess` nothing needs
    * installing. A rejection is a failed create: the scaffold is removed again and the error thrown, as when writing
    * the contexts fails, so the directory is empty for a retry. One that reports its failure some other way (the CLI's
    * resolves, and says the install failed) leaves the agent created.
@@ -47,8 +47,9 @@ export interface CreatedAgent {
 
 /**
  * Create an agent in `dir`, which must be new or empty. Every context is checked before anything is written, and the
- * scaffold is removed again when writing the contexts fails. Without `exampleTool` the agent imports nothing at run
- * time, so it runs without `npm install`. The agent is then a git repository whose first commit is what was written:
+ * scaffold is removed again when writing the contexts fails. It runs without `npm install`; with `webAccess`, its web
+ * tools load only once `npm install` has installed `@fastagent-sh/pi-web-access`, and until then are left out with a warning. The
+ * agent is then a git repository whose first commit is what was written:
  * it changes itself, and version control is how its author goes back to a version that worked.
  */
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
@@ -56,7 +57,7 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
   const declarations = options.contexts ?? [];
   for (const [i, declaration] of declarations.entries()) contextName(agentDir, declarations.slice(0, i), declaration);
   const contexts = resolveContexts(agentDir, declarations);
-  const { created, undo } = await scaffoldAgent(agentDir, { exampleTool: options.exampleTool });
+  const { created, undo } = await scaffoldAgent(agentDir, { webAccess: options.webAccess });
   // The contexts were checked above, so a refusal here is one that check could not foresee (the disk changed in
   // between); the scaffold goes with it, or a retry would find "already an agent" holding no contexts.
   if (declarations.length > 0) {

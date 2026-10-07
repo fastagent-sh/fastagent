@@ -2,7 +2,7 @@
 import { lstat, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
-import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
+import { WEB_ACCESS_PACKAGE, baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 import { GitNotInstalled, gitFor } from "../git.ts";
 
@@ -25,10 +25,11 @@ const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
 
 export interface ScaffoldOptions {
   /**
-   * Include `tools/fetch-url.ts`, the example code tool. It imports `@fastagent-sh/fastagent` at run time, so an agent
-   * that has it runs only once `npm install` has installed that package into the agent directory.
+   * Give the agent web access: `extensions/web-access.ts`, which loads {@link WEB_ACCESS_PACKAGE}, and that package in
+   * `package.json`. The agent runs without it installed; its web tools load only once `npm install` has installed
+   * it, and until then are left out with a warning.
    */
-  exampleTool?: boolean;
+  webAccess?: boolean;
 }
 
 /**
@@ -53,11 +54,18 @@ export async function scaffoldAgent(dir: string, options: ScaffoldOptions = {}):
     { rel: ".gitignore", content: baseTemplate("gitignore") },
     { rel: join(SECRETS_DIRNAME, ".gitignore"), content: baseTemplate("secrets.gitignore") },
     { rel: join(SECRETS_DIRNAME, ".env.example"), content: baseTemplate("env.example") },
-    ...(options.exampleTool
-      ? [{ rel: join("tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") }]
+    ...(options.webAccess
+      ? [{ rel: join("extensions", "web-access.ts"), content: baseTemplate("extensions/web-access.ts") }]
       : []),
     // The agent's own manifest, named after its directory.
-    { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
+    {
+      rel: "package.json",
+      content: packageJson(
+        toPackageName(dir),
+        await fastagentVersion(),
+        options.webAccess ? { [WEB_ACCESS_PACKAGE.name]: WEB_ACCESS_PACKAGE.range } : {},
+      ),
+    },
   ];
 
   const shown = displayPath(process.cwd(), dir) ?? dir;

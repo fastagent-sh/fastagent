@@ -19,11 +19,11 @@ const SRC = fileURLToPath(new URL("../src/", import.meta.url));
  * source, which would make every import resolve; a child process run from a temp directory resolves it the way an
  * app that never ran `npm install` there does: not at all.
  */
-function createAndOpen(dir: string, exampleTool: boolean): Promise<string> {
+function createAndOpen(dir: string, webAccess: boolean): Promise<string> {
   const script = `
     import { createAgent } from ${JSON.stringify(join(SRC, "engines/pi/authoring.ts"))};
     import { createPiAgentFromDir } from ${JSON.stringify(join(SRC, "index.ts"))};
-    await createAgent(${JSON.stringify(dir)}, { exampleTool: ${exampleTool} });
+    await createAgent(${JSON.stringify(dir)}, { webAccess: ${webAccess} });
     await createPiAgentFromDir(${JSON.stringify(dir)}).then(() => console.log("opened"), (e) => console.log(e.message));
   `;
   return new Promise((resolve, reject) => {
@@ -50,12 +50,12 @@ describe("authoring API", () => {
     return () => vi.unstubAllEnvs();
   });
 
-  it("an agent createAgent makes opens without npm install; the example tool is what needs it", async () => {
+  it("an agent createAgent makes opens without npm install, web access or not", async () => {
+    // An extension loads when a session starts, so an uninstalled @fastagent-sh/pi-web-access costs the web tools on the first
+    // turn (warned, left out: extensions' own tests), never the open.
     const base = await mkdtemp(join(tmpdir(), "fa-authoring-"));
     expect(await createAndOpen(join(base, "plain"), false)).toBe("opened");
-    expect(await createAndOpen(join(base, "example"), true)).toMatch(
-      /tools\/fetch-url\.ts \(Cannot find package '@fastagent-sh\/fastagent'/,
-    );
+    expect(await createAndOpen(join(base, "web"), true)).toBe("opened");
   });
 
   it("install runs before the first commit; a rejected install removes the scaffold", async () => {
@@ -86,7 +86,7 @@ describe("authoring API", () => {
     const agentDir = join(base, "agent");
 
     const created = await createAgent(agentDir, { contexts: [{ local: app }] });
-    expect(created.created).not.toContain(join("tools", "fetch-url.ts"));
+    expect(created.created).not.toContain(join("extensions", "web-access.ts"));
     // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
     expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
     await access(join(agentDir, ".git"));

@@ -36,7 +36,9 @@ describe(`published ${PACKAGE}@${VERSION}`, () => {
     // --no-install: the scaffold's own npm install would re-fetch the same package for nothing.
     await run(cli, ["init", "demo", "--no-install"], { cwd: dir });
     const agent = join(dir, "demo");
-    for (const file of ["APPEND_SYSTEM.md", "package.json", "tools/fetch-url.ts"]) {
+    // Files every published version writes. What else `init` adds changes between versions (tools/fetch-url.ts became
+    // extensions/web-access.ts), and the probe runs against `latest`, so that is asserted offline in init.test.ts.
+    for (const file of ["APPEND_SYSTEM.md", "package.json"]) {
       expect(await exists(join(agent, file)), `init did not produce ${file}`).toBe(true);
     }
     // The config's EXTENSION belongs to the probed version (0.21.1 wrote .mjs, later ones .ts) — this probe is about

@@ -276,7 +276,7 @@ for the user.
 // From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent context` run.
 function createAgent(
   dir: string,
-  options?: { contexts?: ContextDeclaration[]; exampleTool?: boolean; install?: (dir: string) => Promise<void> },
+  options?: { contexts?: ContextDeclaration[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
 ): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[]; repository: string }>;
 function listContexts(agentDir: string): Promise<ResolvedContext[]>;
 function addContext(agentDir: string, declaration: ContextDeclaration): Promise<{ name: string; contexts: ResolvedContext[] }>;
@@ -286,8 +286,9 @@ class ContextNameError extends Error {}
 
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
 every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
-removes the scaffold again when writing the contexts fails. Without `exampleTool` (the `tools/fetch-url.ts` that
-`init` adds) the agent imports nothing at run time and runs without `npm install`; `install`, when given, runs after
+removes the scaffold again when writing the contexts fails. The agent runs without `npm install`. `webAccess` adds
+what `init` adds: `extensions/web-access.ts` and `@fastagent-sh/pi-web-access` in `package.json`, whose web tools load only once
+it is installed (until then they are left out with a warning); `install`, when given, runs after
 the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
 failed context write. The agent is then a git repository whose first commit is the
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
@@ -436,8 +437,8 @@ raw page of 30 search results from a typical REST API can cost ~45k tokens.
 Return what the model needs, not what the API sent:
 
 - **Project the fields.** A name, a URL and a description usually replace the whole object.
-- **Truncate, and say so.** The scaffolded `tools/fetch-url.ts` is the pattern: a `MAX_TEXT` ceiling
-  plus a `truncated: true` flag, so the model knows the text was cut rather than guessing.
+- **Truncate, and say so.** Cap long text (a `MAX_TEXT` ceiling) and return a `truncated: true` flag with it, so
+  the model knows the text was cut rather than guessing.
 - **Expose the paging knob** (`per_page`, `limit`) as an input, so the model can ask for less.
 
 `fastagent tool <name> '<json>'` reports the size of what the model would receive:

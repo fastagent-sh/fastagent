@@ -77,6 +77,24 @@ Run the tool directly for faster feedback:
 fastagent tool <name> '{"arg":"value"}'
 ```
 
+## `Invalid schema for function '…'`
+
+```text
+Codex error: Invalid schema for function 'fetch-url': In context=('properties', 'url'), 'uri' is not a valid format.
+```
+
+OpenAI's strict tool schemas accept only these string formats: `date-time`, `time`, `date`, `duration`, `email`,
+`hostname`, `ipv4`, `ipv6`, `uuid`. Any other one fails every turn on that provider, so the tool cannot be called
+at all. `z.url()` emits `format: "uri"`: use a pattern instead, which every provider accepts, and validate further in
+`execute` if needed:
+
+```ts
+input: z.object({ url: z.string().regex(/^https?:\/\/\S+$/) }),
+```
+
+An agent made by an older `init` may hold a `tools/fetch-url.ts` with the `z.url()` form: replace that line, or delete
+the tool, since `init` now gives agents `extensions/web-access.ts` instead.
+
 ## Port already in use
 
 Use another port:

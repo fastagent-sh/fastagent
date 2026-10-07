@@ -29,7 +29,7 @@ cd my-agent
 my-agent/
 ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
-├── tools/fetch-url.ts             # an example code tool
+├── extensions/web-access.ts       # web search and page fetching (@fastagent-sh/pi-web-access)
 ├── fastagent.config.ts            # model, contexts, http
 ├── package.json
 ├── .secrets/.env.example          # secrets live here, never committed
@@ -38,7 +38,20 @@ my-agent/
 
 `APPEND_SYSTEM.md` tells the agent to capture improvements as skills, and `writing-great-skills` (from
 [mattpocock/skills](https://github.com/mattpocock/skills)) shows how. Add skills with
-`fastagent add skill <owner/repo/path>`; delete `tools/fetch-url.ts` if you do not want it.
+`fastagent add skill <owner/repo/path>`.
+
+`extensions/web-access.ts` gives the agent `web_search`, `fetch_content` (readable pages, PDFs, GitHub repositories),
+`get_search_content` and `source_check`, from `@fastagent-sh/pi-web-access`: fastagent's build of the pi package
+[pi-web-access](https://pi.dev/packages/pi-web-access) that keeps each conversation's results its own when the agent
+serves several at once ([fork](https://github.com/fastagent-sh/pi-web-access); the fix is proposed upstream). Where the
+model can add tools mid-conversation, a session starts with `web_enable` only, and the model calls it to make the
+others available, so a turn's first web tool event is often `web_enable`. It needs no key: searches go to Exa, or to
+OpenAI's search when you sign in with a ChatGPT subscription. Fetches of private and reserved addresses are blocked by
+default. For more providers, put their keys (`BRAVE_API_KEY`, `EXA_API_KEY`, `GEMINI_API_KEY`, … see the package
+README) in `.secrets/.env`, which travels with a deploy; `~/.pi/agent/web-search.json` on the serving machine works
+too, but stays on that machine. The file loads the package's tools only: its terminal commands (`/websearch`,
+`/curator`, `/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not
+offered to callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
 
 **To have it work on a project**, declare the project as a context: `fastagent init my-agent --context ~/code/app`,
 or later `fastagent context add ~/code/app`. The agent stays in its own directory and is told where the project is;
@@ -86,9 +99,9 @@ curl -N -X POST localhost:8787/invoke \
 The response is Server-Sent Events. Events include `text`, optional `thinking`, tool events, and exactly one terminal `completed` or `failed`.
 
 ```txt
-data: {"type":"tool_started","id":"tool-1","name":"fetch-url","args":{"url":"https://example.com"}}
+data: {"type":"tool_started","id":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
 
-data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"url":"https://example.com/","text":"Example Domain …"}}}
+data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"content":[{"type":"text","text":"# Example Domain …"}]}}
 
 data: {"type":"completed"}
 ```
@@ -107,12 +120,6 @@ Run one agent turn without a server:
 
 ```bash
 fastagent invoke "Summarize APPEND_SYSTEM.md in one sentence"
-```
-
-Run one tool without a model:
-
-```bash
-fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
 ## 5. Add a tool

@@ -65,7 +65,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       agentDir,
       contexts: [],
       appendSystemPrompt: join(agentDir, "APPEND_SYSTEM.md"),
-      tools: expect.arrayContaining(["fetch-url", "plan-batches"]),
+      tools: expect.arrayContaining(["plan-batches"]),
       skills: expect.arrayContaining([expect.objectContaining({ name: "review-batches" })]),
       schedules: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],
       toolError: null,
