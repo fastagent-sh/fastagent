@@ -1,6 +1,6 @@
 ---
 title: Agent model
-description: "What an agent is, as a program: model + harness + context, the instance that runs it, what it works on and what it knows, and how each kind of context reaches every place an agent runs. The user-facing vocabulary every later design builds on."
+description: "What an agent is, as a program: model + definition + context, the harness that runs it, the instance that holds its state, what it works on and what it knows, and how each kind of context reaches every place an agent runs. The user-facing vocabulary every later design builds on."
 type: design-doc
 status: implemented
 ---
@@ -17,7 +17,7 @@ rewritten, and behaves the same wherever it runs.
 ## 1. The model
 
 ```text
-Agent    = model + harness + context      the definition
+Agent    = model + definition + context   what an author declares; a harness runs it
 Instance = runtime state                  one Agent's life in one place
 ```
 
@@ -25,43 +25,44 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 
 | Concept | Is | Contains |
 |---|---|---|
-| **Agent** | The definition, the way a program is | Its model, harness and contexts, as declared in its directory |
+| **Agent** | What an author creates, the way a program is | Its model, definition and contexts, as declared in its directory |
 | Model | What the agent thinks with | The default model and thinking level. Credentials are not part of it |
-| Harness | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
+| Definition | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
+| Harness | The loop that runs every agent | pi, which FastAgent provides. It is not the author's to write; the word means what it means across the ecosystem |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
 Relations:
 
 - One Agent can run as several instances (on a laptop, on a host). Each has its own runtime state.
 - One context can be the data of several Agents (an engineer's and a PM's agent on one repository).
-- An instance runs exactly one Agent, and exactly one copy of its harness.
+- An instance runs exactly one Agent, and exactly one copy of its definition.
 
 ### What this layer guarantees
 
 Every instance of an Agent, given the same version of its definition, runs the same program on contexts
 resolved the same way: the same declarations, the same names, the same working directory (its own), the same
-`AGENTS.md`, and the same skills from its harness and its contexts. A repository an instance clones is brought to its
+`AGENTS.md`, and the same skills from its definition and its contexts. A repository an instance clones is brought to its
 declared version at each start while it holds nothing of the agent's (§3). A checkout the user names with `local` is the exception: it
 is read as the user left it, and a difference from the declared version is reported, not corrected. A laptop instance and a hosted one behave the same on the same data.
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
-templates, `.agents/skills` found above the agent directory, installed pi packages, engine settings, the programs
+templates, `.agents/skills` found above the agent directory, installed pi packages, harness settings, the programs
 on its `PATH`) comes from that machine wherever the agent runs, and is not compared between instances
-([core](core.md) §5). A skill an agent must have everywhere belongs in its harness or in a context. A machine
+([core](core.md) §5). A skill an agent must have everywhere belongs in its definition or in a context. A machine
 never lends a system prompt: its `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are not read, because a prompt
 from someone's machine would make the agent theirs.
 
 Keeping the data itself the same across instances afterwards is not this layer's job. It belongs to
 collaboration and synchronization (§8): git for a repository, a context service for what is not one.
 
-## 2. Harness and context: program and data
+## 2. Definition and context: program and data
 
-The line between harness and context is the line between a program and the data it works on, not who may write
+The line between definition and context is the line between a program and the data it works on, not who may write
 them (§6) and not how widely a change is seen.
 
-- **Harness** is what the agent is and how it works: its identity, its skills and tools, the channels it
-  answers on, the work it does on a schedule. It moves with the agent. Point the same harness at another
+- **Definition** is what the agent is and how it works: its identity, its skills and tools, the channels it
+  answers on, the work it does on a schedule. It moves with the agent. Point the same definition at another
   project and it is the same agent working on different data.
 - **Context** is what the agent works on or knows, and what that project tells it. It stays with the project.
 
@@ -70,7 +71,7 @@ they belong to the project, not to the agent, the way a repository's `.eslintrc`
 still the repository's file. An identity of the agent's own belongs in `SYSTEM.md`; `APPEND_SYSTEM.md` holds
 standing instructions added to pi's default (below). One reading holds everywhere: an `AGENTS.md` is written for
 whoever works in its directory. The one in a project is for the agent working on that project. The one in an
-agent's own directory is harness: it is for whoever works on the agent, the coding agent that develops it and the
+agent's own directory belongs to the definition: it is for whoever works on the agent, the coding agent that develops it and the
 agent itself, which works in that directory and improves itself there. So it is loaded on every turn, before the
 contexts' ones, the way a harness loads its working directory's `AGENTS.md`. It says how this agent is built and how
 to change it; what the agent does for its users belongs in `APPEND_SYSTEM.md`.
@@ -138,12 +139,12 @@ FastAgent writes no identity line of its own, which settles two things:
 it is about working in `app`, and the name says so. It never collides with the agent's own `deploy`, or with
 another context's, so contexts need no order and no precedence among them. Inside one context, `.pi/skills/deploy`
 wins over `.agents/skills/deploy`, and the two are reported like any two places holding one name. Renaming a context renames its skills. That holds
-because no other skill may have a `/` in its name. pi only warns about one, so FastAgent refuses a harness skill
+because no other skill may have a `/` in its name. pi only warns about one, so FastAgent refuses a definition skill
 named that way and leaves such a machine skill out, saying so; the slash stays the namespace's. The part after it keeps the Agent Skills
 grammar; the whole name is FastAgent's convention.
 
 **One directory, two readers.** The agent directory is also where its author develops it, often with pi itself.
-pi run there treats it as a project and loads the same `.pi/` files and `.agents/skills/` the harness reads: a
+pi run there treats it as a project and loads the same `.pi/` files and `.agents/skills/` the served agent reads: a
 `.pi/SYSTEM.md` makes the author's development session the agent, and a development skill kept in
 `.agents/skills/` ("how to write a fastagent tool") ships with the agent. The root spellings (`SYSTEM.md`,
 `skills/`, `prompts/`) are invisible to pi as a coding agent, which is what keeps the two readers apart; `.pi/`
@@ -156,10 +157,10 @@ changes itself. What only the development session should read goes where pi look
 
 ### They are kept apart
 
-**A declared context never contains the agent directory, and never sits inside it.** A harness and a context
+**A declared context never contains the agent directory, and never sits inside it.** A definition and a context
 ask for opposite things when a new version arrives:
 
-| | Harness | A writable context |
+| | Definition | A writable context |
 |---|---|---|
 | A new version | Is a release: every instance must receive it | Must not overwrite what the instance wrote |
 | Lifetime | Moves with the agent, across projects | Stays with the project, across agents |
@@ -169,7 +170,7 @@ the instance's data, and not copying leaves the release behind. So the two live 
 only by the declaration. An agent's directory is its own, and often its own repository:
 
 ```text
-~/agents/reviewer/            the Agent: harness, its declaration, its local instance (.state/, .secrets/)
+~/agents/reviewer/            the Agent: its definition and declarations, its local instance (.state/, .secrets/)
 ~/code/app/                   a context: the project, which holds no agent
 ```
 
@@ -179,7 +180,7 @@ itself are its own, kept in its storage (`.contexts/`, §3); they are not declar
 definition.
 
 A git repository can merge both sides, so an agent committed inside the repository it works on is coherent in
-principle: one repository, one clone per instance, the harness running from it. It is not supported yet. Starting
+principle: one repository, one clone per instance, the definition running from it. It is not supported yet. Starting
 strict leaves that option open; allowing it first and taking it back would break the people relying on it.
 
 ## 3. Contexts
@@ -218,7 +219,7 @@ type whose home the host reaches: a repository today; object storage, or a servi
 further types (§8). The declaration says where the data lives; how each place reaches it (a clone, a sync, a mount)
 is that place's.
 
-**The agent directory is the one local directory that reaches a host, and it does so as the harness.** A release
+**The agent directory is the one local directory that reaches a host, and it does so as the definition.** A release
 carries it; the next replaces it whole, the same on every instance (§2). So what an author wants on every instance,
 read but not kept (reference material, examples), belongs in the agent directory and ships with each release. What
 the agent works on and must keep, on a host, needs a context with a home.
@@ -355,7 +356,7 @@ merging (§8).
 
 ## 6. An agent changes itself
 
-An agent may change its harness and the contexts it works on while it runs: write a skill, edit its prompt, add
+An agent may change its definition and the contexts it works on while it runs: write a skill, edit its prompt, add
 a tool, update `AGENTS.md`, change the project. Agent harnesses are built for this: pi's own README opens with
 "Ask Pi to create the prompt templates, skills, extensions, and themes you need".
 
@@ -398,8 +399,8 @@ appears (and again if it is repaired and then broken again), and every session's
 (`extension_errors`), so an agent that wrote it can repair it.
 
 A change to a context reaches other instances the way that context synchronizes. A change an agent on a host
-makes to its harness lasts until the next deployment ships the definition again: keeping it is a question of
-where the harness comes from, which is distribution (§8). Recording a self-change, reviewing it and reverting it
+makes to its definition lasts until the next deployment ships it again: keeping it is a question of where the
+definition comes from, which is distribution (§8). Recording a self-change, reviewing it and reverting it
 belong to the tools that keep the history, not to this layer.
 
 Whether an agent may change its own default model is open, pending the definitions in pi 1.0 and pi durable.
@@ -412,6 +413,7 @@ Whether an agent may change its own default model is open, pending the definitio
 | Instance | deployment, for a running agent | Deployment is how an instance gets onto a host (§8) |
 | works on / knows | primary context | What users see says what the agent may do with a context. No context is special |
 | (nothing) | workspace | Not a concept any more: the working directory is the agent's own directory, and where an instance keeps what it fetches is storage |
+| Definition | harness, for an agent's own files | Across the ecosystem a harness is the loop that runs an agent (pi). What an author writes is the definition |
 | `SYSTEM.md`, `APPEND_SYSTEM.md` | `persona.md` | `persona.md` replaced only the identity line; `SYSTEM.md` replaces pi's whole default and `APPEND_SYSTEM.md` adds to it, so neither is the same. `persona.md` is refused, naming both and when to use each |
 
 A client that calls the running thing an agent (duang) maps it to an instance. [Session control](session-control.md) still
@@ -424,9 +426,9 @@ These belong to other layers, the way a program does not do its own package mana
 - **Collaboration and synchronization.** Recording an agent's changes, branches, conflicts, reverting a
   self-change, how changes in a `github` context get back to the repository, and merging a clone with what the
   repository gained. Done by external tools (git) or a future context service, not by the agent layer.
-- **Distribution.** Sharing and copying an Agent, and what of its directory goes with it; reusing a harness by
-  copying it into another Agent; and where an instance's harness comes from. A context has a source type; a
-  harness can have one too: the directory an author points at, a copy shipped with a deployment, or later a clone
+- **Distribution.** Sharing and copying an Agent, and what of its directory goes with it; reusing a definition by
+  copying it into another Agent; and where an instance's definition comes from. A context has a source type; a
+  definition can have one too: the directory an author points at, a copy shipped with a deployment, or later a clone
   of the agent's own repository, from which a hosted agent's changes to itself survive the next deployment.
 - **Deployment.** Running an instance on a host, and how each host reaches each context type (a clone, a sync, a
   mount), where what it fetches lives, and what a redeploy reports. Separating the program from its contexts, and

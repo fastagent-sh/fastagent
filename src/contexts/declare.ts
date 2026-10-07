@@ -126,8 +126,9 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
 }
 
 /**
- * A context and the agent directory are kept apart (agent-model.md §2): a harness is released, a writable context is
- * kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks it again of the real paths.
+ * A context and the agent directory are kept apart (agent-model.md §2): a definition is released, a writable context
+ * is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks it again of the real
+ * paths.
  */
 export function nestingError(agentDir: string, location: string, name: string): string | undefined {
   if (!isAbsolute(location)) throw new Error(`nestingError: "${location}" is not absolute`);

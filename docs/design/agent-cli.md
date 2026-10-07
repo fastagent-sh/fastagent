@@ -172,7 +172,7 @@ knows     papers    local ~/papers                stays on this machine; the dep
   clone goes with it, and preflight says what of the agent's work is lost.
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
   §3): preflight names it, a warning for one the agent works on, and the host's start names it again. The agent
-  directory does reach a host, as the harness each release replaces.
+  directory does reach a host, as the definition each release replaces.
 - **A `github` context's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 

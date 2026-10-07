@@ -99,7 +99,7 @@ for, and no environment variable selects an agent.
   from every non-agent. `SYSTEM.md`, `skills/`, `tools/`, `channels/` and `schedules/` are each optional and generic
   enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
   signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
-- **A context and the agent directory are kept apart.** A harness is released to every instance; a writable
+- **A context and the agent directory are kept apart.** A definition is released to every instance; a writable
   context must keep what an instance wrote. One directory cannot be both, so nesting is refused at load, on the
   declared paths and again on the real ones.
 
@@ -171,7 +171,7 @@ deleted when its stages landed:
 | Question | Chosen | Not chosen, and why |
 |---|---|---|
 | When contexts are resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
-| Whether a local directory reaches a host | No: a context reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the harness, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
+| Whether a local directory reaches a host | No: a context reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the definition, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
 | How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would need ours re-added by hand |
 | How `fastagent context` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
 | Where an agent's work goes, apart from its definition | A context it works on, as the prompt directs; the working directory stays the agent's own directory | A context declared `workdir` (#716; built in #719, closed). It differs from a writable context in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate pi's one cwd from the agent directory in every reader. Reopen with a measurement of results landing in the definition |

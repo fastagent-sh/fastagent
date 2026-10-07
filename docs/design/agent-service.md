@@ -15,7 +15,7 @@ review; everything else is a proposal to settle before implementation.
 Three things are hard in serving an agent, and this design spends itself on them:
 
 1. **Work that outlives its caller.** Work arrives from many entry points, has side effects, and keeps running when
-   the caller goes away. Surviving a restart as well needs an engine that checkpoints its runs (§9.3).
+   the caller goes away. Surviving a restart as well needs a harness that checkpoints its runs (§9.3).
 2. **Disposable boxes.** A deploy wipes a box, and scaling out adds boxes and removes them. So the program comes from
    the image, what has to last lives outside the box, and each conversation reaches the box that holds it (§10.2).
 3. **What the agent works with, on a host.** The contexts it works on, the connectors it reaches, the environment it
@@ -47,7 +47,7 @@ Outside FastAgent:
 
 - a unit above agents: a team, its members, shared secrets, one deployment target. Sharing happens through the
   contexts and connectors several agents declare (§3);
-- the model and the agent loop, which an engine provides (§9.1);
+- the model and the agent loop, which a harness provides (§9.1);
 - a hosting platform of its own: agents deploy to existing hosts (§10);
 - waiting states for human input: steering, follow-ups and cancelling cover it.
 
@@ -70,17 +70,18 @@ init → dev (locally, on the team's channels) → deploy → the team uses it
 ```text
 Agent
   model          what it thinks with
-  harness        the program: who it is and how it works, which is its own directory
+  definition     the program: who it is and how it works, which is its own directory
   context        the data it works on and knows: directories and repositories
   connectors     the other systems it reaches: APIs, tools, MCP servers
   environment    what it runs in: the commands and runtimes the deployment provides
   remembers in   sessions: conversations
   started by     triggers: requests, messages, events, time, itself
+run by a harness: the loop that runs every agent, pi today (§9.1)
 ```
 
-Model, harness and context are the [agent model](agent-model.md)'s; connectors and environment stand beside the
-context, each declared on its own. Declaring all three apart from the harness is what lets a box be wiped and rebuilt
-from the declarations (§10.2), and what lets a team share them across its agents (§1).
+Model, definition and context are the [agent model](agent-model.md)'s; connectors and environment stand beside the
+context, each declared on its own. Declaring all three apart from the definition is what lets a box be wiped and
+rebuilt from the declarations (§10.2), and what lets a team share them across its agents (§1).
 
 ### 3.1 Why three: every action has three parts
 
@@ -140,12 +141,12 @@ They are uses of the three, not further categories.
 |---|---|
 | Knowledge | Reading contexts, and querying connectors (a search) |
 | Memory | Long-term: writing to a writable context. A conversation's: its session (§3.5) |
-| Skill | Know-how stored in the harness or a context, executed in the environment, possibly calling connectors |
-| Tool | How an action is presented to the model. `read`, `write` and `bash` act on the environment and contexts. A code tool is part of the harness, and the system it reaches is a connector; an MCP tool is a connector's |
+| Skill | Know-how stored in the definition or a context, executed in the environment, possibly calling connectors |
+| Tool | How an action is presented to the model. `read`, `write` and `bash` act on the environment and contexts. A code tool is part of the definition, and the system it reaches is a connector; an MCP tool is a connector's |
 
 ### 3.4 The agent's own directory
 
-An agent's own directory is its harness: who it is and how it works. It stays writable on a host as on a laptop; how
+An agent's own directory is its definition: who it is and how it works. It stays writable on a host as on a laptop; how
 what the agent changes there is kept is designed later (§2).
 
 ### 3.5 Sessions and triggers
@@ -242,7 +243,7 @@ whoever steers it through a prompt injection. Removing values from the shell's e
 that read them and protect nothing, so the shell keeps inheriting the process environment.
 
 Isolation needs a boundary: the environment in a sandbox that holds no credentials, and the calls that need one made by
-the service outside it. That is a later level, on the engine's execution-environment seam (pi-durable runs its
+the service outside it. That is a later level, on the harness's execution-environment seam (pi-durable runs its
 built-in tools through a pluggable `ExecutionEnv`).
 
 Until then, give an agent only credentials you would hand it directly, scoped as narrowly as the other system allows:
@@ -307,7 +308,7 @@ type Invocation = AsyncIterable<SessionEvent>;
 /** `run_settled`'s data. */
 interface RunSettled {
   outcome: Outcome;
-  /** What the run spent, as the engine reports it: tokens and cost. */
+  /** What the run spent, as the harness reports it: tokens and cost. */
   usage: Usage;
 }
 
@@ -336,7 +337,7 @@ compaction events. The one thing missing is added: how a busy invoke was taken.
 
 Proposed error codes, one set for every call: `invalid_request`, `unsupported`, `not_found`, `busy` (its `details`
 carry the running run's id), `nothing_to_compact`, `missing_model`, `auth_required`, `model_error`, `partial_update`,
-`unavailable`, `internal`. An engine may add codes under its own prefix; a client that meets an unknown code acts on
+`unavailable`, `internal`. A harness may add codes under its own prefix; a client that meets an unknown code acts on
 `retryable`.
 
 A process that stops takes its runs with it: their streams end without `run_settled`, and what they recorded stays in
@@ -407,7 +408,7 @@ only those three returned it. The other session operations are unchanged.
 | §5 | One event vocabulary, the session stream's (§7.3) |
 | §6 | MUST 1 becomes "exactly one `run_settled`, unless the process stops". MUST 3 changes: a caller that stops reading detaches, and cancelling the session stops the run. Portable conformance is unchanged |
 | §8 | The lineage, identity and source rows are replaced by §7.2; the mid-turn steering row by `whenBusy` (§7.4) and `cancel` (§7.5) |
-| New | The engine port (§9.1): what an engine implements, beside what a caller uses |
+| New | The harness port (§9.1): what a harness implements, beside what a caller uses |
 
 ## 8. Interfaces
 
@@ -489,30 +490,31 @@ entries. Clients live outside this repository.
 
 ## 9. Architecture
 
-### 9.1 Two contracts: the agent and the engine
+### 9.1 Two contracts: the agent and the harness
 
 ```text
 Callers ──► Agent (SPEC v1)      invoke; sessions
               │  the run layer: whenBusy, cancel, a run outliving its caller, the terminal event. Written once
               ▼
-            Engine (the port)    run one turn on a session and steer it; the session operations
+            Harness (the port)   run one turn on a session and steer it; the session operations
               │
               ▼
             pi today; pi-durable, the Claude Agent SDK or Codex later
 ```
 
-The agent's semantics are written once, above a port that an engine implements. Two ways to place them:
+The agent's semantics are written once, above a port that a harness implements. Two ways to place them:
 
-| | A: the run layer above an engine port | B: each engine implements it |
+| | A: the run layer above a harness port | B: each harness implements it |
 |---|---|---|
-| The semantics | Written once, the same on every engine | Written per engine, and the copies drift |
-| An engine without durability, which is most of them | Works as it is | Needs the same layer written for it anyway |
-| A durable engine (pi-durable) | Plugs in below; recovering a run from a checkpoint is added to the port when it is designed | Fits directly |
+| The semantics | Written once, the same on every harness | Written per harness, and the copies drift |
+| A harness without durability, which is most of them | Works as it is | Needs the same layer written for it anyway |
+| A durable harness (pi-durable) | Plugs in below; recovering a run from a checkpoint is added to the port when it is designed | Fits directly |
 
 A wins. Today's `Agent`, where `invoke` runs one turn and a caller that stops reading aborts it, plus the session
 control plane, is already close to the port: the pi implementation and its conformance suite become the first
-engine, and the run layer is new code above them. The port's turn operation gets its own name (`run`), so `invoke`
-keeps one meaning.
+harness, and the run layer is new code above them. The port's turn operation gets its own name (`run`), so `invoke`
+keeps one meaning. The code and the SPEC call this layer the engine today (`src/engines/`, "engine-neutral"); they
+take the name harness when the port is drawn out (§12, step 3).
 
 A running turn offers the layer one operation, `steer`. Follow-ups are the layer's, run as the next turn, and stopping
 a turn is the `AbortSignal` passed to `run`. Steering stays in the port because only the loop knows where its turns
@@ -525,8 +527,8 @@ follow-up.
 Entry points    CLI · SDK · HTTP/SSE · channels · schedules · wake
                   ↓ every one calls invoke(scope, prompt, options)
 Agent           the run layer · session control · triggers (the scheduler) · credentials
-                  ↓ the engine port
-Engine          pi today; others later
+                  ↓ the harness port
+Harness         pi today; others later
                   ↓ storage: the state root (a filesystem today)
 Works with      Contexts (.contexts/ clones) · Connectors (tools, MCP) · Environment (the image, or the machine)
 ```
@@ -548,7 +550,7 @@ names. Scaling out keeps that affinity by giving each conversation its own runti
 
 The service never reruns anything: a run's tools may already have had effects (§3.1, invariant 3). A caller that owes
 an answer may invoke again; the channels do, from their turn stores, and bound their replays. A run that survives a
-restart needs an engine that checkpoints it, such as pi-durable (§13).
+restart needs a harness that checkpoints it, such as pi-durable (§13).
 
 ### 9.4 Where state lives
 
@@ -612,7 +614,7 @@ live outside any one of them (§13).
 ### 10.3 Operations
 
 `logs` shows what the service printed. What an agent is doing is each session's `state()`, and what it cost is in its
-entries, where the engine records each answer's usage.
+entries, where the harness records each answer's usage.
 
 ## 11. What changes in FastAgent
 
@@ -626,7 +628,7 @@ entries, where the engine records each answer's usage.
 | `invoke` | A function call that ends with its stream | A run that outlives its caller; one terminal event; one event vocabulary (§7) |
 | A busy session | Rejected; each caller waits its own way | `whenBusy`, `followUp` by default (§7.4) |
 | Stopping and steering | `abort`, `steer` and `followUp` on the session | `cancel` on the session; steering through `invoke` (§7.5) |
-| The engine boundary | `Agent` is both what callers use and what pi implements | Two contracts: the agent above, the engine port below (§9.1) |
+| The harness boundary | `Agent` is both what callers use and what pi implements | Two contracts: the agent above, the harness port below (§9.1) |
 | AgentCore | One fixed runtime session for every entry point | A runtime session per conversation (§10.2) |
 | The agent's own changes on a host | Lost at the next deploy | Designed later (#605) |
 
@@ -637,9 +639,9 @@ entries, where the engine records each answer's usage.
 | 0 | Finish this design |
 | 1 | Upgrade to pi 1.0.4 |
 | 2 | MCP connectors (#678), on pi 1.0.4 |
-| 3 | SPEC v1 and the engine port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
+| 3 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
 | 4 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
-| Later | The agent's update loop (#605); evaluation; pi-durable as an engine; more context kinds |
+| Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more context kinds |
 
 ## 13. Open questions
 
@@ -651,7 +653,7 @@ entries, where the engine records each answer's usage.
 4. Scaling out on AgentCore: how the ingress routes each message to its conversation's runtime session; how state is
    split by writer (each conversation's own, and what spans conversations: redelivery dedup, the session list,
    schedules); and which API storage holds each part. Pending wake-ups are part of it: a deploy must not wipe them.
-5. What the port adds for an engine that checkpoints its runs, so a run survives a restart (pi-durable).
+5. What the port adds for a harness that checkpoints its runs, so a run survives a restart (pi-durable).
 6. Contexts that are not directories, such as S3.
 7. Acting as the member who asked (§6.3), with permissions.
 
@@ -664,8 +666,11 @@ entries, where the engine records each answer's usage.
 - A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through the contexts
   and connectors several agents declare.
 - An agent works with three things, declared side by side: contexts (the data it works on and knows), connectors (the
-  other systems it reaches) and environment (what the deployment provides). Model, harness and context keep the agent
-  model's meaning. The test in §3.2 separates contexts from connectors.
+  other systems it reaches) and environment (what the deployment provides). The test in §3.2 separates contexts from
+  connectors.
+- A harness is the loop that runs an agent (pi, later others), as the ecosystem uses the word. An agent's own
+  directory is its definition: `Agent = model + definition + context` in the agent model, which called it the harness
+  until this review.
 - The deployed environment is declared (`environment.apt`); locally the machine still lends its environment (§4).
 - A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
   follow-ups live in memory, at most 20 per session, and share the process's fate (§7.4).
@@ -674,13 +679,13 @@ entries, where the engine records each answer's usage.
 - After a failed run, pending follow-ups start as usual, until the move to pi-durable revisits it (§7.4).
 - Channels drop their busy wait. Whether they keep their own queue is decided when they move; their turn store stays
   (§7.4).
-- `cancel` replaces `abort` and stops everything a session is doing (§7.5). A running turn offers the engine port
+- `cancel` replaces `abort` and stops everything a session is doing (§7.5). A running turn offers the harness port
   only `steer`; stopping it is the `AbortSignal` given to `run` (§9.1).
 - Steering and follow-ups move into `invoke` as `whenBusy`, reversing the SPEC §8 "Mid-turn steering" row, which kept
   them on the session control plane (§7.6).
 - Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The shell keeps inheriting
   the process environment; isolation waits for a sandboxed environment (§6.4).
-- The agent's semantics are written once, above an engine port, so another engine can be added (§9.1).
+- The agent's semantics are written once, above a harness port, so another harness can be added (§9.1).
 - Removed or deferred after a first-principles review, because nothing needs them yet:
   - a ledger of invocations, listing them, and attaching to one by id with replay: a client reconnects by observing
     the session (§7.1);
