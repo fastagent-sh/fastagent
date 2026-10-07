@@ -21,11 +21,11 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const read = await Promise.resolve()
     .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd())))
     .catch(failStartup);
-  // The CLI scaffold carries the example tool, which needs the `npm install` createAgent runs before the first commit.
+  // The CLI scaffold carries web access, which needs the `npm install` createAgent runs before the first commit.
   let installFailed = false;
   const { created, contexts, repository } = await createAgent(dir, {
     contexts: read.map((source) => source.declaration),
-    exampleTool: true,
+    webAccess: true,
     ...(opts.install
       ? {
           install: async (agentDir: string) => {

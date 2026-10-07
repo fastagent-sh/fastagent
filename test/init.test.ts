@@ -23,6 +23,7 @@ import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../s
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
+import { PI_WEB_ACCESS_RANGE } from "../src/scaffold/templates.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -51,14 +52,14 @@ function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdent
 describe("init: scaffoldAgent", () => {
   it("scaffolds a COMPLETE agent INTO the directory it names", async () => {
     const dir = join(await freshDir(), "reviewer");
-    const { created } = await scaffoldAgent(dir, { exampleTool: true });
+    const { created } = await scaffoldAgent(dir, { webAccess: true });
     expect(created.sort()).toEqual(
       [
         "APPEND_SYSTEM.md",
         join("skills", "writing-great-skills", "SKILL.md"),
         join("skills", "writing-great-skills", "GLOSSARY.md"),
         join("skills", "writing-great-skills", "LICENSE"),
-        join("tools", "fetch-url.ts"),
+        join("extensions", "web-access.ts"),
         "fastagent.config.ts",
         "package.json",
         ".gitignore",
@@ -97,7 +98,7 @@ describe("init: scaffoldAgent", () => {
       if (line.trim() !== "") expect(line.startsWith("#")).toBe(true); // every non-blank line is a comment
     }
 
-    // package.json is ESM with the tool's deps, named after the agent's directory.
+    // package.json is ESM with what the agent imports, named after the agent's directory.
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
     expect(pkg.type).toBe("module");
     expect(pkg.name).toBe("reviewer");
@@ -109,8 +110,11 @@ describe("init: scaffoldAgent", () => {
         version: string;
       }
     ).version;
-    expect(pkg.dependencies).toEqual({ "@fastagent-sh/fastagent": `^${realVersion}` });
-    expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@fastagent-sh/fastagent"');
+    expect(pkg.dependencies).toEqual({
+      "@fastagent-sh/fastagent": `^${realVersion}`,
+      "pi-web-access": PI_WEB_ACCESS_RANGE, // what extensions/web-access.ts loads
+    });
+    expect(await readFile(join(dir, "extensions", "web-access.ts"), "utf8")).toContain('from "pi-web-access"');
     const standing = await readFile(join(dir, "APPEND_SYSTEM.md"), "utf8");
     expect(standing).toContain("Use only the tools actually listed in your system prompt");
     expect(standing).not.toMatch(/workspace/i);
@@ -302,8 +306,8 @@ describe("init: scaffoldAgent", () => {
     expect(out).toMatch(/^ {4}cd my-agent$/m);
     expect(out).toMatch(/fastagent dev/);
     expect(await exists(join(base, "my-agent", "APPEND_SYSTEM.md"))).toBe(true);
-    // The CLI's scaffold carries the example tool (it installs what that tool imports); the API's does not by default.
-    expect(await exists(join(base, "my-agent", "tools", "fetch-url.ts"))).toBe(true);
+    // The CLI's scaffold carries web access (it installs the package that loads); the API's does not by default.
+    expect(await exists(join(base, "my-agent", "extensions", "web-access.ts"))).toBe(true);
 
     // No directory is a usage error: an agent is a directory of its own, so there is no default to guess.
     expect(await cliInit(["init", "--no-install"], await freshDir())).toMatch(/missing required argument/);

@@ -21,13 +21,16 @@ export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
 /** package.json for the complete agent. */
-export function packageJson(name: string, version: string): string {
+/** The pi package `extensions/web-access.ts` loads: the range a new agent depends on. */
+export const PI_WEB_ACCESS_RANGE = "^0.37.0";
+
+export function packageJson(name: string, version: string, extra: Record<string, string> = {}): string {
   return `${JSON.stringify(
     {
       name,
       private: true,
       type: "module",
-      dependencies: { "@fastagent-sh/fastagent": `^${version}` },
+      dependencies: { "@fastagent-sh/fastagent": `^${version}`, ...extra },
     },
     null,
     2,
