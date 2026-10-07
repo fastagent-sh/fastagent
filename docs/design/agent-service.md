@@ -48,7 +48,7 @@ Outside FastAgent:
   contexts and connectors that several agents declare;
 - the model and the agent loop, which a harness provides (§9.1);
 - a hosting platform of its own: agents deploy to existing hosts (§10);
-- waiting states for human input: steering, follow-ups and aborting stay as they are.
+- waiting states for human input: steering, follow-ups and aborting cover it.
 
 ## 2. The loop
 
@@ -270,10 +270,10 @@ changes: it becomes a durable unit of work, an **invocation**, which the service
 | Identity | None on the data plane; the observation plane reports a `runId` | The service mints an invocation id and reports it in the first event. It is the run id the observation plane already reports |
 | Reattach | Impossible | Any client attaches by id, from a cursor |
 | Retries | A retry can run the work twice | `idempotencyKey`: the same key returns the same invocation |
-| A busy session | Fails with `session_busy`; channels poll and retry, schedules skip | Rejected with `busy`, which carries the running invocation's id (§7.4) |
+| A busy session | Fails with `session_busy`. Channels queue their own turns and poll while another caller's run holds the session; schedules skip; wake-ups retry | The invoke says what its message is: `followUp` (the default) runs it next, `steer` joins the running invocation, `reject` answers `busy` (§7.4) |
 | How it ends | Two terminal events, `completed` and `failed` | One `settled` event: the outcome and the usage |
 
-Steering, follow-ups and aborting a run stay as they are.
+Steering and following up become ways to invoke (§7.4); aborting stays.
 
 ### 7.2 Scope
 
@@ -294,9 +294,14 @@ interface Scope {
 
 interface InvokeOptions {
   idempotencyKey?: string;
+  /** What this message is when the session is running another invocation (§7.4). Default: "followUp". */
+  whenBusy?: "followUp" | "steer" | "reject";
 }
 
-/** Begins with `accepted` (the invocation id, the session) and ends with `settled`. */
+/**
+ * Begins with `accepted` (the invocation id, the session, and whether it runs now, waits as a follow-up, or joined the
+ * running invocation) and ends with `settled`.
+ */
 type Invocation = AsyncIterable<InvokeEvent>;
 ```
 
@@ -336,7 +341,7 @@ no `accepted`, and over HTTP it is an error status instead of a stream.
 
 One event vocabulary serves the invocation's stream and a session's observation stream, so the same thing has one
 name in both. Proposed: `accepted`, `user_message`, `text_delta`, `thinking_delta`, `message_finished`,
-`tool_started`, `tool_progress`, `tool_finished`, `queue_changed` (the run's steering and follow-up messages),
+`tool_started`, `tool_progress`, `tool_finished`, `queue_changed` (the session's pending follow-ups and the running invocation's steering messages),
 `retry_scheduled` and `settled`; a session's stream adds `state_changed` and the compaction events.
 
 Proposed error codes, one set for every call: `invalid_request`, `unsupported`, `not_found`, `busy` (its `details`
@@ -344,32 +349,53 @@ carry the running invocation's id), `no_active_run`, `nothing_to_compact`, `miss
 `model_error`, `interrupted` (§9.3), `partial_update`, `unavailable`, `internal`. An engine may add codes under its
 own prefix; a client that meets an unknown code acts on `retryable`.
 
-### 7.4 A busy session: the caller waits
+### 7.4 A busy session
 
-A session runs one invocation at a time, because each turn extends the history the next one reads. When an invoke
-arrives for a busy session, something has to wait, and that is the caller:
+A session runs one invocation at a time, because each turn extends the history the next one reads. What a message that
+arrives meanwhile means (an addition, a correction, or something that only makes sense right now) is the caller's to
+say, on each invoke:
 
-- **The caller owns what is waiting.** A message nothing has acted on yet is the obligation of whatever received it: a
-  channel owes the chat an answer, a schedule owes its occurrence. The service's obligation starts when it accepts.
-- **Only the caller knows what the second message means:** a correction (steer), an addition (follow-up), a new
-  request (wait), or nothing (drop).
-- **A service that holds only running work stays small.** Its state is bounded by what runs, not by what arrives, and
-  it has no unstarted work to order, limit, cancel or recover after a restart.
+| `whenBusy` | When the session is running another invocation |
+|---|---|
+| `followUp` (the default) | Accepted and pending. It runs as the session's next invocation when the running one ends, in arrival order |
+| `steer` | Joins the running invocation after its current tool round. The invoke returns that invocation, from this point on |
+| `reject` | Rejected with `busy` (retryable; nothing ran and nothing was recorded), carrying the running invocation's id |
 
-So a busy invoke is rejected with `busy` (retryable; nothing ran and nothing was recorded), and the error carries the
-running invocation's id. The caller can attach to that invocation and invoke again when it settles, steer or follow up
-into it, or cancel it. The steering and follow-up messages a run holds belong to that invocation and share its fate.
+An idle session runs the invoke at once, whatever `whenBusy` says. pi's SDK refuses a prompt to a busy session that
+does not say which, rather than guess; pi-durable's `submit` offers the same three choices and defaults to a
+follow-up, and so does this, because a follow-up never disturbs work already running.
 
-The callers already work this way. Channels queue per session (`turn-queue`) and persist what they owe
-(`turn-store`); their busy wait, which polls every 5 seconds today, becomes attach and retry. A schedule skips a busy
-occurrence, and a one-shot wake-up retries it.
+The service decides, because only it can decide without a race: a caller that hears `busy` and then follows up can
+find the run ended in between, and every caller would write its own wait loop, as channels and wake-ups each do today.
+
+What the service holds stays small. Pending follow-ups are kept in memory beside the running invocation and share the
+process's fate: a restart settles them `interrupted`, with nothing run (§9.3). There is no durable queue, no recovery,
+and nothing to coordinate across instances.
+
+- When an invocation settles, however it ended, the session's next pending follow-up starts.
+- `cancel(id)` stops one invocation: a running one is aborted, a pending one is withdrawn.
+- A session's `abort`, which a chat's stop command calls, stops the running invocation and withdraws every pending
+  one, the way pi's own abort returns queued messages to the editor.
+- A steer's message is recorded as a user entry with its own principal. The run's usage stays with the invocation it
+  joined, so nothing is counted twice.
+- A session whose run another process holds cannot be followed or steered from this one: the invoke is rejected with
+  `busy`, whatever `whenBusy` says. That is rare, with one process per agent or one microVM per session.
+
+`steer` and `followUp` leave the session control plane: `invoke` becomes the one way to hand a session a message.
+
+| Caller | `whenBusy` | What changes |
+|---|---|---|
+| Channels | `followUp`; a channel may offer `steer` | Their busy wait, which polls every 5 seconds, goes. Whether they keep their own queue (`turn-queue`) is decided in step 3 (§12) by what it removes; their turn store stays, because it is what they owe the chat |
+| Schedules | `reject` | Nothing: an occurrence on a busy session is skipped |
+| Wake-ups | `followUp` | One that fires into a busy session runs right after the running invocation, instead of retrying |
+| duang and other clients | Their choice | `session.steer` becomes `invoke` with `steer` |
 
 ### 7.5 Control plane
 
 Added, by invocation: `attach(id, { after? })`, `cancel(id)` and a list of invocations by session and status, so a team
 can see what its agents are doing and what it cost. A caller that stops reading detaches; only `cancel` stops the
-work. The session operations (`state`, `entries`, `update`, `steer`, `followUp`, `abort`, `compact`, `fork`, `delete`)
-are unchanged by this proposal.
+work. The session operations (`state`, `entries`, `update`, `abort`, `compact`, `fork`, `delete`) are unchanged, except
+that `abort` also withdraws pending follow-ups; `steer` and `followUp` become `invoke` options (§7.4).
 
 ### 7.6 SPEC changes (v1)
 
@@ -419,7 +445,7 @@ export default {
 | Stage | Today | Proposed |
 |---|---|---|
 | Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `connector add/list/remove` |
-| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | `dev` and `info` check the environment; `invoke --session`, `--detach`, and `--url` for a running agent; `invocations` (list, attach, cancel) |
+| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | `dev` and `info` check the environment; `invoke --session`, `--when-busy`, `--detach`, and `--url` for a running agent; `invocations` (list, attach, cancel) |
 | Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the environment into the image; `login <connector>` for a connector's grant |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | `invocations --url` for a deployed agent: what it is doing and what it cost |
 
@@ -429,7 +455,7 @@ An agent opened in this process (`createAgentService`) and one reached over HTTP
 interface. Today the remote side is two clients, `connectAgent` and `connectSessionControl`; they become one.
 
 ```ts
-type InvocationStatus = "running" | "completed" | "failed" | "canceled";
+type InvocationStatus = "pending" | "running" | "completed" | "failed" | "canceled";
 
 interface Agent {
   invoke(scope: Scope, prompt: Prompt, options?: InvokeOptions): Invocation;
@@ -446,7 +472,7 @@ interface Agent {
 
 | Route | Does | Served |
 |---|---|---|
-| `POST /invoke` | Starts work: SSE whose first event is `accepted`. A rejected invoke answers with an error status; the key goes in `Idempotency-Key` | With `http.invoke` (on by default) |
+| `POST /invoke` | Starts work: SSE whose first event is `accepted`. A rejected invoke answers with an error status. The key goes in `Idempotency-Key`, `whenBusy` in the body | With `http.invoke` (on by default) |
 | `GET /invocations/{id}/events?after=` | Attaches from a cursor | With `/invoke`: the id cannot be guessed, and holding it is the permission |
 | `POST /invocations/{id}/cancel` | Cancels | With `/invoke` |
 | `GET /invocations?session=&status=` | Lists what is running and what finished | With `/control/*` (`sessionControl`) |
@@ -463,7 +489,8 @@ A channel turns a platform message into an invoke:
 | The platform account that posted it | `principal` |
 | The platform message id | `idempotencyKey` |
 
-Channels keep their queue, their turn store and their redelivery dedup (§7.4).
+Channels keep their turn store and their redelivery dedup; whether they keep their own queue is decided in step 3
+(§7.4).
 
 ### 8.6 Clients
 
@@ -495,7 +522,8 @@ The agent's semantics are written once, above a port that a harness implements. 
 A wins. Today's `Agent`, where `invoke` runs one turn and a caller that stops reading aborts it, plus the session
 control plane, is already close to the port: the pi implementation and its conformance suite become the first
 harness, and the invocation layer is new code above them. The port's turn operation gets its own name (`run`), so
-`invoke` keeps one meaning.
+`invoke` keeps one meaning. Follow-ups are the layer's, run as the next turn, so for a running turn the port needs only
+`steer` and `abort`.
 
 ### 9.2 Layers
 
@@ -511,23 +539,25 @@ The world       Environment (the image, or the machine) · Contexts (.contexts/ 
 
 ### 9.3 The invocation layer
 
-It keeps two things:
+It keeps three things:
 
 - **A record per accepted invocation**: id, session, idempotency key, principal, status, outcome, usage and times, in
   the state root, kept for a retention window after it settles (§13).
 - **While it runs, its events in memory**, so an attach replays them from a cursor. A settled invocation answers an
   attach with its `settled` event, and its content is in the session's entries.
+- **Pending follow-ups, in memory**: their prompts, per session, in arrival order (§7.4).
 
-Memory is enough for the events because a running invocation lives in one process, and after a restart it cannot
-continue anyway. Location independence (SPEC MUST 6) holds because a session's calls reach the process that runs it:
+Memory is enough for both because a running invocation lives in one process, and after a restart neither it nor what
+waits behind it can continue anyway. Location independence (SPEC MUST 6) holds because a session's calls reach the process that runs it:
 one process per agent on a resident host, one microVM per session on AgentCore (`runtimeSessionId`). Scaling a
 resident host out would need the same session affinity.
 
-| What happens | A running invocation |
-|---|---|
-| The caller disconnects | Continues; any client attaches by id |
-| `cancel` | Stops, and settles `canceled` |
-| The process restarts, or a deploy replaces it | Settles `failed` with `interrupted` (retryable); what it recorded stays |
+| What happens | A running invocation | A pending follow-up |
+|---|---|---|
+| The caller disconnects | Continues; any client attaches by id | Stays pending, and runs in its turn |
+| `cancel` | Stops, and settles `canceled` | Withdrawn, and settles `canceled` |
+| The session's `abort` | Stops, and settles `canceled` | Withdrawn, and settles `canceled` |
+| The process restarts, or a deploy replaces it | Settles `failed` with `interrupted` (retryable); what it recorded stays | Settles `failed` with `interrupted` (retryable); nothing ran |
 
 The service never reruns an interrupted invocation: its tools may already have had effects (§3.1, invariant 3). A
 caller that owes an answer may invoke again; the channels already bound their replays.
@@ -586,6 +616,7 @@ cost. A `settled` event carries the usage, so cost sums per invocation, per sess
 | Connectors | `tools/`, channel send tools; MCP off when serving | Declared; #678 (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one; values and grants, connectors included (§6) |
 | `invoke` | A function call that ends with its stream | A durable invocation (§7) |
+| A busy session | Rejected; each caller waits its own way | `whenBusy`, `followUp` by default (§7.4) |
 | The engine boundary | `Agent` is both what callers use and what pi implements | Two contracts: the agent above, the harness port below (§9.1) |
 
 ## 12. Order of work
@@ -594,8 +625,8 @@ cost. A `settled` event carries the usage, so cost sums per invocation, per sess
 |---|---|---|
 | 0 | Upgrade to pi 1.0.4 | None |
 | 1 | The SPEC v1 draft, and the harness port drawn out of today's `Agent` without changing behavior | 0 |
-| 2 | The invocation layer: `accepted` and `settled`, ids, detaching, attach, cancel, idempotency, `busy` with an id, `interrupted`; conformance tests | 1 |
-| 3 | HTTP, `connectAgent` and the CLI; channels attach and retry; schedules and wake-ups through the layer; duang follows | 2 |
+| 2 | The invocation layer: `accepted` and `settled`, ids, detaching, attach, cancel, idempotency, `whenBusy` (follow-ups, steer, reject), `interrupted`; conformance tests | 1 |
+| 3 | HTTP, `connectAgent` and the CLI; channels, schedules and wake-ups on `whenBusy`; duang follows | 2 |
 | 4 | The declared environment | None; parallel to 2 and 3 |
 | 5 | Credential declarations for contexts and the environment; connectors, with MCP (#678) and grants | 0 |
 | 6 | pi-durable as a second harness; the self-change loop (#605); more context kinds | 2 |
@@ -611,20 +642,23 @@ cost. A `settled` event carries the usage, so cost sums per invocation, per sess
 7. How a deploy treats the agent's changes that are not merged yet (#605).
 8. Context kinds that are not directories, such as S3.
 9. Acting as the member who asked (§6.3).
-10. The credential model of §6, including leaving the shell's environment as it is (§6.4).
+10. Whether a session needs a cap on its pending follow-ups.
 
 ## 14. Decisions made in review
 
 - `Scope` carries facts the caller asserts. Choices among the agent's options are made on the control plane.
 - Whoever creates a thing names it: callers name sessions; the service names invocations and entries.
 - `invoke` keeps its name and shape; its semantics change as in §7.
-- Steering, follow-ups and aborting stay as they are; no new waiting states for human input.
+- No new waiting states for human input: steering, follow-ups and aborting cover it.
 - A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through contexts and
   connectors.
 - The world an agent acts in is environment, contexts and connectors, separated by the test in §3.2.
 - The environment is declared, reversing the rule that an agent inherits the machine and that nothing compares the
   two.
-- A busy session is the caller's to wait on; the service holds no work that has not started (§7.4).
+- A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
+  follow-ups live in memory and share the process's fate (§7.4).
+- Credentials are declared by whatever uses them and stored by how they are obtained (§6). The shell keeps inheriting
+  the process environment; isolation waits for a sandboxed environment (§6.4).
 - The agent's semantics are written once, above a harness port, so another harness can be added (§9.1).
 - `principal`: channels assert the platform account; HTTP accepts one only from a trusted gateway (§9.5).
 - Attach and cancel are served with `/invoke`, holding the id being the permission; the invocation list is served with
