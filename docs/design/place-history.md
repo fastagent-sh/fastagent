@@ -111,7 +111,7 @@ derivation that must not drift. The seam is where the platforms actually differ.
    would answer it twice) and anything said after it out of this turn; it needs no record of which messages were asks,
    so a cold instance or a lost state file cannot break it.
 2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers, queue notices,
-   stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The second is recorded per place, beside its cursor in `history.json`, by a client the turn posts
+   stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The first is recorded per place, beside its cursor in `history.json`, by a client the turn posts
    through (`FeishuApi.recordingSends`), and forgotten once a read has passed it: a shared bounded ring would let a
    busy deployment evict a quiet place's last answer. `feishu-send` shares the plain client, so the agent's other
    posts (a digest, a post into another chat) stay: they are what #633 is about.

@@ -25,7 +25,12 @@ function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}):
 }
 
 /** A place whose messages the test appends to (oldest first); the fake lists them newest first, as the platform does. */
-function setup(opts: { turnInputs?: string[]; names?: () => Promise<Map<string, string>>; path?: string } = {}) {
+type MemberNames = (
+  chatId: string,
+  wanted: ReadonlySet<string>,
+) => Promise<{ names: Map<string, string>; complete: boolean }>;
+
+function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string } = {}) {
   const messages: FeishuListedMessage[] = [];
   let fail: Error | undefined;
   const listMessages = vi.fn(
@@ -37,7 +42,13 @@ function setup(opts: { turnInputs?: string[]; names?: () => Promise<Map<string, 
       return { items: newestFirst.slice(0, pageSize), hasMore: newestFirst.length > pageSize };
     },
   );
-  const chatMemberNames = vi.fn(opts.names ?? (async () => new Map([["ou_alice", "Alice"]])));
+  const chatMemberNames = vi.fn<MemberNames>(
+    opts.names ??
+      (async (_chatId, wanted) => ({
+        names: new Map([["ou_alice", "Alice"]].filter(([id]) => wanted.has(id as string)) as [string, string][]),
+        complete: true,
+      })),
+  );
   const root = mkdtempSync(join(tmpdir(), "feishu-history-"));
   roots.push(root);
   const path = opts.path ?? join(root, "history.json");
@@ -144,6 +155,22 @@ describe("Feishu place history", () => {
       50,
       Math.floor(second.until.at / 1000),
     );
+  });
+
+  it("a turn that finishes out of ask order does not pull the cursor back", async () => {
+    const place = setup();
+    const early = place.ask();
+    place.messages.push(msg("om_between", "said between the asks"));
+    const late = place.ask();
+    // The later ask runs and commits first (the earlier one was redelivered late, or deferred).
+    const lateRead = await place.history.peek(late);
+    place.history.commit(late, lateRead.consumed);
+    expect(lateRead.text).toContain("said between the asks");
+    const earlyRead = await place.history.peek(early);
+    place.history.commit(early, earlyRead.consumed);
+
+    place.messages.push(msg("om_next", "next"));
+    expect(await answeredTurn(place)).toBe("Alice (msg om_next): next"); // nothing the later turn already folded
   });
 
   it("a turn's answer, posted after its read, is left out of the next read — however long the place is quiet", async () => {
@@ -253,7 +280,7 @@ describe("Feishu place history", () => {
     expect(await answeredTurn(place)).toContain("deploy failed");
   });
 
-  it("without member names, speakers are shown by id, and that is said once per chat", async () => {
+  it("without member names, speakers are shown by id; the failure is said and not retried until the names expire", async () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const place = setup({
       names: async () => {
@@ -264,7 +291,29 @@ describe("Feishu place history", () => {
     expect(await answeredTurn(place)).toBe("user ou_alice (msg om_1): first");
     place.messages.push(msg("om_2", "second"));
     await answeredTurn(place);
+    expect(place.chatMemberNames).toHaveBeenCalledTimes(1); // the second turn does not pay for a known failure
     expect(warn.mock.calls.filter((call) => String(call[0]).includes("member names"))).toHaveLength(1);
+  });
+
+  it("names only the speakers shown, reuses them, and says when a large chat's names ran out", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const place = setup({
+      // A chat larger than one read covers: Alice is found, Bob is past the cap.
+      names: async (_chatId, wanted) => ({
+        names: new Map([...wanted].filter((id) => id === "ou_alice").map((id) => [id, "Alice"])),
+        complete: false,
+      }),
+    });
+    const bob = { sender: { id: "ou_bob", sender_type: "user" } };
+    place.messages.push(msg("om_1", "hi"), msg("om_2", "hello", bob));
+    expect(await answeredTurn(place)).toBe("Alice (msg om_1): hi\nuser ou_bob (msg om_2): hello");
+    expect(place.chatMemberNames.mock.calls[0]?.[1]).toEqual(new Set(["ou_alice", "ou_bob"]));
+    expect(warn.mock.calls.join("\n")).toContain("1 speaker(s) are shown by open_id");
+
+    // Both are known now (one by name, one as unnameable): the next turn reads no names.
+    place.messages.push(msg("om_3", "again"), msg("om_4", "me too", bob));
+    await answeredTurn(place);
+    expect(place.chatMemberNames).toHaveBeenCalledTimes(1);
   });
 
   it("a thread's room is read without moving the room's own cursor", async () => {

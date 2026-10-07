@@ -279,7 +279,9 @@ out what the session already holds: every message the channel posted as a turn's
 feedback), and the messages it took as input (`/stop`). What the Agent posted itself, with `feishu-send` from a
 schedule for example, stays, labelled `you`, so a later "what did point 3 mean?" has it.
 
-- People are named from the chat's member list (`im:chat.members:read`), other bots as `bot <app_id>`.
+- People are named from the chat's member list (`im:chat.members:read`), other bots as `bot <app_id>`. Only the speakers
+  a fold shows are looked up, and names are reused for 10 minutes. A chat larger than 1,000 members may leave a speaker
+  unnamed (shown by open_id, with a warning); a failed name read is retried after the 10 minutes, not on every turn.
 - Cards are read as they were sent (`card_msg_content_type=user_card_content`), so a Card 2.0 digest reads as its text.
 - In a topic group, the main chat's history is each topic's first post; a reply inside a topic belongs to that topic.
 - A thread's first turn also reads its room's discussion, read-only: the room's own next turn still reads it.

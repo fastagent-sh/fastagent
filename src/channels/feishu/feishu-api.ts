@@ -113,6 +113,12 @@ export function isTransientFeishuRegistrationError(e: unknown): boolean {
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * How many pages of 100 a member-name read walks before giving up: each page is a serial round trip on a turn's path,
+ * so a chat of thousands is named up to here and the rest is said, not waited for.
+ */
+const MEMBER_PAGES = 10;
+
 export interface FeishuApiOptions {
   /** Branded diagnostics; defaults to the canonical Feishu cloud. */
   kind?: FeishuCloudKind;
@@ -191,8 +197,15 @@ export interface FeishuApi {
     /** Seconds since the epoch, inclusive: list nothing created after this second. */
     endTime?: number,
   ): Promise<{ items: FeishuListedMessage[]; hasMore: boolean }>;
-  /** A chat's members by name, keyed by open_id (needs `im:chat.members:read`). */
-  chatMemberNames(chatId: string): Promise<Map<string, string>>;
+  /**
+   * Names for `wanted` open_ids among a chat's members (needs `im:chat.members:read`). Pages until every wanted id is
+   * named or the member list ends, up to {@link MEMBER_PAGES} pages; `complete` says whether the list was read to its
+   * end, so an id still unnamed is known not to be a member rather than beyond the cap.
+   */
+  chatMemberNames(
+    chatId: string,
+    wanted: ReadonlySet<string>,
+  ): Promise<{ names: Map<string, string>; complete: boolean }>;
   /** Fetch one message (the reply-referent path). Undefined when the API returns no item.
    *
    *  `sender` is typed rather than `unknown` because the referent path READS it: an app-sent message
@@ -435,11 +448,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         );
         return { items: data.data?.items ?? [], hasMore: data.data?.has_more === true };
       },
-      async chatMemberNames(chatId) {
+      async chatMemberNames(chatId, wanted) {
         const names = new Map<string, string>();
         let pageToken: string | undefined;
-        // A bound, not a loop on trust: a chat's members are a few pages at most.
-        for (let page = 0; page < 10; page++) {
+        for (let page = 0; page < MEMBER_PAGES; page++) {
           const query = new URLSearchParams({ member_id_type: "open_id", page_size: "100" });
           if (pageToken) query.set("page_token", pageToken);
           const data = await call<
@@ -448,12 +460,14 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
             }
           >("chatMemberNames", "GET", `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?${query}`);
           for (const member of data.data?.items ?? []) {
-            if (member.member_id && member.name) names.set(member.member_id, member.name);
+            if (member.member_id && member.name && wanted.has(member.member_id))
+              names.set(member.member_id, member.name);
           }
-          if (data.data?.has_more !== true || !data.data.page_token) break;
+          if (data.data?.has_more !== true || !data.data.page_token) return { names, complete: true };
+          if (names.size === wanted.size) return { names, complete: false };
           pageToken = data.data.page_token;
         }
-        return names;
+        return { names, complete: false };
       },
       async sendText(target, text) {
         const chunks = chunkFeishuText(text);

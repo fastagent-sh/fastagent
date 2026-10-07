@@ -150,24 +150,39 @@ export function createFeishuPlaceHistory(deps: {
       log.warn(`${label} could not write ${path} (${lost}): ${String(error)}`);
     }
   };
-  const names = new Map<string, { names: Map<string, string>; at: number }>();
-  const namesFailed = new Set<string>();
+  /**
+   * Per chat, the speakers already looked up: named, or known to have no name to find (not a member, past the page
+   * cap, or a failed read). Both halves expire together, so a failure or a newcomer is retried after the TTL, not on
+   * every turn.
+   */
+  const names = new Map<string, { named: Map<string, string>; unnamed: Set<string>; at: number }>();
 
-  const memberNames = async (chatId: string): Promise<Map<string, string>> => {
+  /** Names for the speakers a fold shows; one not found is shown by open_id. Never rejects: a name is a label. */
+  const memberNames = async (chatId: string, speakers: ReadonlySet<string>): Promise<Map<string, string>> => {
     const cached = names.get(chatId);
-    if (cached && Date.now() - cached.at < NAMES_TTL_MS) return cached.names;
+    const entry =
+      cached && Date.now() - cached.at < NAMES_TTL_MS
+        ? cached
+        : { named: new Map<string, string>(), unnamed: new Set<string>(), at: Date.now() };
+    names.set(chatId, entry);
+    const unknown = new Set([...speakers].filter((id) => !entry.named.has(id) && !entry.unnamed.has(id)));
+    if (unknown.size === 0) return entry.named;
     try {
-      const read = await api.chatMemberNames(chatId);
-      names.set(chatId, { names: read, at: Date.now() });
-      return read;
-    } catch (error) {
-      // Said once per chat: names are a label, so the discussion goes on by id.
-      if (!namesFailed.has(chatId)) {
-        namesFailed.add(chatId);
-        log.warn(`${label} could not read chat ${chatId}'s member names (speakers are shown by id): ${String(error)}`);
+      const { names: found, complete } = await api.chatMemberNames(chatId, unknown);
+      for (const [id, name] of found) entry.named.set(id, name);
+      const missing = [...unknown].filter((id) => !found.has(id));
+      for (const id of missing) entry.unnamed.add(id);
+      // A complete list without them is ordinary (they left the chat); a list cut at the page cap is a gap to say.
+      if (!complete && missing.length > 0) {
+        log.warn(
+          `${label} chat ${chatId} has more members than one name read covers; ${missing.length} speaker(s) are shown by open_id`,
+        );
       }
-      return new Map();
+    } catch (error) {
+      for (const id of unknown) entry.unnamed.add(id);
+      log.warn(`${label} could not read chat ${chatId}'s member names (speakers are shown by id): ${String(error)}`);
     }
+    return entry.named;
   };
 
   /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
@@ -212,9 +227,10 @@ export function createFeishuPlaceHistory(deps: {
       if (!place.threadId && item.thread_id && item.root_id) return false;
       return !deps.isTurnInput(id) && !outputs.has(id);
     });
-    const people = kept.some(({ item }) => item.sender?.sender_type === "user")
-      ? await memberNames(place.chatId)
-      : new Map<string, string>();
+    const speakers = new Set(
+      kept.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
+    );
+    const people = speakers.size > 0 ? await memberNames(place.chatId, speakers) : new Map<string, string>();
     const messages = kept.map(({ item, id, at }): PlaceMessage => {
       const decoded = decodeFeishuContent({
         message_type: item.msg_type ?? "unknown",
@@ -265,8 +281,12 @@ export function createFeishuPlaceHistory(deps: {
       if (!read?.cursor) return;
       // Only the outputs this read passed: the turn's own answer came after it and waits for the next read.
       const passed = new Set(read.outputsPassed);
-      const outputs = (places.get(key)?.outputs ?? []).filter((id) => !passed.has(id));
-      save(key, { cursor: read.cursor, outputs }, "a restart may re-fold answered discussion");
+      const state = places.get(key);
+      const outputs = (state?.outputs ?? []).filter((id) => !passed.has(id));
+      // Forward only. Turns in a place can finish out of ask order (a redelivered ask, a deferred turn); an earlier
+      // ask committing after a later one must not pull the cursor back over what that later turn already folded.
+      const cursor = state?.cursor && state.cursor.at >= read.cursor.at ? state.cursor : read.cursor;
+      save(key, { cursor, outputs }, "a restart may re-fold answered discussion");
     },
     recordOutput(key, messageId) {
       const state = places.get(key);

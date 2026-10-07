@@ -146,6 +146,30 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(1); // one attempt, no backoff
   });
 
+  it("chatMemberNames pages only until the wanted speakers are named, and says whether the list ended", async () => {
+    // An endless chat: every page has a next one, and member N is on page N.
+    const fx = stubFetch((url) => {
+      const page = Number(new URL(url).searchParams.get("page_token") ?? 0);
+      return okData({
+        items: [{ member_id: `ou_${page}`, name: `Member ${page}` }],
+        has_more: true,
+        page_token: String(page + 1),
+      });
+    });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const members = () => fx.calls().filter((call) => call.url.includes("/members"));
+
+    expect(await api.chatMemberNames("oc_1", new Set(["ou_1"]))).toEqual({
+      names: new Map([["ou_1", "Member 1"]]),
+      complete: false,
+    });
+    expect(members()).toHaveLength(2); // found on the second page: no third read
+
+    const cut = await api.chatMemberNames("oc_1", new Set(["ou_42"])); // beyond the page cap
+    expect(cut).toEqual({ names: new Map(), complete: false });
+    expect(members()).toHaveLength(2 + 10);
+  });
+
   it("listMessages reads newest first, cards as sent, and ends where it is told", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }], has_more: true }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
