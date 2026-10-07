@@ -5,6 +5,7 @@ import type * as Scope from "effect/Scope";
 import { log } from "../../log.ts";
 import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 import type { DiscussionSource } from "./place-history.ts";
+import type { RoomThreads } from "./room-threads.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type TurnRecordBase, type TurnStore, commitAnsweredTurn } from "./turn-store.ts";
 
@@ -29,6 +30,11 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   discussionKey(rec: R): P | undefined;
   /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
+  /**
+   * The room whose threads this turn's tool may read while it runs (`room-threads.ts`): a group turn's chat; undefined
+   * for a turn with none (a DM, a routed turn).
+   */
+  room?: { threads: RoomThreads; of(rec: R): string | undefined };
   /** Queue feedback when a turn is scheduled BEHIND an active one. */
   onQueuedBehind?(rec: R): { done: Promise<void>; cancel?: () => void };
   /** Runs before the attempt is counted. */
@@ -67,6 +73,20 @@ export interface TurnRunner<R, S> {
   recover(): S[];
   /** Resolve once no turn is in flight — the test/observability seam. */
   idle(): Promise<void>;
+}
+
+/** For the turn's lifetime (its scope), the room its thread-reading tool reads. */
+function enterRoom<R extends PendingBase<S>, S extends TurnRecordBase, E, P>(
+  options: TurnRunnerOptions<R, S, E, P>,
+  rec: R,
+): Effect.Effect<unknown, never, Scope.Scope> {
+  const room = options.room?.of(rec);
+  if (options.room === undefined || room === undefined) return Effect.void;
+  const { threads } = options.room;
+  return Effect.acquireRelease(
+    Effect.sync(() => threads.enter(rec.session, room)),
+    (leave) => Effect.sync(leave),
+  );
 }
 
 export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, E, P = string>(
@@ -134,6 +154,7 @@ export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase
             return Effect.promise(async () =>
               key === undefined ? { text: "", consumed: [] as E[] } : source.peek(key),
             ).pipe(
+              Effect.tap(() => enterRoom(options, rec)),
               Effect.flatMap((discussion) =>
                 options.execute(rec, discussion, (answer) => {
                   // Only a recorded answer is recoverable — an untracked run has no record to keep it in.

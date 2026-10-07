@@ -100,6 +100,9 @@ export interface SlackListedMessage {
   hidden?: boolean;
   ts?: string;
   thread_ts?: string;
+  /** On a thread's root, in a channel listing. */
+  reply_count?: number;
+  latest_reply?: string;
   user?: string;
   bot_id?: string;
   username?: string;

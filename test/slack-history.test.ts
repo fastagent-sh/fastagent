@@ -287,4 +287,24 @@ describe("Slack place history", () => {
       skipped: 0,
     });
   });
+
+  it("lists the channel's threads by their last reply, and a tool's read of one leaves nothing out", async () => {
+    const place = setup();
+    const deploy = msg("deploy failed on staging", { reply_count: 2, latest_reply: "1800000000.000100" });
+    const lunch = msg("lunch?", { user: "U2", reply_count: 1, latest_reply: "1790000000.000100" });
+    place.messages.push(deploy, lunch, msg("no replies here"));
+    const fix = msg("killed the backfill, redeploy succeeded", { thread_ts: deploy.ts });
+    place.messages.push(fix);
+
+    const list = (await place.history.threads(CHANNEL)).split("\n");
+    expect(list.slice(1)).toEqual([
+      `- thread ${deploy.ts} (2 replies, last active 2027-01-15 08:00 UTC): user U1: deploy failed on staging`,
+      `- thread ${lunch.ts} (1 reply, last active 2026-09-21 14:13 UTC): user U2: lunch?`,
+    ]);
+    expect(place.channelHistory).toHaveBeenLastCalledWith("C1", { limit: 100 }, CONTEXT_READ);
+
+    const thread = slackHistoryKey("T1", { channelId: "C1", threadTs: deploy.ts });
+    place.history.recordOutput(thread, fix.ts);
+    expect((await place.history.snapshot(thread)).text).toContain("killed the backfill, redeploy succeeded");
+  });
 });

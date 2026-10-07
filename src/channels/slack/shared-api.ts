@@ -2,6 +2,7 @@
  * The ONE Slack transport per state root a process holds: the mounted channel's, shared with the scaffolded send tool.
  */
 import { resolveStateRoot } from "../../paths.ts";
+import { roomThreads } from "../kit/room-threads.ts";
 import { type SlackApi, createSlackApi } from "./slack-api.ts";
 
 /** What a proactive sender needs: Markdown delivery and file upload. */
@@ -25,4 +26,12 @@ export function slackTransport(cwd: string): SlackTransport {
     byStateRoot.set(stateRoot, api);
   }
   return api;
+}
+
+/**
+ * The threads of the channel a tool's turn was asked in, and only those (`kit/room-threads.ts`): `list()` its recent
+ * threads, `read(threadTs)` one of them. Throws outside a Slack channel turn served by this process.
+ */
+export function slackThreads(ctx: Parameters<typeof roomThreads>[1]): ReturnType<typeof roomThreads> {
+  return roomThreads("slack", ctx);
 }

@@ -14,6 +14,7 @@ import {
   type PlaceRead,
   createPlaceHistory,
 } from "../kit/place-history.ts";
+import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
 import { CONTEXT_READ } from "../kit/transport.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
@@ -35,7 +36,10 @@ interface FeishuCursor {
 
 export type FeishuPlaceRead = PlaceRead<FeishuCursor>;
 export type FeishuDiscussion = PlaceDiscussion<FeishuCursor>;
-export type FeishuPlaceHistory = PlaceHistory<FeishuCursor>;
+export interface FeishuPlaceHistory extends PlaceHistory<FeishuCursor> {
+  /** The chat's threads among its newest messages, for a tool (`kit/room-threads.ts`). */
+  threads(chatId: string): Promise<string>;
+}
 
 /** A background resource carried into a turn, with attribution for its prompt manifest. */
 export interface FeishuBufferedRef {
@@ -45,12 +49,18 @@ export interface FeishuBufferedRef {
   from: string;
 }
 
+/** Someone said it: not deleted, and not the platform's own (a system message has no sender). */
+function isSpoken(item: FeishuListedMessage): boolean {
+  return item.deleted !== true && item.msg_type !== "system" && Boolean(item.sender?.sender_type);
+}
+
 /** A place: the chat, or a thread within it. The turn record carries it as this key. */
 export function feishuHistoryKey(place: { chatId: string; threadId?: string }): string {
   return place.threadId ? `${place.chatId}:thread:${place.threadId}` : place.chatId;
 }
 
-function placeOf(key: string): { chatId: string; threadId?: string } {
+/** The inverse of {@link feishuHistoryKey}. */
+export function feishuPlaceOf(key: string): { chatId: string; threadId?: string } {
   const at = key.indexOf(":thread:");
   return at === -1 ? { chatId: key } : { chatId: key.slice(0, at), threadId: key.slice(at + ":thread:".length) };
 }
@@ -127,13 +137,46 @@ export function createFeishuPlaceHistory(deps: {
     return entry.named;
   };
 
+  /** One listed message as a fold shows it; `people` names the humans among its speakers. */
+  const placeMessage = (
+    item: FeishuListedMessage,
+    id: string,
+    at: number,
+    people: ReadonlyMap<string, string>,
+  ): PlaceMessage => {
+    const decoded = decodeFeishuContent({
+      message_type: item.msg_type ?? "unknown",
+      content: item.body?.content ?? "",
+      // The list API names a mention's id as a bare string; the decoder needs only key and name.
+      mentions: item.mentions?.flatMap((mention) => (mention.key ? [{ key: mention.key, name: mention.name }] : [])),
+    });
+    const senderId = item.sender?.id ?? "unknown";
+    const from: PlaceMessage["from"] =
+      item.sender?.sender_type === "app"
+        ? senderId === appId
+          ? { kind: "self", label: "you" }
+          : { kind: "bot", label: `bot ${senderId}` }
+        : { kind: "human", label: people.get(senderId) ?? `user ${senderId}` };
+    return {
+      id,
+      at,
+      from,
+      text: decoded.text,
+      ...(item.parent_id ? { replyTo: item.parent_id } : {}),
+      images: decoded.resources.filter((r) => r.kind === "image").map((r) => ({ key: r.key })),
+      files: decoded.resources
+        .filter((r) => r.kind === "file" || r.kind === "audio" || r.kind === "video")
+        .map((r) => ({ key: r.key, ...(r.name ? { name: r.name } : {}) })),
+    };
+  };
+
   /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
   const read = async (
     key: string,
     { cursor, drop }: { cursor?: FeishuCursor; drop(messageId: string): boolean },
     until?: FeishuCursor,
   ): Promise<PlaceListing<FeishuCursor>> => {
-    const place = placeOf(key);
+    const place = feishuPlaceOf(key);
     const listed = await api.listMessages(
       place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
       PAGE_SIZE,
@@ -141,6 +184,9 @@ export function createFeishuPlaceHistory(deps: {
       until ? Math.floor(until.at / 1000) : undefined,
       CONTEXT_READ,
     );
+    // A thread id names a thread in ANY chat the bot is in: its key's chat is a claim this read checks.
+    const stranger = place.threadId ? listed.items.find((item) => item.chat_id !== place.chatId) : undefined;
+    if (stranger) throw new Error(`thread ${place.threadId} is not in chat ${place.chatId}`);
     const fresh: { item: FeishuListedMessage; id: string; at: number }[] = [];
     let reachedCursor = false;
     for (const item of listed.items) {
@@ -162,7 +208,7 @@ export function createFeishuPlaceHistory(deps: {
 
     const covered = fresh.map(({ id }) => id);
     const kept = fresh.reverse().filter(({ item, id }) => {
-      if (item.deleted === true || item.msg_type === "system" || !item.sender?.sender_type) return false;
+      if (!isSpoken(item)) return false;
       // A topic group lists every topic's replies with its chat; the room is its top-level messages.
       if (!place.threadId && item.thread_id && item.root_id) return false;
       return !drop(id);
@@ -171,36 +217,41 @@ export function createFeishuPlaceHistory(deps: {
       kept.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
     );
     const people = speakers.size > 0 ? await memberNames(place.chatId, speakers) : new Map<string, string>();
-    const messages = kept.map(({ item, id, at }): PlaceMessage => {
-      const decoded = decodeFeishuContent({
-        message_type: item.msg_type ?? "unknown",
-        content: item.body?.content ?? "",
-        // The list API names a mention's id as a bare string; the decoder needs only key and name.
-        mentions: item.mentions?.flatMap((mention) => (mention.key ? [{ key: mention.key, name: mention.name }] : [])),
-      });
-      const senderId = item.sender?.id ?? "unknown";
-      const from: PlaceMessage["from"] =
-        item.sender?.sender_type === "app"
-          ? senderId === appId
-            ? { kind: "self", label: "you" }
-            : { kind: "bot", label: `bot ${senderId}` }
-          : { kind: "human", label: people.get(senderId) ?? `user ${senderId}` };
-      return {
-        id,
-        at,
-        from,
-        text: decoded.text,
-        ...(item.parent_id ? { replyTo: item.parent_id } : {}),
-        images: decoded.resources.filter((r) => r.kind === "image").map((r) => ({ key: r.key })),
-        files: decoded.resources
-          .filter((r) => r.kind === "file" || r.kind === "audio" || r.kind === "video")
-          .map((r) => ({ key: r.key, ...(r.name ? { name: r.name } : {}) })),
-      };
-    });
+    const messages = kept.map(({ item, id, at }) => placeMessage(item, id, at, people));
     return { covered, messages, ...(newest ? { newest } : {}), earlier };
   };
 
-  return createPlaceHistory({
+  /**
+   * The chat's threads among its newest {@link PAGE_SIZE} messages. Feishu has no thread list: an ordinary group lists
+   * each thread's root (no reply count, no last activity), a topic group every message with its thread's id.
+   */
+  const threads = async (chatId: string): Promise<string> => {
+    const listed = await api.listMessages({ type: "chat", id: chatId }, PAGE_SIZE, undefined, CONTEXT_READ);
+    // Newest first, so a thread's first entry is its newest message seen and its last the earliest.
+    const byThread = new Map<string, { item: FeishuListedMessage; id: string; at: number }[]>();
+    for (const item of listed.items) {
+      const at = Number(item.create_time);
+      if (!item.thread_id || !item.message_id || !isSpoken(item) || !Number.isFinite(at)) continue;
+      byThread.set(item.thread_id, [...(byThread.get(item.thread_id) ?? []), { item, id: item.message_id, at }]);
+    }
+    const openers = [...byThread.values()].map((seen) => seen.at(-1) as (typeof seen)[number]);
+    const speakers = new Set(
+      openers.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
+    );
+    const people = speakers.size > 0 ? await memberNames(chatId, speakers) : new Map<string, string>();
+    const summaries = [...byThread].map(([id, seen]): ThreadSummary => {
+      const opener = seen.at(-1) as (typeof seen)[number];
+      const message = placeMessage(opener.item, opener.id, opener.at, people);
+      return {
+        id,
+        latestAt: (seen[0] as (typeof seen)[number]).at,
+        first: { label: message.from.label, text: message.text },
+      };
+    });
+    return threadList(summaries, `this chat's newest ${PAGE_SIZE} messages`);
+  };
+
+  const history = createPlaceHistory({
     label,
     path: deps.path,
     isCursor: (value): value is FeishuCursor =>
@@ -209,4 +260,5 @@ export function createFeishuPlaceHistory(deps: {
     isTurnInput: (_key, id) => deps.isTurnInput(id),
     read,
   });
+  return { ...history, threads };
 }

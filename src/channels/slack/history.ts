@@ -14,6 +14,7 @@ import {
   type PlaceRead,
   createPlaceHistory,
 } from "../kit/place-history.ts";
+import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
 import { CONTEXT_READ } from "../kit/transport.ts";
 import { slackMessageText } from "./parse.ts";
 import type { SlackApi, SlackListedMessage } from "./slack-api.ts";
@@ -29,7 +30,13 @@ const SPOKEN_SUBTYPES = new Set(["file_share", "thread_broadcast", "bot_message"
 
 export type SlackPlaceRead = PlaceRead<string>;
 export type SlackDiscussion = PlaceDiscussion<string>;
-export type SlackPlaceHistory = PlaceHistory<string>;
+export interface SlackPlaceHistory extends PlaceHistory<string> {
+  /** The channel's threads among its newest messages, for a tool (`kit/room-threads.ts`); `room` is its place key. */
+  threads(room: string): Promise<string>;
+}
+
+/** How many of a channel's newest messages a thread list looks through. */
+const THREAD_SCAN = 100;
 
 /** A background file carried into a turn, with attribution for its prompt manifest. */
 export interface SlackBufferedFileRef {
@@ -194,6 +201,19 @@ export function createSlackPlaceHistory(deps: {
 }): SlackPlaceHistory {
   const { api } = deps;
 
+  /** Who said it: this app, another bot, or a person (by user id: names need `users:read`). */
+  const speaker = (message: SlackListedMessage): PlaceMessage["from"] => {
+    const self = deps.self();
+    const own =
+      (message.user !== undefined && message.user === self.userId) ||
+      (message.bot_id !== undefined && message.bot_id === self.botId);
+    if (own) return { kind: "self", label: "you" };
+    if (message.bot_id !== undefined) {
+      return { kind: "bot", label: `bot ${message.bot_profile?.name ?? message.username ?? message.bot_id}` };
+    }
+    return { kind: "human", label: `user ${message.user ?? "unknown"}` };
+  };
+
   const read = async (
     key: string,
     { cursor, drop }: { cursor?: string; drop(ts: string): boolean },
@@ -221,7 +241,6 @@ export function createSlackPlaceHistory(deps: {
     const fresh = listed.filter((message) => after(message.ts));
     const earlier = page.hasMore && fresh.length === listed.length;
 
-    const self = deps.self();
     const messages = fresh
       .filter(
         (message) =>
@@ -230,14 +249,7 @@ export function createSlackPlaceHistory(deps: {
           !drop(message.ts),
       )
       .map((message): PlaceMessage | undefined => {
-        const own =
-          (message.user !== undefined && message.user === self.userId) ||
-          (message.bot_id !== undefined && message.bot_id === self.botId);
-        const from: PlaceMessage["from"] = own
-          ? { kind: "self", label: "you" }
-          : message.bot_id !== undefined
-            ? { kind: "bot", label: `bot ${message.bot_profile?.name ?? message.username ?? message.bot_id}` }
-            : { kind: "human", label: `user ${message.user ?? "unknown"}` };
+        const from = speaker(message);
         const text = slackMessageText({ text: spokenText(message), files: message.files });
         // No text, attachment or file to show: an empty line would only spend the fold's budget.
         if (text.trim() === "") return undefined;
@@ -263,7 +275,26 @@ export function createSlackPlaceHistory(deps: {
     };
   };
 
-  return createPlaceHistory({
+  /** Threads are roots with replies; `conversations.history` gives their count and last reply. */
+  const threads = async (room: string): Promise<string> => {
+    const { channelId } = slackPlaceOf(room);
+    const { messages } = await api.channelHistory(channelId, { limit: THREAD_SCAN }, CONTEXT_READ);
+    const summaries = messages.flatMap((message): ThreadSummary[] =>
+      message.ts !== undefined && (message.reply_count ?? 0) > 0
+        ? [
+            {
+              id: message.ts,
+              latestAt: Number(message.latest_reply ?? message.ts) * 1000,
+              replies: message.reply_count as number,
+              first: { label: speaker(message).label, text: spokenText(message) },
+            },
+          ]
+        : [],
+    );
+    return threadList(summaries, `this channel's newest ${THREAD_SCAN} messages`);
+  };
+
+  const history = createPlaceHistory({
     label: deps.label,
     path: deps.path,
     isCursor: (value): value is string => typeof value === "string",
@@ -271,4 +302,5 @@ export function createSlackPlaceHistory(deps: {
     isTurnInput: deps.isTurnInput,
     read,
   });
+  return { ...history, threads };
 }

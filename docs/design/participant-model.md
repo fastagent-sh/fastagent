@@ -162,7 +162,7 @@ take a while" signal.
 ## 5. Rule 3 — what to remember
 
 > **Memory follows the place. A room has one memory. A thread starts from what the room knew and
-> keeps its own history. What happens in a thread flows back to the room.**
+> keeps its own history. A room can see its threads and read them when a question needs one.**
 
 | Place | Session | Rationale |
 |---|---|---|
@@ -198,9 +198,10 @@ content. The user already tells us which asks are independent: by opening a thre
 *Non-goal, deliberately deferred:* folding a thread's conclusion back into the room. Two different
 things are lost when a side conversation ends — the room's session does not hold what was decided
 (cheap to fix, invisible to everyone) and the people in the room do not know it (needs a message, so
-it needs consent). The memory half is now proposed in [place-history.md](place-history.md), and it is
-not a fold: the room reads a thread from the platform when a question needs it, and nothing is copied
-into the room.
+it needs consent). The memory half is not a fold: the room reads a thread from the platform when a
+question needs it ([place-history.md](place-history.md), the `*-threads` tools), and nothing is copied
+into the room. The question decides what is relevant, the read costs nothing until asked, and it is
+visible. The people half stays the agent's to say, with a send tool, when asked to.
 
 ## 8. Thread context: the inheritance ladder
 

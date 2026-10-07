@@ -8,7 +8,7 @@ updated: 2026-10-07
 
 # Place history
 
-**Status: phases 1–3 (Telegram's own posts, Feishu/Lark, Slack) implemented; thread reading is proposed.** It replaces the context buffer as the source of "what was said in this
+**Status: implemented: Telegram's own posts, Feishu/Lark and Slack history, and thread reading.** It replaces the context buffer as the source of "what was said in this
 place" for Feishu/Lark and Slack, and keeps a local record for Telegram, whose Bot API has no history read.
 It answers two issues together:
 
@@ -101,6 +101,8 @@ channels/feishu/history.ts           the read: im/v1/messages (chat | thread), u
                                      C = (create_time, message_id)
 channels/slack/history.ts            the read: conversations.history (top level) | conversations.replies (thread);
                                      C = ts
+channels/kit/room-threads.ts         what a thread tool may read: the room of the turn it runs in, never one it is
+                                     told; the list's format and bound
 ```
 
 The turn runner sees only `DiscussionSource`: it peeks when a turn runs and commits what it peeked when the turn's
@@ -176,7 +178,28 @@ says "could not read the recent discussion here: <the platform's error>" instead
 | 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session. The buffer has one writer, the mounted channel; a send from a process with no channel mounted (`fastagent tool`, `invoke`) is delivered but not recorded, and the tool's result says so. Where channel state does not persist (AgentCore, no volume) the buffer itself does not, so this holds only within one instance's life (#754) | a schedule's post is in the chat's next answered turn, where the schedule fires in the serving process |
 | 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
 | 3. Slack | `history.ts`; the place state moved into the kit (`createPlaceHistory`), shared with Feishu; buffer removed | the same, live |
-| 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
+| 4. Thread reading (#374) | `{feishu,lark,slack}-threads` tools over `kit/room-threads.ts` (below) | done: lists and reads run against both platforms; a thread named for another chat is refused |
+
+### Thread reading (phase 4)
+
+A scaffolded tool per channel (`tools/feishu-threads.ts`, `lark-threads.ts`, `slack-threads.ts`) lists the room's
+recent threads, or reads one. #374's spike settled the shape: two operations, no per-turn index in the prompt, a
+short list, a bounded read.
+
+- **The room is never an argument.** The bot can read every chat it is in, so a room the tool were told would let one
+  chat read another ("what did they decide in the other group?"). While a group turn runs, the turn runner registers
+  its room under its session (`TurnRunnerOptions.room`), and the tool, asking with its own session id, gets that room
+  or an error. DMs and routed turns have no room.
+- **A thread id is checked against the room.** Slack reads `conversations.replies` in the room's channel, so a thread
+  is in it by construction. A Feishu `thread_id` names a thread in any chat, so the read refuses items whose `chat_id`
+  is not the room's, for the history read as well.
+- **The list** is threads among the room's newest messages, most recently active first, at most 20: Slack's 100
+  newest (`reply_count`, `latest_reply`); Feishu's 50 newest, since it has no thread list (an ordinary group lists
+  roots without a reply count, a topic group every message).
+- **The read** is the history fold over the thread with no cursor and nothing left out: another session's asks and
+  answers are what that thread said. A failed read is the tool's error, for the model to see.
+- An agent created before this gets the tools with `fastagent add <channel> --no-onboard`, which keeps the channel
+  file and rewrites the package's tools.
 
 Docs move with the phases: participant-model.md §2 (hearing vs knowing), §7 and §8 (rung 3's source);
 core.md §7; feishu.md and slack.md "Group context".

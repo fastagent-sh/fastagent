@@ -15,6 +15,7 @@ import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "../kit/state.ts";
 import { signatureIsFresh } from "../kit/signature.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
+import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
@@ -26,6 +27,7 @@ import {
   collectFoldedAttachments,
   createFeishuPlaceHistory,
   feishuHistoryKey,
+  feishuPlaceOf,
 } from "./history.ts";
 import { decryptEvent, verifySignature } from "./crypto.ts";
 import { feishuTurnStream } from "./invoke-turn.ts";
@@ -310,6 +312,14 @@ function createFeishuRuntimeFactory(
      * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
      * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
      */
+    // A group turn's room, for the thread-reading tool (`feishuThreads`): the chat it was asked in, and its threads.
+    const rooms = createRoomThreads({
+      list: (chatId) => history.threads(chatId),
+      read: async (chatId, threadId) =>
+        (await history.snapshot(feishuHistoryKey({ chatId, threadId }))).text ||
+        `(thread ${threadId} shows no messages)`,
+    });
+    registerRoomThreads(kind, stateRoot, rooms);
     const placeApi = (historyKey: string | undefined): FeishuApi =>
       historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
@@ -338,6 +348,11 @@ function createFeishuRuntimeFactory(
       label,
       store,
       discussion: history,
+      // A turn with a place is a group turn (DMs and routed turns have none), and its chat is its room.
+      room: {
+        threads: rooms,
+        of: (rec) => (rec.historyKey === undefined ? undefined : feishuPlaceOf(rec.historyKey).chatId),
+      },
       seen,
       toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, preview: undefined }),
