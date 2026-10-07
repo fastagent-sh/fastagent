@@ -216,13 +216,33 @@ describe("card decoding — a card as it was SENT (`card_msg_content_type=user_c
     expect(decode({ ...card10, config: {} })).toBe("构建失败\n3 个测试失败");
     // Per-locale elements alone mark a card as sent: no header needed.
     expect(decode({ i18n_elements: card10.i18n_elements })).toBe("3 个测试失败");
-    // Card 2.0 spells a per-locale text `i18n_content`.
+    // Card 2.0 spells a per-locale text `i18n_content`, with no per-locale element lists: the declared order still
+    // decides, whatever order the JSON lists the locales in.
     const card20 = {
       schema: "2.0",
-      header: { title: { tag: "plain_text", i18n_content: { en_us: "Alert" } } },
-      body: { elements: [{ tag: "markdown", i18n_content: { en_us: "disk at 91%" } }] },
+      config: { locales: ["en_us", "zh_cn"] },
+      header: { title: { tag: "plain_text", i18n_content: { zh_cn: "告警", en_us: "Alert" } } },
+      body: { elements: [{ tag: "markdown", i18n_content: { zh_cn: "磁盘 91%", en_us: "disk at 91%" } }] },
     };
     expect(decode(card20)).toBe("Alert\ndisk at 91%");
+  });
+
+  it("reads a collapsible panel's title, the one line it shows folded, before its content", () => {
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "collapsible_panel",
+            header: { title: { tag: "markdown", content: "Details" } },
+            elements: [{ tag: "markdown", content: "inner" }],
+          },
+        ],
+      },
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Details\ninner",
+    );
   });
 
   it("says a template card cannot be read, rather than leaving a bare marker", () => {

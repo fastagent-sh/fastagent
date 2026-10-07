@@ -93,27 +93,29 @@ function isSentCard(card: Record<string, unknown>): boolean {
   );
 }
 
-/**
- * The locale a multi-language card is read in: the first of its `config.locales` it carries, else the first it
- * carries. A card holds the same content once per locale; one of them is the content.
- */
-function cardLocale(card: Record<string, unknown>): string | undefined {
-  const carried = isRecord(card.i18n_elements) ? Object.keys(card.i18n_elements) : [];
+/** A card's declared `config.locales`, in order: the locales a multi-language card is read in, first carried wins. */
+function declaredLocales(card: Record<string, unknown>): string[] {
   const declared = isRecord(card.config) && Array.isArray(card.config.locales) ? card.config.locales : [];
-  return (
-    declared.find((locale): locale is string => typeof locale === "string" && carried.includes(locale)) ?? carried[0]
-  );
+  return declared.filter((locale): locale is string => typeof locale === "string");
 }
 
-/** A text field's value: `content`, else its per-locale form (1.0 `i18n`, 2.0 `i18n_content`) in `locale`. */
-function localizedText(node: Record<string, unknown>, locale: string | undefined): string | undefined {
+/**
+ * One locale's form out of per-locale `forms`: the first declared locale it carries, else the first it carries. A card
+ * holds the same content once per locale; one of them is the content.
+ */
+function pickLocale(forms: Record<string, unknown>, locales: readonly string[]): unknown {
+  const declared = locales.find((locale) => locale in forms);
+  return declared !== undefined ? forms[declared] : Object.values(forms)[0];
+}
+
+/** A text field's value: `content`, else its per-locale form (1.0 `i18n`, 2.0 `i18n_content`). */
+function localizedText(node: Record<string, unknown>, locales: readonly string[]): string | undefined {
   const own = nonEmptyString(node.content)?.trim();
   if (own) return own;
   for (const key of ["i18n", "i18n_content"]) {
     const forms = node[key];
     if (!isRecord(forms)) continue;
-    const pick = (locale !== undefined ? forms[locale] : undefined) ?? Object.values(forms)[0];
-    const text = nonEmptyString(pick)?.trim();
+    const text = nonEmptyString(pickLocale(forms, locales))?.trim();
     if (text) return text;
   }
   return undefined;
@@ -126,9 +128,10 @@ function localizedText(node: Record<string, unknown>, locale: string | undefined
  */
 function sentCardLines(card: Record<string, unknown>): string[] {
   const lines: string[] = [];
-  const locale = cardLocale(card);
-  const header = isRecord(card.header) ? card.header : undefined;
-  const title = isRecord(header?.title) ? localizedText(header.title, locale) : undefined;
+  const locales = declaredLocales(card);
+  const titleOf = (header: unknown): string | undefined =>
+    isRecord(header) && isRecord(header.title) ? localizedText(header.title, locales) : undefined;
+  const title = titleOf(card.header);
   if (title) lines.push(title);
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -136,14 +139,17 @@ function sentCardLines(card: Record<string, unknown>): string[] {
       return;
     }
     if (!isRecord(node)) return;
-    const content = localizedText(node, locale);
+    // A collapsible panel's title is the one line it shows folded.
+    const panelTitle = titleOf(node.header);
+    if (panelTitle) lines.push(panelTitle);
+    const content = localizedText(node, locales);
     if (typeof node.tag === "string" && CARD_TEXT_TAGS.has(node.tag) && content) lines.push(content);
     else if (node.tag === "img") lines.push("[image]");
-    const label = isRecord(node.text) ? localizedText(node.text, locale) : undefined;
+    const label = isRecord(node.text) ? localizedText(node.text, locales) : undefined;
     if (label) lines.push(label);
     for (const key of ["elements", "columns", "fields", "actions"]) visit(node[key]);
   };
-  const i18nElements = isRecord(card.i18n_elements) && locale !== undefined ? card.i18n_elements[locale] : undefined;
+  const i18nElements = isRecord(card.i18n_elements) ? pickLocale(card.i18n_elements, locales) : undefined;
   visit(isRecord(card.body) ? card.body.elements : (card.elements ?? i18nElements));
   return lines;
 }
