@@ -193,7 +193,7 @@ because its server connections live as long as a session and a served session li
   | The service offers | Reach it with | Declared in | Its credential |
   |---|---|---|---|
   | A CLI (`gh`, `aws`, `stripe`) | The CLI in the environment, and a skill that teaches it | `environment.apt`, `skills/` | The variable the CLI reads |
-  | An API, a few calls this agent makes | Code tools | `tools/` (`defineTool`) | `defineTool({ secrets })` |
+  | An API this agent calls | Code tools, one per operation, beside the client they share | `tools/` (`defineTool`, §8.1) | `defineTool({ secrets })` |
   | An API with many operations, or one several agents or harnesses reuse | An MCP server of one's own, run locally (stdio) or hosted | `mcp.json` | `${VAR}` in `env` or `headers` |
   | An OpenAPI or Smithy description, or a Lambda function, on AWS | AgentCore Gateway, which turns it into an MCP server and handles the outbound authorization | `mcp.json` (`url`) | The Gateway's own |
   | A REST call or two | A skill with a script (`curl`, Python) | `skills/` | The variable the script reads |
@@ -439,7 +439,7 @@ The directory is the only source of an agent.
 my-agent/
   SYSTEM.md · APPEND_SYSTEM.md · AGENTS.md   identity and behavior
   skills/ · prompts/                          know-how
-  tools/                                      code tools
+  tools/                                      code tools: every value defineTool makes, in any file below
   extensions/                                 pi extensions
   channels/                                   triggers: messages
   schedules/<name>.md                         triggers: time
@@ -453,6 +453,18 @@ my-agent/
 Files declare what the agent is and what it works with; the config declares how it is served and deployed. A
 declaration that is data (contexts, MCP servers, schedules) is a file the agent, `fastagent` and other tools can write
 without TypeScript; code stays code (`tools/`, `channels/`, `extensions/`).
+
+`tools/` is anchored on `defineTool`, the way Trigger.dev finds every exported `task()` in its task directories:
+
+- Every module below `tools/` is loaded, at any depth, except tests (`*.test.*`, `*.spec.*`) and `.d.ts` files.
+  Every value a module exports that `defineTool` made is a tool; a module that exports none is a helper.
+- A tool is named by `defineTool({ name })`, or, when its module exports only that one tool, by the module's file name,
+  as today. A module that exports several names each of them.
+- Folders only organize: a service's tools and the client they share sit together and travel as one folder. Grouping
+  is `defineTool({ namespace })`.
+- A module that fails to load still refuses the start, and a name two tools share is still reported. A file meant to
+  export a tool that does not is no longer refused: the tool is missing from the startup report and `fastagent info`,
+  which list every tool with its file.
 
 `contexts.json` is one map by name, in JSON like `mcp.json`, `models.json` and `package.json`, with a JSON Schema
 for editors. A context's entry is a few fields and one sentence for the agent, the size the ecosystem keeps in a
@@ -664,6 +676,7 @@ entries, where the harness records each answer's usage.
 | Declarations | What the agent works with, in the TypeScript config | Files declare what the agent is and works with; the config declares how it is served and deployed (§8.1) |
 | Contexts | `contexts` in the config, cloned into `.contexts/` | `contexts.json`; each at `contexts/<name>/`: a clone, a link to the author's checkout, a mount (§8.1). Later, more storage kinds; writable contexts as long-term memory |
 | State | `.state/` on the host's storage | Declared apart from the contexts; on AgentCore, API storage when scaling out (§10.2) |
+| Code tools | One per file directly in `tools/`, default-exported; helpers kept outside | Every `defineTool` value exported from any module below `tools/`; helpers beside them (§8.1) |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
 | `invoke` | A function call that ends with its stream | A run that outlives its caller; one terminal event; one event vocabulary (§7) |
@@ -680,7 +693,7 @@ entries, where the harness records each answer's usage.
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior |
 | 2 | Upgrade to pi 1.0.4 |
-| 3 | Connectors and contexts as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/` |
+| 3 | Connectors and contexts as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/`; `tools/` anchored on `defineTool` |
 | 4 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
 | 5 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more context kinds |
@@ -756,6 +769,9 @@ entries, where the harness records each answer's usage.
 - A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
   service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
   connector file type, and `fastagent info` lists every connector (§5).
+- `tools/` is anchored on `defineTool`: every value it makes, exported from any module below `tools/` (tests and
+  `.d.ts` aside), is a tool, and a module that exports none is a helper. A tool is named by `defineTool({ name })`, or
+  by its file when its module exports only it. Folders only organize; grouping is `namespace` (§8.1).
 - The order: finish this design; rename engine to harness, in a refactor of its own; upgrade to pi 1.0.4; then MCP
   (#678). The update loop and evaluation come later (§12).
 - No field is reserved for a use nobody has designed.
