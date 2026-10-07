@@ -5,6 +5,7 @@
  * login, the model list — so none of them can read other credential layers or another registry than the runtime
  * does. Each used to compose these parts itself, and two of those copies drifted from the rule (#636, #660).
  */
+import { stat } from "node:fs/promises";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
 import { liveExtensions } from "./live-extensions.ts";
@@ -21,10 +22,13 @@ import {
   fastagentCredentialStore,
   resolveAuthLayers,
 } from "./auth.ts";
+import { log } from "../../log.ts";
 import {
   type ModelFiles,
+  checkModelFiles,
   createPiModelRuntime,
   environmentAuthSource,
+  modelFilePaths,
   modelRuntimeFiles,
   piModelsOver,
   probeAuthSource,
@@ -54,11 +58,14 @@ export interface AgentModels {
   /**
    * The registry: pi's built-ins, plus (with a directory) the agent's `models.json` and model catalog over the
    * machine's, plus `providers` and extension model declarations. An unbound catalog, built on first use and shared
-   * until the extensions' code changes, when it is built again; session bindings use createRuntime and their own
-   * extension instances.
+   * until the model files or the extensions' code change, when it is built again; session bindings use createRuntime
+   * and their own extension instances.
    */
   runtime(): Promise<ModelRuntime>;
-  /** A session-local registry, before its extensions are loaded. Credentials remain shared. */
+  /**
+   * A session-local registry, before its extensions are loaded, over the model files as they are now (the same read
+   * {@link runtime} is built from). Credentials remain shared.
+   */
   createRuntime(): Promise<ModelRuntime>;
   /**
    * What authenticates `provider` here, resolved exactly as a turn resolves it: the ONE answer the startup report and a
@@ -114,13 +121,9 @@ export function agentModels(
     : agentDir
       ? resolveAuthLayers(agentDir, source.authPath)
       : { path: source.authPath ?? GLOBAL_AUTH_PATH };
-  // The model files, read once for every runtime this agent builds: a session's and the control plane's.
-  let modelFiles: Promise<ModelFiles> | undefined;
-  const readModelFiles = (): Promise<ModelFiles> =>
-    (modelFiles ??= modelRuntimeFiles({
-      ...(agentDir ? { agentDir } : {}),
-      ...(machineLayer !== undefined ? { machineLayer } : {}),
-    }));
+  // The model files as they are now, for every runtime this agent builds: a session's and the control plane's.
+  const layering = { ...(agentDir ? { agentDir } : {}), ...(machineLayer !== undefined ? { machineLayer } : {}) };
+  const readModelFiles = liveModelFiles(modelFilePaths(layering), () => modelRuntimeFiles(layering));
   const store: FastagentCredentialStore | undefined = files
     ? agentCredentialStore(files, readModelFiles, { providers, warn: source.warn })
     : undefined;
@@ -142,11 +145,19 @@ export function agentModels(
   const extensionPaths = async (): Promise<readonly string[]> => (await loadable()).paths;
   // The catalog registers what the extensions declare, so it is rebuilt when their code changes: what the control
   // plane lists and lets a session select is what a session would load (a model an edited extension declares).
-  let registry: { generation: number; runtime: Promise<ModelRuntime> } | undefined;
+  // The same for the model files: one read of them, the one the sessions bind.
+  let registry: { generation: number; files: ModelFiles; runtime: Promise<ModelRuntime> } | undefined;
   const runtime = async (): Promise<ModelRuntime> => {
     const { paths, generation } = await loadable();
-    if (registry?.generation !== generation) {
-      const built = createRuntime().then(async (models) => {
+    const files = await readModelFiles();
+    if (registry?.generation !== generation || registry.files !== files) {
+      const built = createPiModelRuntime({
+        credentials,
+        files,
+        ...(agentDir ? { agentDir } : {}),
+        ...(providers ? { providers } : {}),
+        ...(machineLayer !== undefined ? { machineLayer } : {}),
+      }).then(async (models) => {
         if (agentDir)
           await definitionServices({
             cwd: agentDir,
@@ -156,7 +167,7 @@ export function agentModels(
           });
         return models;
       });
-      registry = { generation, runtime: built };
+      registry = { generation, files, runtime: built };
     }
     return registry.runtime;
   };
@@ -219,22 +230,93 @@ function agentCredentialStore(
   const { warn, providers = [] } = options;
   const fallback = auth.fallback;
   if (fallback === undefined) return fastagentCredentialStore(auth.path, { warn });
-  let project: Promise<ModelRuntime> | undefined;
-  const projectRuntime = (): Promise<ModelRuntime> => {
-    project ??= (async () => {
-      const runtime = await ModelRuntime.create({
-        credentials: fastagentCredentialStore(auth.path, { warn }),
-        ...(await (await modelFiles()).create()),
-        refreshOnCreate: false,
-      });
-      for (const provider of providers) runtime.registerNativeProvider(provider);
-      return runtime;
-    })();
-    return project;
+  // Rebuilt when the model files change: a key a models.json adds authenticates its provider from then on.
+  let project: { files: ModelFiles; runtime: Promise<ModelRuntime> } | undefined;
+  const projectRuntime = async (): Promise<ModelRuntime> => {
+    const files = await modelFiles();
+    if (project?.files !== files) {
+      const runtime = (async () => {
+        const created = await ModelRuntime.create({
+          credentials: fastagentCredentialStore(auth.path, { warn }),
+          ...(await files.create()),
+          refreshOnCreate: false,
+        });
+        for (const provider of providers) created.registerNativeProvider(provider);
+        return created;
+      })();
+      project = { files, runtime };
+    }
+    return project.runtime;
   };
   return fastagentCredentialStore(auth.path, {
     warn,
     fallbackPath: fallback,
     projectAuthenticates: async (providerId) => (await (await projectRuntime()).checkAuth(providerId)) !== undefined,
   });
+}
+
+/**
+ * The model files, LIVE: read again whenever one of `paths` changed since the last read (path, size and modification
+ * time, as live-extensions.ts tracks `extensions/`), so a model added to `models.json`, or to a catalog by
+ * `fastagent models --refresh` in any process, is selectable without a restart. The same object comes back until
+ * then, which is what the registries built from it are keyed by.
+ *
+ * A change that does not load (malformed JSON, an unreadable file) KEEPS the files last read, and says so once per
+ * change: the agent can write its own `models.json`, and a turn that failed on every message would leave it no turn
+ * to repair it with. With nothing read before, there is nothing to keep, and the read throws, as at any start.
+ */
+function liveModelFiles(paths: readonly string[], read: () => Promise<ModelFiles>): () => Promise<ModelFiles> {
+  let current: { fingerprint: string; files: ModelFiles } | undefined;
+  /** The fingerprint of a change that did not load, so it is said, and tried, once. */
+  let refused: string | undefined;
+  let pending: Promise<ModelFiles> | undefined;
+  const refresh = async (): Promise<ModelFiles> => {
+    let fingerprint: string | undefined;
+    let files: ModelFiles;
+    try {
+      fingerprint = await fingerprintFiles(paths);
+      if (current && (fingerprint === current.fingerprint || fingerprint === refused)) return current.files;
+      files = await read();
+      await checkModelFiles(files);
+    } catch (error) {
+      // THE boundary between an edit and the turns running on the files before it: thrown at a start (nothing to
+      // keep), said and kept from then on. A file that cannot even be stat'ed is said by its error, once.
+      if (!current) throw error;
+      const said = fingerprint ?? `unreadable: ${String(error)}`;
+      if (said !== refused) {
+        log.error(
+          `[fastagent] the model files changed and do not load, so the models read before are kept until they ` +
+            `are fixed: ${String(error)}`,
+        );
+      }
+      refused = said;
+      return current.files;
+    }
+    current = { fingerprint, files };
+    refused = undefined;
+    return files;
+  };
+  // Single-flight: concurrent reads after an edit share one read of the files.
+  return () => {
+    pending ??= refresh().finally(() => {
+      pending = undefined;
+    });
+    return pending;
+  };
+}
+
+/** Each of `paths` as `path, size, mtime` (or absent), in one string that changes when any of them does. */
+async function fingerprintFiles(paths: readonly string[]): Promise<string> {
+  const lines = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        const info = await stat(path);
+        return `${path}\t${info.size}\t${info.mtimeMs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return `${path}\tabsent`;
+        throw error;
+      }
+    }),
+  );
+  return lines.join("\n");
 }

@@ -310,8 +310,8 @@ export async function inGlobalCatalog(provider: string, id: string): Promise<boo
 }
 
 /**
- * The model files a runtime reads, READ ONCE: `agentModels` keeps one of these per agent, so every session's runtime
- * and the control plane's catalog see the same content however the files change while serving.
+ * The model files a runtime reads, as ONE read: `agentModels` keeps the current one per agent (read again when a file
+ * changes), so every session's runtime and the control plane's catalog built from it see the same content.
  */
 export interface ModelFiles {
   models?: ModelsFile;
@@ -322,6 +322,42 @@ export interface ModelFiles {
     allowModelNetwork: false;
     catalogBaseUrl?: string;
   }>;
+}
+
+/**
+ * Every file {@link modelRuntimeFiles} reads for these options, read or not: what a change to an agent's model files
+ * is detected by (agent-models.ts). None without a directory, which reads none.
+ */
+export function modelFilePaths(options: Pick<PiModelRuntimeOptions, "agentDir" | "machineLayer">): string[] {
+  const { agentDir } = options;
+  if (!agentDir) return [];
+  const machine = options.machineLayer !== false;
+  return [
+    ...(machine ? [machineModelsPath(), globalCatalogPath()] : []),
+    join(agentDir, AGENT_MODELS_FILE),
+    join(agentDir, AGENT_MODEL_CATALOG_FILE),
+  ];
+}
+
+/**
+ * Refuse model files pi would not load: a models.json it cannot parse makes `ModelRuntime.create` fall back to the
+ * built-ins and park the reason, which is thrown here, with where the content came from.
+ */
+function refuseUnloadable(runtime: ModelRuntime, models: ModelsFile | undefined): void {
+  const error = runtime.getError();
+  if (!error) return;
+  const origin = models?.merged
+    ? `\n\nThat file merges ${models.merged.machine} with ${models.merged.definition} (the agent's own wins a provider id).`
+    : models?.snapshotOf
+      ? `\n\nThat file is ${models.snapshotOf} as read.`
+      : "";
+  throw new Error(`${error}${origin}`);
+}
+
+/** Throw what a runtime over `files` would refuse, without building one to keep (no credentials, no registration). */
+export async function checkModelFiles(files: ModelFiles): Promise<void> {
+  const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), ...(await files.create()) });
+  refuseUnloadable(runtime, files.models);
 }
 
 /** The models.json a runtime for these options loads, and which model catalog it reads. */
@@ -480,17 +516,8 @@ export async function createPiModelRuntime(
 ): Promise<ModelRuntime> {
   const { models, create } = options.files ?? (await modelRuntimeFiles(options));
   const runtime = await ModelRuntime.create({ credentials: options.credentials, ...(await create()) });
-  // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason in
-  // getError().
-  const error = runtime.getError();
-  if (error) {
-    const origin = models?.merged
-      ? `\n\nThat file merges ${models.merged.machine} with ${models.merged.definition} (the agent's own wins a provider id).`
-      : models?.snapshotOf
-        ? `\n\nThat file is ${models.snapshotOf} as read at startup.`
-        : "";
-    throw new Error(`${error}${origin}`);
-  }
+  // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the reason.
+  refuseUnloadable(runtime, models);
   await withModelRegistration(runtime, async () => {
     registerAccountModels(runtime);
     for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);

@@ -624,7 +624,8 @@ not sent to `warn`, which stays about the credentials file. `fastagent login` re
 `refreshModelCatalog` fetches the model catalog from pi.dev into the agent's `models-store.json`, with the
 credentials `createPiAgentFromDir(dir, { authPath })` would use: pi asks only for the providers they authenticate, and
 may refresh an expired OAuth token to do so. Afterwards a model released after the installed pi is listed by
-`availableModelsFromDir` and runs. The file is part of the definition: commit it, and it ships with a deploy.
+`availableModelsFromDir`, and an agent already open lists, accepts (`update({ model })`) and runs it without being
+opened again. The file is part of the definition: commit it, and it ships with a deploy.
 Nothing refreshes it on its own, so serving makes no catalog request. It rejects, naming each provider that failed,
 when the refresh fails,
 takes longer than 15 seconds, or `PI_OFFLINE` is set, and when none of the credentials authenticates a provider (the

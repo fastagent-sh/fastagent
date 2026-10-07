@@ -282,7 +282,7 @@ fastagent dev
 templates are
 read on the next turn.
 With watching enabled, changes under the agent's `tools/` and `channels/`
-restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, `models.json`, and resolved
+restart the worker, as do changes to its `fastagent.config.ts`, `package.json`, and resolved
 `.env` (only when that file is inside the agent directory). The restart waits for the turns running in the worker
 to finish (at most 10 minutes), so editing your own `tools/` does not cut off the turn that made the edit; the
 change takes effect from the next turn after the restart.

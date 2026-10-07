@@ -23,7 +23,17 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
  *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
 const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, models.json, models-store.json, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, .secrets/.env`;
+
+/**
+ * Files a running worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
+ * without: an edit restarts nothing while a worker runs, and starts one that is down. Unwatched, the edit that repairs
+ * a stopped worker's model file would not be the edit that brings it back.
+ */
+export function revivesOnly(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === AGENT_MODELS_FILE || rel === AGENT_MODEL_CATALOG_FILE;
+}
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -36,11 +46,8 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // their only re-read).
     if (rel === AGENT_CONFIG_FILE) return false;
     if (rel === "package.json") return false;
-    // models.json is read ONCE per worker (agentModels' snapshot, which every session's runtime is built from), so an
-    // edit needs a restart like any other code input.
-    if (rel === AGENT_MODELS_FILE) return false;
-    // So is the model catalog: a `models --refresh` during `dev` restarts the worker onto the new models.
-    if (rel === AGENT_MODEL_CATALOG_FILE) return false;
+    // Watched for a worker that is down ({@link revivesOnly}).
+    if (revivesOnly(root, path)) return false;
     const segments = rel.split(sep);
     if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
     // The `.env` restarts too (credentials are process-bound).
@@ -149,7 +156,8 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     ignoreInitial: true, // the startup scan is not a change
     ignored: devWatchIgnored(agentDir, dotEnvPath(agentDir)),
   });
-  watcher.on("all", () => {
+  watcher.on("all", (_event, path) => {
+    if (worker && revivesOnly(agentDir, path)) return; // the running worker reads it itself
     clearTimeout(timer);
     timer = setTimeout(triggerReload, 200);
   });
@@ -157,7 +165,7 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); SYSTEM.md/APPEND_SYSTEM.md/AGENTS.md/skills/prompts go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); SYSTEM.md/APPEND_SYSTEM.md/AGENTS.md/skills/prompts/extensions/schedules/models.json go live without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely.
   if (!isUnderDir(dotEnvPath(agentDir), agentDir)) {
