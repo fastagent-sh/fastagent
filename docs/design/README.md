@@ -31,7 +31,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
-| [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + definition + context, the harness that runs it, the instance that holds its state, what it works on and what it knows, the context types, and the vocabulary later designs build on. |
+| [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, what it works on and what it knows, the context types, and the vocabulary later designs build on. |
 | [agent-service.md](agent-service.md) | **Proposed.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (contexts, connectors, environment), state, credentials, `invoke` as work that outlives its caller, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
 | [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing contexts, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |

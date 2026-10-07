@@ -1,6 +1,6 @@
 ---
 title: Agent model
-description: "What an agent is, as a program: model + definition + context, the harness that runs it, the instance that holds its state, what it works on and what it knows, and how each kind of context reaches every place an agent runs. The user-facing vocabulary every later design builds on."
+description: "What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, what it works on and what it knows, and how each kind of context reaches every place an agent runs. The user-facing vocabulary every later design builds on."
 type: design-doc
 status: implemented
 ---
@@ -17,19 +17,23 @@ rewritten, and behaves the same wherever it runs.
 ## 1. The model
 
 ```text
-Agent    = model + definition + context   what an author declares; a harness runs it
+Agent    = model + harness + context      composed by a definition: the agent's own directory
 Instance = runtime state                  one Agent's life in one place
 ```
+
+Each of the three is supplied by someone else: the model by a model provider, the harness by pi, the context by the
+repositories, clouds and other systems the agent works with. FastAgent defines the agent and composes the three, in its
+definition, and serves the result.
 
 What an author thinks: **I created an agent. It works on some things, and it knows others.**
 
 | Concept | Is | Contains |
 |---|---|---|
-| **Agent** | What an author creates, the way a program is | Its model, definition and contexts, as declared in its directory |
-| Model | What the agent thinks with | The default model and thinking level. Credentials are not part of it |
-| Definition | The program: who the agent is and how it works | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
-| Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
-| Harness | The loop that runs every agent | pi, which FastAgent provides. It is not the author's to write; the word means what it means across the ecosystem |
+| **Agent** | A model, a harness and a context, composed by a definition, the way a program is | As declared in its directory |
+| Model | What the agent thinks with, from a model provider | The default model and thinking level. Credentials are not part of it |
+| Harness | The loop that runs it: pi | Supplied by pi. The word means what it means across the ecosystem |
+| Context | What the agent works with, from outside its definition | Contexts: each one data, a directory the agent **works on** (writable) or **knows** (read-only), whose type says how it reaches each instance (§3). Beside them, the systems it reaches and what it runs in ([agent service](agent-service.md) §3) |
+| Definition | The program: who the agent is and how it works, and which model and context it uses | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
 Relations:

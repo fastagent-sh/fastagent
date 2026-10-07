@@ -68,20 +68,23 @@ init → dev (locally, on the team's channels) → deploy → the team uses it
 ## 3. The model
 
 ```text
-Agent
-  model          what it thinks with
-  definition     the program: who it is and how it works, which is its own directory
-  context        the data it works on and knows: directories and repositories
-  connectors     the other systems it reaches: APIs, tools, MCP servers
-  environment    what it runs in: the commands and runtimes the deployment provides
+Agent = model + harness + context, composed by a definition
+  model          what it thinks with, from a model provider
+  harness        the loop that runs it: pi (§9.1)
+  context        what it works with, from outside, declared side by side as:
+    contexts       the data it works on and knows: directories and repositories
+    connectors     the other systems it reaches: APIs, tools, MCP servers
+    environment    what it runs in: the commands and runtimes the deployment provides
+  definition     its own directory: who it is and how it works, and which model and context it uses
   remembers in   sessions: conversations
   started by     triggers: requests, messages, events, time, itself
-run by a harness: the loop that runs every agent, pi today (§9.1)
 ```
 
-Model, definition and context are the [agent model](agent-model.md)'s; connectors and environment stand beside the
-context, each declared on its own. Declaring all three apart from the definition is what lets a box be wiped and
-rebuilt from the declarations (§10.2), and what lets a team share them across its agents (§1).
+The formula is the [agent model](agent-model.md)'s. Each of the three is supplied by someone else: the model by a
+model provider, the harness by pi, the context by the repositories, clouds and MCP servers the agent works with.
+FastAgent defines the agent and composes the three, in its definition, and serves the result. Declaring the context
+apart from the definition is what lets a box be wiped and rebuilt from the declarations (§10.2), and what lets a team
+share it across its agents (§1).
 
 ### 3.1 Why three: every action has three parts
 
@@ -665,12 +668,13 @@ entries, where the harness records each answer's usage.
 - No new waiting states for human input: steering, follow-ups and cancelling cover it.
 - A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through the contexts
   and connectors several agents declare.
-- An agent works with three things, declared side by side: contexts (the data it works on and knows), connectors (the
-  other systems it reaches) and environment (what the deployment provides). The test in §3.2 separates contexts from
+- `Agent = model + harness + context`: the model from a model provider, the harness pi (the loop that runs an agent,
+  as the ecosystem uses the word), and the context everything it works with from outside. FastAgent defines the agent
+  and composes the three in its definition, its own directory, which the agent model called the harness until this
+  review, and serves the result.
+- The context is declared side by side, not nested: contexts (the data it works on and knows), connectors (the other
+  systems it reaches) and environment (what the deployment provides). The test in §3.2 separates contexts from
   connectors.
-- A harness is the loop that runs an agent (pi, later others), as the ecosystem uses the word. An agent's own
-  directory is its definition: `Agent = model + definition + context` in the agent model, which called it the harness
-  until this review.
 - The deployed environment is declared (`environment.apt`); locally the machine still lends its environment (§4).
 - A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
   follow-ups live in memory, at most 20 per session, and share the process's fate (§7.4).
