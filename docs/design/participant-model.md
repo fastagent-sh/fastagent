@@ -56,9 +56,9 @@ implement the participant.
 
 The two capabilities are independent, and FastAgent implements them separately: everything said but
 not addressed to the agent is folded into the next answered turn in that place, and speaking is
-governed by rule 1. Where the platform can be read (Feishu/Lark), that turn reads the place's history
-from it (`channels/feishu/history.ts`, design: `place-history.md`); elsewhere the channel keeps what it
-heard in a context buffer (`channels/kit/context-buffer.ts`).
+governed by rule 1. Where the platform can be read (Feishu/Lark, Slack), that turn reads the place's
+history from it (`channels/<platform>/history.ts`, design: `place-history.md`); Telegram, which has no
+history read, keeps what it heard in a context buffer (`channels/kit/context-buffer.ts`).
 
 This is what the platform's sensitive group-message scope actually buys. It does not grant the right
 to speak — it grants the ability to *hear*. Onboarding asks for it on every app; a tenant that withholds

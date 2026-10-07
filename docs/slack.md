@@ -194,24 +194,40 @@ which makes it a participant, and later bare replies reach it without the name. 
 speaks in that thread, addressing is ambiguous again and it returns to requiring a mention while still
 listening.
 
-A bare message that @-mentions only other people is discussion, never an ask: it is buffered like any
-other unsummoned message, and the Agent stays quiet. Only an absent mention — or one naming the Agent —
-reaches the rule above.
+A bare message that @-mentions only other people is discussion, never an ask: the Agent stays quiet,
+and the message reaches it, like any other unsummoned one, in the next turn it answers there
+([Place history](#place-history)). Only an absent mention — or one naming the Agent — reaches the rule above.
 
 Both halves are what this channel *heard*, not a claim about who is really in the thread: nothing is
-read back from Slack, so acceptance stays synchronous and a thread the Agent joined before this
+read back from Slack before the ACK, so acceptance stays synchronous and a thread the Agent joined before this
 deployment — or before a lost `thread-participants.json` — takes one mention to re-enter. That is the
 same bootstrap every thread starts with and it self-heals in one message. A consequence worth knowing:
 a thread where several people are present but only one has spoken *while the Agent was listening*
 counts as two-party.
 
-Unsummoned human discussion is bucketed by workspace + channel + concrete thread root.
-The next answered turn in that place receives a bounded sender-prefixed block. Consumption is durable:
+### Place history
 
-1. persist each background message before webhook ACK;
-2. snapshot with `peek` when the turn dequeues;
-3. commit exactly that snapshot only when the Agent emits `completed`;
-4. retain it on failure/crash, and retain messages that arrive while the turn is running.
+A place is a channel's top level or a thread in it. When a turn in a channel runs, the channel reads the place's
+messages from Slack (`conversations.history` for the top level, `conversations.replies` for a thread) and folds what
+was said since the Agent last answered there into the prompt, as `[recent discussion here: …]`. The first turn in a
+place reads its newest 20 messages. The read ends at the turn's own ask: an ask queued behind it, and anything said
+after it, are read by their own turn. Within that, the read leaves out what the session already holds: every message
+the channel posted as a turn's output (answers, queue notices, stop feedback), and the messages it took as input. An
+answer is left out of the place it lands in: the Agent answers a top-level ask in a thread under it, so the answer
+belongs to that thread. What the Agent posted itself, with `slack-send` from a schedule for example, stays, labelled
+`you`, so a later "what did point 3 mean?" has it.
+
+- People are shown by user id (`user U…`), other bots by name (`bot <name>`), with what an integration put in legacy
+  attachments. Slack's own messages (joins, topic changes) and messages with nothing to show are left out.
+- A post written as Markdown (every answer and `slack-send` post) is read from its blocks, tables included; Slack's
+  plain-text rendering of such a post drops its tables.
+- The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it
+  leaves out is counted in the prompt. A place with more than 50 messages since its last answer says earlier ones
+  are not shown.
+- A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
+  a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
+  the turn waits for it.
+- Direct messages and turns from a custom `route` read no history.
 
 This deliberately lets the app read messages in channels where it is installed; invite it only to channels
 it may read. State is local to the deployment and gitignored from git, but operators still own
@@ -231,7 +247,7 @@ Events persist stable Slack file IDs—never temporary private URLs. At dequeue,
 
 A current-message file is primary input: an inaccessible, deleted, external-without-bytes, not-yet-ready,
 oversized, or Slack Connect-denied file produces a visible failed turn instead of silently running without
-it. Earlier buffered files degrade individually; readable siblings still load and the prompt counts missing
+it. Files from the earlier discussion degrade individually; readable siblings still load and the prompt counts missing
 ones.
 
 The selected model must support vision for image inputs. Canvas and other remote/external file modes are
@@ -329,9 +345,13 @@ Slack state lives under:
 ├── turns.json
 ├── seen.json
 ├── thread-participants.json
-├── buffers.json
+├── history.json
 └── files/
 ```
+
+`history.json` holds, per place, the newest message its last answered turn read (the next read starts after it) and
+the messages turns posted there that no read has passed yet. Losing it costs one re-read of a place's newest 20
+messages, the Agent's earlier answers among them.
 
 `files/` holds downloaded inbound files, one directory per channel. They are kept — the path the agent
 was given stays readable for as long as the conversation can refer back to it — and FastAgent never
@@ -366,6 +386,6 @@ each one; both secrets ride the runtime environment and are unaffected.
 
 - HTTP Events API only; Socket Mode is not included.
 - One Slack workspace installation/token per channel instance; no OAuth installation store or Marketplace multi-tenancy.
-- Edited/deleted messages do not mutate Agent history or buffered context.
+- Edited/deleted messages do not change what a session already holds. A later read of the place sees them as they are then.
 - Slack's Agent messaging experience is enabled for newly onboarded apps and cannot be switched back to the legacy Assistant experience.
 - `rendering: "classic"` exists for plans/apps without native Agent streaming and for intentional top-level replies.

@@ -478,25 +478,30 @@ be what was crashing the process. A turn with nothing to deliver — or whose la
 ### Slack
 
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
-`Agent.invoke` boundary and reuses the shared `turn-queue`, generic `turn-store`, generic
-`context-buffer`, invoke-turn kit, `state`, `seen`, and `preview-kit`. Platform-specific modules own
+`Agent.invoke` boundary and reuses the shared `turn-queue`, generic `turn-store`, `place-history`,
+invoke-turn kit, `state`, `seen`, and `preview-kit`. Platform-specific modules own
 signature verification/event acceptance, message subtype policy, thread participation/context,
 private-file resolution, Web API transport, and dual native-stream / rate-limited edited-message
 rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
-then persists turn intent and buffered context before returning 200. Logical dedup uses
+then persists turn intent before returning 200. Logical dedup uses
 `(team, channel, ts)` because `app_mention` and `message.*` subscriptions may overlap; `event_id` alone
 does not identify that shared message. Sessions follow the place, not the ask: an answer goes in a
 thread on the ask and that thread *is* the session, so there are no session modes. `context` group mode
 subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where the
 participation rule allows it (see [participant-model.md](participant-model.md) §3), and folds other
-discussion with the same peek→completed→commit invariant as Telegram/Feishu. `mentions` keeps the
-least-privilege explicit-summon surface.
+discussion with the same peek→completed→commit invariant as Telegram/Feishu. That discussion is read
+from Slack when the turn runs (`history.ts`: `conversations.history` for a channel's top level,
+`conversations.replies` for a thread), up to the turn's own ask, the commit being a per-place cursor in
+`history.json` ([place-history.md](place-history.md)). An answer is recorded in the place it lands in
+(`SlackApi.recordingSends`; an answer to a top-level ask lands in the thread it opens), so that place's
+next read leaves it out, while what `slack-send` posts stays discussion. A DM or a custom-`route` turn
+reads no history.
 
 File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated
 downloads are host-restricted, timeout/cap guarded, and translated to vision images or absolute local
-paths. Primary files fail visibly; buffered files degrade individually. Outbound delivery uses Slack's
+paths. Primary files fail visibly; files from the discussion degrade individually. Outbound delivery uses Slack's
 external upload three-step protocol and stays at-least-once across an ambiguous completion response.
 
 Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent

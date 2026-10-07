@@ -8,8 +8,7 @@ updated: 2026-10-07
 
 # Place history
 
-**Status: phase 2 (Feishu/Lark) implemented. Phase 1 (Telegram's own posts) is in review (#754); Slack and thread
-reading are proposed.** It replaces the context buffer as the source of "what was said in this
+**Status: phases 1–3 (Telegram's own posts, Feishu/Lark, Slack) implemented; thread reading is proposed.** It replaces the context buffer as the source of "what was said in this
 place" for Feishu/Lark and Slack, and keeps a local record for Telegram, whose Bot API has no history read.
 It answers two issues together:
 
@@ -53,9 +52,12 @@ Measured on 2026-10-07 with read-only calls, except for a handful of `spike test
 | Humans / other bots | humans have `user` and no `bot_id`; another bot has a different `bot_id` |
 | System messages | `subtype` (`channel_join`, …), to be dropped |
 | Threads | the channel history holds each thread's root with `reply_count`; `conversations.replies` returns the root plus every reply, the agent's answers included |
-| Reading after a point | `oldest` + `inclusive=false` |
+| Reading up to a point | `latest` is exclusive: the ask's `ts` is the bound. Without `oldest`, `limit` takes the newest messages before it: `history` lists them newest first, `replies` oldest first, after the root |
+| Reading after a point | **not usable.** With `oldest`, both return the *oldest* `limit` after it, and `replies` then pages on to nothing: a thread of 8 replies read with `limit=3, oldest=r4` returned r5–r7 and an empty second page, losing r8. The reader takes the newest page and stops at its cursor itself, as on Feishu |
+| Thread root | `replies` lists the root first whatever the range |
+| Markdown posts | a `markdown_text` post (every answer, every `slack-send` post) is stored as blocks (`rich_text`, `header`, `table`, …); its `text` renders tables as ", with interactive elements". The reader renders the blocks, and falls back to `text` for a block type it does not know |
 | Rate limit | Tier 3 (50+/min) for an app built for its own workspace, which is what `add slack` creates. The 2025 limit of 1/min and 15 messages applies only to commercially distributed non-Marketplace apps |
-| Latency from a laptop in China | history 550–640 ms, replies ~320 ms. Not measured from a deployed host |
+| Latency from a laptop in China | history 550–640 ms, replies ~320–490 ms; a channel of long digests 1.4 s for 20 messages (497 KB, its blocks). Not measured from a deployed host |
 
 ### Feishu (`GET /open-apis/im/v1/messages`)
 
@@ -90,11 +92,15 @@ channels/kit/place-history.ts        engine-neutral
   DiscussionSource<E> { peek(place) → { text, consumed: E[] } (sync or async, never rejects); commit(place, consumed) }
   PlaceMessage        { id, at, from: { kind: "human" | "self" | "bot", label }, text, replyTo?, images, files }
   foldPlace(messages, earlier) → { text, folded }   the one budget and label format
+  createPlaceHistory<C>({ read, compare, … })      a DiscussionSource over a platform read: what a place
+                                                   remembers (cursor C, outputs) in history.json, what a read
+                                                   leaves out, forward-only commit, a failed read said
 
-channels/kit/context-buffer.ts       a DiscussionSource over pushed messages (Telegram, Slack until phase 3)
-channels/feishu/history.ts           a DiscussionSource over im/v1/messages (chat | thread), user_card_content,
-                                     members → names, a per-place cursor in history.json
-channels/slack/history.ts            phase 3: conversations.history | conversations.replies
+channels/kit/context-buffer.ts       a DiscussionSource over pushed messages (Telegram)
+channels/feishu/history.ts           the read: im/v1/messages (chat | thread), user_card_content, members → names;
+                                     C = (create_time, message_id)
+channels/slack/history.ts            the read: conversations.history (top level) | conversations.replies (thread);
+                                     C = ts
 ```
 
 The turn runner sees only `DiscussionSource`: it peeks when a turn runs and commits what it peeked when the turn's
@@ -103,21 +109,26 @@ answer is recorded, whichever source is behind it.
 Considered: each channel doing it its own way. Then "since my last turn here" is derived three times, which is the
 derivation that must not drift. The seam is where the platforms actually differ.
 
-### The fold (Feishu, `history.ts` + `foldPlace`)
+### The fold (`createPlaceHistory` + a platform read + `foldPlace`)
 
-1. Read the place's messages after its cursor **and up to the turn's own ask** (`end_time` server-side, then
-   `(create_time, message_id)`). With no cursor, the newest 20 before the ask. The cursor then moves to the ask. The
-   bound is what keeps this turn's ask, an ask queued behind it in the same session (its own turn: folding it here
-   would answer it twice) and anything said after it out of this turn; it needs no record of which messages were asks,
-   so a cold instance or a lost state file cannot break it. (Slack, in phase 3: `latest`.)
+1. Read the place's messages after its cursor **and up to the turn's own ask**. With no cursor, the newest 20 before
+   the ask. The cursor then moves to the ask. The bound is what keeps this turn's ask, an ask queued behind it in the
+   same session (its own turn: folding it here would answer it twice) and anything said after it out of this turn; it
+   needs no record of which messages were asks, so a cold instance or a lost state file cannot break it.
+   - Feishu: `end_time` server-side (seconds, inclusive), then `(create_time, message_id)`.
+   - Slack: `latest` = the ask's `ts`, exclusive, and no `oldest` (§2): the newest page, cut at the cursor.
 2. **Drop what the session holds**, by message id: every message a turn posted into the place (answers, queue notices,
    stop feedback) and, as prompt shaping only, what the channel took as input (`seen.json`: a `/stop`). The first is recorded per place, beside its cursor in `history.json`, by a client the turn posts
-   through (`FeishuApi.recordingSends`), and forgotten once a read has passed it: a shared bounded ring would let a
-   busy deployment evict a quiet place's last answer. `feishu-send` shares the plain client, so the agent's other
-   posts (a digest, a post into another chat) stay: they are what #633 is about.
+   through (`FeishuApi.recordingSends`, `SlackApi.recordingSends`), and forgotten once a read has passed it: a shared
+   bounded ring would let a busy deployment evict a quiet place's last answer. Slack records an output in the place it
+   lands in, since the answer to a top-level ask opens a thread: recorded against the channel, no channel read would
+   ever pass it. Most such threads are never asked in again, so `history.json` bounds the places no read has reached
+   (500) apart from all places (2,000), each least recently used first: a flood of them cannot push out a quiet
+   place's cursor, and the thread answered a moment ago is still there for its follow-up. The send tools share the plain client, so the agent's other posts (a digest, a post into another
+   chat) stay: they are what #633 is about.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
-3. Drop system and deleted messages. Label each sender: a human by name, `you` for this
-   app, `bot <app_id>` for another.
+3. Drop system and deleted messages. Label each sender: a human by name (Slack: by user id, see §6), `you` for
+   this app, another bot by its id (Feishu) or name (Slack).
 4. Bound newest-first by a character budget, so the discussion closest to the ask is what survives. The agent's own
    posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
    ("N earlier messages not shown"), and so is what the read never reached ("earlier messages not shown", without a
@@ -128,7 +139,8 @@ derivation that must not drift. The seam is where the platforms actually differ.
    commit-on-`completed` rule, in place of consume-by-identity. An answer that is then not delivered is re-delivered
    from the turn store, not re-run, so its discussion is not owed to another turn.
 6. **A failed read is said**, in the prompt ("could not read the recent discussion here: …") and as a `warn`. The turn
-   proceeds: context is not the ask.
+   proceeds: context is not the ask. For the same reason a read is never retried through a rate limit
+   (`CONTEXT_READ`): the asker sees nothing, not even the 👀, until it ends.
 
 **A lost cursor** (a deleted state file, a new instance) falls back to the place's last N messages. That costs
 repetition the session may already hold (the agent's earlier answers among them, labelled `you`), and never loses a
@@ -139,12 +151,12 @@ store in [participant-model.md](participant-model.md) §8: a cache may shape a p
 
 | Mechanism | After |
 |---|---|
-| Unsummoned discussion folded into the next answered turn (the buffer's main job) | `foldPlace` over a platform read, behind `DiscussionSource` (Feishu: `createFeishuPlaceHistory`) |
-| A thread's first turn folding the room's discussion (rung 3, participant-model §8) | the same over the room's history, read-only: the room's cursor does not move |
+| Unsummoned discussion folded into the next answered turn (the buffer's main job) | `foldPlace` over a platform read, behind `DiscussionSource` (`createFeishuPlaceHistory`, `createSlackPlaceHistory`) |
+| A thread's first turn folding the room's discussion (rung 3, participant-model §8) | the same over the room's history, read-only: the room's cursor does not move (Feishu; Slack has no rung 3, and its answer to a top-level ask already reads the room) |
 | Summon rule (§3: humans heard in a thread) | **unchanged**: it is decided on the ACK path from pushed events, and §3 rejects platform reads there. These reads happen in the turn, after the ACK |
 | Referent anchor (rung 2) and session inheritance (rung 4) | unchanged |
 | Feishu/Slack `context-buffer.ts` and their `buffers.json` | removed |
-| Telegram's buffer | stays: it is the only record a Telegram place has. `telegram-send` records what it sent into it through the shared `telegramTransport` (phase 1, #754). The buffer is already a `DiscussionSource`; whether it also renders through `foldPlace` is decided when #754 lands |
+| Telegram's buffer | stays: it is the only record a Telegram place has. `telegram-send` records what it sent into it through the shared `telegramTransport` (phase 1, #754) |
 | #374: the room reading a thread | an agent tool over the same platform reads: list this room's threads, read one; bounded, the current room only |
 
 ## 4. Scopes
@@ -163,7 +175,7 @@ says "could not read the recent discussion here: <the platform's error>" instead
 |---|---|---|
 | 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session. The buffer has one writer, the mounted channel; a send from a process with no channel mounted (`fastagent tool`, `invoke`) is delivered but not recorded, and the tool's result says so. Where channel state does not persist (AgentCore, no volume) the buffer itself does not, so this holds only within one instance's life (#754) | a schedule's post is in the chat's next answered turn, where the schedule fires in the serving process |
 | 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
-| 3. Slack | `history.ts`; buffer removed | the same, live |
+| 3. Slack | `history.ts`; the place state moved into the kit (`createPlaceHistory`), shared with Feishu; buffer removed | the same, live |
 | 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
 
 Docs move with the phases: participant-model.md §2 (hearing vs knowing), §7 and §8 (rung 3's source);
@@ -176,6 +188,8 @@ Decided in phase 2: a topic group's room is its topics' first posts. Its chat hi
 
 - **Latency from a host.** Every read above was measured from a laptop in China. A turn adds one read, and a thread's
   first turn adds two. Measure from Fly or AgentCore before choosing the budget and the page size.
-- **Slack DMs.** Each assistant thread is its own place. Check that `conversations.replies` on an assistant thread
-  returns what the user sees.
+- **Direct messages read no history**, on Feishu and Slack alike: every message there is an ask, so the read would
+  add only what the agent sent itself into the DM with a send tool. Whether a schedule's DM digest is worth one read
+  per DM turn is open.
+- **Slack names.** People are shown by user id. Names need `users:read` and `users.info`, which no current app has.
 - **Lark.** The same API on `open.larksuite.com` is assumed, not measured.

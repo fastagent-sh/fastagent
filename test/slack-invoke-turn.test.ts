@@ -10,6 +10,11 @@ import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts
 
 function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
   return {
+    recordingSends(this: SlackApi) {
+      return this;
+    },
+    channelHistory: async () => ({ messages: [], hasMore: false }),
+    threadReplies: async () => ({ messages: [], hasMore: false }),
     authTest: async () => ({}),
     postMessage: async () => "1.0",
     postMarkdown: async () => "1.0",

@@ -20,7 +20,14 @@ import { codePointPrefix } from "../kit/text.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
-import { type SlackBufferEntry, collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
+import {
+  type SlackDiscussion,
+  type SlackPlaceRead,
+  collectFoldedFiles,
+  createSlackPlaceHistory,
+  slackHistoryKey,
+  slackPlaceOf,
+} from "./history.ts";
 import { slackTurnStream } from "./invoke-turn.ts";
 import {
   type SlackEventEnvelope,
@@ -31,16 +38,12 @@ import {
   isSlackDirectMessage,
   isSlackGroupMessage,
   hasSlackMention,
-  hasSlackUserMention,
   isSlackHumanMessage,
   mentionsSlackUser,
   stripSlackMentions,
-  slackBufferText,
   slackEnvelope,
   slackFileIds,
   slackMessageText,
-  slackPlaceKey,
-  slackSenderLabel,
   slackTeamId,
 } from "./parse.ts";
 import {
@@ -53,7 +56,7 @@ import {
 } from "./preview.ts";
 import { completeSlackReaction, resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
 import { registerSlackApi } from "./shared-api.ts";
-import { type SlackTarget, createSlackApi } from "./slack-api.ts";
+import { type SlackApi, type SlackTarget, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
@@ -72,7 +75,8 @@ const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question o
 interface StoredSlackTurn extends TurnRecordBase {
   seq: number;
   baseText: string;
-  bufferKey: string;
+  /** The place whose history this turn reads (a channel's top level, or a thread); absent outside a group. */
+  historyKey?: string;
   teamId: string;
   channelId: string;
   threadTs?: string;
@@ -88,7 +92,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     typeof turn.seq === "number" &&
     typeof turn.session === "string" &&
     typeof turn.baseText === "string" &&
-    typeof turn.bufferKey === "string" &&
+    (turn.historyKey === undefined || typeof turn.historyKey === "string") &&
     typeof turn.teamId === "string" &&
     typeof turn.channelId === "string" &&
     (turn.threadTs === undefined || typeof turn.threadTs === "string") &&
@@ -175,16 +179,19 @@ interface SlackAuthentication {
   ready(): Promise<void>;
   teamId(): string | undefined;
   botUserId(): string | undefined;
+  botId(): string | undefined;
 }
 
 function createSlackAuthentication(api: ReturnType<typeof createSlackApi>, label: string): SlackAuthentication {
   let teamId: string | undefined;
   let botUserId: string | undefined;
+  let botId: string | undefined;
   let state: "pending" | "ready" | "failed" = "pending";
   const settled = api.authTest().then(
     (identity) => {
       teamId = identity.teamId;
       botUserId = identity.userId;
+      botId = identity.botId;
       state = "ready";
       log.info(`${label} authenticated${identity.teamId ? ` for workspace ${identity.teamId}` : ""}`);
     },
@@ -200,6 +207,7 @@ function createSlackAuthentication(api: ReturnType<typeof createSlackApi>, label
     settled,
     teamId: () => teamId,
     botUserId: () => botUserId,
+    botId: () => botId,
     ready: () =>
       state !== "pending"
         ? settled
@@ -268,7 +276,28 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
       `slack:${teamId}:${channelId}:${threadTs}`;
     const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
-    const buffer = createSlackContextBuffer(join(stateHome, "buffers.json"), label);
+    // Every message this channel took as input (a turn, a /stop) is in `seen`. A history read also leaves these out,
+    // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
+    const history = createSlackPlaceHistory({
+      api,
+      self: () => ({ userId: auth.botUserId(), botId: auth.botId() }),
+      label,
+      path: join(stateHome, "history.json"),
+      isTurnInput: (key, ts) => {
+        const place = slackPlaceOf(key);
+        return seen.has(`${place.teamId}:${place.channelId}:${ts}`);
+      },
+    });
+    /**
+     * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
+     * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
+     * top-level ask lands in the thread it opens. The send tool uses the plain client, so what the agent posts itself
+     * stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     */
+    const placeApi = (turn: { historyKey?: string; teamId: string }): SlackApi =>
+      turn.historyKey === undefined
+        ? api
+        : api.recordingSends((where, ts) => history.recordOutput(slackHistoryKey(turn.teamId, where), ts));
     const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredSlackTurn,
@@ -286,21 +315,25 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const target = targetOf(turn);
       if (turn.nativeQueueStatus) void api.setThreadStatus(target, "").catch(() => {});
       void settleSlackPreview(
-        api,
+        placeApi(turn),
         target,
         turn.previewTs,
         "⚠️ I couldn’t complete an earlier request — please ask again.",
       ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
     };
 
-    const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, SlackBufferEntry>({
+    const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, SlackDiscussion, SlackPlaceRead>({
       label,
       store,
-      discussion: buffer,
+      discussion: history,
       seen,
       toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),
-      discussionKey: (turn) => turn.bufferKey,
+      // The read ends at the ask (`messageRefOf`: the ts of the message that asked).
+      discussionKey: (turn) => {
+        const ask = messageRefOf(turn.id);
+        return turn.historyKey === undefined || ask === undefined ? undefined : { key: turn.historyKey, until: ask.ts };
+      },
       where: (turn) => `channel=${turn.channelId}`,
       onQueuedBehind(turn) {
         const nativeDmStatus = rendering === "native" && turn.threadTs && turn.channelId.startsWith("D");
@@ -310,9 +343,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
             .then(() =>
               nativeDmStatus
                 ? api.setThreadStatus(targetOf(turn), "is queued behind an earlier request…")
-                : api.postMessage(targetOf(turn), QUEUED_PLACEHOLDER).then((ts) => {
-                    turn.previewTs = ts;
-                  }),
+                : placeApi(turn)
+                    .postMessage(targetOf(turn), QUEUED_PLACEHOLDER)
+                    .then((ts) => {
+                      turn.previewTs = ts;
+                    }),
             )
             .catch((error) => log.warn(`${label} queue preview failed (the turn stays durable): ${String(error)}`)),
         };
@@ -333,7 +368,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
             .setThreadStatus(targetOf(turn), "is delayed by a temporary system issue and will retry after restart…")
             .catch((error) => log.warn(`${label} could not update a deferred Agent status: ${String(error)}`));
         } else if (turn.previewTs) {
-          void settleSlackPreview(api, targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
+          void settleSlackPreview(placeApi(turn), targetOf(turn), turn.previewTs, DEFERRED_PLACEHOLDER).catch((error) =>
             log.warn(`${label} could not update a deferred queue preview: ${String(error)}`),
           );
         }
@@ -348,7 +383,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               .setThreadStatus(targetOf(turn), "")
               .catch((error) => log.warn(`${label} could not clear a queued Agent status: ${String(error)}`));
           }
-          await deliverSlackAnswer(api, targetOf(turn), answer, turn.previewTs);
+          await deliverSlackAnswer(placeApi(turn), targetOf(turn), answer, turn.previewTs);
           // The 👀 on the asker's message was added by the run that produced this answer, and `execute`'s
           // acquire/release — the only thing that turns it into ✅ — is not on this path.
           const messageRef = messageRefOf(turn.id);
@@ -386,10 +421,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
                   { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                   {
                     primaryFileIds: turn.fileIds,
-                    buffered: collectSlackBufferedFiles(discussion.consumed, new Set(turn.fileIds)),
+                    buffered: collectFoldedFiles(
+                      discussion.consumed.flatMap((read) => read.folded),
+                      new Set(turn.fileIds),
+                    ),
                   },
                 ),
-                api,
+                placeApi(turn),
                 targetOf(turn),
                 formatError,
                 {
@@ -433,7 +471,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const group = isSlackGroupMessage(event);
       const direct = isSlackDirectMessage(event);
       const rootTs = event.thread_ts ?? event.ts;
-      const bufferKey = slackPlaceKey(teamId, event);
       // Listening is not speaking: every message the channel can see refines who takes part in its thread, whether or
       // not it is answered.
       if (group && event.thread_ts !== undefined) {
@@ -441,9 +478,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
 
       let routed = decide(envelope);
-      // Two different questions (see parse.ts).
       const addressesSomeone = hasSlackMention(event.text ?? "");
-      const mightBeTheBot = hasSlackUserMention(event.text ?? "");
       const structurallyMentionsBot = botUserId !== undefined && mentionsSlackUser(event.text ?? "", botUserId);
       // app_mention and message.* subscriptions can overlap.
       if (!routed && route === undefined && group && event.type === "message" && structurallyMentionsBot) routed = {};
@@ -463,22 +498,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         routed = {};
       }
       if (!routed) {
-        if (route === undefined && group && botUserId === undefined && mightBeTheBot) return;
-        if (route === undefined && group) {
-          const body = slackBufferText(slackMessageText(event));
-          if (body) {
-            const fileIds = slackFileIds(event);
-            buffer.push(bufferKey, {
-              sender: slackSenderLabel(event),
-              body,
-              messageId: event.ts,
-              replyTo: event.thread_ts,
-              fileIds: fileIds.length ? fileIds : undefined,
-            });
-            seen.add(logicalId);
-            log.debug(`${label} buffered unsummoned group message ${logicalId} (place ${bufferKey})`);
-          }
-        }
+        // Not lost: the turn that is summoned here reads it from the place's history.
+        log.debug(`${label} not summoned — message ${logicalId}`);
         return;
       }
 
@@ -489,13 +510,22 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
       const defaultSession = threadKey(teamId, event.channel, rootTs);
+      // A group's discussion, under the default routing: a routed session's place is the router's to decide.
+      const historyKey =
+        route === undefined && group
+          ? slackHistoryKey(teamId, { channelId: event.channel, threadTs: event.thread_ts })
+          : undefined;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
       if (isStopText(stripSlackMentions(event.text ?? ""))) {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
         sideTasks.track(
           dispatchStop(control, routed.session ?? defaultSession, label)
-            .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
+            .then((feedback) =>
+              placeApi({ historyKey, teamId })
+                .postMessage(target, feedback)
+                .then(() => undefined),
+            )
             .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
         );
         return;
@@ -514,7 +544,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           seq: ++seq,
           session: routed.session ?? defaultSession,
           baseText,
-          bufferKey,
+          ...(historyKey !== undefined ? { historyKey } : {}),
           teamId,
           channelId: targetChannel,
           threadTs,
