@@ -8,8 +8,8 @@ updated: 2026-10-07
 
 # Place history
 
-**Status: phases 1 (Telegram's own posts) and 2 (Feishu/Lark) implemented; Slack and thread reading proposed.** It
-replaces the context buffer as the source of "what was said in this
+**Status: phase 2 (Feishu/Lark) implemented. Phase 1 (Telegram's own posts) is in review (#754); Slack and thread
+reading are proposed.** It replaces the context buffer as the source of "what was said in this
 place" for Feishu/Lark and Slack, and keeps a local record for Telegram, whose Bot API has no history read.
 It answers two issues together:
 
@@ -107,34 +107,38 @@ derivation that must not drift. The seam is where the platforms actually differ.
 
 1. Read the place's messages after its cursor. With no cursor, the newest 20.
 2. **Drop what the session holds**, by message id: every message the channel took as input (`seen.json`: a turn,
-   answered or queued, or a `/stop`) and every message it posted as turn output (`sent.json`: answers, queue notices,
-   stop feedback). The channel's own client records the second (`FeishuApi.recordingSends`); `feishu-send` shares the
-   plain client, so the agent's other posts (a digest, a post into another chat) stay: they are what #633 is about.
+   answered or queued, or a `/stop`) and every message a turn posted into the place (answers, queue notices, stop
+   feedback). The second is recorded per place, beside its cursor in `history.json`, by a client the turn posts
+   through (`FeishuApi.recordingSends`), and forgotten once a read has passed it: a shared bounded ring would let a
+   busy deployment evict a quiet place's last answer. `feishu-send` shares the plain client, so the agent's other
+   posts (a digest, a post into another chat) stay: they are what #633 is about.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
-3. Drop system and deleted messages. Label each sender: a human by name, `you (sent outside an answer, …)` for this
+3. Drop system and deleted messages. Label each sender: a human by name, `you` for this
    app, `bot <app_id>` for another.
 4. Bound newest-first by a character budget. The agent's own posts get a larger per-message cap, because a digest is
    thousands of characters. What the budget cut is said ("N earlier messages not shown"), never dropped silently.
-5. Advance the cursor when the turn's answer is delivered: the buffer's commit-on-`completed` rule, in place of
-   consume-by-identity.
+5. Advance the cursor when the turn's answer is recorded (`onAnswered`, before it is delivered): the buffer's
+   commit-on-`completed` rule, in place of consume-by-identity. An answer that is then not delivered is re-delivered
+   from the turn store, not re-run, so its discussion is not owed to another turn.
 6. **A failed read is said**, in the prompt ("could not read the recent discussion here: …") and as a `warn`. The turn
    proceeds: context is not the ask.
 
 **A lost cursor** (a deleted state file, a new instance) falls back to the place's last N messages. That costs
-repetition the session may already hold, and never loses a message. This is the same contract as the participants
+repetition the session may already hold (the agent's earlier answers among them, labelled `you`), and never loses a
+message. This is the same contract as the participants
 store in [participant-model.md](participant-model.md) §8: a cache may shape a prompt, never a durable claim.
 
 ### What it replaces, and what it does not
 
 | Mechanism | After |
 |---|---|
-| Unsummoned discussion folded into the next answered turn (the buffer's main job) | `recentDiscussion` over `PlaceHistory` |
+| Unsummoned discussion folded into the next answered turn (the buffer's main job) | `foldPlace` over a platform read, behind `DiscussionSource` (Feishu: `createFeishuPlaceHistory`) |
 | A thread's first turn folding the room's discussion (rung 3, participant-model §8) | the same over the room's history, read-only: the room's cursor does not move |
 | Summon rule (§3: humans heard in a thread) | **unchanged**: it is decided on the ACK path from pushed events, and §3 rejects platform reads there. These reads happen in the turn, after the ACK |
 | Referent anchor (rung 2) and session inheritance (rung 4) | unchanged |
 | Feishu/Slack `context-buffer.ts` and their `buffers.json` | removed |
-| Telegram's buffer | stays: it is the only record a Telegram place has. `telegram-send` records what it sent into it through the shared `telegramTransport` (phase 1). Whether it later becomes a local `PlaceHistory` behind the same fold is decided once the fold exists |
-| #374: the room reading a thread | an agent tool over the same `PlaceHistory`: list this room's threads, read one; bounded, the current room only |
+| Telegram's buffer | stays: it is the only record a Telegram place has. `telegram-send` records what it sent into it through the shared `telegramTransport` (phase 1, #754). The buffer is already a `DiscussionSource`; whether it also renders through `foldPlace` is decided when #754 lands |
+| #374: the room reading a thread | an agent tool over the same platform reads: list this room's threads, read one; bounded, the current room only |
 
 ## 4. Scopes
 

@@ -796,9 +796,7 @@ describe("turn flow", () => {
     // A schedule's digest, posted through the send tool's transport.
     await feishuTransport(agentDir).sendText({ chatId: "oc_1" }, "Daily digest: 3 PRs merged");
     await ask("om_first");
-    expect(calls[0]?.prompt.text).toMatch(
-      /you \(sent outside an answer, e\.g\. with a send tool\) \(msg om_bot_\d+\): Daily digest: 3 PRs merged/,
-    );
+    expect(calls[0]?.prompt.text).toMatch(/you \(msg om_bot_\d+\): Daily digest: 3 PRs merged/);
 
     // The first answer is in the session already; nothing else was said.
     await ask("om_second");

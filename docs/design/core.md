@@ -584,19 +584,20 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   confirm page (`FEISHU_AGENT_SCOPES`, the sensitive `im:message.group_msg` among them); onboarding and the
   channel's startup both name any a tenant withheld, with what the agent loses without it. A mention arriving before the startup `bot/v3/info` settles is kept as
   context rather than answered (fail-closed: without its own open_id the channel cannot tell a mention
-  of itself from one of someone else). Non-`user` senders are dropped as asks.
+  of itself from one of someone else). Non-`user` senders are dropped as asks. A reply summon carries only
+  `parent_id`: the referent is fetched as primary input and the chain above it as context (oldest-first,
+  one shared text budget, a visible truncation line when the walk ends short of the root — see
+  participant-model.md §8).
 - **The platform is the place's memory; the channel stores none of it** (design:
   [place-history.md](place-history.md)). A group turn reads its place's messages since the agent last
   answered there (`history.ts` over `GET /im/v1/messages`) and folds them into the prompt under the same
   peek→commit-on-`completed` invariant, the commit being a per-place cursor in `history.json`. The read
-  leaves out what the session holds: the ids the channel took as input (`seen.json`) and the ids it
-  posted as turn output (`sent.json`, recorded by the channel's own client from
-  `FeishuApi.recordingSends`). The send tool shares the plain client, so what the agent posts itself
-  stays in the discussion — the gap a buffer could never fill, since a bot never receives its own
-  messages. A failed read costs the discussion, never the turn. A reply summon carries only
-  `parent_id`: the referent is fetched as primary input and the chain above it as context (oldest-first,
-  one shared text budget, a visible truncation line when the walk ends short of the root — see
-  participant-model.md §8).
+  leaves out what the session holds: the ids the channel took as input (`seen.json`) and the ids a turn
+  posted into the place, which the place keeps beside its cursor until a read passes them (recorded by a
+  per-place client from `FeishuApi.recordingSends`, so a busy deployment cannot evict a quiet place's
+  last answer). The send tool shares the plain client, so what the agent posts itself stays in the
+  discussion — the gap a buffer could never fill, since a bot never receives its own messages. A failed
+  read costs the discussion, never the turn.
 - **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
   writes the corresponding factory into the channel module. WebSocket needs only App ID/Secret and
   skips token capture, tunnel, Request URL registration, and platform crypto; the official SDK

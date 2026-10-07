@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,14 +25,7 @@ function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}):
 }
 
 /** A place whose messages the test appends to (oldest first); the fake lists them newest first, as the platform does. */
-function setup(
-  opts: {
-    turnInputs?: string[];
-    turnOutputs?: string[];
-    names?: () => Promise<Map<string, string>>;
-    path?: string;
-  } = {},
-) {
+function setup(opts: { turnInputs?: string[]; names?: () => Promise<Map<string, string>>; path?: string } = {}) {
   const messages: FeishuListedMessage[] = [];
   let fail: Error | undefined;
   const listMessages = vi.fn(async (_container: { type: "chat" | "thread"; id: string }, pageSize: number) => {
@@ -51,7 +44,6 @@ function setup(
       label: "[feishu]",
       path,
       isTurnInput: (id) => opts.turnInputs?.includes(id) ?? false,
-      isTurnOutput: (id) => opts.turnOutputs?.includes(id) ?? false,
     });
   return {
     messages,
@@ -102,7 +94,8 @@ describe("Feishu place history", () => {
   });
 
   it("leaves out what the session holds — turn asks and turn answers — and keeps the agent's own posts", async () => {
-    const place = setup({ turnInputs: ["om_ask"], turnOutputs: ["om_answer"] });
+    const place = setup({ turnInputs: ["om_ask"] });
+    place.history.recordOutput("oc_1", "om_answer");
     place.messages.push(
       msg("om_ask", "@bot summarize"),
       msg("om_answer", "the summary", { sender: { id: "cli_self", sender_type: "app" } }),
@@ -116,13 +109,42 @@ describe("Feishu place history", () => {
     expect(text).not.toContain("the summary");
     expect(text).not.toContain("oops");
     // A digest is the agent's own words: kept past the per-line bound people get, up to its own cap.
-    expect(text).toMatch(
-      /^you \(sent outside an answer, e\.g\. with a send tool\) \(msg om_digest\): daily digest x{1900,}/,
-    );
+    expect(text).toMatch(/^you \(msg om_digest\): daily digest x{1900,}/);
     expect(text).toContain(" … (truncated)");
     expect(text).toContain("bot cli_ci (msg om_other_bot): build #42 green");
     // Only humans need names, and only humans are asked about.
     expect(place.chatMemberNames).toHaveBeenCalledTimes(0);
+  });
+
+  it("a turn's answer, posted after its read, is left out of the next read — however long the place is quiet", async () => {
+    const place = setup({ turnInputs: ["om_ask1", "om_ask2"] });
+    const self = { sender: { id: "cli_self", sender_type: "app" } };
+    place.messages.push(msg("om_ask1", "@bot first"));
+    const read = await place.history.peek("oc_1");
+    // The answer lands after the read, through the place's recording client.
+    place.messages.push(msg("om_answer1", "first answer", self));
+    place.history.recordOutput("oc_1", "om_answer1");
+    place.history.commit("oc_1", read.consumed);
+
+    // Other places' traffic does not touch this place's record, and a restart keeps it.
+    const reopened = place.open();
+    for (let i = 0; i < 1500; i++) reopened.recordOutput(`oc_busy_${i % 3}`, `om_busy_${i}`);
+    place.messages.push(msg("om_aside", "days later"), msg("om_ask2", "@bot again"));
+    expect(await answeredTurn(reopened, "oc_1")).toBe("Alice (msg om_aside): days later");
+
+    // Passed by a read, the answer no longer needs remembering.
+    const saved = JSON.parse(readFileSync(place.path, "utf8")) as Record<string, { outputs: string[] }>;
+    expect(saved.oc_1?.outputs).toEqual([]);
+  });
+
+  it("an output that cannot be persisted is still left out, and the failure is said", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const place = setup();
+    mkdirSync(`${place.path}.tmp`); // the atomic write's temp path is a directory: every write fails
+    place.messages.push(msg("om_answer", "an answer", { sender: { id: "cli_self", sender_type: "app" } }));
+    expect(() => place.history.recordOutput("oc_1", "om_answer")).not.toThrow(); // the message was sent
+    expect(warn.mock.calls.join("\n")).toContain("may fold the agent's own answer");
+    expect(await answeredTurn(place.history, "oc_1")).toBe("");
   });
 
   it("a place's first read takes its newest 20 messages, and says there are earlier ones", async () => {
@@ -232,6 +254,6 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_1", "still read"));
     expect(await answeredTurn(place.history, "oc_1")).toContain("still read");
     expect(warn.mock.calls.join("\n")).toContain("unexpected shape");
-    expect(JSON.parse(readFileSync(path, "utf8")).oc_1.id).toBe("om_1");
+    expect(JSON.parse(readFileSync(path, "utf8")).oc_1.cursor.id).toBe("om_1");
   });
 });

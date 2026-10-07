@@ -256,18 +256,13 @@ function createFeishuRuntimeFactory(
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    // The channel's state home must exist before the sent ring below can be read.
     if (!isAbsolute(stateRoot)) {
       throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // the files below may carry chat content; the agent .gitignore covers .state/
-    // What this channel posts as turn output (answers, queue notices, stop feedback): already in the session, so a
-    // place's history leaves it out. The send tool's client is not this one, so what the agent sends itself stays.
-    const sent = createSeenRing(join(stateHome, "sent.json"), label, 1000);
-    // Tools share the plain client (registered below); the channel sends through the recording one.
-    const sharedApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
-    const api: FeishuApi = sharedApi.recordingSends((id) => sent.add(id));
+    // Shared with the send tools (registered below). A turn's own posts go through `placeApi`.
+    const api = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     void api.listAppScopes().then(
       (scopes) => {
@@ -304,8 +299,14 @@ function createFeishuRuntimeFactory(
       label,
       path: join(stateHome, "history.json"),
       isTurnInput: (id) => seen.has(id),
-      isTurnOutput: (id) => sent.has(id),
     });
+    /**
+     * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
+     * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
+     * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     */
+    const placeApi = (historyKey: string | undefined): FeishuApi =>
+      historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
@@ -323,7 +324,7 @@ function createFeishuRuntimeFactory(
     // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
+      void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), r.preview, body).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
       );
     };
@@ -346,7 +347,7 @@ function createFeishuRuntimeFactory(
         });
         const mount = (): void => {
           fired = true;
-          mountFeishuPreview(api, queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
+          mountFeishuPreview(placeApi(rec.historyKey), queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
             .then(
               (preview) => {
                 rec.preview = preview;
@@ -372,14 +373,15 @@ function createFeishuRuntimeFactory(
       // honest delayed status.
       onDeferred: (rec) => {
         if (rec.preview !== undefined) {
-          void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
-            log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
+          void settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch(
+            (e) => log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
           );
         }
       },
       notifyDropped,
       // `rec.preview`: the queue card THIS process mounted if the record waited behind another turn.
-      deliverAnswer: (rec, answer) => portJoin(() => settleFeishuPreview(api, targetOf(rec), rec.preview, answer)),
+      deliverAnswer: (rec, answer) =>
+        portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), rec.preview, answer)),
       execute: (rec, discussion, onAnswered) =>
         Effect.promise(async () =>
           // Read-only: the room's own next answered turn still reads it into the room's memory (§8).
@@ -402,13 +404,14 @@ function createFeishuRuntimeFactory(
             // Recorded at ingress (see submit) — never re-derived from the session key, which may be a routed OPAQUE id
             // that only looks like a place key.
             const parentSession = rec.parentSession;
+            const turnApi = placeApi(rec.historyKey);
             return feishuReply(
               feishuTurnStream(
                 agent,
                 rec.session,
                 prompt,
                 {
-                  api,
+                  api: turnApi,
                   chatId: rec.chatId,
                   filesDir: attachmentsDir(stateHome),
                   label,
@@ -417,7 +420,7 @@ function createFeishuRuntimeFactory(
                 },
                 { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               ),
-              api,
+              turnApi,
               targetOf(rec),
               formatError,
               rec.preview,
@@ -427,7 +430,7 @@ function createFeishuRuntimeFactory(
           }),
         ),
     });
-    registerFeishuApi(stateRoot, kind, sharedApi);
+    registerFeishuApi(stateRoot, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant model §3), and it
@@ -513,7 +516,11 @@ function createFeishuRuntimeFactory(
         seen.add(m.message_id);
         sideTasks.track(
           dispatchStop(control, session, label)
-            .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
+            .then((feedback) =>
+              placeApi(historyKey)
+                .sendText({ chatId, replyTo, replyInThread }, feedback)
+                .then(() => undefined),
+            )
             .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
         );
         return;

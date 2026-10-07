@@ -276,7 +276,7 @@ the platform (`GET /im/v1/messages`) and folds what was said since the Agent las
 `[recent group discussion: …]`. The first turn in a place reads its newest 20 messages. The read leaves out what the
 session already holds: every message that was a turn (answered or queued) and every message the channel posted as a
 turn's output (answers, queue notices, stop feedback). What the Agent posted itself, with `feishu-send` from a
-schedule for example, stays, labelled `you (sent outside an answer, …)`, so a later "what did point 3 mean?" has it.
+schedule for example, stays, labelled `you`, so a later "what did point 3 mean?" has it.
 
 - People are named from the chat's member list (`im:chat.members:read`), other bots as `bot <app_id>`.
 - Cards are read as they were sent (`card_msg_content_type=user_card_content`), so a Card 2.0 digest reads as its text.
@@ -384,8 +384,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s the channel took as input (a turn, a `/stop`); Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key. A place's history read leaves these out,
-- `sent.json` — the most recent 1,000 `message_id`s the channel posted as turn output, which a history read leaves out,
-- `history.json` — per place, the newest message its last answered turn read; the next read starts after it. Losing it costs one re-read of a place's newest 20 messages,
+- `history.json` — per place, the newest message its last answered turn read (the next read starts after it) and the messages turns posted there that no read has passed yet (answers, queue notices, stop feedback; the next read leaves them out). Losing it costs one re-read of a place's newest 20 messages, the Agent's earlier answers among them,
 - `bot.json` — the bot's own `open_id`, bound to its `appId` and cached from `bot/v3/info` so a cold start recognizes @mentions immediately,
 - `thread-participants.json` — per thread, the humans the Agent heard (at most two) and whether it has answered there. Losing the file costs one mention per thread to re-enter it,
 - `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Never pruned by FastAgent; size and prune it yourself.

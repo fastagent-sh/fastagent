@@ -4,8 +4,10 @@
  * what was pushed — never the agent's own posts, and never what was said before the channel started.
  *
  * What the session already holds is left out: the messages that were turns (`isTurnInput`: every ask, answered or
- * queued) and the messages this channel sent as turn output (`isTurnOutput`: answers, queue notices). What the agent
- * sent itself from a send tool stays — that is what a later "what did point 3 mean?" is about.
+ * queued) and the messages a turn posted into the place (`recordOutput`: answers, queue notices, stop feedback). A
+ * place keeps its own outputs beside its cursor until a read has passed them, so a busy deployment cannot push a quiet
+ * place's last answer out of a shared ring. What the agent sent itself from a send tool stays — that is what a later
+ * "what did point 3 mean?" is about.
  */
 import { log } from "../../log.ts";
 import { capBufferedRefs } from "../kit/context-buffer.ts";
@@ -23,8 +25,14 @@ const FIRST_READ = 20;
 /** How long a chat's member names are reused before they are read again. */
 const NAMES_TTL_MS = 10 * 60_000;
 
-/** Places whose cursor is kept, oldest dropped: a dropped cursor costs one re-read of {@link FIRST_READ} messages. */
-const MAX_CURSORS = 2000;
+/** Places kept, least recently used dropped: a dropped place costs one re-read of {@link FIRST_READ} messages. */
+const MAX_PLACES = 2000;
+
+/**
+ * A place's outputs not yet passed by a read. One turn posts a handful (an answer, its chunks, a queue notice); the
+ * bound only stops a place whose reads keep failing from growing without end.
+ */
+const MAX_OUTPUTS = 200;
 
 /** The newest message a committed turn's read reached: the next read starts after it. */
 interface PlaceCursor {
@@ -32,11 +40,19 @@ interface PlaceCursor {
   id: string;
 }
 
-/** One turn's read: where it reached, and what it folded (whose attachments ride along). */
+/** What a place remembers between turns. */
+interface PlaceState {
+  cursor?: PlaceCursor;
+  /** Messages turns posted here that no read has passed yet. */
+  outputs: string[];
+}
+
+/** One turn's read: where it reached, what it folded (whose attachments ride along), and which outputs it passed. */
 export interface FeishuDiscussion {
   /** Absent when the read failed: the cursor then stays, and the next turn reads the same messages again. */
   cursor?: PlaceCursor;
   folded: PlaceMessage[];
+  outputsPassed: string[];
 }
 
 /** A background resource carried into a turn, with attribution for its prompt manifest. */
@@ -85,6 +101,8 @@ export function collectFoldedAttachments(
 }
 
 export interface FeishuPlaceHistory extends DiscussionSource<FeishuDiscussion> {
+  /** A message a turn posted into this place: in the session already, so the place's next read leaves it out. */
+  recordOutput(key: string, messageId: string): void;
   /**
    * A thread's room, read-only, for the thread's first turn (participant-model §8): the room's own next answered turn
    * still reads it, so each place takes the discussion into its own memory.
@@ -97,13 +115,29 @@ export function createFeishuPlaceHistory(deps: {
   /** THIS app's id: a message whose sender is this app is the agent's own. */
   appId: string;
   label: string;
-  /** Where the cursors persist. */
+  /** Where each place's cursor and outputs persist. */
   path: string;
   isTurnInput(messageId: string): boolean;
-  isTurnOutput(messageId: string): boolean;
 }): FeishuPlaceHistory {
   const { api, appId, label, path } = deps;
-  const cursors = loadCursors(path, label);
+  const places = loadPlaces(path, label);
+  /** Mark `key` most recently used (the map's order is the eviction order) and persist every place. */
+  const save = (key: string, state: PlaceState, lost: string): void => {
+    places.delete(key);
+    places.set(key, state);
+    while (places.size > MAX_PLACES) {
+      const oldest = places.keys().next().value;
+      if (oldest === undefined) break;
+      places.delete(oldest);
+    }
+    try {
+      saveStateFile(path, Object.fromEntries(places));
+    } catch (error) {
+      // Both callers are past a platform write (a sent message, a recorded answer): throwing would report a send that
+      // happened as failed. The state holds in memory; only a restart loses it.
+      log.warn(`${label} could not write ${path} (${lost}): ${String(error)}`);
+    }
+  };
   const names = new Map<string, { names: Map<string, string>; at: number }>();
   const namesFailed = new Set<string>();
 
@@ -125,9 +159,13 @@ export function createFeishuPlaceHistory(deps: {
   };
 
   /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
-  const read = async (key: string): Promise<{ messages: PlaceMessage[]; newest?: PlaceCursor; earlier: boolean }> => {
+  const read = async (
+    key: string,
+  ): Promise<{ messages: PlaceMessage[]; newest?: PlaceCursor; earlier: boolean; outputsPassed: string[] }> => {
     const place = placeOf(key);
-    const cursor = cursors.get(key);
+    const state = places.get(key);
+    const cursor = state?.cursor;
+    const outputs = new Set(state?.outputs);
     const listed = await api.listMessages(
       place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
       PAGE_SIZE,
@@ -150,11 +188,12 @@ export function createFeishuPlaceHistory(deps: {
       ? !reachedCursor && (listed.hasMore || listed.items.length >= PAGE_SIZE)
       : fresh.length >= FIRST_READ && (listed.items.length > FIRST_READ || listed.hasMore);
 
+    const outputsPassed = fresh.filter(({ id }) => outputs.has(id)).map(({ id }) => id);
     const kept = fresh.reverse().filter(({ item, id }) => {
       if (item.deleted === true || item.msg_type === "system" || !item.sender?.sender_type) return false;
       // A topic group lists every topic's replies with its chat; the room is its top-level messages.
       if (!place.threadId && item.thread_id && item.root_id) return false;
-      return !deps.isTurnInput(id) && !deps.isTurnOutput(id);
+      return !deps.isTurnInput(id) && !outputs.has(id);
     });
     const people = kept.some(({ item }) => item.sender?.sender_type === "user")
       ? await memberNames(place.chatId)
@@ -170,7 +209,7 @@ export function createFeishuPlaceHistory(deps: {
       const from: PlaceMessage["from"] =
         item.sender?.sender_type === "app"
           ? senderId === appId
-            ? { kind: "self", label: "you (sent outside an answer, e.g. with a send tool)" }
+            ? { kind: "self", label: "you" }
             : { kind: "bot", label: `bot ${senderId}` }
           : { kind: "human", label: people.get(senderId) ?? `user ${senderId}` };
       return {
@@ -185,7 +224,7 @@ export function createFeishuPlaceHistory(deps: {
           .map((r) => ({ key: r.key, ...(r.name ? { name: r.name } : {}) })),
       };
     });
-    return { messages, newest, earlier };
+    return { messages, newest, earlier, outputsPassed };
   };
 
   const unreadable = (key: string, error: unknown): { text: string; folded: PlaceMessage[] } => {
@@ -196,32 +235,30 @@ export function createFeishuPlaceHistory(deps: {
   return {
     async peek(key) {
       try {
-        const { messages, newest, earlier } = await read(key);
+        const { messages, newest, earlier, outputsPassed } = await read(key);
         const { text, folded } = foldPlace(messages, earlier);
-        return { text, consumed: [{ ...(newest ? { cursor: newest } : {}), folded }] };
+        return { text, consumed: [{ ...(newest ? { cursor: newest } : {}), folded, outputsPassed }] };
       } catch (error) {
         const { text } = unreadable(key, error);
-        return { text, consumed: [{ folded: [] }] };
+        return { text, consumed: [{ folded: [], outputsPassed: [] }] };
       }
     },
     commit(key, consumed) {
-      const cursor = consumed[0]?.cursor;
-      if (!cursor) return;
-      cursors.delete(key); // re-inserted last: the map's order is the eviction order
-      cursors.set(key, cursor);
-      while (cursors.size > MAX_CURSORS) {
-        const oldest = cursors.keys().next().value;
-        if (oldest === undefined) break;
-        cursors.delete(oldest);
-      }
-      try {
-        saveStateFile(path, Object.fromEntries(cursors));
-      } catch (error) {
-        // Post-answer: the cursor holds in memory; a restart re-reads what this turn already folded.
-        log.warn(
-          `${label} place-history cursor write failed (a restart may re-fold answered discussion): ${String(error)}`,
-        );
-      }
+      const read = consumed[0];
+      if (!read?.cursor) return;
+      // Only the outputs this read passed: the turn's own answer came after it and waits for the next read.
+      const passed = new Set(read.outputsPassed);
+      const outputs = (places.get(key)?.outputs ?? []).filter((id) => !passed.has(id));
+      save(key, { cursor: read.cursor, outputs }, "a restart may re-fold answered discussion");
+    },
+    recordOutput(key, messageId) {
+      const state = places.get(key);
+      const outputs = [...(state?.outputs ?? []), messageId].slice(-MAX_OUTPUTS);
+      save(
+        key,
+        { ...(state?.cursor ? { cursor: state.cursor } : {}), outputs },
+        "after a restart this place's next read may fold the agent's own answer",
+      );
     },
     async room(key) {
       try {
@@ -234,13 +271,24 @@ export function createFeishuPlaceHistory(deps: {
   };
 }
 
-function loadCursors(path: string, label: string): Map<string, PlaceCursor> {
+function loadPlaces(path: string, label: string): Map<string, PlaceState> {
   const raw = loadStateFile(path);
   if (raw === undefined) return new Map();
-  const valid = (value: unknown): value is PlaceCursor =>
-    typeof (value as PlaceCursor)?.at === "number" && typeof (value as PlaceCursor).id === "string";
+  const validCursor = (value: unknown): boolean =>
+    value === undefined ||
+    (typeof (value as PlaceCursor)?.at === "number" && typeof (value as PlaceCursor).id === "string");
+  const valid = (value: unknown): value is PlaceState => {
+    const state = value as PlaceState;
+    return (
+      typeof state === "object" &&
+      state !== null &&
+      validCursor(state.cursor) &&
+      Array.isArray(state.outputs) &&
+      state.outputs.every((id) => typeof id === "string")
+    );
+  };
   if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(valid)) {
-    return new Map(Object.entries(raw as Record<string, PlaceCursor>));
+    return new Map(Object.entries(raw as Record<string, PlaceState>));
   }
   log.warn(`${label} unexpected shape in ${path} — every place reads its recent history afresh`);
   return new Map();
