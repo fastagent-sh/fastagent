@@ -72,8 +72,8 @@ Agent = model + harness + context, composed by a definition
   model          what it thinks with, from a model provider
   harness        the loop that runs it: pi (§9.1)
   context        what it works with, from outside, declared side by side as:
-    contexts       the data it works on and knows: directories and repositories
-    connectors     the other systems it reaches: APIs, tools, MCP servers
+    contexts       the data it works on and knows: directories and repositories (contexts.json)
+    connectors     the other systems it reaches: APIs, tools, MCP servers (mcp.json, tools/)
     environment    what it runs in: the commands and runtimes the deployment provides
   definition     its own directory: who it is and how it works, and which model and context it uses
   remembers in   sessions: conversations
@@ -184,10 +184,23 @@ Today a connector is a code tool in `tools/` or a channel's send tool. Pi's MCP 
 because its server connections live as long as a session and a served session lives one turn
 ([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed, on pi 1.0.4 (§12):
 
-- MCP servers are declared in the definition beside the contexts; the code tools in `tools/` already declare what they
-  need;
-- a connector declares its credential as a value (§6). An OAuth grant for an MCP server comes when a server needs one;
-- an MCP connection lives as long as the process or the conversation, not one turn, which is #678.
+- **A service that speaks MCP** is declared in `mcp.json` at the agent's root, in pi's format, which Claude Code,
+  Cursor and VS Code share (`mcpServers`: a `command` or a `url`, `headers` or `env` that name values as `${VAR}`, and
+  a `description` the agent reads). `.pi/mcp.json` is read too, below it, as for every file pi and FastAgent both
+  have a place for. Pi brings OAuth sign-in (`mcp login`) and per-server exposure with it.
+- **A service without MCP** needs no new kind of file. Each way to reach it already has its declaration:
+
+  | The service offers | Reach it with | Declared in | Its credential |
+  |---|---|---|---|
+  | A CLI (`gh`, `aws`, `stripe`) | The CLI in the environment, and a skill that teaches it | `environment.apt`, `skills/` | The variable the CLI reads |
+  | An API, a few calls this agent makes | Code tools | `tools/` (`defineTool`) | `defineTool({ secrets })` |
+  | An API with many operations, or one several agents or harnesses reuse | An MCP server of one's own, run locally (stdio) or hosted | `mcp.json` | `${VAR}` in `env` or `headers` |
+  | An OpenAPI or Smithy description, or a Lambda function, on AWS | AgentCore Gateway, which turns it into an MCP server and handles the outbound authorization | `mcp.json` (`url`) | The Gateway's own |
+  | A REST call or two | A skill with a script (`curl`, Python) | `skills/` | The variable the script reads |
+
+- `fastagent info` lists every connector in one place: the MCP servers, the code tools with the secrets they declare,
+  and the commands the environment provides.
+- An MCP connection lives as long as the process or the conversation, not one turn, which is #678.
 
 ## 6. Credentials
 
@@ -209,7 +222,7 @@ A credential that code or configuration uses is declared next to it, the way `de
 | A code tool | `defineTool({ secrets })` | Exists |
 | A channel | `defineChannel({ secrets })` | Exists |
 | A context | Its kind's credential: a `github` context reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
-| A connector | `auth: { bearer: "LINEAR_API_KEY" }`, a value | No connectors yet |
+| An MCP server | `${VAR}` in its `env` or `headers` in `mcp.json`, or an OAuth sign-in (`mcp login`) | MCP is not served yet |
 | A command the agent runs (`gh`, `aws`) | Nothing: it reads the process environment, which holds every value | As today |
 
 A declaration does what it does for tools and channels today:
@@ -224,13 +237,14 @@ A declaration does what it does for tools and channels today:
 | Obtained as | Examples | Stored | Provided locally | On a deployed host | Renewed |
 |---|---|---|---|---|---|
 | A value | API keys, bot tokens, signing secrets, a GitHub App's private key | `.secrets/.env`, by env-var name | Written by the author, or by `add <channel>` | `deploy` carries the value file | Rotated by hand |
-| A grant | OAuth to a model subscription; to an MCP server when one needs it | `.secrets/auth.json`, by provider or connector name | `fastagent login <name>` | `fastagent login <name> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
+| A grant | OAuth to a model subscription, or to an MCP server | `.secrets/auth.json`, by provider or connector name | `fastagent login <name>` | `fastagent login <name> --deployment <host>` runs the flow on the box | Refreshed in place by the runtime |
 
 - Values keep env-var names because every SDK and CLI reads them (`GITHUB_TOKEN`, `OPENAI_API_KEY`). Two
   declarations of one name share one value; two parts that need different values declare different names
   (`ACME_GITHUB_TOKEN`).
-- Grants exist today for model providers, including the machine-wide store `login -g` writes. An MCP server that
-  needs one will reuse the same flow and the same file.
+- Grants exist today for model providers, including the machine-wide store `login -g` writes. Pi signs in to an MCP
+  server itself (`mcp login`) and keeps its tokens on the machine; where they live for a deployed agent is decided
+  with MCP (§13).
 
 ### 6.3 On whose authority
 
@@ -429,19 +443,42 @@ my-agent/
   extensions/                                 pi extensions
   channels/                                   triggers: messages
   schedules/<name>.md                         triggers: time
-  fastagent.config.ts                         the model, contexts, connectors, environment; serving and deploy options
-  .secrets/ · .state/ · .contexts/            machinery, never in git
+  contexts.json                               contexts: the data it works on and knows
+  contexts/<name>/                            where each context is: a clone, a link, a mount; never in git
+  mcp.json                                    connectors that speak MCP
+  fastagent.config.ts                         how it is served and deployed: the model, environment, http, deploy
+  .secrets/ · .state/                         machinery, never in git
 ```
 
-Behavior is written in markdown, code in `tools/` and `channels/`, and what the agent works with is declared in the
-config: contexts, connectors and environment, side by side. The shapes of `connectors` and `environment` are drafts
-(§13):
+Files declare what the agent is and what it works with; the config declares how it is served and deployed. A
+declaration that is data (contexts, MCP servers, schedules) is a file the agent, `fastagent` and other tools can write
+without TypeScript; code stays code (`tools/`, `channels/`, `extensions/`).
+
+`contexts.json` is one map by name, in JSON like `mcp.json`, `models.json` and `package.json`, with a JSON Schema
+for editors. A context's entry is a few fields and one sentence for the agent, the size the ecosystem keeps in a
+manifest (`.gitmodules`, west's `west.yml`, `mcp.json`); and JSON reads `ref: 1.10` as the string it is, where YAML
+reads the number 1.1:
+
+```json
+{
+  "$schema": "https://fastagent.sh/schema/contexts.json",
+  "contexts": {
+    "app": { "github": "acme/app", "ref": "main", "description": "The product's repository. Open pull requests against main." },
+    "handbook": { "github": "acme/handbook", "readonly": true }
+  }
+}
+```
+
+Each context is materialized at `contexts/<name>/`, the way a manifest's projects land at their paths (DVC's `.dvc`
+file beside its data, a submodule's directory, a west project). What is there is the place's choice: a clone by
+default; on a laptop, a link to the author's own checkout, so no machine's path is committed; on a host, a link into
+the host's storage, which a release does not replace. A context's home stays outside the agent's directory (agent
+model §2); `contexts/<name>/` is only where this place mounts it, and neither git nor a deploy's build context
+includes it.
 
 ```ts
 export default {
   model: "openai-codex/gpt-5.5",
-  contexts: [{ github: "acme/handbook", readonly: true }, { github: "acme/app" }],
-  connectors: [{ mcp: "linear", url: "https://mcp.linear.app/mcp", auth: { bearer: "LINEAR_API_KEY" } }],
   environment: { apt: ["gh"] },
 } satisfies FastagentConfig;
 ```
@@ -517,7 +554,7 @@ A wins. Today's `Agent`, where `invoke` runs one turn and a caller that stops re
 control plane, is already close to the port: the pi implementation and its conformance suite become the first
 harness, and the run layer is new code above them. The port's turn operation gets its own name (`run`), so `invoke`
 keeps one meaning. The code and the SPEC call this layer the engine today (`src/engines/`, "engine-neutral"); they
-take the name harness when the port is drawn out (§12, step 3).
+take the name harness in a refactor of their own (§12, step 1).
 
 A running turn offers the layer one operation, `steer`. Follow-ups are the layer's, run as the next turn, and stopping
 a turn is the `AbortSignal` passed to `run`. Steering stays in the port because only the loop knows where its turns
@@ -533,7 +570,7 @@ Agent           the run layer · session control · triggers (the scheduler) · 
                   ↓ the harness port
 Harness         pi today; others later
                   ↓ storage: the state root (a filesystem today)
-Works with      Contexts (.contexts/ clones) · Connectors (tools, MCP) · Environment (the image, or the machine)
+Works with      Contexts (contexts/<name>/) · Connectors (tools, MCP) · Environment (the image, or the machine)
 ```
 
 ### 9.3 The run layer
@@ -561,7 +598,7 @@ restart needs a harness that checkpoints it, such as pi-durable (§13).
 |---|---|---|
 | The definition | Identity, behavior, skills, tools, triggers, the config | In git; built into the image |
 | `.state/` | The service's state: session records, schedule claims, wake-ups, channel state | Not in git; where the deployment puts it (§10.2) |
-| `.contexts/` | Clones of the agent's contexts | Not in git; cloned on the host at start |
+| `contexts/<name>/` | Each context, as this place reaches it: a clone, a link, a mount | Not in git; on a host, a link into the host's storage |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
@@ -624,9 +661,10 @@ entries, where the harness records each answer's usage.
 | Area | Today | Proposed |
 |---|---|---|
 | Environment | `deploy.apt` | `environment.apt`, installed by `deploy` (§4) |
-| Contexts | `local` and `github` | Unchanged; later, more storage kinds; writable contexts as long-term memory |
+| Declarations | What the agent works with, in the TypeScript config | Files declare what the agent is and works with; the config declares how it is served and deployed (§8.1) |
+| Contexts | `contexts` in the config, cloned into `.contexts/` | `contexts.json`; each at `contexts/<name>/`: a clone, a link to the author's checkout, a mount (§8.1). Later, more storage kinds; writable contexts as long-term memory |
 | State | `.state/` on the host's storage | Declared apart from the contexts; on AgentCore, API storage when scaling out (§10.2) |
-| Connectors | `tools/`, channel send tools; MCP off when serving | Declared MCP servers with value credentials; #678 (§5) |
+| Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
 | `invoke` | A function call that ends with its stream | A run that outlives its caller; one terminal event; one event vocabulary (§7) |
 | A busy session | Rejected; each caller waits its own way | `whenBusy`, `followUp` by default (§7.4) |
@@ -640,15 +678,17 @@ entries, where the harness records each answer's usage.
 | Step | Work |
 |---|---|
 | 0 | Finish this design |
-| 1 | Upgrade to pi 1.0.4 |
-| 2 | MCP connectors (#678), on pi 1.0.4 |
-| 3 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
-| 4 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
+| 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior |
+| 2 | Upgrade to pi 1.0.4 |
+| 3 | Connectors and contexts as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/` |
+| 4 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
+| 5 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more context kinds |
 
 ## 13. Open questions
 
-1. The declaration shapes: `connectors`, `environment`, and naming a context's credential.
+1. The shapes of `contexts.json` (naming a context's credential) and of `environment`; where an MCP server's OAuth
+   tokens live for a deployed agent.
 2. How `fork.at` names the point a thread starts from: an entry id the service gave out, which each channel would map
    its messages to, or the platform message id, which the service would record on the entry it belongs to. Feishu,
    the only user, holds message ids; today it finds the point by searching the parent's text for them.
@@ -687,8 +727,8 @@ entries, where the harness records each answer's usage.
   only `steer`; stopping it is the `AbortSignal` given to `run` (§9.1).
 - Steering and follow-ups move into `invoke` as `whenBusy`, reversing the SPEC §8 "Mid-turn steering" row, which kept
   them on the session control plane (§7.6).
-- Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The shell keeps inheriting
-  the process environment; isolation waits for a sandboxed environment (§6.4).
+- Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The
+  shell keeps inheriting the process environment; isolation waits for a sandboxed environment (§6.4).
 - The agent's semantics are written once, above a harness port, so another harness can be added (§9.1).
 - Removed or deferred after a first-principles review, because nothing needs them yet:
   - a ledger of invocations, listing them, and attaching to one by id with replay: a client reconnects by observing
@@ -698,7 +738,7 @@ entries, where the harness records each answer's usage.
   - `principal`, until permissions are designed (§9.5);
   - an optional `session`, and a structured `result`;
   - the environment's secrets, runtimes and contexts' needs, and a check of the local machine;
-  - the host-identity credential, OAuth for connectors, and connector commands;
+  - the host-identity credential, and commands to add or remove connectors;
   - cancelling one pending follow-up.
 - The deployed definition stays writable. The agent's update loop is designed later, in #605 (§2); the core now is
   serving.
@@ -708,6 +748,14 @@ entries, where the harness records each answer's usage.
 - State is declared apart from the contexts, and where it lives is the deployment's choice. On AgentCore it stays in
   the session storage until scaling out moves it to API storage; no EFS stopgap (§10.2).
 - Evaluation comes later.
-- The order: finish this design, upgrade to pi 1.0.4, then MCP (#678); the update loop and evaluation come later
-  (§12).
+- Files declare what the agent is and works with; the config declares how it is served and deployed. A declaration
+  that is data is a file the agent and tools can write without TypeScript (§8.1).
+- Contexts are declared in `contexts.json` (JSON, a map by name, with a description for the agent and a JSON Schema),
+  and each is materialized at `contexts/<name>/`: a clone, a link to the author's checkout, or a mount, never committed
+  (§8.1).
+- A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
+  service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
+  connector file type, and `fastagent info` lists every connector (§5).
+- The order: finish this design; rename engine to harness, in a refactor of its own; upgrade to pi 1.0.4; then MCP
+  (#678). The update loop and evaluation come later (§12).
 - No field is reserved for a use nobody has designed.
