@@ -85,11 +85,18 @@ function foldPlace(messages: readonly PlaceMessage[], earlier: boolean): { text:
 }
 
 /**
- * Places kept. A dropped place costs one re-read of its newest messages, its earlier answers among them. Places no turn
- * has read yet go first: Slack records an answer to a top-level ask in the thread it opens, and most such threads are
- * never asked in again, so they must not push out a quiet place's cursor.
+ * Places kept, least recently used dropped. A dropped place costs one re-read of its newest messages, its earlier
+ * answers among them.
  */
 const MAX_PLACES = 2000;
+
+/**
+ * Of those, places no read has reached yet (only outputs, no cursor), least recently used dropped. Slack records an
+ * answer to a top-level ask in the thread it opens, and most such threads are never asked in again: their own bound
+ * keeps them from pushing out a quiet place's cursor, while a thread answered a moment ago is still among the newest
+ * when its follow-up comes.
+ */
+const MAX_UNREAD_PLACES = 500;
 
 /**
  * A place's outputs not yet passed by a read. One turn posts a handful (an answer, its chunks, a queue notice); the
@@ -168,18 +175,14 @@ export function createPlaceHistory<C>(deps: {
   const { label, path } = deps;
   const places = loadPlaces(path, label, deps.isCursor);
   /**
-   * Mark `key` most recently used (the map's order is the eviction order) and persist every place. Over the bound, the
-   * least recently used place without a cursor goes, else the least recently used; never `key` itself.
+   * Mark `key` most recently used (the map's order is the eviction order), apply both bounds, and persist every place.
    */
   const save = (key: string, state: PlaceState<C>, lost: string): void => {
     places.delete(key);
     places.set(key, state);
-    while (places.size > MAX_PLACES) {
-      const others = [...places].filter(([other]) => other !== key);
-      const victim = (others.find(([, place]) => place.cursor === undefined) ?? others[0])?.[0];
-      if (victim === undefined) break;
-      places.delete(victim);
-    }
+    const unread = [...places.keys()].filter((other) => places.get(other)?.cursor === undefined);
+    for (const victim of unread.slice(0, Math.max(0, unread.length - MAX_UNREAD_PLACES))) places.delete(victim);
+    for (const victim of [...places.keys()].slice(0, Math.max(0, places.size - MAX_PLACES))) places.delete(victim);
     try {
       saveStateFile(path, Object.fromEntries(places));
     } catch (error) {

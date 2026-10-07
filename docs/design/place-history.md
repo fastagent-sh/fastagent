@@ -122,8 +122,9 @@ derivation that must not drift. The seam is where the platforms actually differ.
    through (`FeishuApi.recordingSends`, `SlackApi.recordingSends`), and forgotten once a read has passed it: a shared
    bounded ring would let a busy deployment evict a quiet place's last answer. Slack records an output in the place it
    lands in, since the answer to a top-level ask opens a thread: recorded against the channel, no channel read would
-   ever pass it. Most such threads are never asked in again, so the 2,000 places `history.json` keeps drop those no
-   read has reached before any place with a cursor. The send tools share the plain client, so the agent's other posts (a digest, a post into another
+   ever pass it. Most such threads are never asked in again, so `history.json` bounds the places no read has reached
+   (500) apart from all places (2,000), each least recently used first: a flood of them cannot push out a quiet
+   place's cursor, and the thread answered a moment ago is still there for its follow-up. The send tools share the plain client, so the agent's other posts (a digest, a post into another
    chat) stay: they are what #633 is about.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
 3. Drop system and deleted messages. Label each sender: a human by name (Slack: by user id, see §6), `you` for

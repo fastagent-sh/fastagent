@@ -13,7 +13,7 @@ afterEach(() => {
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "place-history-"));
   roots.push(root);
-  const read = vi.fn(async (_key: string, _from: { cursor?: number }) => ({
+  const read = vi.fn(async (_key: string, _from: { cursor?: number; drop(id: string): boolean }) => ({
     covered: [],
     messages: [],
     earlier: false,
@@ -34,22 +34,33 @@ function setup() {
     await history.peek({ key, until: Number.MAX_SAFE_INTEGER });
     return read.mock.lastCall?.[1].cursor;
   };
-  return { history, answered, cursorOf };
+  /** Whether a read of `key` would leave `id` out: a recorded output the place still holds. */
+  const drops = async (key: string, id: string): Promise<boolean> => {
+    await history.peek({ key, until: Number.MAX_SAFE_INTEGER });
+    return read.mock.lastCall?.[1].drop(id) ?? false;
+  };
+  return { history, answered, cursorOf, drops };
 }
 
 describe("place history state", () => {
-  it("places no read has reached are dropped before a quiet place's cursor", async () => {
-    const { history, answered, cursorOf } = setup();
+  it("places no read has reached have their own bound, so they cannot push out a quiet place's cursor", async () => {
+    const { history, answered, cursorOf, drops } = setup();
     await answered("quiet", 7);
-    // A busy deployment's answers, each in a thread nobody asks in again (2,000 is the bound).
+    // A busy deployment's answers, each in a thread nobody asks in again (500 is their bound).
     for (let i = 0; i < 2000; i++) history.recordOutput(`thread-${i}`, `answer-${i}`);
     expect(await cursorOf("quiet")).toBe(7);
+    expect(await drops("thread-1999", "answer-1999")).toBe(true);
+    expect(await drops("thread-1500", "answer-1500")).toBe(true);
+    expect(await drops("thread-1499", "answer-1499")).toBe(false);
   });
 
-  it("when every place has a cursor, the least recently used goes, never the one just written", async () => {
-    const { history, answered, cursorOf } = setup();
-    for (let i = 0; i < 2000; i++) await answered(`place-${i}`, i + 1);
-    history.recordOutput("new-thread", "answer");
+  it("an answer just recorded outlives the next one, though every other place has a cursor", async () => {
+    const { history, answered, cursorOf, drops } = setup();
+    for (let i = 0; i < 1999; i++) await answered(`place-${i}`, i + 1);
+    history.recordOutput("thread-a", "answer-a");
+    history.recordOutput("thread-b", "answer-b");
+    // Its follow-up still leaves the answer out; the least recently used place paid instead.
+    expect(await drops("thread-a", "answer-a")).toBe(true);
     expect(await cursorOf("place-0")).toBeUndefined();
     expect(await cursorOf("place-1")).toBe(2);
   });
