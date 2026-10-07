@@ -37,9 +37,12 @@ export function capBufferedRefs<R>(refs: R[]): { kept: R[]; skipped: number } {
   return { kept: refs.slice(-BUFFER_ATTACH_MAX), skipped: Math.max(0, refs.length - BUFFER_ATTACH_MAX) };
 }
 
-/** The folded discussion as it reaches the model — the prompt block, or nothing when the buffer is empty. */
+/**
+ * The folded discussion as it reaches the model — the prompt block, or nothing when the buffer is empty. "Here", not
+ * "group": a direct chat's buffer holds what the agent sent there itself.
+ */
 export function discussionBlock(text: string): string {
-  return text ? `[recent group discussion:\n${text}\n]\n\n` : "";
+  return text ? `[recent discussion here:\n${text}\n]\n\n` : "";
 }
 
 export interface ContextBuffer<E> extends DiscussionSource<E> {

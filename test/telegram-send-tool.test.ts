@@ -19,14 +19,22 @@ beforeAll(async () => {
   description = tool.description;
 });
 
-function stubBotApi(): { calls: { url: string; form: FormData }[] } {
-  const calls: { url: string; form: FormData }[] = [];
+/** A Bot API that answers like the real one: every sent Message names its id and chat. */
+function stubBotApi(): { calls: { url: string; body: FormData | Record<string, unknown> }[] } {
+  const calls: { url: string; body: FormData | Record<string, unknown> }[] = [];
+  let id = 100;
   vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
-    calls.push({ url: String(url), form: init?.body as FormData });
-    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    const body =
+      init?.body instanceof FormData ? init.body : (JSON.parse(String(init?.body)) as Record<string, unknown>);
+    calls.push({ url: String(url), body });
+    const chat = body instanceof FormData ? body.get("chat_id") : body.chat_id;
+    return Response.json({ ok: true, result: { message_id: ++id, chat: { id: Number(chat) } } });
   });
   return { calls };
 }
+
+const json = (call: { body: FormData | Record<string, unknown> } | undefined) => call?.body as Record<string, unknown>;
+const form = (call: { body: FormData | Record<string, unknown> } | undefined) => call?.body as FormData;
 
 describe("scaffold telegram-send: message-or-file mode switch", () => {
   it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
@@ -44,9 +52,11 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     const { calls } = stubBotApi();
     const r = await execute({ chatId: 42, text: "digest ready" });
     expect(calls[0]?.url).toContain("/bottok/sendMessage");
-    expect(calls[0]?.form.get("chat_id")).toBe("42");
-    expect(calls[0]?.form.get("text")).toBe("digest ready");
+    expect(json(calls[0])).toMatchObject({ chat_id: 42, text: "digest ready" });
     expect(JSON.stringify(r.details)).toContain("sent message to chat 42");
+    // No channel is mounted in this test's process: the message went out, and the result says the chat's next turn
+    // will not see it.
+    expect(JSON.stringify(r.details)).toContain("not recorded: no telegram channel is mounted in this process");
   });
 
   it("path → sendDocument with the file attached (caption rides along)", async () => {
@@ -56,8 +66,8 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     await writeFile(join(dir, "report.txt"), "hi");
     const r = await execute({ chatId: "7", path: join(dir, "report.txt"), caption: "the report" });
     expect(calls[0]?.url).toContain("/sendDocument");
-    expect(calls[0]?.form.get("caption")).toBe("the report");
-    expect(calls[0]?.form.get("document")).toBeInstanceOf(Blob);
+    expect(form(calls[0]).get("caption")).toBe("the report");
+    expect(form(calls[0]).get("document")).toBeInstanceOf(Blob);
     expect(JSON.stringify(r.details)).toContain("sent report.txt to chat 7");
   });
 
@@ -83,7 +93,7 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
     const r = await execute({ chatId: 9, text: line.repeat(5).trimEnd() });
     expect(calls.length).toBe(2); // one send per chunk, sequential
-    const texts = calls.map((c) => String(c.form.get("text")));
+    const texts = calls.map((c) => String(json(c).text));
     for (const t of texts) expect(t.length).toBeLessThanOrEqual(4096);
     expect(texts.join("\n")).toBe(line.repeat(5).trimEnd()); // nothing lost at the seams
     expect(JSON.stringify(r.details)).toContain("sent 2 messages to chat 9");
@@ -92,8 +102,8 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     calls.length = 0;
     await execute({ chatId: 9, text: "b".repeat(4097) });
     expect(calls.length).toBe(2);
-    expect(String(calls[0]?.form.get("text"))).toHaveLength(4096);
-    expect(String(calls[1]?.form.get("text"))).toBe("b");
+    expect(String(json(calls[0]).text)).toHaveLength(4096);
+    expect(String(json(calls[1]).text)).toBe("b");
   });
 
   it("a Bot API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {

@@ -273,7 +273,7 @@ Practical consequences in groups:
 
 A place is a group chat or a thread in one. When a turn in a group runs, the channel reads the place's messages from
 the platform (`GET /im/v1/messages`) and folds what was said since the Agent last answered there into the prompt, as
-`[recent group discussion: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
+`[recent discussion here: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
 own ask: an ask queued behind it, and anything said after it, are read by their own turn. Within that, the read leaves
 out what the session already holds: every message the channel posted as a turn's output (answers, queue notices, stop
 feedback), and the messages it took as input (`/stop`). What the Agent posted itself, with `feishu-send` from a
