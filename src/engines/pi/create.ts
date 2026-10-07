@@ -237,7 +237,7 @@ export function fastagentPromptSections(options: {
   // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
   // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
   // once per process (machine.ts), so it would not be live.
-  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute; changes to tools, channels or configuration take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash — or, for a tool or command of your own, a pi extension in extensions/, loaded from your next session on. Either lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
+  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute, and models.json from the next turn; changes to tools, channels or other configuration (fastagent.config.ts, .pi/settings.json, package.json) take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash — or, for a tool or command of your own, a pi extension in extensions/, loaded from your next session on. Either lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
     // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model
     // does not have invites calls to it.
     mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""
@@ -516,7 +516,13 @@ export async function assemblePiFromDefinition(
   }
   refuseDefaultPromptOverReplacedTools(tools, options.base !== undefined || definition.systemPrompt !== undefined);
   const { providers } = options;
-  const models = options.models ?? agentModels(dir, options, { env, ...(providers ? { providers } : {}) });
+  const models =
+    options.models ??
+    agentModels(dir, options, {
+      env,
+      ...(providers ? { providers } : {}),
+      ...(options.model ? { keepsModel: options.model } : {}),
+    });
   // Built at boot, so a malformed models.json fails the assembly rather than its first turn. The directory's own
   // models.json is what a turn resolves against, layered over the machine's (models.ts).
   await models.runtime();

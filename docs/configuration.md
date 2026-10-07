@@ -153,6 +153,12 @@ differences:
 - pi's own `~/.pi/agent/models.json` is not read. The machine's endpoints live in `~/.fastagent/models.json`
   instead (below).
 - A malformed `models.json` fails startup.
+- **Edits take effect while the agent runs.** Every reader (a turn, the model list, `update({ model })`) checks the
+  model files first, this agent's and the machine's, and reads them again when one changed. An edit that cannot be
+  used (it does not load, or it drops the agent's default model) keeps the models read before and is logged once,
+  until it is fixed: the agent can write its own
+  `models.json`, and a broken one must not leave it unable to run a turn. The `chat` session already open keeps its
+  models; the next one reads the edit.
 
 ### Endpoints for this machine: `~/.fastagent/models.json`
 
@@ -164,9 +170,8 @@ provider's key can be stored instead of written into the file.
 - The agent's own `models.json` wins a provider id: an agent that pins an endpoint keeps it.
 - A malformed file fails startup, naming the file.
 - It is plain JSON (no comments), and while it exists so must the agent's own `models.json` be: fastagent merges
-  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. A running process keeps the snapshot it
-  started with, so an edit to either file takes effect on the next start (in `chat`, `/model` does not pick it
-  up). Snapshots are never pruned; delete the directory while no fastagent process runs.
+  the two itself, into a snapshot under `~/.fastagent/.cache/models/`. An edit to either file makes a new snapshot,
+  read from the next turn on. Snapshots are never pruned; delete the directory while no fastagent process runs.
 - It does not ship, and neither does a key written into it. `fastagent info` lists the providers the agent
   inherits from it and marks a model whose endpoint comes from it. `deploy` refuses a model whose provider exists
   only there (with `--run`; a warning otherwise), and warns when it only overrides one of pi's built-in providers,
@@ -190,7 +195,7 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
   `refreshMachineModelCatalog` ([API reference](api-reference.md)).
 - An entry no newer than the installed pi's bundled catalog is ignored, so after a pi upgrade the bundled metadata
   takes over again.
-- A running process keeps the catalogs it started with; `dev` restarts when the agent's file changes.
+- A refresh takes effect in a running agent from its next turn, whichever process ran it, without a restart.
 
 ## Contexts
 

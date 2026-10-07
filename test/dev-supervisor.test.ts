@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
-import { devWatchIgnored, listenForRestart } from "../src/dev-supervisor.ts";
+import { devWatchIgnored, listenForRestart, revivesOnly } from "../src/dev-supervisor.ts";
 import { log } from "../src/log.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
@@ -20,14 +20,15 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
-    // models.json is loaded once per worker (the model hub is built during assembly) AND a malformed one
-    // fails that assembly — unwatched, the edit that repairs a dead worker would not be the edit that
-    // restarts it, so the author would be stranded with a correct file and a broken serve.
-    expect(ignored(join(root, "models.json"))).toBe(false);
-    // The model catalog too: a `models --refresh` during dev restarts the worker onto the new models. Its lock,
-    // which pi holds only while a refresh writes, does not.
-    expect(ignored(join(root, "models-store.json"))).toBe(false);
+    // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
+    // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
+    for (const file of ["models.json", "models-store.json"]) {
+      expect(ignored(join(root, file))).toBe(false);
+      expect(revivesOnly(root, join(root, file))).toBe(true);
+    }
     expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
+    expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);
+    expect(revivesOnly(root, join(root, "tools", "models.json"))).toBe(false);
   });
 
   it(".secrets/.env is a code input (credentials are process-bound); the rest of .secrets is not", () => {
