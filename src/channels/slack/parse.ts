@@ -1,5 +1,4 @@
-import { BUFFER_LINE_MAX_CHARS } from "../kit/context-buffer.ts";
-import { codePointPrefix, truncateCodePointPrefix } from "../kit/text.ts";
+import { codePointPrefix } from "../kit/text.ts";
 import type { SlackEventEnvelope, SlackMessageEvent, SlackRoute } from "./model.ts";
 
 export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } from "./model.ts";
@@ -15,10 +14,6 @@ const ANY_MENTION = String.raw`(?:${USER_MENTION}|<!(?:here|channel|everyone)(?:
 /** Does this text address ANYONE — a user, a broadcast, or a user group? */
 export function hasSlackMention(text: string): boolean {
   return new RegExp(ANY_MENTION, "i").test(text);
-}
-
-export function hasSlackUserMention(text: string): boolean {
-  return new RegExp(USER_MENTION, "i").test(text);
 }
 
 /** Escape a platform-supplied id before it becomes part of a pattern. */
@@ -74,20 +69,6 @@ export function slackMessageText(event: SlackMessageEvent): string {
   if (files === 0) return text;
   const marker = `[${files} attached file${files === 1 ? "" : "s"}]`;
   return text ? `${text}\n${marker}` : marker;
-}
-
-export function slackSenderLabel(event: SlackMessageEvent): string {
-  return `user ${event.user ?? "unknown"}`;
-}
-
-/** Main-channel discussion and each concrete thread are independent context buckets. */
-export function slackPlaceKey(teamId: string, event: Pick<SlackMessageEvent, "channel" | "thread_ts">): string {
-  const base = `${teamId}:${event.channel ?? "unknown-channel"}`;
-  return event.thread_ts ? `${base}:root:${event.thread_ts}` : base;
-}
-
-export function slackBufferText(text: string): string {
-  return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
 export function slackEnvelope(envelope: SlackEventEnvelope): string {

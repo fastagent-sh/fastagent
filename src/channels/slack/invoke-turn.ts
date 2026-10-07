@@ -12,7 +12,7 @@ import {
   missingAttachmentsNote,
   turnStream,
 } from "../kit/invoke-turn-kit.ts";
-import type { SlackBufferedFileRef } from "./context-buffer.ts";
+import type { SlackBufferedFileRef } from "./history.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
 
 const MARKDOWN_INSTRUCTION =

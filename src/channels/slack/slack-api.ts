@@ -93,7 +93,49 @@ export interface SlackApiOptions {
   baseUrl?: string;
 }
 
+/** A message as `conversations.history` / `conversations.replies` list it: the fields a place's history reads. */
+export interface SlackListedMessage {
+  type?: string;
+  subtype?: string;
+  hidden?: boolean;
+  ts?: string;
+  thread_ts?: string;
+  user?: string;
+  bot_id?: string;
+  username?: string;
+  bot_profile?: { name?: string };
+  text?: string;
+  blocks?: unknown[];
+  files?: SlackFile[];
+}
+
+/**
+ * The newest `limit` messages before `latest` (exclusive). There is deliberately no `oldest`: with it, both reads
+ * return the OLDEST `limit` after it instead, and `conversations.replies` then pages on to nothing (measured), so a
+ * reader cuts at its own cursor.
+ */
+interface SlackRange {
+  latest?: string;
+  limit: number;
+}
+
+/** Where a posted message landed: a channel's top level, or a thread in it. */
+type OnSent = (where: { channelId: string; threadTs?: string }, ts: string) => void;
+
 export interface SlackApi {
+  /**
+   * The same transport, reporting every message it posts (`chat.postMessage`, every chunk of a long body, and
+   * `chat.startStream`) with where it landed. Edits, deletions and file uploads are not reported.
+   */
+  recordingSends(onSent: OnSent): SlackApi;
+  /** A channel's top-level messages in `range`, NEWEST first (`conversations.history`). */
+  channelHistory(channelId: string, range: SlackRange): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
+  /** A thread's replies in `range`, OLDEST first, after its root, which Slack lists whatever the range. */
+  threadReplies(
+    channelId: string,
+    threadTs: string,
+    range: SlackRange,
+  ): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
   authTest(): Promise<{ teamId?: string; userId?: string; botId?: string }>;
   postMessage(target: SlackTarget, text: string): Promise<string>;
   postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
@@ -223,8 +265,13 @@ function assertLongLivedBotToken(botToken: string): void {
   }
 }
 
-export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions): SlackApi {
-  assertLongLivedBotToken(botToken);
+export function createSlackApi(options: SlackApiOptions): SlackApi {
+  assertLongLivedBotToken(options.botToken);
+  return slackClient(options, undefined);
+}
+
+/** A transport holds no state between calls, so a recording one is simply another instance. */
+function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions, onSent?: OnSent): SlackApi {
   const apiBase = baseUrl.replace(/\/$/, "");
 
   const call = async <T extends SlackBody>(
@@ -303,6 +350,11 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
   };
 
+  const sent = (channelId: string, threadTs: string | undefined, ts: string): string => {
+    onSent?.({ channelId, ...(threadTs ? { threadTs } : {}) }, ts);
+    return ts;
+  };
+
   const postMarkdown = async (target: SlackTarget, markdown: string): Promise<SentSlackMessage> => {
     const data = await call<SlackBody & { ts?: string; channel?: string }>("chat.postMessage", {
       channel: target.channelId,
@@ -313,16 +365,34 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     });
     if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
     // The response's `channel` is what resolves a user-id target to its DM; a channel target echoes itself.
-    return { ts: data.ts, channelId: data.channel ?? target.channelId };
+    const channelId = data.channel ?? target.channelId;
+    return { ts: sent(channelId, target.threadTs, data.ts), channelId };
   };
 
   const api: SlackApi = {
+    recordingSends: (record) => slackClient({ botToken, baseUrl }, record),
+    async channelHistory(channelId, range) {
+      const data = await call<SlackBody & { messages?: SlackListedMessage[]; has_more?: boolean }>(
+        "conversations.history",
+        { channel: channelId, ...range },
+        "GET",
+      );
+      return { messages: data.messages ?? [], hasMore: data.has_more === true };
+    },
+    async threadReplies(channelId, threadTs, range) {
+      const data = await call<SlackBody & { messages?: SlackListedMessage[]; has_more?: boolean }>(
+        "conversations.replies",
+        { channel: channelId, ts: threadTs, ...range },
+        "GET",
+      );
+      return { messages: data.messages ?? [], hasMore: data.has_more === true };
+    },
     async authTest() {
       const data = await call<SlackBody & { team_id?: string; user_id?: string; bot_id?: string }>("auth.test", {});
       return { teamId: data.team_id, userId: data.user_id, botId: data.bot_id };
     },
     async postMessage(target, text) {
-      const data = await call<SlackBody & { ts?: string }>("chat.postMessage", {
+      const data = await call<SlackBody & { ts?: string; channel?: string }>("chat.postMessage", {
         channel: target.channelId,
         text,
         ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
@@ -330,7 +400,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         unfurl_media: false,
       });
       if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
-      return data.ts;
+      return sent(data.channel ?? target.channelId, target.threadTs, data.ts);
     },
     async postMarkdown(target, markdown) {
       return (await postMarkdown(target, markdown)).ts;
@@ -381,7 +451,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         ...(markdown ? { markdown_text: markdown } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
-      return data.ts;
+      return sent(target.channelId, target.threadTs, data.ts);
     },
     async appendStream(channelId, ts, markdown) {
       await call("chat.appendStream", { channel: channelId, ts, markdown_text: markdown });

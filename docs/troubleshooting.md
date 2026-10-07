@@ -224,7 +224,7 @@ state file, deliberately falls back to printing the manual Slack console URL.
 
 The app needs `files:read`. Slack Connect, deleted files, Canvas/remote files without downloadable bytes,
 workspace policy, and the channel's 20 MB cap can still make a file unavailable. A current-message file
-fails the turn visibly; earlier buffered files degrade individually. See [Slack channel](slack.md).
+fails the turn visibly; files from the earlier discussion degrade individually. See [Slack channel](slack.md).
 
 ## Images are ignored or fail
 

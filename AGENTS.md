@@ -116,10 +116,11 @@ src/
 │   │   ├── invoke-turn-kit.ts # resolve inputs → ask the agent; the background tier's degradation; busy wait;
 │   │   │                   # the prompt manifest wording
 │   │   ├── transport.ts    # whether a write is worth waiting out a rate limit for (DROPPABLE_FRAME)
-│   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + buffer
+│   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
 │   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
-│   │   ├── place-history.ts # the DiscussionSource a turn folds + the place-history fold (budget, labels)
+│   │   ├── place-history.ts # the DiscussionSource a turn folds + the place-history fold (budget, labels) + what a
+│   │   │                   # place remembers between platform reads (cursor, the turns' own outputs)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup
@@ -144,8 +145,8 @@ src/
 │   │   ├── slack.ts        # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts, model.ts, reaction.ts # pure protocol parsing/shapes + the reaction vocabulary
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + BOTH renderers (native Agent stream, classic edits)
-│   │   ├── context-buffer.ts # slack's entry shape + file selection over the generic buffer
-│   │   ├── slack-api.ts    # the Bot API pipeline (retry, markdown/text splitting, files)
+│   │   ├── history.ts      # a place's history: conversations.history (top level) / .replies (a thread)
+│   │   ├── slack-api.ts    # the Bot API pipeline (retry, markdown/text splitting, files, history reads)
 │   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share
 │   │   ├── onboard.ts, setup-server.ts, manifest.ts, config-api.ts, onboarding-state.ts, welcomed.ts,
 │   │   │                   # register-webhook.ts # `add slack`: the app-creation flow and what it remembers

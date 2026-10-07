@@ -1,20 +1,19 @@
 /**
- * A Feishu/Lark place's history, read from the platform when a turn runs (docs/design/place-history.md): what was said
- * in a chat or a thread since this agent last answered there. It replaces the context buffer, which only ever held
- * what was pushed — never the agent's own posts, and never what was said before the channel started.
- *
- * A turn reads up to and including its own ask (`FeishuPlaceRead.until`), so the ask itself, an ask queued behind it
- * and anything said after it wait for their own turn; the next read starts at that ask. That bound needs no record and
- * cannot be lost with state. Within it, what the session already holds is left out: the messages a turn posted into
- * the place (`recordOutput`: answers, queue notices, stop feedback), which a place keeps beside its cursor until a read
- * has passed them, so a busy deployment cannot push a quiet place's last answer out of a shared ring; and, as prompt
- * shaping only, what this channel took as input (`isTurnInput`: an earlier `/stop`, another place's ask). What the agent sent itself from a send tool stays — that is what a later
- * "what did point 3 mean?" is about.
+ * A Feishu/Lark place's history, read from `im/v1/messages` when a turn runs (docs/design/place-history.md). What a
+ * place remembers between turns, and what a read leaves out, is the kit's (`createPlaceHistory`); this is the read:
+ * newest first up to the turn's own ask (`end_time` in seconds, then `(create_time, message_id)`), back to the cursor,
+ * with senders named from the chat's members.
  */
 import { log } from "../../log.ts";
 import { capBufferedRefs } from "../kit/context-buffer.ts";
-import { type DiscussionSource, type PlaceMessage, foldPlace } from "../kit/place-history.ts";
-import { loadStateFile, saveStateFile } from "../kit/state.ts";
+import {
+  type PlaceDiscussion,
+  type PlaceHistory,
+  type PlaceListing,
+  type PlaceMessage,
+  type PlaceRead,
+  createPlaceHistory,
+} from "../kit/place-history.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
 
@@ -27,45 +26,15 @@ const FIRST_READ = 20;
 /** How long a chat's member names are reused before they are read again. */
 const NAMES_TTL_MS = 10 * 60_000;
 
-/** Places kept, least recently used dropped: a dropped place costs one re-read of {@link FIRST_READ} messages. */
-const MAX_PLACES = 2000;
-
-/**
- * A place's outputs not yet passed by a read. One turn posts a handful (an answer, its chunks, a queue notice); the
- * bound only stops a place whose reads keep failing from growing without end.
- */
-const MAX_OUTPUTS = 200;
-
-/** The newest message a committed turn's read reached: the next read starts after it. */
-interface PlaceCursor {
+/** A message's position: `create_time` alone is not unique, so the id breaks ties. */
+interface FeishuCursor {
   at: number;
   id: string;
 }
 
-/** What a place remembers between turns. */
-interface PlaceState {
-  cursor?: PlaceCursor;
-  /** Messages turns posted here that no read has passed yet. */
-  outputs: string[];
-}
-
-/**
- * What a turn reads: its place, up to and including its own ask. The bound is what keeps every later message out —
- * an ask queued behind this one is its own turn, and folding it here would answer it twice — and it needs no record
- * of which messages were asks, so a lost or cold state cannot break it.
- */
-export interface FeishuPlaceRead {
-  key: string;
-  until: PlaceCursor;
-}
-
-/** One turn's read: where it reached, what it folded (whose attachments ride along), and which outputs it passed. */
-export interface FeishuDiscussion {
-  /** Absent when the read failed: the cursor then stays, and the next turn reads the same messages again. */
-  cursor?: PlaceCursor;
-  folded: PlaceMessage[];
-  outputsPassed: string[];
-}
+export type FeishuPlaceRead = PlaceRead<FeishuCursor>;
+export type FeishuDiscussion = PlaceDiscussion<FeishuCursor>;
+export type FeishuPlaceHistory = PlaceHistory<FeishuCursor>;
 
 /** A background resource carried into a turn, with attribution for its prompt manifest. */
 export interface FeishuBufferedRef {
@@ -112,16 +81,6 @@ export function collectFoldedAttachments(
   return { files: files.kept, images: images.kept, skipped: files.skipped + images.skipped };
 }
 
-export interface FeishuPlaceHistory extends DiscussionSource<FeishuDiscussion, FeishuPlaceRead> {
-  /** A message a turn posted into this place: in the session already, so the place's next read leaves it out. */
-  recordOutput(key: string, messageId: string): void;
-  /**
-   * A thread's room, read-only, for the thread's first turn (participant-model §8): the room's own next answered turn
-   * still reads it, so each place takes the discussion into its own memory.
-   */
-  room(key: string): Promise<{ text: string; folded: PlaceMessage[] }>;
-}
-
 export function createFeishuPlaceHistory(deps: {
   api: Pick<FeishuApi, "listMessages" | "chatMemberNames">;
   /** THIS app's id: a message whose sender is this app is the agent's own. */
@@ -131,25 +90,7 @@ export function createFeishuPlaceHistory(deps: {
   path: string;
   isTurnInput(messageId: string): boolean;
 }): FeishuPlaceHistory {
-  const { api, appId, label, path } = deps;
-  const places = loadPlaces(path, label);
-  /** Mark `key` most recently used (the map's order is the eviction order) and persist every place. */
-  const save = (key: string, state: PlaceState, lost: string): void => {
-    places.delete(key);
-    places.set(key, state);
-    while (places.size > MAX_PLACES) {
-      const oldest = places.keys().next().value;
-      if (oldest === undefined) break;
-      places.delete(oldest);
-    }
-    try {
-      saveStateFile(path, Object.fromEntries(places));
-    } catch (error) {
-      // Both callers are past a platform write (a sent message, a recorded answer): throwing would report a send that
-      // happened as failed. The state holds in memory; only a restart loses it.
-      log.warn(`${label} could not write ${path} (${lost}): ${String(error)}`);
-    }
-  };
+  const { api, appId, label } = deps;
   /**
    * Per chat, the speakers already looked up: named, or known to have no name to find (not a member, past the page
    * cap, or a failed read). Both halves expire together, so a failure or a newcomer is retried after the TTL, not on
@@ -188,12 +129,10 @@ export function createFeishuPlaceHistory(deps: {
   /** The place's messages since its cursor (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
   const read = async (
     key: string,
-    until?: PlaceCursor,
-  ): Promise<{ messages: PlaceMessage[]; newest?: PlaceCursor; earlier: boolean; outputsPassed: string[] }> => {
+    { cursor, drop }: { cursor?: FeishuCursor; drop(messageId: string): boolean },
+    until?: FeishuCursor,
+  ): Promise<PlaceListing<FeishuCursor>> => {
     const place = placeOf(key);
-    const state = places.get(key);
-    const cursor = state?.cursor;
-    const outputs = new Set(state?.outputs);
     const listed = await api.listMessages(
       place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
       PAGE_SIZE,
@@ -214,18 +153,17 @@ export function createFeishuPlaceHistory(deps: {
       fresh.push({ item, id, at });
       if (!cursor && fresh.length >= FIRST_READ) break;
     }
-    // A bounded read has accounted for everything up to its bound, the ask included: the next read starts after it.
-    const newest = until ?? (fresh[0] ? { at: fresh[0].at, id: fresh[0].id } : undefined);
+    const newest = fresh[0] ? { at: fresh[0].at, id: fresh[0].id } : undefined;
     const earlier = cursor
       ? !reachedCursor && (listed.hasMore || listed.items.length >= PAGE_SIZE)
       : fresh.length >= FIRST_READ && (listed.items.length > FIRST_READ || listed.hasMore);
 
-    const outputsPassed = fresh.filter(({ id }) => outputs.has(id)).map(({ id }) => id);
+    const covered = fresh.map(({ id }) => id);
     const kept = fresh.reverse().filter(({ item, id }) => {
       if (item.deleted === true || item.msg_type === "system" || !item.sender?.sender_type) return false;
       // A topic group lists every topic's replies with its chat; the room is its top-level messages.
       if (!place.threadId && item.thread_id && item.root_id) return false;
-      return !deps.isTurnInput(id) && !outputs.has(id);
+      return !drop(id);
     });
     const speakers = new Set(
       kept.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
@@ -257,76 +195,16 @@ export function createFeishuPlaceHistory(deps: {
           .map((r) => ({ key: r.key, ...(r.name ? { name: r.name } : {}) })),
       };
     });
-    return { messages, newest, earlier, outputsPassed };
+    return { covered, messages, ...(newest ? { newest } : {}), earlier };
   };
 
-  const unreadable = (key: string, error: unknown): { text: string; folded: PlaceMessage[] } => {
-    log.warn(`${label} could not read the history of place ${key}; the turn runs without it: ${String(error)}`);
-    return { text: `(could not read the recent discussion here: ${String(error)})`, folded: [] };
-  };
-
-  return {
-    async peek({ key, until }) {
-      try {
-        const { messages, newest, earlier, outputsPassed } = await read(key, until);
-        const { text, folded } = foldPlace(messages, earlier);
-        return { text, consumed: [{ ...(newest ? { cursor: newest } : {}), folded, outputsPassed }] };
-      } catch (error) {
-        const { text } = unreadable(key, error);
-        return { text, consumed: [{ folded: [], outputsPassed: [] }] };
-      }
-    },
-    commit({ key }, consumed) {
-      const read = consumed[0];
-      if (!read?.cursor) return;
-      // Only the outputs this read passed: the turn's own answer came after it and waits for the next read.
-      const passed = new Set(read.outputsPassed);
-      const state = places.get(key);
-      const outputs = (state?.outputs ?? []).filter((id) => !passed.has(id));
-      // Forward only. Turns in a place can finish out of ask order (a redelivered ask, a deferred turn); an earlier
-      // ask committing after a later one must not pull the cursor back over what that later turn already folded.
-      const cursor = state?.cursor && state.cursor.at >= read.cursor.at ? state.cursor : read.cursor;
-      save(key, { cursor, outputs }, "a restart may re-fold answered discussion");
-    },
-    recordOutput(key, messageId) {
-      const state = places.get(key);
-      const outputs = [...(state?.outputs ?? []), messageId].slice(-MAX_OUTPUTS);
-      save(
-        key,
-        { ...(state?.cursor ? { cursor: state.cursor } : {}), outputs },
-        "after a restart this place's next read may fold the agent's own answer",
-      );
-    },
-    async room(key) {
-      try {
-        const { messages, earlier } = await read(key);
-        return foldPlace(messages, earlier);
-      } catch (error) {
-        return unreadable(key, error);
-      }
-    },
-  };
-}
-
-function loadPlaces(path: string, label: string): Map<string, PlaceState> {
-  const raw = loadStateFile(path);
-  if (raw === undefined) return new Map();
-  const validCursor = (value: unknown): boolean =>
-    value === undefined ||
-    (typeof (value as PlaceCursor)?.at === "number" && typeof (value as PlaceCursor).id === "string");
-  const valid = (value: unknown): value is PlaceState => {
-    const state = value as PlaceState;
-    return (
-      typeof state === "object" &&
-      state !== null &&
-      validCursor(state.cursor) &&
-      Array.isArray(state.outputs) &&
-      state.outputs.every((id) => typeof id === "string")
-    );
-  };
-  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(valid)) {
-    return new Map(Object.entries(raw as Record<string, PlaceState>));
-  }
-  log.warn(`${label} unexpected shape in ${path} — every place reads its recent history afresh`);
-  return new Map();
+  return createPlaceHistory({
+    label,
+    path: deps.path,
+    isCursor: (value): value is FeishuCursor =>
+      typeof (value as FeishuCursor)?.at === "number" && typeof (value as FeishuCursor).id === "string",
+    compare: (a, b) => a.at - b.at,
+    isTurnInput: (_key, id) => deps.isTurnInput(id),
+    read,
+  });
 }

@@ -13,6 +13,58 @@ const API = "https://slack.test/api";
 const roots: string[] = [];
 const idles = new Set<() => Promise<void>>();
 
+/**
+ * What Slack holds: every message a signed request delivers, and every message the bot posts. `conversations.history`
+ * and `conversations.replies` read it, so a turn's place history is what the test said there.
+ */
+interface PlatformMessage {
+  channel: string;
+  ts: string;
+  thread_ts?: string;
+  user?: string;
+  bot_id?: string;
+  text?: string;
+}
+const platform: PlatformMessage[] = [];
+
+/** The newest `limit` before `latest` (or, given `oldest`, the oldest `limit` after it), as Slack pages. */
+function platformPage(messages: PlatformMessage[], url: URL): { slice: PlatformMessage[]; hasMore: boolean } {
+  const param = (name: string): string | undefined => url.searchParams.get(name) ?? undefined;
+  const oldest = param("oldest");
+  const latest = param("latest");
+  const limit = Number(param("limit"));
+  const inRange = messages
+    .filter(
+      (m) =>
+        (oldest === undefined || Number(m.ts) > Number(oldest)) &&
+        (latest === undefined || Number(m.ts) < Number(latest)),
+    )
+    .sort((a, b) => Number(a.ts) - Number(b.ts));
+  return {
+    slice: oldest !== undefined ? inRange.slice(0, limit) : inRange.slice(-limit),
+    hasMore: inRange.length > limit,
+  };
+}
+
+function platformRead(url: URL): Response {
+  const channel = url.searchParams.get("channel");
+  if (url.pathname.endsWith("/conversations.history")) {
+    const { slice, hasMore } = platformPage(
+      platform.filter((m) => m.channel === channel && (m.thread_ts === undefined || m.thread_ts === m.ts)),
+      url,
+    );
+    return Response.json({ ok: true, messages: slice.reverse(), has_more: hasMore });
+  }
+  const root = url.searchParams.get("ts");
+  const { slice, hasMore } = platformPage(
+    platform.filter((m) => m.channel === channel && m.thread_ts === root && m.ts !== root),
+    url,
+  );
+  // Slack lists the root whatever the range.
+  const parent = platform.filter((m) => m.channel === channel && m.ts === root);
+  return Response.json({ ok: true, messages: [...parent, ...slice], has_more: hasMore });
+}
+
 function replyingAgent(reply = "done") {
   const calls: { scope: Scope; prompt: Prompt }[] = [];
   const agent: Agent = {
@@ -33,17 +85,41 @@ function root(): string {
 
 function okFetch() {
   let ts = 100;
-  return vi.fn(async (input: string | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
-    if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
-      return Response.json({ ok: true, ts: String(ts++) });
+  return vi.fn(async (input: string | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/auth.test")) {
+      return Response.json({ ok: true, team_id: "T1", user_id: "UBOT", bot_id: "BBOT" });
     }
+    if (url.pathname.endsWith("/chat.postMessage") || url.pathname.endsWith("/chat.startStream")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, string | undefined>;
+      const posted = String(ts++);
+      platform.push({
+        channel: String(body.channel),
+        ts: posted,
+        ...(body.thread_ts ? { thread_ts: body.thread_ts } : {}),
+        user: "UBOT",
+        bot_id: "BBOT",
+        text: body.markdown_text ?? body.text,
+      });
+      return Response.json({ ok: true, ts: posted });
+    }
+    if (/\/conversations\.(history|replies)$/.test(url.pathname)) return platformRead(url);
     return Response.json({ ok: true });
   });
 }
 
+/** A signed delivery of `envelope`; a message it carries is on the platform from then on, as on Slack. */
 function signedRequest(envelope: unknown, options: { timestamp?: number; signature?: string } = {}): Request {
+  const event = (envelope as SlackEventEnvelope).event;
+  if (event?.channel && event.ts && !platform.some((m) => m.channel === event.channel && m.ts === event.ts)) {
+    platform.push({
+      channel: event.channel,
+      ts: event.ts,
+      ...(event.thread_ts ? { thread_ts: event.thread_ts } : {}),
+      ...(event.user ? { user: event.user } : {}),
+      text: event.text,
+    });
+  }
   const body = JSON.stringify(envelope);
   const timestamp = String(options.timestamp ?? Math.floor(Date.now() / 1000));
   const signature =
@@ -109,7 +185,7 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
     seq,
     session: "recovery-session",
     baseText: id,
-    bufferKey: "T1:C1",
+    historyKey: "T1:C1",
     teamId: "T1",
     channelId: "C1",
     threadTs: "1.0",
@@ -142,6 +218,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   idles.clear();
+  platform.length = 0;
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
@@ -408,12 +485,10 @@ describe("Slack sessions, context, and thread participation", () => {
   it("defaults to context-aware groups, records participation in the thread its answer creates, and dedups logical messages", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve)); // auth.test resolves bot identity
 
     await handler(signedRequest(message("1.0", { text: "the deploy is broken" })));
-    const bufferPath = join(stateRoot, "channels", "slack", "buffers.json");
-    expect(readFileSync(bufferPath, "utf8")).toContain("the deploy is broken");
 
     await handler(signedRequest(message("2.0", { type: "app_mention", text: "<@UBOT> investigate" })));
     await settle();
@@ -434,6 +509,32 @@ describe("Slack sessions, context, and thread participation", () => {
     );
     await settle();
     expect(calls).toHaveLength(2);
+  });
+
+  it("a turn reads its place from Slack: the agent's own post is there, the asks and answers its session holds are not", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent("point 3 is the cache fix");
+    const { handler } = mount(agent);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // What `slack-send` posted earlier (a schedule's digest): on the platform, in no session.
+    platform.push({ channel: "C1", ts: "5.0", user: "UBOT", bot_id: "BBOT", text: "Weekly digest: 3. ship it" });
+    await handler(signedRequest(message("6.0", { type: "app_mention", text: "<@UBOT> what did point 3 mean?" })));
+    await settle();
+    expect(calls[0]?.prompt.text).toContain("you (msg 5.0): Weekly digest: 3. ship it");
+
+    // The answer opened thread 6.0. Someone else speaks there, then a third person asks: the thread's read holds the
+    // discussion, and neither the ask that opened it nor the agent's answer, which are the session's already.
+    await handler(signedRequest(message("150", { user: "U3", text: "I think 4 is the docs", thread_ts: "6.0" })));
+    await handler(
+      signedRequest(message("200", { user: "U2", type: "app_mention", text: "<@UBOT> and 4?", thread_ts: "6.0" })),
+    );
+    await settle();
+    expect(calls).toHaveLength(2);
+    const thread = calls[1]?.prompt.text ?? "";
+    expect(thread).toContain("user U3 (msg 150): I think 4 is the docs");
+    expect(thread).not.toContain("what did point 3 mean");
+    expect(thread).not.toContain("point 3 is the cache fix");
   });
 
   it("records a second human who summons it by mention, so it does not barge into a crowd later", async () => {
@@ -481,7 +582,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a bare message that mentions only other people is discussion, not an ask", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
     await handler(signedRequest(message("14.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "14.0" })));
     await settle();
@@ -491,7 +592,6 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("14.2", { text: "<@U9> can you look?", thread_ts: "14.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
   });
 
   it("a bot id carrying regex metacharacters is matched, not interpreted", () => {
@@ -503,32 +603,10 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(mentionsSlackUser("hi <@UBOT|agent> there", "UBOT")).toBe(true);
   });
 
-  it("a broadcast is not a possible summon, so it buffers while the bot identity is unresolved", async () => {
-    // auth.test succeeds without a user_id, so botUserId stays undefined: a message mentioning a USER
-    // is deferred (it might be the bot). A broadcast never can be, so deferring it would drop it.
-    const base = okFetch();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) =>
-        String(input).endsWith("/auth.test")
-          ? Response.json({ ok: true, team_id: "T1" })
-          : base(input, init as RequestInit),
-      ),
-    );
-    const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
-
-    await handler(signedRequest(message("50.1", { text: "<!here> standup in five" })));
-    await settle();
-
-    expect(calls).toHaveLength(0);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("standup in five");
-  });
-
   it("the labelled mention form counts too, on both sides of the guard", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // `<@UBOT|agent>` is a summon, not background text.
@@ -541,13 +619,11 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("40.2", { text: "<@U9|dana> what do you think?", thread_ts: "40.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("what do you think?");
 
     // A broadcast addresses the room, not the Agent: discussion, like any mention of other people.
     await handler(signedRequest(message("40.4", { text: "<!here> can someone look at this?", thread_ts: "40.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("look at this");
 
     // …and the stop command must survive the strip in either form, or it becomes an ordinary turn
     // queued behind the very run it meant to stop.
@@ -559,7 +635,7 @@ describe("Slack sessions, context, and thread participation", () => {
   it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     // U1 asks at CHANNEL top level: the ask carries no thread_ts, so the observation on the way in
@@ -573,13 +649,12 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("20.1", { user: "U2", text: "which part?", thread_ts: "20.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("which part?");
   });
 
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
-    const { handler, stateRoot } = mount(agent);
+    const { handler } = mount(agent);
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
@@ -596,7 +671,6 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("10.3", { text: "bare follow-up", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("bare follow-up");
 
     // …and the discussion it stayed quiet through is folded into the next answered turn.
     await handler(
@@ -763,13 +837,12 @@ describe("Slack sessions, context, and thread participation", () => {
     writeTurns(stateRoot, {
       // `first` has no thread, so it renders classically and never touches the Agent status — every status call
       // below therefore belongs to `second`.
-      first: storedTurn("first", 1, { baseText: "run me", channelId: "D1", bufferKey: "T1:D1", threadTs: undefined }),
+      first: storedTurn("first", 1, { baseText: "run me", channelId: "D1", threadTs: undefined }),
       // A real logical id, so the ack on the asker's message (👀, added by the run that produced the answer) is
       // reachable from this record.
       "T1:D1:2.0": storedTurn("T1:D1:2.0", 2, {
         baseText: "answered already",
         channelId: "D1",
-        bufferKey: "T1:D1",
         answer: "the answer nobody received",
       }),
     });
