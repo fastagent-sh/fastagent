@@ -26,7 +26,8 @@ const IGNORABLE = [".DS_Store", ".gitkeep", ".keep"];
 export interface ScaffoldOptions {
   /**
    * Give the agent web access: `extensions/web-access.ts`, which loads the pi package `pi-web-access`, and that package
-   * in `package.json`. The agent then runs only once `npm install` has installed it into the agent directory.
+   * in `package.json`. The agent runs without it installed; its web tools load only once `npm install` has installed
+   * it, and until then are left out with a warning.
    */
   webAccess?: boolean;
 }

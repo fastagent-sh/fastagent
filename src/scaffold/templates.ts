@@ -20,10 +20,10 @@ export const channelTemplate = (kind: string, name: string): string =>
 export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
-/** package.json for the complete agent. */
 /** The pi package `extensions/web-access.ts` loads: the range a new agent depends on. */
 export const PI_WEB_ACCESS_RANGE = "^0.37.0";
 
+/** package.json for the complete agent: fastagent at this build's version, plus `extra` dependencies. */
 export function packageJson(name: string, version: string, extra: Record<string, string> = {}): string {
   return `${JSON.stringify(
     {
