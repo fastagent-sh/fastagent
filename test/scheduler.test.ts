@@ -762,7 +762,7 @@ describe("schedule/scheduler: schedules/ re-read while running", () => {
     // The changed cron fires on its new grid (10:05), the old one (11:00) is gone.
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(calls).toEqual([{ session: scheduleSession("job"), text: "go" }]);
-    expect(changes).toHaveBeenCalledTimes(2); // a fire moves the next instant, which AgentCore mirrors
+    expect(changes).toHaveBeenCalledTimes(1); // a fire changes no schedule: EventBridge's recurring one stands
 
     // A file that breaks keeps what it last was, said once — not on every re-read.
     loaded = {

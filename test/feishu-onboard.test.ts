@@ -50,7 +50,9 @@ describe("Feishu/Lark agent permission check", () => {
     const { result, notes, opened } = await check("feishu", async () => scopes);
     expect(result).toEqual({ publishReady: false, missing: ["im:message.group_msg", "im:chat.members:read"] });
     expect(notes).toContain("im:message.group_msg: without it only @mentions arrive");
-    expect(notes).toContain("im:chat.members:read: without it the agent cannot list");
+    expect(notes).toContain(
+      "im:chat.members:read: without it people in the discussion the agent reads are shown by open_id",
+    );
     expect(notes).toContain("Tick and enable them on the page that opens");
     expect(opened).toHaveLength(1);
     expect(new URL(opened[0] as string).pathname).toBe("/app/cli_a/auth");

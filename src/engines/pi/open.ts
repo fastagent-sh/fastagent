@@ -210,7 +210,7 @@ export async function resolveAgentAssembly(
     contexts,
     stateRoot,
     // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
-    models: agentModels(agentDir, options),
+    models: agentModels(agentDir, options, modelSpec ? { keepsModel: modelSpec } : {}),
     tools,
     toolNames,
     indirectTools,

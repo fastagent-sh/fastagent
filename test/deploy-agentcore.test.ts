@@ -139,7 +139,7 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("Timeout: 900");
   });
 
-  it("every stack carries the full wake-alarm topology: forwarder, secret param, roles, env", () => {
+  it("every stack carries the full alarm topology: forwarder, secret param, roles, env, both prefixes", () => {
     // Wake-ups are a default capability, so even a definition with no channel and no schedule needs the forwarder —
     // it is the alarm registrar and the poke target.
     const plan = planAgentcoreDeploy(baseInput());
@@ -151,6 +151,13 @@ describe("deploy agentcore: the plan", () => {
     expect(template).toContain("WAKE_SECRET: !Ref FastagentWakeSecret");
     expect(template).toContain("WAKE_PREFIX: fa-my-agent-wk-");
     expect(template).toContain("scheduler:CreateSchedule");
+    // The recurring schedules: the forwarder keeps them equal to the container's set, so it lists, reads and deletes
+    // under its own prefix (ListSchedules takes no resource).
+    expect(template).toContain("SCHEDULE_PREFIX: fa-my-agent-sc-");
+    expect(template).toMatch(
+      /Action: \[scheduler:CreateSchedule, scheduler:UpdateSchedule, scheduler:GetSchedule, scheduler:DeleteSchedule\]\n\s+Resource: .*schedule\/default\/fa-my-agent-sc-\*/,
+    );
+    expect(template).toMatch(/Action: scheduler:ListSchedules\n\s+Resource: "\*"/);
     expect(template).toContain("lambda:GetFunctionUrlConfig");
     const runbook = plan.runbook.join("\n");
     expect(runbook).toContain("EventBridge-backed");

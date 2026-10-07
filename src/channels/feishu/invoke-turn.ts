@@ -27,7 +27,7 @@ import {
   turnStream,
 } from "../kit/invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
-import type { FeishuBufferedRef } from "./context-buffer.ts";
+import type { FeishuBufferedRef } from "./history.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";

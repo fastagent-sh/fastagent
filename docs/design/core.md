@@ -431,7 +431,8 @@ exists only in that call — Telegram's placeholder send, Slack's ordered stream
 write — keep the default budget. How a platform signals a limit stays in each `*-api.ts`.
 
 `runQueuedTurn` separates business settlement from resource cleanup. The `completed` callback removes
-intent before committing the exact context snapshot consumed; later discussion stays buffered. Effect
+intent before committing the exact discussion snapshot consumed (a buffer's entries, or a history read's
+cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
 The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
@@ -452,7 +453,7 @@ Telegram is the stateful channel reference:
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
 | `invoke-turn.ts` | attachment resolution; the turn itself (busy retry, load-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
-| `../kit/turn-runner.ts` | the durable-turn lifecycle over queue + store + buffer (shared with Slack and Feishu) |
+| `../kit/turn-runner.ts` | the durable-turn lifecycle over queue + store + discussion source (shared with Slack and Feishu) |
 | `turn-store.ts` | telegram's record + ordering over the generic `../kit/turn-store.ts` |
 | `context-buffer.ts` | telegram's entry shape over the generic `../kit/context-buffer.ts` |
 | `preview.ts` | live preview and terminal write policy |
@@ -552,7 +553,7 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
 - **Turn identity and delivery dedup use `message_id`; recovery order is an explicit `seq`.** Feishu
   ids carry no arrival order, unlike Telegram's numeric `update_id`, while the platform documents
   duplicate pushes even after a successful ACK. A bounded persisted `seen.ts` ring filters deliveries
-  that already produced a durable turn intent or buffered entry. It is post-persist, best-effort
+  that already produced a durable turn intent (or a `/stop`). It is post-persist, best-effort
   insurance rather than exactly-once: a crash between the state and ring writes, a failed ring write,
   or an id beyond the cap retains the at-least-once tail.
 - **Session partitioning follows the place, not the ask.** A chat is one session (`<kind>:<chat_id>`)
@@ -560,14 +561,14 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   session ids share one namespace across every channel in a deployment. A room keeps one memory
   everyone in it shares; a side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the
   platform's `root_id` tracks the reply chain and can differ between messages of one thread, which
-  would split a side conversation across sessions and buffer buckets. One place stays FIFO while
+  would split a side conversation across sessions and history reads. One place stays FIFO while
   different places run concurrently — the concurrency unit is the place because the causal unit is.
   The rules are derived in [participant-model.md](participant-model.md); there is no session-mode
   option.
 - **Speaking is gated by who is in the place, listening is not.** Direct messages always answer; a
   group's main timeline requires an @mention; inside a thread the agent answers bare messages only
-  while it takes part and has not heard a second human. Everything else it can see is buffered as
-  context (`im:message.group_msg` buys the hearing). An explicit mention of only other people is
+  while it takes part and has not heard a second human. Everything else is discussion, which the
+  place's next answered turn reads (`im:message.group_msg` buys the hearing). An explicit mention of only other people is
   discussion, never an ask. A message's `parent_id` referent is always loaded — a quote is the user
   pointing at something that may predate this session — and an unreadable referent degrades to a marker
   rather than failing the turn.
@@ -584,12 +585,21 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   confirm page (`FEISHU_AGENT_SCOPES`, the sensitive `im:message.group_msg` among them); onboarding and the
   channel's startup both name any a tenant withheld, with what the agent loses without it. A mention arriving before the startup `bot/v3/info` settles is kept as
   context rather than answered (fail-closed: without its own open_id the channel cannot tell a mention
-  of itself from one of someone else). Other human discussion is persisted in `buffers.json`, bucketed
-  by main chat or thread, and folded into that place's next answered turn under the same
-  peek→commit-on-`completed` invariant. Non-`user` senders are dropped. A reply summon carries only
+  of itself from one of someone else). Non-`user` senders are dropped as asks. A reply summon carries only
   `parent_id`: the referent is fetched as primary input and the chain above it as context (oldest-first,
   one shared text budget, a visible truncation line when the walk ends short of the root — see
   participant-model.md §8).
+- **The platform is the place's memory; the channel stores none of it** (design:
+  [place-history.md](place-history.md)). A group turn reads its place's messages since the agent last
+  answered there (`history.ts` over `GET /im/v1/messages`) and folds them into the prompt under the same
+  peek→commit-on-`completed` invariant, the commit being a per-place cursor in `history.json`. The read
+  ends at the turn's own ask, so a queued ask is never folded into an earlier turn, whatever state survived;
+  within it, it leaves out what the session holds: the ids a turn
+  posted into the place, which the place keeps beside its cursor until a read passes them (recorded by a
+  per-place client from `FeishuApi.recordingSends`, so a busy deployment cannot evict a quiet place's
+  last answer). The send tool shares the plain client, so what the agent posts itself stays in the
+  discussion — the gap a buffer could never fill, since a bot never receives its own messages. A failed
+  read costs the discussion, never the turn.
 - **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
   writes the corresponding factory into the channel module. WebSocket needs only App ID/Secret and
   skips token capture, tunnel, Request URL registration, and platform crypto; the official SDK
@@ -784,7 +794,7 @@ existence alone cannot authorize reuse.
 is the SigV4 `InvokeAgentRuntime` API only) and no resident process (compute is per-session microVMs,
 reclaimed when idle). The generated CloudFormation stack therefore carries a forwarder Lambda (public
 Function URL → `{method,path,headers,bodyB64}` envelope → `InvokeAgentRuntime`) fronting the webhooks,
-and no per-schedule resource: the container sets its own alarms (below). Inside the container,
+and no per-schedule resource: the container sets its own EventBridge schedules (below). Inside the container,
 `FASTAGENT_AGENTCORE=1` makes `start` mount the adapter (`channels/agentcore.ts`): `POST /invocations`
 unwraps the envelope — a webhook is reconstructed verbatim and dispatched to the *same* channel routes
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
@@ -865,21 +875,27 @@ missing file reads as "not configured yet".
 
 A live session keeps its old compute (and the old image) until reclaimed, so `--run` stops the ingress
 session after a successful deploy. Wake-ups and schedules are EventBridge-backed the same way: every wakeups-store
-mutation, every change the schedule clock sees and every fire notifies a sink (`schedule/wake-alarm.ts`) that POSTs
-the pending wake-ups and each schedule's next instant to the forwarder's reserved path (shared secret), and the
-forwarder mirrors each into a self-deleting one-shot EventBridge schedule. A wake-up's pokes the container, whose
-ordinary wake pump fires the due entry; a schedule's carries `{scheduleFire: {name, occurrence}}`, which the
-container claims and runs. The container runs no resident timer for schedules, so the alarm is the one path that
-fires an instant and its reply is the record of what happened. Every alarm is keyed by its INSTANT, never by the
-schedule or wake-up: an alarm deletes itself once it has fired, and mirroring runs right after a fire, so an id
-reused for the next instant would update the alarm EventBridge is about to delete. Mirroring again is therefore
-idempotent, and it runs after every delivery however it ended (fired, skipped, failed) and every 5 minutes for as
-long as the container lives, which also repairs a sync that gave up and an alarm lost where no sync sees. An alarm
-that outlived an edit (a schedule removed, an instant its cron no longer has) is answered as skipped. Because the
-container sets the alarms, a schedule written on the runtime is armed without a deploy. The costs: the alarms exist
-only once an envelope has reached the container through the forwarder (`--run` probes it; the manual runbook prints
-the probe), and only a living container repairs them. A deployment whose alarms were lost after its container was
-reclaimed, with nothing else to wake it, sleeps until something does. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
+mutation and every change the schedule clock sees notifies a sink (`schedule/wake-alarm.ts`) that POSTs the whole
+desired set to the forwarder's reserved path (shared secret). The forwarder makes EventBridge equal to it:
+- **a schedule is a RECURRING cron schedule** (`fa-<name>-sc-<hash>`), the way AWS runs any recurring job: its cron
+  translated to EventBridge's dialect (`schedule/eventbridge-cron.ts`), in its zone. Created, updated only when it
+  differs, deleted when the set no longer has it. Each fire carries `{scheduleFire: {name, occurrence:
+  <aws.scheduler.scheduled-time>}}`, which the container claims and runs. The container runs no resident timer for
+  schedules, so that fire is the one path per instant and its reply is the record of what happened. A fire an edit
+  has not reached yet (a schedule removed, an instant its cron no longer has) is answered as skipped.
+- **a pending wake-up is a self-deleting one-shot** (`fa-<name>-wk-<hash>`) that pokes the container, whose ordinary
+  wake pump fires the due entry. Keyed by its INSTANT: an alarm deletes itself shortly after it fires, and a recurring
+  wake-up's next instant is mirrored right after, so an id reused for it would update the alarm about to be deleted.
+
+The recurring schedule is why a fault costs an edit, never the schedule: nothing has to happen after a fire for the
+next one, so a sync that fails (retried with backoff, then every 5 minutes while the container lives, then at its
+next start) delays a change and leaves what EventBridge holds firing. One rule follows from EventBridge being this
+host's clock: discovery refuses, on every host, a cron it cannot express (both day fields restricted, `L`/`#`,
+nicknames), so what runs locally runs here. One difference remains, at a DST change: a local time the spring
+change removes is skipped by EventBridge and run an hour later by croner. Because the container sets the schedules, one
+written on the runtime takes effect without a deploy; the cost is that they are set only once an envelope has
+reached the container through the forwarder (`--run` probes it; the manual runbook prints the probe). They are no
+stack resources, so `destroy` deletes both prefixes itself. The forwarder injects its own URL into every envelope, so nothing is circularly baked into the
 template, and wake-alarm reconciliation begins with a trusted forwarder envelope carrying the current
 callback URL: a public invoke cannot redirect it. Structural limit: long-connection channels cannot
 run, because nothing can restore their ingress when compute is reclaimed.

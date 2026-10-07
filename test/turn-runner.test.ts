@@ -67,11 +67,11 @@ function runnerOptions(
   return {
     label: "[t]",
     store,
-    buffer: fakeBuffer(calls),
+    discussion: fakeBuffer(calls),
     seen: { add: (id) => calls.push(`seen ${id}`) },
     toStored: ({ notice: _n, ...intent }) => ({ ...intent, attempts: 0 }),
     fromStored: ({ attempts: _a, ...intent }) => ({ ...intent, notice: undefined }),
-    bufferKey: (rec) => `place:${rec.session}`,
+    discussionKey: (rec) => `place:${rec.session}`,
     where: (rec) => `session=${rec.session}`,
     onDeferred: (rec) => calls.push(`deferred ${rec.id}`),
     notifyDropped: (rec) => calls.push(`dropped ${rec.id}`),
@@ -138,8 +138,8 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
         const buffer = createContextBuffer({ path: root + '/buffer.json', label: '[child]', isEntry: () => true, line: x => x });
         buffer.push('place:s', 'earlier');
         const runner = createTurnRunner({
-          label: '[child]', store, buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
-          bufferKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
+          label: '[child]', store, discussion: buffer, toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
+          discussionKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
           deliverAnswer: () => portJoin(async () => {}),
           execute: (_rec, _discussion, onAnswered) => portJoin(async () => {
             process.on('message', () => {
@@ -256,7 +256,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       const finish = Promise.withResolvers<void>();
       let running!: Fiber.Fiber<unknown, unknown>;
       const opts = runnerOptions(store, [], {
-        buffer,
+        discussion: buffer,
         execute: (_rec, discussion, onAnswered) =>
           portJoin(async () => {
             expect(discussion.consumed).toEqual(["earlier"]);
@@ -295,7 +295,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
       ]);
       expect(openBuffer().peek("place:s").consumed, label).toEqual(completed ? ["later"] : ["earlier", "later"]);
       const calls: string[] = [];
-      const replay = runner(openStore(), calls, { buffer: openBuffer() });
+      const replay = runner(openStore(), calls, { discussion: openBuffer() });
       expect(replay.recover(), label).toHaveLength(1);
       await replay.idle();
       expect(
@@ -312,7 +312,7 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     const { store, buffer, storePath, openStore } = durable();
     const calls: string[] = [];
     const base = activeWork();
-    const r = runner(store, calls, { buffer });
+    const r = runner(store, calls, { discussion: buffer });
     const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => {
       throw new Error("disk failed");
     });

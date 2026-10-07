@@ -236,7 +236,7 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     // the replay then re-runs it with its folded discussion stripped. This order's failure is the harmless
     // one — an answer kept for re-delivery whose discussion is re-folded if it is run again after all.
     const { order, store, buffer } = recorder();
-    commitAnsweredTurn(store, buffer, { id: "t1", bufferKey: "chat:1", consumed: [], answer: "hi" });
+    commitAnsweredTurn(store, buffer, { id: "t1", key: "chat:1", consumed: [], answer: "hi" });
     expect(order).toEqual(["answered:t1:hi", "commit:chat:1"]);
   });
 
@@ -249,7 +249,7 @@ describe("commitAnsweredTurn (the order a crash between the two writes depends o
     const buffer = { commit: (_k: string, c: unknown) => void seen.push(c) } as unknown as Parameters<
       typeof commitAnsweredTurn
     >[1];
-    commitAnsweredTurn(recorder().store, buffer, { id: "t1", bufferKey: "chat:1", consumed, answer: "hi" });
+    commitAnsweredTurn(recorder().store, buffer, { id: "t1", key: "chat:1", consumed, answer: "hi" });
     expect(seen[0]).toBe(consumed);
   });
 });

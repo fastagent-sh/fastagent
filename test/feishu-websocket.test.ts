@@ -119,20 +119,6 @@ describe("Feishu/Lark WebSocket ingress", () => {
     ).rejects.toThrow();
     await expect(readFile(join(home, "turns.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(home, "seen.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-
-    await mkdir(join(home, "buffers.json.tmp"));
-    const groupEvent = {
-      ...event,
-      message: { ...event.message, message_id: "om_ws_group", chat_type: "group" },
-    } as FeishuMessageEvent;
-    await expect(
-      dispatcher.invoke(
-        { schema: "2.0", header: { event_type: "im.message.receive_v1" }, event: groupEvent },
-        { needCheck: false },
-      ),
-    ).rejects.toThrow();
-    await expect(readFile(join(home, "buffers.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readFile(join(home, "seen.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("maps SDK readiness, reconnect callbacks, events, fatal errors, and abort into long-connection lifecycle", async () => {

@@ -7,7 +7,7 @@
  * exactly-once story needs the different backend above.
  */
 import { log } from "../../log.ts";
-import type { ContextBuffer } from "./context-buffer.ts";
+import type { DiscussionSource } from "./place-history.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
 /** How many times a turn may START without finishing before it is dropped rather than run again. */
@@ -66,13 +66,13 @@ export interface TurnStoreOptions<T extends TurnRecordBase> {
  *
  * Returns whether the answer became recoverable, so a caller does not claim a recovery that has nothing on disk.
  */
-export function commitAnsweredTurn<T extends TurnRecordBase, E>(
+export function commitAnsweredTurn<T extends TurnRecordBase, E, P>(
   store: TurnStore<T>,
-  buffer: ContextBuffer<E>,
-  turn: { id: string; bufferKey: string; consumed: E[]; answer: string },
+  discussion: Pick<DiscussionSource<E, P>, "commit">,
+  turn: { id: string; key: P; consumed: E[]; answer: string },
 ): boolean {
   const recorded = store.answered(turn.id, turn.answer);
-  buffer.commit(turn.bufferKey, turn.consumed);
+  discussion.commit(turn.key, turn.consumed);
   return recorded;
 }
 

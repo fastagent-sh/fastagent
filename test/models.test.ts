@@ -313,12 +313,14 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     expect(existsSync(globalCatalogPath())).toBe(false);
   });
 
-  it("every runtime an agent builds reads the model files as they were at startup", async () => {
-    // Each session builds its own runtime while the control plane keeps the startup catalog: a runtime re-reading the
-    // files would let turns run on an edit the control plane validates and reports against the old content.
+  it("the model files are live: the catalog and every session runtime read an edit, through one read", async () => {
+    // One read for both planes: the control plane lists and validates against what a session then runs on.
     const dir = await agentWith(GATEWAY);
     const models = agentModels(dir, { authPath: join(dir, "auth.json") });
     const startup = await models.runtime();
+    expect(resolveModel(startup, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
+    expect(await models.runtime()).toBe(startup); // unchanged files: the same catalog
+
     await writeFile(join(dir, "models.json"), GATEWAY.replace("vllm.internal", "edited.internal"));
     await writeFile(
       join(dir, "models-store.json"),
@@ -329,20 +331,37 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
         },
       }),
     );
-    const session = await models.createRuntime();
-    for (const runtime of [startup, session]) {
-      expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
-      expect(runtime.getModel("anthropic", "catalog-added")).toBeUndefined();
+    for (const runtime of [await models.runtime(), await models.createRuntime()]) {
+      expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://edited.internal:8000/v1");
+      expect(runtime.getModel("anthropic", "catalog-added")).toBeDefined();
     }
-    const fresh = await agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime();
-    expect(resolveModel(fresh, "mygw/deepseek-v3").baseUrl).toBe("http://edited.internal:8000/v1");
-    expect(fresh.getModel("anthropic", "catalog-added")).toBeDefined();
-    await writeFile(join(dir, "models.json"), "{ not json");
-    await expect(models.createRuntime()).resolves.toBeDefined();
-    // A fresh agent reads the edit, and names the agent's own file when it cannot load it.
-    await expect(agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime()).rejects.toThrow(
-      join(dir, "models.json"),
-    );
+  });
+
+  it("an edit that does not load keeps the files read before, said once; a start on it fails, naming the file", async () => {
+    // The agent can write its own models.json: if a broken one failed every turn, no turn would be left to fix it.
+    const dir = await agentWith(GATEWAY);
+    const models = agentModels(dir, { authPath: join(dir, "auth.json") });
+    await models.runtime();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(join(dir, "models.json"), "{ not json");
+      for (const runtime of [await models.runtime(), await models.createRuntime(), await models.runtime()]) {
+        expect(resolveModel(runtime, "mygw/deepseek-v3").baseUrl).toBe("http://vllm.internal:8000/v1");
+      }
+      const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /cannot be used/.test(line));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toContain(join(dir, "models.json"));
+      // Fixed: read again.
+      await writeFile(join(dir, "models.json"), GATEWAY.replace("vllm.internal", "fixed.internal"));
+      expect(resolveModel(await models.runtime(), "mygw/deepseek-v3").baseUrl).toBe("http://fixed.internal:8000/v1");
+      // With nothing read before, there is nothing to keep: a start on a broken file fails.
+      await writeFile(join(dir, "models.json"), "{ not json");
+      await expect(agentModels(dir, { authPath: join(dir, "auth.json") }).createRuntime()).rejects.toThrow(
+        join(dir, "models.json"),
+      );
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 
@@ -441,6 +460,47 @@ describe("the machine's models.json (~/.fastagent/models.json), under the agent'
     expect(await snapshots()).toHaveLength(2); // a new snapshot; the one a running process reads stays
   });
 
+  it("a running agent reads an edit of the MACHINE's file too", async () => {
+    const { agentDir, machinePath, authPath } = await layers(
+      JSON.stringify({ providers: { localgw: endpoint("http://m/v1", { apiKey: "x" }) } }),
+    );
+    const models = agentModels(agentDir, { authPath });
+    expect((await models.runtime()).getModel("localgw", "added")).toBeUndefined();
+    await writeFile(
+      machinePath,
+      JSON.stringify({
+        providers: { localgw: { ...endpoint("http://m/v1", { apiKey: "x" }), models: [{ id: "m" }, { id: "added" }] } },
+      }),
+    );
+    expect((await models.runtime()).getModel("localgw", "added")).toBeDefined();
+  });
+
+  it("a model file that cannot even be stat'ed keeps the models read before, and is said once", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-machine-unreadable-"));
+    const machineDir = join(root, "machine");
+    await mkdir(machineDir);
+    await writeFile(
+      join(machineDir, "models.json"),
+      JSON.stringify({ providers: { localgw: endpoint("http://m/v1", { apiKey: "x" }) } }),
+    );
+    vi.stubEnv("FASTAGENT_MODELS_PATH", join(machineDir, "models.json"));
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir);
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+    const models = agentModels(agentDir, { authPath: join(root, "auth.json") });
+    await models.runtime();
+    // The machine file's directory becomes a file: its stat fails with ENOTDIR, not "absent".
+    await rm(machineDir, { recursive: true });
+    await writeFile(machineDir, "");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 3; i++) expect(resolveModel(await models.runtime(), "localgw/m").baseUrl).toBe("http://m/v1");
+      expect(errors.mock.calls.filter((call) => /cannot be used/.test(call.join(" ")))).toHaveLength(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("a malformed machine file fails startup naming that file, alone or merged", async () => {
     for (const own of [undefined, JSON.stringify({ providers: {} })]) {
       const { agentDir, machinePath, authPath } = await layers("{ not json", own);
@@ -480,6 +540,87 @@ describe("models.json on the serving path (createPiAgentFromDir)", () => {
     // that its default derivation keeps pi's catalog cache out of what `deploy` bakes into the image.
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
     expect(stateRoot.startsWith(dir)).toBe(true);
+  });
+});
+
+describe("models.json while the agent runs (session control)", () => {
+  it("a model added to models.json is listed, accepted and resolved without reopening the agent; one removed is not", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-live-modelsjson-"));
+    const gateway = (ids: string[]) =>
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://gw.invalid/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: ids.map((id) => ({ id })),
+          },
+        },
+      });
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/a" };`);
+    await writeFile(join(dir, "models.json"), gateway(["a"]));
+    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
+    const listed = async () =>
+      (await sessionControl!.models()).map((m) => m.spec).filter((spec) => spec.startsWith("mygw/"));
+    expect(await listed()).toEqual(["mygw/a"]);
+
+    await writeFile(join(dir, "models.json"), gateway(["a", "b"]));
+    expect(await listed()).toEqual(["mygw/a", "mygw/b"]);
+    expect(await sessionControl!.sessions.get("s").update({ model: "mygw/b" })).toEqual({ ok: true });
+    expect((await sessionControl!.sessions.get("s").state()).model).toBe("mygw/b");
+
+    // Removed: no longer offered for a new selection.
+    await writeFile(join(dir, "models.json"), gateway(["a"]));
+    expect(await listed()).toEqual(["mygw/a"]);
+    expect((await sessionControl!.sessions.get("t").update({ model: "mygw/b" })).ok).toBe(false);
+  });
+
+  it("a default the files never resolved holds no edit back: there was nothing a turn could run on to keep", async () => {
+    // A ChatGPT model resolves only after its sign-in, so an agent can open on one before it.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-live-modelsjson-nodefault-"));
+    const gateway = (ids: string[]) =>
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://gw.invalid/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: ids.map((id) => ({ id })),
+          },
+        },
+      });
+    await writeFile(join(dir, "models.json"), gateway(["a"]));
+    const models = agentModels(dir, { authPath: join(dir, "auth.json") }, { keepsModel: "openai-codex/gpt-5.4" });
+    await models.runtime();
+    await writeFile(join(dir, "models.json"), gateway(["a", "b"]));
+    expect((await models.runtime()).getModel("mygw", "b")).toBeDefined();
+  });
+
+  it("an edit that drops the default model is refused like one that does not load: the turns keep running", async () => {
+    // Valid JSON, but the provider renamed: every turn on the default would fail, the agent's own included.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-live-modelsjson-default-"));
+    const gateway = (id: string) =>
+      JSON.stringify({
+        providers: {
+          [id]: { baseUrl: "http://gw.invalid/v1", api: "openai-completions", apiKey: "x", models: [{ id: "a" }] },
+        },
+      });
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/a" };`);
+    await writeFile(join(dir, "models.json"), gateway("mygw"));
+    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(join(dir, "models.json"), gateway("othergw"));
+      for (let i = 0; i < 2; i++) {
+        expect((await sessionControl!.sessions.get("s").state()).model).toBe("mygw/a");
+        expect((await sessionControl!.models()).map((m) => m.spec)).toContain("mygw/a");
+      }
+      const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /cannot be used/.test(line));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(/no longer define the default model "mygw\/a"/);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 

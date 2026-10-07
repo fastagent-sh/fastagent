@@ -251,9 +251,10 @@ The stack carries:
 
 - the **Runtime** (your container; `FASTAGENT_AGENTCORE=1` serves `POST /invocations` and `GET /ping`);
 - a **forwarder Lambda** with a public Function URL: it relays webhooks when a webhook channel exists (channels
-  verify signatures as on every host) and manages wake alarms;
-- **alarms**: pending wake-ups and each schedule's next instant become one-shot EventBridge schedules that wake the
-  container on time, so a schedule edited on the runtime needs no deploy. The container sets them once an envelope has
+  verify signatures as on every host) and manages the EventBridge schedules below;
+- **EventBridge schedules**, which the container sets itself: one recurring cron schedule per `schedules/` file,
+  which EventBridge fires on its own clock, and a self-deleting one-shot per pending wake-up. Both wake the container
+  on time, and a schedule edited on the runtime needs no deploy. The container sets them once an envelope has
   reached it through the forwarder, which tells it where the forwarder is: `--run` does this with its probe; after a
   manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
   prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.

@@ -146,11 +146,57 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(1); // one attempt, no backoff
   });
 
-  it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
+  it("chatMemberNames pages only until the wanted speakers are named, and says whether the list ended", async () => {
+    // An endless chat: every page has a next one, and member N is on page N.
+    const fx = stubFetch((url) => {
+      const page = Number(new URL(url).searchParams.get("page_token") ?? 0);
+      return okData({
+        items: [{ member_id: `ou_${page}`, name: `Member ${page}` }],
+        has_more: true,
+        page_token: String(page + 1),
+      });
+    });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const members = () => fx.calls().filter((call) => call.url.includes("/members"));
+
+    expect(await api.chatMemberNames("oc_1", new Set(["ou_1"]))).toEqual({
+      names: new Map([["ou_1", "Member 1"]]),
+      complete: false,
+    });
+    expect(members()).toHaveLength(2); // found on the second page: no third read
+
+    const cut = await api.chatMemberNames("oc_1", new Set(["ou_42"])); // beyond the page cap
+    expect(cut).toEqual({ names: new Map(), complete: false });
+    expect(members()).toHaveLength(2 + 10);
+  });
+
+  it("listMessages reads newest first, cards as sent, and ends where it is told", async () => {
+    const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }], has_more: true }));
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    expect(await api.listMessages({ type: "thread", id: "omt_1" }, 50, 1_791_357_412)).toEqual({
+      items: [{ message_id: "om_1" }],
+      hasMore: true,
+    });
+    const query = new URL(fx.calls().at(-1)?.url ?? "").searchParams;
+    expect(Object.fromEntries(query)).toMatchObject({
+      container_id_type: "thread",
+      container_id: "omt_1",
+      sort_type: "ByCreateTimeDesc",
+      page_size: "50",
+      end_time: "1791357412",
+      card_msg_content_type: "user_card_content",
+    });
+    await api.listMessages({ type: "chat", id: "oc_1" }, 50);
+    expect(new URL(fx.calls().at(-1)?.url ?? "").searchParams.has("end_time")).toBe(false);
+  });
+
+  it("getMessage pins user_id_type=open_id, and asks for a card as it was sent", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.getMessage("om_1");
     expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
+    // Without it a Card 2.0 (every streamed answer) reads as "please upgrade the client" (measured).
+    expect(fx.calls().at(-1)?.url).toContain("card_msg_content_type=user_card_content");
   });
 
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {

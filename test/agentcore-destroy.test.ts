@@ -14,6 +14,7 @@ const REGION = "ap-southeast-1";
 /** What the forwarder actually mints: the prefix plus `sha256(wakeId).slice(0, 16)` (forwarder.js). */
 const ALARM_A = "fa-probe-wk-0123456789abcdef";
 const ALARM_B = "fa-probe-wk-fedcba9876543210";
+const SCHEDULE_A = "fa-probe-sc-00112233445566ff";
 /** What AgentCore names the runtime's own log group, which holds the agent's stdout. */
 const RUNTIME_PREFIX = "/aws/bedrock-agentcore/runtimes/probe-";
 const RUNTIME_GROUP = `${RUNTIME_PREFIX}xyz-DEFAULT`;
@@ -87,11 +88,15 @@ describe("destroy agentcore", () => {
     expect(aws.calls.flat().filter((a) => a.startsWith("delete"))).toEqual([]);
   });
 
-  it("reaches all four resources, wake alarms first and the bucket emptied before it is deleted", async () => {
+  it("reaches all four resources, the container's schedules first and the bucket emptied before it is deleted", async () => {
     const aws = fakeAws({
-      "scheduler list-schedules": {
+      "scheduler list-schedules --name-prefix fa-probe-wk-": {
         code: 0,
         stdout: JSON.stringify({ Schedules: [{ Name: ALARM_A }, { Name: ALARM_B }] }),
+      },
+      "scheduler list-schedules --name-prefix fa-probe-sc-": {
+        code: 0,
+        stdout: JSON.stringify({ Schedules: [{ Name: SCHEDULE_A }] }),
       },
       "s3api list-object-versions": {
         code: 0,
@@ -107,19 +112,23 @@ describe("destroy agentcore", () => {
     expect(names(aws.calls)).toEqual([
       "sts get-caller-identity",
       "configure get", // the region every resource below lives in, reported before anything is touched
-      "scheduler list-schedules",
+      "scheduler list-schedules", // the wake alarms
+      "scheduler list-schedules", // the recurring schedules
       "cloudformation describe-stacks",
       "s3api list-object-versions",
       "ecr describe-repositories",
       "logs describe-log-groups",
       "logs describe-log-groups", // the RUNTIME's group, named from the definition rather than the stack
-      // ALARMS WHILE THE STACK STANDS: they are minted at runtime into the default Scheduler group, so the
-      // stack does not own them, and after the Lambda is gone they retry into nothing for weeks.
+      // SCHEDULES WHILE THE STACK STANDS: they are minted at runtime into the default Scheduler group, so the
+      // stack does not own them, and after the Lambda is gone they retry into nothing.
+      "scheduler delete-schedule",
       "scheduler delete-schedule",
       "scheduler delete-schedule",
       "cloudformation delete-stack",
       "cloudformation wait",
-      "scheduler list-schedules", // again: the container could mint one while the stack was going away
+      // Again: the container could mint one while the stack was going away.
+      "scheduler list-schedules",
+      "scheduler list-schedules",
       "s3api list-object-versions",
       // Versions AND delete markers: `delete-bucket` refuses a bucket holding either.
       "s3api delete-objects",
@@ -128,6 +137,10 @@ describe("destroy agentcore", () => {
       "logs delete-log-group",
       "logs delete-log-group", // BOTH: the forwarder's and the runtime's own
     ]);
+    if (outcome.ok) {
+      expect(outcome.found).toContain("1 schedule(s) under fa-probe-sc-");
+      expect(outcome.removed).toContain(`schedule ${SCHEDULE_A}`);
+    }
     const deleted = aws.calls.find((c) => c[1] === "delete-objects") as string[];
     expect(JSON.parse(deleted.at(-1) as string).Objects).toEqual([
       { Key: "forwarder/a.zip", VersionId: "v1" },

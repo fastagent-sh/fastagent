@@ -7,6 +7,7 @@ import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 import type { SessionControl } from "../src/session.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
+import { feishuTransport } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
 import { cardSummary } from "../src/channels/feishu/card.ts";
 import { piSessionId } from "../src/engines/pi/session-store.ts";
@@ -43,7 +44,36 @@ const flush = async () => {
   }
 };
 
+/**
+ * The platform's side of a chat's history: every message an event delivers and every message the channel sends lands
+ * here, and `GET /im/v1/messages` lists it the way the platform does (newest first; an ordinary group's chat listing
+ * holds a thread's root, not its replies).
+ */
+interface PlatformMessage {
+  message_id: string;
+  chat_id: string;
+  thread_id?: string;
+  root_id?: string;
+  parent_id?: string;
+  msg_type: string;
+  create_time: string;
+  body: { content: string };
+  mentions?: unknown[];
+  sender: { id: string; id_type: string; sender_type: string };
+}
+const platform: PlatformMessage[] = [];
+let platformClock = 1_700_000_000_000;
+/** File a message (once per id) and return the create_time the platform stamped it with. */
+function platformAdd(message: Omit<PlatformMessage, "create_time">): string {
+  const filed = platform.find((m) => m.message_id === message.message_id);
+  if (filed) return filed.create_time;
+  const createTime = String(++platformClock);
+  platform.push({ ...message, create_time: createTime });
+  return createTime;
+}
+
 afterEach(async () => {
+  platform.length = 0;
   vi.useRealTimers();
   await Promise.race([Promise.all([...channelIdles].map((idle) => idle())), new Promise((r) => setTimeout(r, 2000))]);
   vi.unstubAllGlobals();
@@ -88,7 +118,58 @@ function feishuFetch(
       return Response.json({ code: 0, msg: "ok", data: { card_id: `c${++cardId}` } });
     if (url.includes("/cardkit/v1/cards/")) return Response.json({ code: 0, msg: "ok", data: {} });
     if (url.includes("/im/v1/messages") && (method === "POST" || method === "PUT" || method === "DELETE")) {
-      return Response.json({ code: 0, msg: "ok", data: { message_id: `om_bot_${++msgId}` } });
+      const id = `om_bot_${++msgId}`;
+      if (method === "POST") {
+        // Where the platform files a reply: under its parent, inside the parent's thread (or the one it opens).
+        const parentId = /\/im\/v1\/messages\/([^/]+)\/reply/.exec(url)?.[1];
+        const parent = platform.find((m) => m.message_id === parentId);
+        const thread =
+          parent && body?.reply_in_thread === true ? (parent.thread_id ?? `omt_${parent.message_id}`) : undefined;
+        if (parent && thread && parent.thread_id === undefined) parent.thread_id = thread;
+        const chatId = parent?.chat_id ?? (body?.receive_id as string | undefined);
+        if (chatId) {
+          platformAdd({
+            message_id: id,
+            chat_id: chatId,
+            ...(thread ? { thread_id: thread, root_id: parent?.root_id ?? parent?.message_id } : {}),
+            ...(parent ? { parent_id: parent.message_id } : {}),
+            msg_type: String(body?.msg_type ?? "text"),
+            body: { content: String(body?.content ?? "") },
+            sender: { id: "app", id_type: "app_id", sender_type: "app" },
+          });
+        }
+      }
+      return Response.json({ code: 0, msg: "ok", data: { message_id: id } });
+    }
+    if (/\/im\/v1\/messages\?/.test(url) && method === "GET") {
+      const query = new URL(url).searchParams;
+      const id = query.get("container_id");
+      const items = platform
+        .filter((m) =>
+          query.get("container_id_type") === "thread"
+            ? m.thread_id === id
+            : m.chat_id === id && !(m.thread_id !== undefined && m.root_id !== undefined),
+        )
+        .reverse();
+      const size = Number(query.get("page_size") ?? 20);
+      return Response.json({
+        code: 0,
+        msg: "ok",
+        data: { items: items.slice(0, size), has_more: items.length > size },
+      });
+    }
+    if (url.includes("/members")) {
+      return Response.json({
+        code: 0,
+        msg: "ok",
+        data: {
+          items: [
+            { member_id: "ou_alice", name: "Alice" },
+            { member_id: "ou_bob", name: "Bob" },
+          ],
+          has_more: false,
+        },
+      });
     }
     if (url.includes("/im/v1/messages/") && method === "GET") {
       return Response.json({ code: 0, msg: "ok", data: { items: [] } });
@@ -155,6 +236,18 @@ function messageEvent(over: {
   rootId?: string;
   threadId?: string;
 }) {
+  const senderId = over.senderId === null ? undefined : (over.senderId ?? "ou_alice");
+  const createTime = platformAdd({
+    message_id: over.id ?? "om_1",
+    chat_id: over.chatId ?? "oc_1",
+    ...(over.threadId ? { thread_id: over.threadId } : {}),
+    ...(over.rootId ? { root_id: over.rootId } : {}),
+    ...(over.parentId ? { parent_id: over.parentId } : {}),
+    msg_type: over.msgType ?? "text",
+    body: { content: over.content ?? JSON.stringify({ text: over.text ?? "hi" }) },
+    ...(over.mentions ? { mentions: over.mentions } : {}),
+    sender: { id: senderId ?? "", id_type: "open_id", sender_type: over.senderType ?? "user" },
+  });
   return {
     schema: "2.0",
     header: { event_id: `ev_${over.id ?? "1"}`, event_type: "im.message.receive_v1", token: TOKEN },
@@ -166,6 +259,7 @@ function messageEvent(over: {
       },
       message: {
         message_id: over.id ?? "om_1",
+        create_time: createTime,
         chat_id: over.chatId ?? "oc_1",
         chat_type: over.chatType ?? "p2p",
         message_type: over.msgType ?? "text",
@@ -638,18 +732,15 @@ describe("turn flow", () => {
     expect(texts).toHaveLength(0);
   });
 
-  it("dedups unsummoned context, folds it into the next @mention, then commits it", async () => {
+  it("folds the chat's unanswered discussion into the next @mention, by name, once", async () => {
     feishuFetch();
-    const { handler, calls, idle, home } = buildChannel();
+    const { handler, calls, idle } = buildChannel();
     await flush();
     const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
     const context = messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" });
 
     await handler(feishuRequest(context));
-    await handler(feishuRequest(context));
     expect(calls).toHaveLength(0);
-    const persisted = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
-    expect(persisted.oc_1).toHaveLength(1);
 
     await handler(
       feishuRequest(
@@ -664,7 +755,9 @@ describe("turn flow", () => {
     await idle();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).toContain("[recent discussion here:");
-    expect(calls[0]?.prompt.text).toContain("user ou_alice (msg om_context): deploy failed");
+    expect(calls[0]?.prompt.text).toContain("Alice (msg om_context): deploy failed");
+    // The ask is the turn's own text, not discussion.
+    expect(calls[0]?.prompt.text).not.toContain("(msg om_context_ask)");
 
     await handler(
       feishuRequest(
@@ -677,6 +770,41 @@ describe("turn flow", () => {
       ),
     );
     await idle();
+    // Read since the last answer: the first ask and its answer are already in the session.
+    expect(calls[1]?.prompt.text).not.toContain("recent discussion here");
+  });
+
+  it("what the agent sent itself is discussion; what it answered is not", async () => {
+    feishuFetch();
+    const agentDir = mkdtempSync(join(tmpdir(), "feishu-own-posts-"));
+    tempRoots.push(agentDir);
+    const { agent, calls } = replyingAgent("the answer");
+    const handler = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      apiBaseUrl: BASE,
+    })({
+      agent,
+      stateRoot: join(agentDir, ".state"),
+    })["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+    channelIdles.add(idle);
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    const ask = async (id: string) => {
+      await handler(feishuRequest(messageEvent({ id, chatType: "group", text: "@_user_1 go", mentions: mention })));
+      await idle();
+    };
+
+    // A schedule's digest, posted through the send tool's transport.
+    await feishuTransport(agentDir).sendText({ chatId: "oc_1" }, "Daily digest: 3 PRs merged");
+    await ask("om_first");
+    expect(calls[0]?.prompt.text).toMatch(/you \(msg om_bot_\d+\): Daily digest: 3 PRs merged/);
+
+    // The first answer is in the session already; nothing else was said.
+    await ask("om_second");
     expect(calls[1]?.prompt.text).not.toContain("recent discussion here");
   });
 
@@ -825,8 +953,9 @@ describe("turn flow", () => {
     // Rule 3: a thread is its own place, so both turns share the thread's session.
     expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1:omt_two_party", "feishu:oc_1:omt_two_party"]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
-    // Nothing was asked of the platform: both halves of the rule are what this channel heard.
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
+    // The rule asked nothing of the platform (both halves are what this channel heard): the only thread reads are
+    // each turn's history read.
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(calls.length);
     const reply = fx.calls("/im/v1/messages/om_bare/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
     expect(reply?.body?.reply_in_thread).toBe(true);
@@ -884,7 +1013,7 @@ describe("turn flow", () => {
 
   it("a thread the agent never joined is discussion, however quiet it looks", async () => {
     const fx = feishuFetch();
-    const { handler, calls, home } = buildChannel();
+    const { handler, calls } = buildChannel();
     await flush();
 
     // One human, no mention, and the agent has never spoken here — being a participant is the half
@@ -899,12 +1028,11 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty("oc_1:thread:omt_human");
   });
 
-  it("a permanently failed bot identity keeps group mentions off, and the ask becomes context", async () => {
+  it("a permanently failed bot identity keeps group mentions off, and the ask stays discussion", async () => {
     feishuFetch({ "/bot/v3/info": () => Response.json({ code: 1, msg: "bot capability disabled" }, { status: 403 }) });
-    const { handler, calls, home } = buildChannel();
+    const { handler, calls } = buildChannel();
     await flush(); // botInfo settles as FAILED — @mention summon stays off (warned at startup)
 
     await handler(
@@ -920,9 +1048,8 @@ describe("turn flow", () => {
     await flush();
 
     // Fail-closed: without its own identity the agent cannot tell a mention of itself from one of
-    // someone else, so the message is kept as context rather than answered.
+    // someone else, so the message is left as discussion rather than answered.
     expect(calls).toHaveLength(0);
-    expect(readFileSync(join(home, "buffers.json"), "utf8")).toContain("who am I asking?");
   });
 
   it("buffers @other-only discussion in a thread; the next bare message consumes it", async () => {
@@ -1286,7 +1413,7 @@ describe("turn flow", () => {
     expect(calls[0]?.prompt.images).toHaveLength(2);
     expect(calls[0]?.prompt.text).toContain("background vision images from earlier discussion");
     expect(calls[0]?.prompt.text).toContain("appended after 1 primary image(s)");
-    expect(calls[0]?.prompt.text).toContain("vision image 2: from user ou_alice, msg om_background_image");
+    expect(calls[0]?.prompt.text).toContain("vision image 2: from Alice, msg om_background_image");
     expect(fx.calls("/im/v1/messages/om_image_ask/resources/primary_image", "GET")).toHaveLength(1);
     expect(fx.calls("/im/v1/messages/om_background_image/resources/background_image", "GET")).toHaveLength(1);
   });
@@ -1333,7 +1460,7 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).toContain("1 attachment(s) from the earlier discussion are not loaded");
-    expect(calls[0]?.prompt.text).toContain("- good.txt (from user ou_alice, msg om_good_file, earlier discussion)");
+    expect(calls[0]?.prompt.text).toContain("- good.txt (from Alice, msg om_good_file, earlier discussion)");
     expect(fx.calls("/resources/stale", "GET")).toHaveLength(1);
     expect(fx.calls("/resources/good", "GET")).toHaveLength(1);
   });
@@ -1543,9 +1670,20 @@ describe("turn flow", () => {
                 message_id: "om_bot_card",
                 msg_type: "interactive",
                 parent_id: "om_original_ask", // the chain's next link — walked
+                // The agent's streamed answer as the read returns it (`user_card_content`): a Card 2.0 as sent.
                 body: {
                   content: JSON.stringify({
-                    elements: [[{ tag: "text", text: "确认后我会给出方案；批准后再实现 SVG 足球页面。" }]],
+                    schema: "2.0",
+                    config: { streaming_mode: false },
+                    body: {
+                      elements: [
+                        {
+                          tag: "markdown",
+                          element_id: "answer",
+                          content: "确认后我会给出方案；批准后再实现 SVG 足球页面。",
+                        },
+                      ],
+                    },
                   }),
                 },
                 sender: { id: "cli_self", id_type: "app_id", sender_type: "app" }, // THIS app
@@ -1712,7 +1850,7 @@ describe("turn flow", () => {
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("branched from"); // the fold is there…
     expect(calls[0]?.prompt.images).toHaveLength(1); // …and the image crossed with it
-    expect(prompt).toContain("vision image 1: from user ou_alice, msg om_room_img");
+    expect(prompt).toContain("vision image 1: from Alice, msg om_room_img");
     expect(fx.calls("/im/v1/messages/om_room_img/resources/room_shot", "GET")).toHaveLength(1);
 
     // A later turn in the same thread neither re-fetches it nor re-attaches it: one copy in the
@@ -1759,7 +1897,12 @@ describe("turn flow", () => {
                 message_id: "om_other_bot",
                 msg_type: "interactive",
                 parent_id: "om_stranger_ask", // no shared prefix with om_other_bot — feishuFetch matches by substring
-                body: { content: JSON.stringify({ elements: [[{ tag: "text", text: "another bot's card" }]] }) },
+                body: {
+                  content: JSON.stringify({
+                    schema: "2.0",
+                    body: { elements: [{ tag: "markdown", content: "another bot's card" }] },
+                  }),
+                },
                 sender: { id: "cli_someone_else", id_type: "app_id", sender_type: "app" },
               },
             ],
@@ -2160,15 +2303,19 @@ describe("turn flow", () => {
     expect(bufferFetches).toHaveLength(1);
   });
 
-  it("a custom route's null remains a full ignore and does not enter the default context buffer", async () => {
-    feishuFetch();
-    const { handler, calls, home } = buildChannel({ route: () => null });
+  it("a routed turn and a direct message read no place history; a group under the default routing does", async () => {
+    const fx = feishuFetch();
+    const routed = buildChannel({ route: (event) => (event.message?.chat_type === "group" ? {} : null) });
+    await routed.handler(feishuRequest(messageEvent({ id: "om_routed", chatType: "group", text: "routed ask" })));
+    await routed.idle();
+    expect(routed.calls).toHaveLength(1);
+    expect(fx.calls("container_id_type", "GET")).toHaveLength(0); // the router decides what a session's place is
 
-    await handler(feishuRequest(messageEvent({ id: "om_custom_ignore", chatType: "group", text: "ignore me" })));
-    await flush();
-
-    expect(calls).toHaveLength(0);
-    expect(existsSync(join(home, "buffers.json"))).toBe(false);
+    const direct = buildChannel();
+    await direct.handler(feishuRequest(messageEvent({ id: "om_dm", chatType: "p2p", text: "dm ask" })));
+    await direct.idle();
+    expect(direct.calls).toHaveLength(1);
+    expect(fx.calls("container_id_type", "GET")).toHaveLength(0); // every DM message is a turn: nothing to fold
   });
 
   it("startup names each agent scope the app lacks, and a superset counts as the scope it covers", async () => {
@@ -2311,7 +2458,7 @@ describe("turn flow", () => {
           seq: 1,
           session: "oc_9",
           baseText: "what a prior run never finished",
-          bufferKey: "oc_9",
+          askAt: 1_700_000_000_000,
           chatId: "oc_9",
           images: [],
           files: [],

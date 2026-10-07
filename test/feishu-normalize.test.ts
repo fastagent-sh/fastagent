@@ -56,10 +56,10 @@ describe("Feishu/Lark normalized webhook model", () => {
   });
 });
 
-describe("card (interactive) decoding — the shape the agent's OWN answers come back as", () => {
-  // What a query API hands back for a card: `title` + `elements` paragraphs of the same tagged nodes
-  // as `post`. NOT what we sent (an entity reference holding only a card_id) — the platform renders it
-  // down on the way out, which is why this needs no cardkit read.
+describe("card (interactive) decoding — a card as the platform renders it down", () => {
+  // What a read WITHOUT `user_card_content` returns for a card 1.0: `title` + `elements` paragraphs of
+  // the same tagged nodes as `post`. This channel's reads ask for the card as sent (below); this shape
+  // is still decoded wherever a card arrives rendered down.
   const card = {
     title: "需要先确认两项",
     elements: [
@@ -132,5 +132,158 @@ describe("card (interactive) decoding — the shape the agent's OWN answers come
     const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(labelled) });
     expect(decoded.text).toContain("批准");
     expect(decoded.text).toContain("选一个");
+  });
+});
+
+describe("card decoding — a card as it was SENT (`card_msg_content_type=user_card_content`)", () => {
+  it("reads the agent's streamed answer, as the platform returned it for a real one", () => {
+    // Verbatim from `GET /im/v1/messages/:id?card_msg_content_type=user_card_content` on a streamed answer card.
+    const answer = {
+      body: { elements: [{ content: "Hello! 👋 How can I help?", element_id: "answer", tag: "markdown" }] },
+      config: {
+        enable_forward_interaction: false,
+        streaming_mode: false,
+        summary: { content: "Hello! 👋 How can I help?" },
+      },
+      schema: "2.0",
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(answer) }).text).toBe(
+      "Hello! 👋 How can I help?",
+    );
+  });
+
+  it("reads a header title and text nested in containers, in reading order, with button labels", () => {
+    const card = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "Daily digest" } },
+      body: {
+        elements: [
+          { tag: "markdown", content: "1. deploys" },
+          {
+            tag: "column_set",
+            columns: [
+              { tag: "column", elements: [{ tag: "div", text: { tag: "plain_text", content: "2. incidents" } }] },
+            ],
+          },
+          { tag: "img", img_key: "img_1" },
+          { tag: "button", text: { tag: "plain_text", content: "Open report" } },
+        ],
+      },
+    };
+    const decoded = decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) });
+    expect(decoded.text).toBe("Daily digest\n1. deploys\n2. incidents\n[image]\nOpen report");
+    expect(decoded.resources).toEqual([]); // a card's resources cannot be downloaded (see above)
+  });
+
+  it("reads a card 1.0 as it was sent: header title, div text, fields, notes and button labels", () => {
+    // The 1.0 shape a CI or alert bot sends; with `user_card_content` a read returns it as sent, not rendered down.
+    const card = {
+      config: { wide_screen_mode: true },
+      header: { title: { tag: "plain_text", content: "Build #42 failed" }, template: "red" },
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: "**main** · 3 tests failed" } },
+        { tag: "div", fields: [{ is_short: true, text: { tag: "lark_md", content: "owner: alice" } }] },
+        { tag: "hr" },
+        { tag: "note", elements: [{ tag: "plain_text", content: "from ci-bot" }] },
+        { tag: "action", actions: [{ tag: "button", text: { tag: "plain_text", content: "Open logs" } }] },
+      ],
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Build #42 failed\n**main** · 3 tests failed\nowner: alice\nfrom ci-bot\nOpen logs",
+    );
+  });
+
+  it("recognizes a card 1.0 as sent by either half: a header with no elements, or elements with no header", () => {
+    const decode = (card: unknown) =>
+      decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text;
+    expect(decode({ header: { title: { tag: "plain_text", content: "Deploy approved" } } })).toBe("Deploy approved");
+    expect(decode({ elements: [{ tag: "markdown", content: "disk at 91%" }] })).toBe("disk at 91%");
+  });
+
+  it("reads a multi-language card in its declared locale, title included", () => {
+    const decode = (card: unknown) =>
+      decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text;
+    const card10 = {
+      config: { locales: ["en_us", "zh_cn"] },
+      header: { title: { tag: "plain_text", i18n: { zh_cn: "构建失败", en_us: "Build failed" } } },
+      i18n_elements: {
+        zh_cn: [{ tag: "div", text: { tag: "lark_md", content: "3 个测试失败" } }],
+        en_us: [{ tag: "div", text: { tag: "lark_md", content: "3 tests failed" } }],
+      },
+    };
+    expect(decode(card10)).toBe("Build failed\n3 tests failed");
+    // No declared locales: the first the card carries.
+    expect(decode({ ...card10, config: {} })).toBe("构建失败\n3 个测试失败");
+    // Per-locale elements alone mark a card as sent: no header needed.
+    expect(decode({ i18n_elements: card10.i18n_elements })).toBe("3 个测试失败");
+    // Card 2.0 spells a per-locale text `i18n_content`, with no per-locale element lists: the declared order still
+    // decides, whatever order the JSON lists the locales in.
+    const card20 = {
+      schema: "2.0",
+      config: { locales: ["en_us", "zh_cn"] },
+      header: { title: { tag: "plain_text", i18n_content: { zh_cn: "告警", en_us: "Alert" } } },
+      body: { elements: [{ tag: "markdown", i18n_content: { zh_cn: "磁盘 91%", en_us: "disk at 91%" } }] },
+    };
+    expect(decode(card20)).toBe("Alert\ndisk at 91%");
+  });
+
+  it("reads a collapsible panel's title, the one line it shows folded, before its content", () => {
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "collapsible_panel",
+            header: { title: { tag: "markdown", content: "Details" } },
+            elements: [{ tag: "markdown", content: "inner" }],
+          },
+        ],
+      },
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Details\ninner",
+    );
+  });
+
+  it("reads a control's placeholder and a div's extra, and says a table is there", () => {
+    const card = {
+      elements: [
+        {
+          tag: "div",
+          text: { tag: "lark_md", content: "Deploy v2?" },
+          extra: { tag: "button", text: { tag: "plain_text", content: "Approve" } },
+        },
+        { tag: "action", actions: [{ tag: "select_static", placeholder: { tag: "plain_text", content: "选一个" } }] },
+      ],
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(card) }).text).toBe(
+      "Deploy v2?\nApprove\n选一个",
+    );
+    const table = {
+      schema: "2.0",
+      body: {
+        elements: [
+          { tag: "markdown", content: "Latency by region" },
+          { tag: "table", columns: [{ name: "region", display_name: "Region" }], rows: [{ region: "eu" }] },
+        ],
+      },
+    };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(table) }).text).toBe(
+      "Latency by region\n[table]",
+    );
+  });
+
+  it("says a template card cannot be read, rather than leaving a bare marker", () => {
+    const template = { type: "template", data: { template_id: "ctp_1", template_variable: { build: "42" } } };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(template) }).text).toBe(
+      "[interactive message: a template card; its text cannot be read]",
+    );
+  });
+
+  it("keeps the marker when a Card 2.0 renders to nothing", () => {
+    const controlsOnly = { schema: "2.0", body: { elements: [{ tag: "button" }] } };
+    expect(decodeFeishuContent({ message_type: "interactive", content: JSON.stringify(controlsOnly) }).text).toBe(
+      "[interactive message]",
+    );
   });
 });

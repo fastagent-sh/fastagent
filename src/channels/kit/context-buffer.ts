@@ -14,13 +14,14 @@
  * never flowing in as trusted data.
  */
 import { log } from "../../log.ts";
+import type { DiscussionSource } from "./place-history.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
 /**
  * Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded the OLDEST
  * un-summoned messages are dropped. Not a time window: a quiet group keeps its sparse-but-relevant lines.
  */
-const BUFFER_MAX_CHARS = 4000;
+export const BUFFER_MAX_CHARS = 4000;
 
 /** Per-message bound INSIDE that budget. */
 export const BUFFER_LINE_MAX_CHARS = 280;
@@ -44,7 +45,7 @@ export function discussionBlock(text: string): string {
   return text ? `[recent discussion here:\n${text}\n]\n\n` : "";
 }
 
-export interface ContextBuffer<E> {
+export interface ContextBuffer<E> extends DiscussionSource<E> {
   /** Record an un-summoned message. */
   push(placeKey: string, entry: E): void;
   /** Render the fold text and snapshot the consumed entries (see the module header's consume protocol). */

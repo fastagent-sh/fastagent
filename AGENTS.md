@@ -119,6 +119,7 @@ src/
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + buffer
 │   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
+│   │   ├── place-history.ts # the DiscussionSource a turn folds + the place-history fold (budget, labels)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── state.ts, seen.ts # atomic channel state + bounded durable delivery dedup
@@ -154,7 +155,7 @@ src/
 │   │   ├── cloud.ts        # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol/content/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
-│   │   ├── context-buffer.ts # feishu's entry shape + resource selection over the generic buffer
+│   │   ├── history.ts      # a place's history read from the platform (cursor, own-output exclusion, names)
 │   │   ├── feishu-api.ts   # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
 │   │   ├── setup-mode.ts   # the onboarding choice (webhook vs websocket) + the scopes every agent app asks for
@@ -204,7 +205,9 @@ src/
 │   ├── discover.ts         # schedules/<name>.md discovery: a strict cron/tz frontmatter over the prompt
 │   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
-│   ├── wake-alarm.ts       # the wake-up's EXTERNAL-clock form: mirrored into one-shot EventBridge schedules
+│   ├── wake-alarm.ts       # the EXTERNAL-clock form of both: schedules as recurring EventBridge schedules,
+│   │                       # wake-ups as one-shots
+│   ├── eventbridge-cron.ts # a cron in EventBridge's dialect; discovery refuses what it cannot express
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── engines/pi/             # the pi reference implementation
