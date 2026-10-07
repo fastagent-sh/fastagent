@@ -676,6 +676,10 @@ cost. A `settled` event carries the usage, so cost sums per invocation, per sess
 - After a failed run, pending follow-ups start as usual, until the move to pi-durable revisits it (§7.4).
 - Channels drop their busy wait. Whether they keep their own queue is decided in step 3; their turn store stays
   (§7.4).
+- `cancel` replaces `abort`, at two scopes: one invocation, or everything a session is doing (§7.5). A running turn
+  offers the harness port only `steer`; stopping it is the `AbortSignal` given to `run` (§9.1).
+- Steering and follow-ups move into `invoke` as `whenBusy`, reversing the SPEC §8 "Mid-turn steering" row, which kept
+  them on the session control plane (§7.6).
 - Credentials are declared by whatever uses them and stored by how they are obtained (§6). The shell keeps inheriting
   the process environment; isolation waits for a sandboxed environment (§6.4).
 - The agent's semantics are written once, above a harness port, so another harness can be added (§9.1).
