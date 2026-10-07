@@ -7,7 +7,9 @@ const MAX_TEXT = 20_000; // keep a huge page from flooding the model's context
 
 export default defineTool({
   description: "Fetch a web page and return its readable text (HTML stripped, truncated).",
-  input: z.object({ url: z.url({ protocol: /^https?$/ }).describe("The http(s) URL to fetch") }),
+  // A pattern, not z.url(): z.url() emits `format: "uri"`, which OpenAI's strict tool schemas reject for the whole
+  // request. A pattern constrains sampling on every provider.
+  input: z.object({ url: z.string().regex(/^https?:\/\/\S+$/).describe("The http(s) URL to fetch") }),
   async execute({ url }) {
     const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`GET ${url} failed: ${res.status} ${res.statusText}`);
