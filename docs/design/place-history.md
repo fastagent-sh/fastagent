@@ -102,12 +102,14 @@ derivation that must not drift. The seam is where the platforms actually differ.
 
 ### The fold, `recentDiscussion`
 
-1. Read the place's messages after its cursor.
-2. **Drop what the session holds or will hold**, by message id:
-   - every message the channel accepted as a turn: this turn's ask (already the prompt) and asks still queued in the
-     same session (each is its own turn; folding one into an earlier turn would answer it twice). The channel already
-     records these ids when it accepts them (its delivery dedup), so the fold reads that record;
-   - the answers this channel delivered. `PlaceMarks` keeps their ids.
+1. Read the place's messages after its cursor **and up to the turn's own ask**, then move the cursor to that ask. The
+   bound keeps out this turn's ask (already the prompt), an ask queued behind it in the same session (its own turn:
+   folding it here would answer it twice) and anything said after it, which the next turn reads. It is a position on
+   the platform, not a record of which messages were asks, so a cold instance, a second instance or a lost state file
+   cannot break it. (Slack: `latest`; Feishu: `end_time` in seconds, then the ask's `(create_time, message_id)`.)
+2. **Drop the answers this channel delivered**, by message id. They are in the session already. `PlaceMarks` keeps
+   their ids per place, beside the cursor, so traffic in other places cannot evict them. Messages the channel took as
+   input that are not asks of this session (a `/stop`) may be dropped too; that only shapes the prompt.
 
    The agent's other posts (a digest, a post into another chat) stay: they are what #633 is about. The drop is by id,
    not time: a message that arrives during a turn can be older than the answer that ends it.
@@ -155,13 +157,18 @@ app cannot read this chat's history" instead of folding nothing.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session (#754) | a schedule's post is in the chat's next answered turn |
-| 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; `include_bot:read` requested; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group |
+| 1. Telegram's own posts | `telegramTransport`, shared by the channel and `telegram-send`: its send methods, which only `telegram-send` calls, record what they send into that chat's buffer. The channel's answers go out through its own preview path and are not recorded: they are in the session. The buffer has one writer, the mounted channel; a send from a process with no channel mounted (`fastagent tool`, `invoke`) is delivered but not recorded, and the tool's result says so. Where channel state does not persist (AgentCore, no volume) the buffer itself does not, so this holds only within one instance's life (#754) | a schedule's post is in the chat's next answered turn, where the schedule fires in the serving process |
+| 2. Kit + Feishu / Lark | `place-history.ts` (the seam and the fold, built with its first async, platform-read source); Feishu `history.ts` over the measured API; names from members; bot messages labeled; `include_bot:read` requested; buffer removed | live: a digest sent with `feishu-send` is answered about without quoting it, in an ordinary and a topic group (from a new topic: the topic group's room is its topics' first posts, decided below) |
 | 3. Slack | `history.ts`; buffer removed | the same, live |
 | 4. Thread reading (#374) | the tool: list and read this room's threads | the #374 question set: a resolution a human wrote in a thread is found from the room |
 
 Docs move with the phases: participant-model.md §2 (hearing vs knowing), §7 and §8 (rung 3's source);
 core.md §7; feishu.md and slack.md "Group context".
+
+**Decided: a topic group's room is its topics' first posts.** Its chat history holds every topic's messages, and the
+fold must not pour every topic into one prompt. A reply inside a topic belongs to that topic's place, so the room's
+read drops messages that are replies inside a thread; a topic's first turn reads the room read-only (rung 3), which is
+where a digest posted as a topic of its own is found.
 
 ## 6. Open questions
 
@@ -170,9 +177,6 @@ core.md §7; feishu.md and slack.md "Group context".
   posting in a test group, read by the agent's app.
 - **Latency from a host.** Every read above was measured from a laptop in China. A turn adds one read, and a thread's
   first turn adds two. Measure from Fly or AgentCore before choosing the budget and the page size.
-- **Topic groups.** A topic group's chat history holds every topic's messages. "The room" there is the set of topic
-  roots, and the fold must not pour every topic into one prompt. Decide whether a topic group has a room memory at
-  all, or only its topics (participant-model §11 has the analogous Slack case).
 - **Slack DMs.** Each assistant thread is its own place. Check that `conversations.replies` on an assistant thread
   returns what the user sees.
 - **Lark.** The same API on `open.larksuite.com` is assumed, not measured.
