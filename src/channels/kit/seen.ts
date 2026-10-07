@@ -31,7 +31,7 @@ export function createSeenRing(path: string, label: string, cap = 2000): SeenRin
       try {
         saveStateFile(path, values);
       } catch (error) {
-        log.warn(`${label} could not write ${path} (its ids are held in memory until restart): ${String(error)}`);
+        log.warn(`${label} seen-ring write failed (delivery dedup is in-memory until restart): ${String(error)}`);
       }
     },
   };
