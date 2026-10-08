@@ -17,6 +17,7 @@ function fakeApi(): SlackApi {
       return this;
     }),
     channelHistory: vi.fn(async () => ({ messages: [], hasMore: false })),
+    userName: vi.fn(async () => undefined),
     threadReplies: vi.fn(async () => ({ messages: [], hasMore: false })),
     authTest: vi.fn(async () => ({})),
     postMessage: vi.fn(async () => "1.0"),

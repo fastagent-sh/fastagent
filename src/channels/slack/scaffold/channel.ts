@@ -4,7 +4,8 @@ import { defineChannel } from "@fastagent-sh/fastagent";
 // Slack HTTP Events API channel. Setup:
 //   1. Create a Slack app at https://api.slack.com/apps and add a bot user.
 //   2. Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history,
-//      files:read, files:write, channels:history, groups:history, and mpim:history.
+//      files:read, files:write, reactions:write, channels:history, groups:history, mpim:history,
+//      and users:read.
 //   3. Event Subscriptions: app_home_opened, app_context_changed, app_mention, message.im,
 //      message.channels, message.groups, and message.mpim.
 //      Set Request URL to https://<host>/slack.

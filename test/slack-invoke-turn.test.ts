@@ -14,6 +14,7 @@ function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
       return this;
     },
     channelHistory: async () => ({ messages: [], hasMore: false }),
+    userName: async () => undefined,
     threadReplies: async () => ({ messages: [], hasMore: false }),
     authTest: async () => ({}),
     postMessage: async () => "1.0",

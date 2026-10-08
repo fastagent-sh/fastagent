@@ -1,5 +1,5 @@
 // One posture, as on Feishu: the agent hears the channels it is in (participant-model.md §2), so the history scopes
-// and their message events are part of every app.
+// and their message events are part of every app. `users:read` names the people in the history a turn reads.
 const SLACK_BOT_SCOPES = [
   "app_mentions:read",
   "assistant:write",
@@ -11,6 +11,7 @@ const SLACK_BOT_SCOPES = [
   "channels:history",
   "groups:history",
   "mpim:history",
+  "users:read",
 ] as const;
 const SLACK_BOT_EVENTS = [
   "app_context_changed",
