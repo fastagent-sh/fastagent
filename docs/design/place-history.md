@@ -129,7 +129,7 @@ derivation that must not drift. The seam is where the platforms actually differ.
    place's cursor, and the thread answered a moment ago is still there for its follow-up. The send tools share the plain client, so the agent's other posts (a digest, a post into another
    chat) stay: they are what #633 is about.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
-3. Drop system and deleted messages. Label each sender: a human by name (Slack: by user id, see §6), `you` for
+3. Drop system and deleted messages. Label each sender: a human by name (Slack: `users.info`, `users:read`), `you` for
    this app, another bot by its id (Feishu) or name (Slack).
 4. Bound newest-first by a character budget, so the discussion closest to the ask is what survives. The agent's own
    posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
@@ -222,5 +222,4 @@ Decided in phase 2: a topic group's room is its topics' first posts. Its chat hi
 
 - **Latency from a host.** Every read above was measured from a laptop in China. A turn adds one read, and a thread's
   first turn adds two. Measure from Fly or AgentCore before choosing the budget and the page size.
-- **Slack names.** People are shown by user id. Names need `users:read` and `users.info`, which no current app has.
 - **Lark.** The same API on `open.larksuite.com` is assumed, not measured.

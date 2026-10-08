@@ -9,7 +9,8 @@ import {
   slackHistoryKey,
   slackPlaceOf,
 } from "../src/channels/slack/history.ts";
-import type { SlackApi, SlackListedMessage } from "../src/channels/slack/slack-api.ts";
+import { type SlackApi, SlackApiError, type SlackListedMessage } from "../src/channels/slack/slack-api.ts";
+import { log } from "../src/log.ts";
 import { CONTEXT_READ } from "../src/channels/kit/transport.ts";
 
 const roots: string[] = [];
@@ -30,7 +31,7 @@ const CHANNEL = slackHistoryKey("T1", { channelId: "C1" });
  * `limit` before `latest`; the channel newest first, a thread oldest first after its root, which comes whatever the
  * range. An `oldest` makes Slack return the OLDEST `limit` after it instead, so a reader passing one loses messages.
  */
-function setup(opts: { turnInputs?: string[] } = {}) {
+function setup(opts: { turnInputs?: string[]; userName?: SlackApi["userName"] } = {}) {
   const messages: (SlackListedMessage & { ts: string })[] = [];
   const page = (
     candidates: (SlackListedMessage & { ts: string })[],
@@ -59,10 +60,12 @@ function setup(opts: { turnInputs?: string[] } = {}) {
     );
     return { messages: [...root, ...slice], hasMore };
   });
+  // By default nobody has a name to show, so a label is the user id.
+  const userName = vi.fn<SlackApi["userName"]>(opts.userName ?? (async () => undefined));
   const root = mkdtempSync(join(tmpdir(), "slack-history-"));
   roots.push(root);
   const history = createSlackPlaceHistory({
-    api: { channelHistory, threadReplies },
+    api: { channelHistory, threadReplies, userName },
     self: () => ({ userId: "UBOT", botId: "BBOT" }),
     label: "[slack]",
     path: join(root, "history.json"),
@@ -72,6 +75,7 @@ function setup(opts: { turnInputs?: string[] } = {}) {
     messages,
     channelHistory,
     threadReplies,
+    userName,
     history,
     /** A person asks the agent in `key`: the turn's read ends at this message. */
     ask(key = CHANNEL, over: Partial<SlackListedMessage> = {}): SlackPlaceRead {
@@ -306,5 +310,86 @@ describe("Slack place history", () => {
     const thread = slackHistoryKey("T1", { channelId: "C1", threadTs: deploy.ts });
     place.history.recordOutput(thread, fix.ts);
     expect((await place.history.snapshot(thread)).text).toContain("killed the backfill, redeploy succeeded");
+  });
+
+  it("names people once each, never the agent or a bot, and reuses the names", async () => {
+    const place = setup({ userName: async (id) => ({ U1: "Alice", U2: "Bob" })[id] });
+    place.messages.push(
+      msg("deploy failed"),
+      msg("on staging", { user: "U2" }),
+      msg("my answer", { user: "UBOT", bot_id: "BBOT" }),
+      msg("build green", { user: "UCI", bot_id: "BCI", username: "ci" }),
+      msg("who am I", { user: "U3" }),
+    );
+    const text = await answeredTurn(place, place.ask());
+    expect(text).toMatch(/^Alice \(msg [\d.]+\): deploy failed$/m);
+    expect(text).toMatch(/^Bob \(msg [\d.]+\): on staging$/m);
+    expect(text).toMatch(/^user U3 \(msg [\d.]+\): who am I$/m);
+    expect(place.userName.mock.calls.map(([id]) => id).sort()).toEqual(["U1", "U2", "U3"]);
+    expect(place.userName.mock.calls.every(([, opts]) => opts === CONTEXT_READ)).toBe(true);
+
+    place.messages.push(msg("still broken"), msg("fixed", { user: "U3" }));
+    await answeredTurn(place, place.ask());
+    expect(place.userName).toHaveBeenCalledTimes(3);
+  });
+
+  it("without users:read, says so once with the remedy, shows ids, and asks again only after the TTL", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    let granted = false;
+    const place = setup({
+      userName: async (id) => {
+        if (granted) return id === "U4" ? "Dana" : undefined;
+        throw new SlackApiError("users.info", 200, "missing_scope; needed users:read", "missing_scope");
+      },
+    });
+    place.messages.push(msg("deploy failed"), msg("on staging", { user: "U2" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^user U1 \(msg [\d.]+\): deploy failed$/m);
+    place.messages.push(msg("anyone?", { user: "U4" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^user U4 /);
+    expect(place.userName).toHaveBeenCalledTimes(2);
+
+    // Still not granted at the next TTL: asked again, not said again.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("still?", { user: "U5" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^user U5 /m);
+    expect(place.userName).toHaveBeenCalledTimes(3);
+
+    // A reinstall grants the scope to the running token: the next lookup after the TTL names people, unannounced.
+    granted = true;
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("back", { user: "U4" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^Dana \(msg /m);
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
+      "[slack] users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token",
+    ]);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("a failed lookup is said, and the person shown by id until the names are read again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    let down = true;
+    const place = setup({
+      userName: async () => {
+        if (!down) return "Alice";
+        throw new SlackApiError("users.info", 0, "fetch failed");
+      },
+    });
+    place.messages.push(msg("deploy failed"));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^user U1 /);
+    place.messages.push(msg("again"));
+    await answeredTurn(place, place.ask());
+    expect(place.userName).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("could not look up 1 name(s) (shown by user id for 10 minutes)");
+
+    down = false;
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("and now?"));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^Alice \(msg [\d.]+\): and now\?$/m);
+    expect(place.userName).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+    vi.useRealTimers();
   });
 });
