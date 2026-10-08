@@ -312,7 +312,7 @@ are still drafts.
 
 | Concept | Is | A user uses it to | Exposed as |
 |---|---|---|---|
-| **Session** | A conversation: the invokes of one session share its history | Continue a conversation; list, read, follow, fork, rename, compact or abort it | Named by the caller, or created by the service (§7.4) |
+| **Session** | A conversation: the invokes of one session share its history | Continue a conversation; list, read, follow, fork, compact or abort it. An operator also names it and sets its model | Named by the caller, or created by the service (§7.4) |
 | **Message** | One thing said in a session, by a user or by the agent | Send one (`invoke`); read the history | Content only: entries in the history and the live text. No id and no operations |
 | **Run** | One stretch of the agent working: from taking a message to stopping, across model calls and tool calls | See whether the agent is busy; learn how its work ended and what it cost; stop it | The unit a caller holds (`runId`), with a status, events and a cancel (§7.3). A session runs one at a time |
 | **Entry** | One record in a session's history: a message, a tool result, a run's start or end, a settings change, a compaction | Read the history; reconnect from a point; fork from a point | Ids that are the cursor for `follow` and the point for `fork` (§7.5) |
@@ -459,10 +459,9 @@ interface Session {
   attachment(ref: string): Promise<Attachment | undefined>;
   abort(): Promise<AbortResult>;
   rewind(entryId: string): Promise<Result>;
-  rename(name: string): Promise<Result>;
   compact(options?: { instructions?: string }): Promise<Result>;
   // the control plane (§7.7)
-  update(settings: { model?: string; thinkingLevel?: string }): Promise<Result>;
+  update(settings: { name?: string; model?: string; thinkingLevel?: string }): Promise<Result>;
   delete(): Promise<Result>;
 }
 
@@ -498,8 +497,9 @@ type AbortResult =
   reports what it stopped, so a stop command can say when nothing was running. A chat's stop command calls it.
 - **`rewind`** moves the session's active branch to an entry, and the next run continues from there. Nothing is
   deleted: the earlier branch stays in the history.
-- **`rename`** and **`compact`** belong to the user plane; changing the model or the thinking level (`update`) and
-  `delete` belong to the control plane, because the operator decides what a team's agent runs on (§7.7).
+- **`compact`** belongs to the user plane. `update` (a session's name, model and thinking level) and `delete` belong
+  to the control plane, because the operator decides what a team's agent runs on and how its conversations are named
+  and kept (§7.7).
 - **`list`** returns every session of the deployment: FastAgent does not know users, so a gateway in front of many
   users filters it.
 
@@ -553,7 +553,7 @@ interface AgentInfo {
   protocolVersion: string;
   capabilities: {
     steer: boolean; fork: boolean; compaction: boolean; delete: boolean;
-    updatable: ("model" | "thinkingLevel")[];
+    updatable: ("name" | "model" | "thinkingLevel")[];
     durableQueue: boolean;   // queued runs survive a restart
     durableRuns: boolean;    // a running run continues after a restart
     toolProgress: boolean; usage: boolean;
@@ -571,8 +571,8 @@ The operations are grouped by who uses them:
 
 | Plane | For | Operations | Served |
 |---|---|---|---|
-| User | People talking to the agent, and clients acting for them (duang, an app's front end) | `invoke`; runs; sessions: create, list, read, follow, attachment, abort, rewind, rename, compact; the agent's info, models and commands | `http.api`, on by default |
-| Control | Operators and builders | A session's model and thinking level; deleting a session. Agent-wide management joins it when a client needs it | `http.control`, off by default |
+| User | People talking to the agent, and clients acting for them (duang, an app's front end) | `invoke`; runs; sessions: create, list, read, follow, attachment, abort, rewind, compact; the agent's info, models and commands | `http.api`, on by default |
+| Control | Operators and builders | A session's name, model and thinking level; deleting a session. Agent-wide management joins it when a client needs it | `http.control`, off by default |
 | Platform | Chat platforms | Channel webhooks, each verified by its platform's signature | When a channel is defined |
 | Base | Hosts | Health checks | Always |
 
@@ -582,10 +582,10 @@ The operations are grouped by who uses them:
 | `sessions.create`, `sessions.list` | `POST /sessions`, `GET /sessions` |
 | `read`, `follow` | `GET /sessions/{s}?after=&before=&limit=`; `GET /sessions/{s}/follow?after=` (SSE, each event's `id` is its entry id, so `Last-Event-ID` resumes) |
 | `attachment` | `GET /sessions/{s}/attachments/{ref}` |
-| `abort`, `rewind`, `rename`, `compact` | `POST /sessions/{s}/abort`; `POST /sessions/{s}/rewind`; `PATCH /sessions/{s}` with `{ name }`; `POST /sessions/{s}/compact` |
+| `abort`, `rewind`, `compact` | `POST /sessions/{s}/abort`; `POST /sessions/{s}/rewind`; `POST /sessions/{s}/compact` |
 | `runs.get`, `runs.follow`, `runs.cancel` | `GET /sessions/{s}/runs/{r}` or `GET /sessions/{s}/runs?idempotencyKey=`; `GET /sessions/{s}/runs/{r}/events?after=` (SSE); `POST /sessions/{s}/runs/{r}/cancel` |
 | `info`, `models`, `commands` | `GET /agent`, `GET /agent/models`, `GET /agent/commands` |
-| `update`, `delete` (control) | `PATCH /control/sessions/{s}` with `{ model?, thinkingLevel? }`; `DELETE /control/sessions/{s}` |
+| `update`, `delete` (control) | `PATCH /control/sessions/{s}` with `{ name?, model?, thinkingLevel? }`; `DELETE /control/sessions/{s}` |
 | Base | `GET /health`; on AgentCore, `POST /invocations` and `GET /ping` |
 
 Every route carries its session, so a router in front of many boxes can route by session (§10.2).
@@ -738,7 +738,7 @@ Each records its `source` on the run. Channels keep their turn store, because it
 ### 8.4 Clients
 
 A client such as duang uses the user plane: the session list, `read` and `follow`, `invoke` with `queue` or `steer`,
-`runs.cancel`, `abort`, `rewind`, `rename` and `compact`. Changing a session's model or thinking level needs the
+`runs.cancel`, `abort`, `rewind` and `compact`. Naming a session and changing its model or thinking level need the
 control plane. The remote client (`connectAgent`) presents the same interface as an agent opened in process
 (`createAgentService`); today's two remote clients, `connectAgent` and `connectSessionControl`, become one. Clients
 live outside this repository.
@@ -996,12 +996,12 @@ The serving protocol:
   session's `abort` stops the running run, every queued run and a manual compaction (§7.3, §7.4).
 - A session's history is read with `read` (state and a page, after or before a cursor) and followed with `follow`
   from a cursor; the serving layer builds both on the harness's ordered log, the same way for every harness (§7.4).
-- `update` changes only a session's model and thinking level, and creates nothing; moving the active branch is
-  `rewind`; naming is `rename` (§7.4).
+- `update` changes a session's name, model and thinking level, on the control plane, and creates nothing; moving the
+  active branch is `rewind` (§7.4).
 - Run boundaries are entries in the session's log, so a run's status after the fact is read from the log, and
   `interrupted` is derived when read (§7.3, §9.3).
 - The operations are grouped by who uses them: the user plane (on by default) and the control plane (`/control`, off
-  by default), which holds a session's model and thinking level and its deletion (§7.7).
+  by default), which holds a session's name, model and thinking level, and its deletion (§7.7).
 - FastAgent authenticates nobody: exposing it belongs to an API gateway in front, and authentication inside FastAgent
   would plug in as middleware (§7.7).
 - Naming: fields are camelCase; enum values and discriminators are snake_case; a field that refers to another object
