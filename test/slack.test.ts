@@ -195,6 +195,7 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
     session: "recovery-session",
     baseText: id,
     historyKey: "T1:C1",
+    group: true,
     teamId: "T1",
     channelId: "C1",
     threadTs: "1.0",
@@ -579,6 +580,28 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(seen[2]).toBe(
       "refused: this turn was not asked in a slack group chat: threads are read only from the group a turn was asked in",
     );
+  });
+
+  it("a DM turn reads what slack-send posted into the DM, and not the earlier asks or their answers", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent("the answer");
+    const { handler } = mount(agent);
+    await new Promise((resolve) => setImmediate(resolve));
+    const dm = { channel: "D1", channel_type: "im" };
+
+    await handler(signedRequest(message("1.0", { ...dm, text: "first ask" })));
+    await settle();
+    // A schedule's digest, sent to the user with slack-send: top level in the DM, in no session.
+    platform.push({ channel: "D1", ts: "5.0", user: "UBOT", bot_id: "BBOT", text: "Weekly digest: 3. ship it" });
+    await handler(signedRequest(message("6.0", { ...dm, text: "what did 3 mean?" })));
+    await settle();
+
+    expect(calls).toHaveLength(2);
+    const second = calls[1]?.prompt.text ?? "";
+    expect(second).toContain("you (msg 5.0): Weekly digest: 3. ship it");
+    expect(second).not.toContain("first ask");
+    // …nor the answer to it (in the ask's assistant thread, a place of its own): the digest is the agent's only line.
+    expect(second.match(/^you \(msg /gm)).toHaveLength(1);
   });
 
   it("records a second human who summons it by mention, so it does not barge into a crowd later", async () => {

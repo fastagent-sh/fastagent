@@ -180,6 +180,15 @@ says "could not read the recent discussion here: <the platform's error>" instead
 | 3. Slack | `history.ts`; the place state moved into the kit (`createPlaceHistory`), shared with Feishu; buffer removed | the same, live |
 | 4. Thread reading (#374) | `{feishu,lark,slack}-threads` tools over `kit/room-threads.ts` (below) | done: lists and reads run against both platforms; a thread named for another chat is refused |
 
+### Direct messages
+
+A DM is a place like any other: its turns read its history under the same rule. Every human message in a DM is an
+ask, which the session holds, so in practice the read adds what the agent sent there outside a turn: a schedule's
+digest sent with `feishu-send` or `slack-send`, which "what did point 3 mean?" is about. It costs one read per DM turn
+(Feishu measured 553 ms; Slack's `im:history` is in every app), and nothing new is asked for: Feishu reads a p2p chat
+with the same scopes as a group. On Slack, a top-level DM ask is answered in its own assistant thread, so the DM's
+top level holds the asks (left out as turn inputs) and what a send tool posted there.
+
 ### Thread reading (phase 4)
 
 A scaffolded tool per channel (`tools/feishu-threads.ts`, `lark-threads.ts`, `slack-threads.ts`) lists the room's
@@ -189,7 +198,7 @@ short list, a bounded read.
 - **The room is never an argument.** The bot can read every chat it is in, so a room the tool were told would let one
   chat read another ("what did they decide in the other group?"). While a group turn runs, the turn runner registers
   its room under its session (`TurnRunnerOptions.room`), and the tool, asking with its own session id, gets that room
-  or an error. DMs and routed turns have no room.
+  or an error. DMs and routed turns have no room. A DM still has a place whose history its turns read (below).
 - **A thread id is checked against the room.** Slack reads `conversations.replies` in the room's channel, so a thread
   is in it by construction. A Feishu `thread_id` names a thread in any chat, so the read refuses items whose `chat_id`
   is not the room's, for the history read as well.
@@ -213,8 +222,5 @@ Decided in phase 2: a topic group's room is its topics' first posts. Its chat hi
 
 - **Latency from a host.** Every read above was measured from a laptop in China. A turn adds one read, and a thread's
   first turn adds two. Measure from Fly or AgentCore before choosing the budget and the page size.
-- **Direct messages read no history**, on Feishu and Slack alike: every message there is an ask, so the read would
-  add only what the agent sent itself into the DM with a send tool. Whether a schedule's DM digest is worth one read
-  per DM turn is open.
 - **Slack names.** People are shown by user id. Names need `users:read` and `users.info`, which no current app has.
 - **Lark.** The same API on `open.larksuite.com` is assumed, not measured.

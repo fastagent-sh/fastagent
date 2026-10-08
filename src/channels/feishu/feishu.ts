@@ -84,8 +84,10 @@ interface StoredFeishuTurn extends TurnRecordBase {
   // `id` is the message_id (the platform delivery identity); `seq` carries arrival order.
   seq: number;
   baseText: string;
-  /** The place whose history this turn reads (the chat, or the thread it was asked in); absent outside a group. */
+  /** The place whose history this turn reads (the chat, or the thread it was asked in); absent for a routed turn. */
   historyKey?: string;
+  /** Asked in a group chat: the one kind of chat whose threads its tool may read. */
+  group: boolean;
   /** When the ask was created (ms): this turn's read of its place ends there. */
   askAt: number;
   chatId: string;
@@ -116,6 +118,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.session === "string" &&
     typeof r.baseText === "string" &&
     (r.historyKey === undefined || typeof r.historyKey === "string") &&
+    typeof r.group === "boolean" &&
     typeof r.askAt === "number" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
@@ -318,7 +321,7 @@ function createFeishuRuntimeFactory(
     /**
      * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
      * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
-     * so what the agent posts itself stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     * so what the agent posts itself stays discussion. A routed turn has no place and reads no history.
      */
     const placeApi = (historyKey: string | undefined): FeishuApi =>
       historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
@@ -348,10 +351,10 @@ function createFeishuRuntimeFactory(
       label,
       store,
       discussion: history,
-      // A turn with a place is a group turn (DMs and routed turns have none), and its chat is its room.
+      // A group turn under the default routing reads its chat's threads; a DM has none to read.
       room: {
         threads: rooms,
-        of: (rec) => (rec.historyKey === undefined ? undefined : feishuPlaceOf(rec.historyKey).chatId),
+        of: (rec) => (rec.group && rec.historyKey !== undefined ? feishuPlaceOf(rec.historyKey).chatId : undefined),
       },
       seen,
       toStored: ({ preview: _live, ...intent }) => ({ ...intent, attempts: 0 }),
@@ -521,9 +524,9 @@ function createFeishuRuntimeFactory(
         parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
           ? feishuHistoryKey({ chatId: m.chat_id })
           : undefined;
-      // A group's discussion, under the default routing: a routed session's place is the router's to decide.
-      const historyKey =
-        route === undefined && m.chat_type === "group" ? feishuHistoryKey(normalized.conversation) : undefined;
+      // Every place's discussion under the default routing, a DM's too (what a send tool posted there is in no session);
+      // a routed session's place is the router's to decide.
+      const historyKey = route === undefined ? feishuHistoryKey(normalized.conversation) : undefined;
       // The platform stamps every message; acceptance time stands in only if a payload lacks it, and is still a bound
       // the ask was created before.
       const created = Number(m.create_time);
@@ -567,6 +570,7 @@ function createFeishuRuntimeFactory(
           session,
           baseText,
           ...(historyKey !== undefined ? { historyKey } : {}),
+          group: m.chat_type === "group",
           askAt,
           chatId,
           replyTo,
