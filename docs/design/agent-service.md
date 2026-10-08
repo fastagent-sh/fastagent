@@ -159,6 +159,13 @@ A **session** is a conversation's continuity: the invokes of one session share i
 caller (§7.2), and may start as a fork of another session. A session is the agent's working memory of a
 conversation: what should outlast it belongs in a context, and a chat place's own history is the platform's (§10.2).
 
+A session's record is an append-only log of entries, in pi's format: the messages (the asks, the answers with their
+usage, the tool calls and results), model and thinking-level changes, compactions, and FastAgent's own markers, which
+the model never sees. Each entry names its parent, so forks and branches share what they inherited. That log is the
+session's durable history. The live events (`message_delta`, `tool_*`, `run_settled`) are not stored: a client that
+reconnects subscribes again and reads the log (`entries()`, §7.1). What the service prints is its own log, kept by the
+host (§10.3).
+
 A **trigger** is where an invoke comes from: a request (HTTP, another agent), a message (a channel), an event (a
 webhook), time (a schedule), or the agent itself (`wake`, a subagent). A channel is a trigger and a connector of one
 system: messages arrive through it, and the agent's send tool posts through it.
@@ -506,7 +513,11 @@ my-agent/
   contexts/<name>/                            where each context is: a clone, a link, a mount; never in git
   mcp.json                                    connectors that speak MCP
   fastagent.config.ts                         what only the author sets: the model, environment, serving, deploy
-  .secrets/ · .state/                         machinery, never in git
+  .secrets/                                   values and grants, never in git
+  .state/                                     the service's state, never in git; where it lives is the deployment's
+    sessions/<time>_<id>.jsonl                  each session's record: an append-only log of entries (§3.5)
+    schedule/                                   schedules' claims and history, pending wake-ups
+    channels/<kind>/                            what a channel owes (turns), redelivery dedup, attachments
 ```
 
 A declaration that has a standard format, or that the agent, a `fastagent` command or another tool writes, is a file of
