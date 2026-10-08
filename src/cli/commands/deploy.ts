@@ -13,7 +13,7 @@ import { prepareWebhookApps, unpreparedWebhookApps, verificationTokenVar } from 
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { enterAgentDirectory } from "../shared.ts";
+import { enterAgentDirectory, isInteractive } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
@@ -135,7 +135,17 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         ),
       );
     }
-    await prepareWebhookApps(agentDir, unprepared).catch(failStartup);
+    if (opts.input === false || !isInteractive()) {
+      failStartup(
+        new Error(
+          `deploy stopped: ${unprepared.join(", ")} receive by webhook here, and ${pre.valueFile} has no ` +
+            `${tokens.join(", ")}: preparing the app opens console pages and may ask for values, so it needs a ` +
+            `terminal — run this deploy in one${opts.input === false ? " without --no-input" : ""}, or copy ` +
+            `${tokens.join(", ")} from the console (Events & Callbacks) into ${pre.valueFile}`,
+        ),
+      );
+    }
+    await prepareWebhookApps(agentDir, unprepared, `fastagent deploy ${host} --run`).catch(failStartup);
     pre = await preflight();
     if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   }

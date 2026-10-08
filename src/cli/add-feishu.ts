@@ -97,6 +97,8 @@ export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
   ingress: FeishuSubscriptionMode,
+  /** The command that continues an interrupted setup: the one that started it. */
+  rerun = `fastagent add ${kind}${ingress === "webhook" ? " --ingress webhook" : ""}`,
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
@@ -124,7 +126,7 @@ export async function onboardFeishuCloudApp(
   }
 
   if (capabilities.appCreation === "scan-to-create") {
-    await createFeishuAppFlow(target, existing, ingress);
+    await createFeishuAppFlow(target, existing, ingress, rerun);
     return undefined;
   }
 
@@ -149,6 +151,7 @@ export async function onboardFeishuCloudApp(
     {
       existing,
       ingress,
+      rerun,
       verifyCredentials: async (appId, appSecret) => {
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
@@ -207,6 +210,7 @@ async function createFeishuAppFlow(
   target: string,
   existing: Readonly<Record<string, string>>,
   ingress: FeishuSubscriptionMode,
+  rerun: string,
 ): Promise<void> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { apiBase } = cloudFor("feishu");
@@ -301,7 +305,7 @@ async function createFeishuAppFlow(
     console.error(
       `[fastagent] not capturing the Verification Token: the app is not granted ${FEISHU_APP_CONFIG_SCOPE}. Choose webhook ` +
         `in Events & Callbacks and set the Request URL there yourself (dev --tunnel and deploy --run cannot ` +
-        `either), or have the permission approved and re-run \`fastagent add feishu\`.`,
+        `either), or have the permission approved and re-run \`${rerun}\`.`,
     );
   } else if (!token) {
     console.error(
@@ -388,11 +392,14 @@ export function unpreparedWebhookApps(
 /**
  * Prepare each app for webhook, as `add --ingress webhook` does (the app-config scope, then the Verification Token),
  * writing what it captures to the value file. `deploy --run` calls it once every check that touches nothing has
- * passed. An app that cannot be prepared leaves its token unset, for the caller's gate to stop on.
+ * passed, from a terminal: the flows open console pages and Lark's may ask for values. What stops a preparation
+ * names `rerun`, the command that continues it. Feishu says so and leaves its token unset, for the caller's gate;
+ * Lark throws.
  */
 export async function prepareWebhookApps(
   agentDir: string,
   kinds: readonly ("feishu" | "lark")[],
+  rerun: string,
   onboard: typeof onboardFeishuCloudApp = onboardFeishuCloudApp,
 ): Promise<void> {
   for (const kind of kinds) {
@@ -400,7 +407,7 @@ export async function prepareWebhookApps(
       `[fastagent] ${kind}: this deployment receives by webhook (${cloudFor(kind).envPrefix}_INGRESS is not ` +
         `websocket), and the app has no ${verificationTokenVar(kind)} yet — preparing the app for webhook`,
     );
-    const created = await onboard(agentDir, kind, "webhook");
+    const created = await onboard(agentDir, kind, "webhook", rerun);
     if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), "webhook");
   }
 }

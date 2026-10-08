@@ -87,12 +87,12 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
       {
         name: "FEISHU_VERIFICATION_TOKEN",
-        hint: "captured automatically (console → Events & Callbacks)",
+        hint: "webhook only (`start`, every deployment) — captured by `deploy --run` (console → Events & Callbacks)",
         required: true,
       },
       {
         name: "FEISHU_ENCRYPT_KEY",
-        hint: "optional but recommended — set one in the console and copy it here",
+        hint: "webhook only; optional but recommended — set one in the console and copy it here",
         required: false,
       },
       ingressEnv("FEISHU"),
@@ -112,12 +112,12 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info", required: true },
       {
         name: "LARK_VERIFICATION_TOKEN",
-        hint: "console → Events & Callbacks; authenticates inbound events",
+        hint: "webhook only (`start`, every deployment) — console → Events & Callbacks; authenticates inbound events",
         required: true,
       },
       {
         name: "LARK_ENCRYPT_KEY",
-        hint: "optional but recommended — set one in the console and copy it here",
+        hint: "webhook only; optional but recommended — set one in the console and copy it here",
         required: false,
       },
       ingressEnv("LARK"),
@@ -188,13 +188,10 @@ export function channelSetup(
 
 /**
  * Append a channel's env vars (commented placeholders + hints) to `.env.example`, so a developer who copies it to
- * `.env` finds the vars already there.
+ * `.env` finds the vars already there. Every var the channel can declare, whichever way this machine receives it:
+ * the file is what a collaborator or CI fills for a deployment, which receives Feishu/Lark by webhook.
  */
-export async function appendChannelEnv(
-  dir: string,
-  kind: ChannelKind,
-  ingress: FeishuSubscriptionMode = "webhook",
-): Promise<boolean> {
+export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<boolean> {
   const file = envExamplePath(dir);
   let current: string;
   try {
@@ -206,9 +203,7 @@ export async function appendChannelEnv(
   const marker = `# --- ${kind} channel ---`;
   if (current.includes(marker)) return false;
   // Hint on its OWN line above the placeholder (like the base env.example template).
-  const block = `\n${marker}\n${channelSetup(kind, ingress)
-    .env.map((e) => `# ${e.hint}\n# ${e.name}=`)
-    .join("\n")}\n`;
+  const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.hint}\n# ${e.name}=`).join("\n")}\n`;
   await appendFile(file, block);
   return true;
 }

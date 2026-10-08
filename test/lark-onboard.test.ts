@@ -122,8 +122,18 @@ describe("guided Lark app onboarding", () => {
 
     const cancelled = fakeIO([undefined]);
     await expect(onboardLarkApp(cancelled.io, { verifyCredentials: async () => {}, bootstrapWebhook })).rejects.toThrow(
-      /LARK_APP_ID is required/,
+      "LARK_APP_ID is required — re-run `fastagent add lark` to continue setup",
     );
+    // Started by a deploy, it names the deploy: `add lark` alone would set the app up for dev's WebSocket.
+    const fromDeploy = fakeIO([]);
+    await expect(
+      onboardLarkApp(fromDeploy.io, {
+        existing: { LARK_APP_ID: "cli_1", LARK_APP_SECRET: "s" },
+        verifyCredentials: async () => {},
+        bootstrapWebhook: async () => ({ manualReason: "config API 404" }),
+        rerun: "fastagent deploy fly --run",
+      }),
+    ).rejects.toThrow("LARK_VERIFICATION_TOKEN is required — re-run `fastagent deploy fly --run` to continue setup");
   });
 
   it("never attaches an orphaned existing token to a newly entered App pair", async () => {

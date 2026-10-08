@@ -28,6 +28,8 @@ export interface LarkOnboardOptions {
   ingress?: FeishuSubscriptionMode;
   verifyCredentials(appId: string, appSecret: string): Promise<void>;
   bootstrapWebhook?(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
+  /** The command that continues an interrupted setup: the one that started it (`add lark`, `deploy <host> --run`). */
+  rerun?: string;
 }
 
 export interface LarkOnboardCredentials {
@@ -36,14 +38,15 @@ export interface LarkOnboardCredentials {
   LARK_VERIFICATION_TOKEN?: string;
 }
 
-function required(value: string | undefined, name: string): string {
+function required(value: string | undefined, name: string, rerun: string): string {
   const trimmed = value?.trim();
-  if (!trimmed) throw new Error(`${name} is required — re-run \`fastagent add lark\` to continue setup`);
+  if (!trimmed) throw new Error(`${name} is required — re-run \`${rerun}\` to continue setup`);
   return trimmed;
 }
 
 /** Open the stable app console and collect everything the runtime needs. */
 export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions): Promise<LarkOnboardCredentials> {
+  const rerun = opts.rerun ?? "fastagent add lark";
   const existingId = opts.existing?.LARK_APP_ID?.trim();
   const existingSecret = opts.existing?.LARK_APP_SECRET?.trim();
   const reuseExistingApp = Boolean(existingId && existingSecret);
@@ -58,10 +61,12 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   const appId = required(
     reuseExistingApp ? existingId : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
     "LARK_APP_ID",
+    rerun,
   );
   const appSecret = required(
     reuseExistingApp ? existingSecret : await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
     "LARK_APP_SECRET",
+    rerun,
   );
 
   await opts.verifyCredentials(appId, appSecret);
@@ -90,6 +95,7 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
       (reuseExistingApp ? opts.existing?.LARK_VERIFICATION_TOKEN?.trim() : undefined) ||
       (await io.prompt("LARK_VERIFICATION_TOKEN (Events & Callbacks → Encryption Strategy)", { hidden: true })),
     "LARK_VERIFICATION_TOKEN",
+    rerun,
   );
 
   return {

@@ -102,7 +102,10 @@ Verification Token, `deploy --run` prepares the app (`prepareWebhookApps`), with
 has. Preparing is the deploy's first change to anything, so it comes after every refusal that touches nothing: the
 pre-flight, and every value the deployment lacks other than the tokens preparing captures. The pre-flight runs again
 afterwards, so what preparing wrote is what travels. Checks a host makes of its own CLI still come after; a re-run
-then finds the token and prepares nothing again.
+then finds the token and prepares nothing again. Preparing opens console pages and Lark's may ask for values, so it
+runs only from a terminal: without one (CI, `--no-input`) `deploy` stops and names the token to copy from the console
+into `.secrets/.env`. What stops a preparation names `deploy <host> --run` as the command to re-run, not `add`,
+which would set the app up for `dev`'s WebSocket.
 
 1. **`patch` scope.** `checkAgentScopes` with the webhook scopes: if `application:application:patch` is missing, it
    opens the console page that requests it; the token then cannot be captured, and the deploy's gate on declared

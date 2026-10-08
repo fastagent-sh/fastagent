@@ -58,7 +58,7 @@ export async function runAddChannel(
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] wrote ${relative(target, tool)}`);
   }
-  if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
+  if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
   // Stateful app onboarding is re-runnable after the scaffold boundary.

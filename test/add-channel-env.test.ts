@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendChannelDotEnv,
+  appendChannelEnv,
   channelSetup,
   scaffoldChannel,
   scaffoldCompanionTools,
@@ -59,6 +60,26 @@ describe("channel setup guidance", () => {
     expect(source).toContain('feishuIngress() === "webhook"');
     expect(source).toContain("feishuWebSocketChannel(");
     expect(source).toContain("feishuChannel(");
+  });
+});
+
+describe("appendChannelEnv", () => {
+  it("lists every var the channel can declare, so a deployment's values can be filled from it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-example-"));
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env.example"), "# agent\n");
+    expect(await appendChannelEnv(dir, "feishu")).toBe(true);
+    const example = await readFile(join(dir, ".secrets", ".env.example"), "utf8");
+    for (const name of [
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_ENCRYPT_KEY",
+      "FEISHU_INGRESS",
+    ]) {
+      expect(example).toContain(`# ${name}=`);
+    }
+    expect(example).toMatch(/# webhook only \(`start`, every deployment\).*\n# FEISHU_VERIFICATION_TOKEN=/);
   });
 });
 

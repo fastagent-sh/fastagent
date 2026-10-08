@@ -40,10 +40,11 @@ it("prepares each app as add --ingress webhook does, and writes what the guided 
     }
     return { LARK_VERIFICATION_TOKEN: "t2" };
   });
-  await prepareWebhookApps(dir, ["feishu", "lark"], onboard);
+  await prepareWebhookApps(dir, ["feishu", "lark"], "fastagent deploy fly --run", onboard);
+  // A stopped preparation names the deploy to re-run, not the `add` the flows were written for.
   expect(onboard.mock.calls).toEqual([
-    [dir, "feishu", "webhook"],
-    [dir, "lark", "webhook"],
+    [dir, "feishu", "webhook", "fastagent deploy fly --run"],
+    [dir, "lark", "webhook", "fastagent deploy fly --run"],
   ]);
   const env = await readFile(join(dir, ".secrets", ".env"), "utf8");
   expect(env).toMatch(/^FEISHU_VERIFICATION_TOKEN=t1$/m);

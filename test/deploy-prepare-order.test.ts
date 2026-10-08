@@ -13,9 +13,11 @@ const calls: string[] = [];
 let facts: { values: Map<string, string>; modelAuth?: string };
 const stopped = new Error("deploy stopped");
 
+let interactive = true;
 vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/shared.ts")>()),
   enterAgentDirectory: async (dir: string) => ({ agentDir: dir }),
+  isInteractive: () => interactive,
 }));
 vi.mock("../src/engines/pi/config.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/engines/pi/config.ts")>()),
@@ -40,8 +42,8 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
 }));
 vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/add-feishu.ts")>()),
-  prepareWebhookApps: async (_dir: string, kinds: string[]) => {
-    calls.push(`prepare ${kinds.join(",")}`);
+  prepareWebhookApps: async (_dir: string, kinds: string[], rerun: string) => {
+    calls.push(`prepare ${kinds.join(",")} rerun=${rerun}`);
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
   },
 }));
@@ -56,6 +58,7 @@ let dir: string;
 let said: string[];
 beforeEach(async () => {
   calls.length = 0;
+  interactive = true;
   facts = { values: new Map([["FEISHU_APP_ID", "cli_1"]]) };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
@@ -99,7 +102,7 @@ it("prepares only once every other value is there, then plans again with what pr
   await runDeploy("fly", dir, { run: true });
   expect(calls).toEqual([
     "preflight dev=- token=-",
-    "prepare feishu",
+    "prepare feishu rerun=fastagent deploy fly --run",
     "preflight dev=- token=captured",
     "host token=captured",
   ]);
@@ -114,7 +117,24 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
 
   calls.length = 0;
   await runDeploy("docker", dir, { run: true, tunnel: true });
-  expect(calls).toContain("prepare feishu");
+  expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --run");
+});
+
+it("prepares only from a terminal: unattended, it says how to supply the token instead", async () => {
+  interactive = false;
+  await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
+  expect(calls).toEqual(["preflight dev=- token=-"]);
+  expect(said.join("\n")).toContain(
+    "preparing the app opens console pages and may ask for values, so it needs a terminal — run this deploy in one, " +
+      "or copy FEISHU_VERIFICATION_TOKEN from the console (Events & Callbacks) into .secrets/.env",
+  );
+
+  interactive = true;
+  calls.length = 0;
+  said.length = 0;
+  await expect(runDeploy("fly", dir, { run: true, input: false })).rejects.toBe(stopped);
+  expect(calls).toEqual(["preflight dev=- token=-"]);
+  expect(said.join("\n")).toContain("run this deploy in one without --no-input");
 });
 
 it("generating a plan prepares nothing", async () => {

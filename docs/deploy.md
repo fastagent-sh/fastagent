@@ -46,6 +46,7 @@ the steps it could not do.
   (`LARK_INGRESS`), while `dev` keeps WebSocket ([design note](design/channel-environments.md)). The first
   `--run` prepares the app for webhook before it builds: it opens the page that requests
   `application:application:patch` when the app lacks it, and captures the Verification Token into `.secrets/.env`.
+  That needs a terminal; in CI, put the token (developer console → Events & Callbacks) in `.secrets/.env` first.
 - **One app delivers to one place.** `dev` and a deployment share each channel's app and `.secrets/.env`, so
   `--run` moves the app to the deployment, and `dev --tunnel` moves it back until the next `--run`. Both say so.
 
