@@ -727,9 +727,17 @@ The entry points inside FastAgent call the protocol in process, like any other c
 
 | Caller | Calls |
 |---|---|
-| A channel | `invoke({ sessionId: the chat place, whenBusy: "queue", idempotencyKey: the platform's message id })`. A thread's first message creates its session with `sessions.create({ sessionId, fork })` from the chat's session, and treats `conflict` as already done. Its stop command calls `abort`. It finds the entry a platform message became with `runs.get({ idempotencyKey })` |
+| A channel | `invoke({ sessionId: the chat place, whenBusy: "queue", idempotencyKey: the platform's message id })`. A thread's first message creates its session with `sessions.create({ sessionId, fork })` from the chat's session, and treats `conflict` as already done. Its stop command calls `abort` |
 | A schedule | `invoke({ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: the occurrence })`: an occurrence on a busy session is skipped |
 | A wake-up | `invoke({ sessionId, whenBusy: "queue", idempotencyKey: the wake-up and its instant })`: one that fires into a busy session runs after the running run |
+
+Where a thread forks is found through the platform's reply chain, nearest message first: the first message in the
+chain that the chat's session holds as an idempotency key names the run that took it (`runs.get({ idempotencyKey })`),
+and the thread forks at that run's answer. The agent's own reply is found through the message it replies to, as
+today's search for `msg <id>` in the parent's messages finds it, but by key instead of by text. A post that replies to
+nothing (a schedule's digest, a send tool's message) has no point in the chat's session, because it was produced
+elsewhere: the thread forks at the present, and the post reaches it through the place's history read from the
+platform ([place history](place-history.md)).
 
 Each records its `source` on the run. Channels keep their turn store, because it is what they owe the chat. Whether
 `idempotencyKey` replaces their redelivery dedup, and whether they keep their own queue, is decided when they move
@@ -928,19 +936,19 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 ## 13. Open questions
 
+Each is settled when the step that needs it is built (§12).
+
 1. The shape of `contexts.json` (naming a context's credential); where an MCP server's OAuth tokens live for a
    deployed agent.
-2. Forking a thread from a platform message the agent itself posted: a user's message is found by its idempotency
-   key, but nothing yet maps the agent's own posts to entries.
-3. The final error codes, the cap on runs in flight, and the page limits of `read`.
-4. Scaling out on AgentCore: routing each message to its conversation's runtime session; a lease that holds across
+2. The final error codes, the cap on runs in flight, and the page limits of `read`.
+3. Scaling out on AgentCore: routing each message to its conversation's runtime session; a lease that holds across
    processes; how state is split by writer (each conversation's own, and what spans conversations: redelivery dedup,
    the session list, schedules); which API storage holds each part. Pending wake-ups are part of it: a deploy must
    not wipe them.
-5. pi-durable as a harness: reading its log after a cursor, and stopping a running run while its queue stays.
-6. What the port adds for a harness whose runs continue after a restart (`durableRuns`).
-7. Contexts that are not directories, such as S3.
-8. Acting as the member who asked (§6.3), with permissions.
+4. pi-durable as a harness: reading its log after a cursor, and stopping a running run while its queue stays.
+5. What the port adds for a harness whose runs continue after a restart (`durableRuns`); harnesses may differ.
+6. Contexts that are not directories, such as S3.
+7. Acting as the member who asked (§6.3), with permissions.
 
 ## 14. Decisions made in review
 
@@ -1000,6 +1008,8 @@ The serving protocol:
   active branch is `rewind` (§7.4).
 - Run boundaries are entries in the session's log, so a run's status after the fact is read from the log, and
   `interrupted` is derived when read (§7.3, §9.3).
+- A thread forks at the answer of the run that took the nearest message of its reply chain, found by idempotency key;
+  a post that replies to nothing forks at the present (§8.3).
 - The operations are grouped by who uses them: the user plane (on by default) and the control plane (`/control`, off
   by default), which holds a session's name, model and thinking level, and its deletion (§7.7).
 - FastAgent authenticates nobody: exposing it belongs to an API gateway in front, and authentication inside FastAgent
