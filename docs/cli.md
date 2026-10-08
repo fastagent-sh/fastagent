@@ -250,7 +250,8 @@ fastagent add telegram [agent]
 fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
-                             # feishu/lark take --ingress websocket|webhook (asked when omitted; websocket by default)
+                             # feishu/lark take --ingress websocket|webhook: writes FEISHU_INGRESS for dev and deployments
+                             # (unset: dev connects by websocket, start and deployments receive by webhook)
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
 ```
 

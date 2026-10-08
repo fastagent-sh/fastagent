@@ -13,6 +13,7 @@ import {
   defaultFeishuRoute,
 } from "../feishu/feishu.ts";
 import { cloudEnvelope } from "../feishu/parse.ts";
+import { type FeishuSubscriptionMode, feishuIngressFor } from "../feishu/setup-mode.ts";
 
 export type LarkChannelOptions = FeishuChannelOptions;
 export type LarkWebSocketChannelOptions = FeishuWebSocketChannelOptions;
@@ -29,6 +30,11 @@ export function larkEnvelope(event: LarkMessageEvent): string {
 
 export function larkChannel(opts: LarkChannelOptions): ChannelModule {
   return buildFeishuChannel(LARK_COMPAT_CLOUD, opts, larkChannel.name);
+}
+
+/** How this process receives the Lark channel: `LARK_INGRESS`, else WebSocket under `dev` and webhook otherwise. */
+export function larkIngress(): FeishuSubscriptionMode {
+  return feishuIngressFor("lark");
 }
 
 export function larkWebSocketChannel(opts: LarkWebSocketChannelOptions): LongConnectionChannelModule {

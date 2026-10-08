@@ -23,7 +23,8 @@ import {
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { onboardLarkApp } from "../channels/lark/onboard.ts";
-import { dotEnvPath, parseEnvContent } from "../env.ts";
+import type { DeclaredChannel } from "../channels/discover.ts";
+import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
@@ -366,4 +367,36 @@ async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<
       return value ? [[name, value]] : [];
     }),
   );
+}
+
+/**
+ * Before `deploy --run` builds anything: a Feishu/Lark channel the deployment receives by webhook needs its app ready
+ * for it, which is the preparation `add --ingress webhook` runs (the app-config scope, then the Verification Token).
+ * Capturing the token switches the app to webhook mode, after which `dev`'s WebSocket on this machine receives nothing
+ * from it, so that is said. An app that cannot be prepared leaves the token unset, and the deploy's own gate on
+ * declared values stops the run with the lines above it.
+ */
+export async function prepareWebhookApps(
+  agentDir: string,
+  channels: readonly DeclaredChannel[],
+  onboard: typeof onboardFeishuCloudApp = onboardFeishuCloudApp,
+): Promise<void> {
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!channels.some((channel) => channel.name === kind && channel.ingress === "webhook")) continue;
+    const { envPrefix } = cloudFor(kind);
+    const tokenVar = `${envPrefix}_VERIFICATION_TOKEN`;
+    if (loadEnvValues(dotEnvPath(agentDir)).get(tokenVar)) continue;
+    console.error(
+      `[fastagent] ${kind}: this deployment receives by webhook (${envPrefix}_INGRESS is not websocket), and the app ` +
+        `has no ${tokenVar} yet — preparing the app for webhook`,
+    );
+    const created = await onboard(agentDir, kind, "webhook");
+    if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), "webhook");
+    if (loadEnvValues(dotEnvPath(agentDir)).get(tokenVar)) {
+      console.error(
+        `[fastagent] ${kind}: the app is in webhook mode now, so \`dev\` on this machine receives nothing from it ` +
+          `until \`${envPrefix}_INGRESS=webhook fastagent dev --tunnel\` takes it back`,
+      );
+    }
+  }
 }

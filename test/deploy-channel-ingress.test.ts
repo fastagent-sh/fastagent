@@ -181,6 +181,21 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     expect(gate).toContain("telegram");
     expect(gate).toContain("re-run with --into-linked");
   });
+
+  it("says which apps now deliver to the deployment, and only those it registered", async () => {
+    const said: string[] = [];
+    await registerWebhooks({
+      baseUrl: "https://x",
+      channels: webhook("telegram", "slack", "feishu"),
+      registrars: { telegram: async () => "failed", slack: registered, feishu: registered },
+      log: (line) => said.push(line),
+      retryHint: "re-run",
+    });
+    expect(said.filter((line) => line.includes("now delivers to this deployment"))).toEqual([
+      "the slack, feishu app now delivers to this deployment, so `dev` on this machine receives nothing from it; " +
+        "`dev --tunnel` would take it back until the next `deploy --run`",
+    ]);
+  });
 });
 
 describe("every host's runbook reads the same answer", () => {

@@ -6,6 +6,7 @@
  * which of those must have a value, so a missing one stops a deploy before its first side effect instead of a boot.
  */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
+import { DEV_SERVE_ENV } from "../serving-command.ts";
 
 /** Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none? */
 export function isEnvKey(source: string | undefined): source is string {
@@ -29,6 +30,7 @@ const DEPLOY_OWNED = new Set([
   "FASTAGENT_INGRESS_SECRET",
   "FASTAGENT_WAKE_SECRET",
   "FASTAGENT_DEV_WORKER",
+  DEV_SERVE_ENV,
 ]);
 
 /** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */

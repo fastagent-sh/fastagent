@@ -61,6 +61,8 @@ src/
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
 │                           # loopback http reaches the opener, because some URLs come from a deployed box
 ├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
+├── serving-command.ts      # which command serves this process (`dev` marks it): the default a channel's ingress
+│                           # setting falls back to, read through the process environment the CLI and the agent share
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the

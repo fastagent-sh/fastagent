@@ -36,6 +36,19 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `.contexts/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Contexts that reach a host** | A `github` [context](configuration.md#contexts) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` context stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, which every release ships; move what it works on and must keep to a repository. |
 
+## Chat channels
+
+A deployment receives its chat channels by webhook: `--run` points each channel's app at the deployment's URL once
+it answers `/health` (Telegram, Slack apps `add slack` created, Feishu; Lark when its config API allows), and prints
+the steps it could not do.
+
+- **Feishu/Lark receive by webhook on every host** unless `.secrets/.env` sets `FEISHU_INGRESS=websocket`
+  (`LARK_INGRESS`), while `dev` keeps WebSocket ([design note](design/channel-environments.md)). The first
+  `--run` prepares the app for webhook before it builds: it opens the page that requests
+  `application:application:patch` when the app lacks it, and captures the Verification Token into `.secrets/.env`.
+- **One app delivers to one place.** `dev` and a deployment share each channel's app and `.secrets/.env`, so
+  `--run` moves the app to the deployment, and `dev --tunnel` moves it back until the next `--run`. Both say so.
+
 ## Logging a deployment in
 
 A model with no API key in `.secrets/.env` (an OAuth subscription such as `openai-codex`, or a key you entered
@@ -277,7 +290,8 @@ What to know:
 - **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
-- **No long-connection channels.** Use webhook mode; `--run` refuses otherwise.
+- **No long-connection channels.** Feishu/Lark receive by webhook here by default; a `FEISHU_INGRESS=websocket` in
+  `.secrets/.env` makes `--run` refuse.
 - **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
   `session` selects the conversation.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).

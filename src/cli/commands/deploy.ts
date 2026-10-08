@@ -2,7 +2,9 @@
  * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
  * runbook.
  */
+import { inspectChannels } from "../../channels/discover.ts";
 import type { DeployHost } from "../../deploy/hosts.ts";
+import { prepareWebhookApps } from "../add-feishu.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
@@ -77,6 +79,13 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // (WYSIWYG).
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
   const { config } = await loadConfig(agentDir).catch(failStartup);
+  // A webhook app is prepared before the pre-flight reads the value file, so the token it captures is what that reads.
+  // Generating a plan touches no platform, so only --run does. A channel that fails to inspect is the pre-flight's to
+  // report.
+  if (opts.run) {
+    const { channels } = await inspectChannels(agentDir).catch(failStartup);
+    await prepareWebhookApps(agentDir, channels).catch(failStartup);
+  }
   // The host-neutral pre-flight (the model and its source, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts.
   const pre = await preflightDeploy({

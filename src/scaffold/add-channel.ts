@@ -32,6 +32,12 @@ const AGENT_SCOPE_LIST = FEISHU_AGENT_SCOPES.map((entry) => entry.request).join(
 const FEISHU_PERMISSION_STEP =
   `before publishing: the app needs ${AGENT_SCOPE_LIST} — \`add feishu\` requests them with the app and names any ` +
   "your tenant withheld (approve those, then publish)";
+/** The setting both clouds read, said the same way in `.env.example` and in `add`'s next steps. */
+const ingressEnv = (prefix: "FEISHU" | "LARK"): ChannelEnv => ({
+  name: `${prefix}_INGRESS`,
+  hint: "webhook | websocket — unset, `dev` connects by websocket, and `start` and every deployment receive by webhook",
+  required: false,
+});
 const LARK_PERMISSION_STEP =
   `before publishing: add ${AGENT_SCOPE_LIST} — \`add lark\` checks them and opens the permission page for any that ` +
   "are missing";
@@ -89,12 +95,13 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         hint: "optional but recommended — set one in the console and copy it here",
         required: false,
       },
+      ingressEnv("FEISHU"),
     ],
     steps: [
       FEISHU_PERMISSION_STEP,
       "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
-      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
+      "FEISHU_INGRESS=webhook is set, so `dev --tunnel` receives by webhook too; the event Request URL is registered by `dev --tunnel` / `deploy --run`",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
@@ -113,11 +120,12 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         hint: "optional but recommended — set one in the console and copy it here",
         required: false,
       },
+      ingressEnv("LARK"),
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
       LARK_PERMISSION_STEP,
-      "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
+      "LARK_INGRESS=webhook is set: run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
@@ -129,23 +137,27 @@ export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
 const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   feishu: {
-    env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) => ["FEISHU_APP_ID", "FEISHU_APP_SECRET"].includes(entry.name)),
+    env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) =>
+      ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"].includes(entry.name),
+    ),
     steps: [
       FEISHU_PERMISSION_STEP,
       "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
-      "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
-      "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
+      "edit {channel} — routing policy",
+      "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and `deploy --run` prepares this app for it (the app-config permission, the Verification Token) and moves it to the deployment",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
   },
   lark: {
-    env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) => ["LARK_APP_ID", "LARK_APP_SECRET"].includes(entry.name)),
+    env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) =>
+      ["LARK_APP_ID", "LARK_APP_SECRET", "LARK_INGRESS"].includes(entry.name),
+    ),
     steps: [
       LARK_PERMISSION_STEP,
       "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
-      "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
-      "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
+      "edit {channel} — routing policy",
+      "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and `deploy --run` prepares this app for it and moves it to the deployment (if Lark refuses its config API, set the Request URL in the console once)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
@@ -310,11 +322,7 @@ export async function channelExists(dir: string, kind: ChannelKind): Promise<boo
 }
 
 /** Scaffold `channels/<kind>.ts` into {@link dir}. */
-export async function scaffoldChannel(
-  dir: string,
-  kind: ChannelKind,
-  options: { ingress?: FeishuSubscriptionMode } = {},
-): Promise<string> {
+export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the agent dir; one inside it is fine.
   await assertInsideAgentDir(dir, "channels");
@@ -323,23 +331,7 @@ export async function scaffoldChannel(
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  // The long-connection variant is its own template FILE, not a transform of the webhook one: a transform
-  // has to be re-taught every time the template changes shape, and a missed anchor scaffolds a channel
-  // configured for the wrong ingress with nothing failing.
-  // Which templates exist is the BUNDLE's fact, asked here rather than assumed from the kind: only
-  // feishu/lark ship a long-connection variant today, and a caller asking for one that is missing
-  // must get that sentence, not the ENOENT of a path it never named.
-  const template = options.ingress === "websocket" ? "channel.websocket.ts" : "channel.ts";
-  // CHANNEL templates only: the bundle also holds companion tools (`telegram-send.ts`), and listing
-  // one as an available scaffold sends whoever reads this line looking for an ingress that is a tool.
-  const available = channelBundleFiles(kind).filter((f) => f.startsWith("channel."));
-  if (!available.includes(template)) {
-    throw new Error(
-      `${kind} has no ${options.ingress ?? "webhook"} scaffold (${template} is not in its bundle) — ` +
-        `available: ${available.join(", ")}`,
-    );
-  }
-  await writeFile(file, channelTemplate(kind, template), { flag: "wx" });
+  await writeFile(file, channelTemplate(kind, "channel.ts"), { flag: "wx" });
   return file;
 }
 
@@ -347,7 +339,7 @@ export async function scaffoldChannel(
 export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
   const written: string[] = [];
   for (const name of channelBundleFiles(kind)) {
-    if (name.startsWith("channel.")) continue; // channel.ts / channel.websocket.ts are the channel, not tools
+    if (name === "channel.ts") continue; // the channel, not a tool
     const file = join(dir, "tools", name);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, channelTemplate(kind, name));

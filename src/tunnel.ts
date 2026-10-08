@@ -9,7 +9,7 @@ import type { DeclaredChannel } from "./channels/discover.ts";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
-import { pointChannelsAt } from "./deploy/channel-ingress.ts";
+import { pointChannelsAt, webhookKinds } from "./deploy/channel-ingress.ts";
 import { dotEnvPath, loadDotEnv } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { resolveStateRoot } from "./paths.ts";
@@ -176,6 +176,14 @@ export async function announceWebhooks(
   const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
+  // One app delivers to one place (docs/design/channel-environments.md §3): said before the move, not discovered later.
+  const moving = webhookKinds(channels);
+  if (moving.length > 0) {
+    log.info(
+      `[fastagent] pointing the ${moving.join(", ")} app at this machine: wherever it delivered before (a ` +
+        "deployment) receives nothing from it until `deploy --run` points it back",
+    );
+  }
   return pointChannelsAt({
     baseUrl,
     channels,

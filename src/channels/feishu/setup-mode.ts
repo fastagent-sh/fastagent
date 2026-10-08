@@ -1,5 +1,24 @@
-/** Feishu/Lark app-level event subscription choice used by onboarding and scaffolding. */
+import { servedByDev } from "../../serving-command.ts";
+import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
+
+/** Feishu/Lark app-level event subscription choice: how a channel receives, and what an app is set up for. */
 export type FeishuSubscriptionMode = "webhook" | "websocket";
+
+/**
+ * How THIS process receives a Feishu/Lark channel (docs/design/channel-environments.md): `<PREFIX>_INGRESS` when the
+ * environment names one, else WebSocket under `dev` (no public URL, no reviewed scope) and webhook everywhere else,
+ * which is what every deployment runs. The channel file asks at import, and so does every reader of its shape: `deploy`
+ * inspects it in a process that is not `dev`, with the same value file loaded, so it sees what the box will serve.
+ */
+export function feishuIngressFor(kind: FeishuCloudKind, env: NodeJS.ProcessEnv = process.env): FeishuSubscriptionMode {
+  const name = `${cloudFor(kind).envPrefix}_INGRESS`;
+  const raw = env[name]?.trim();
+  if (!raw) return servedByDev(env) ? "websocket" : "webhook";
+  if (raw !== "webhook" && raw !== "websocket") {
+    throw new Error(`${name} must be "webhook" or "websocket", got "${raw}"`);
+  }
+  return raw;
+}
 
 /**
  * Configuring THIS app through the v7 config API: registering a webhook Request URL and switching the subscription

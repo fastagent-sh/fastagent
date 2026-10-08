@@ -1,6 +1,7 @@
 /** `@fastagent-sh/fastagent/feishu` — the canonical Feishu (open.feishu.cn) bot-channel surface. */
 export {
   feishuChannel,
+  feishuIngress,
   feishuWebSocketChannel,
   defaultFeishuRoute,
   feishuEnvelope,

@@ -219,6 +219,14 @@ export async function registerWebhooks(input: {
   retryHint: string;
 }): Promise<string | undefined> {
   const reg = registrationGate(input.log, input.retryHint);
-  for (const { kind, outcome } of await pointChannelsAt(input)) reg.track(kind, outcome);
+  const outcomes = await pointChannelsAt(input);
+  for (const { kind, outcome } of outcomes) reg.track(kind, outcome);
+  const moved = outcomes.filter(({ outcome }) => outcome === "registered").map(({ kind }) => kind);
+  if (moved.length > 0) {
+    input.log(
+      `the ${moved.join(", ")} app now delivers to this deployment, so \`dev\` on this machine receives nothing from ` +
+        "it; `dev --tunnel` would take it back until the next `deploy --run`",
+    );
+  }
   return reg.gate();
 }

@@ -2,13 +2,13 @@
 title: Channels across environments
 description: "A deployment receives Feishu/Lark by webhook by default and the laptop keeps WebSocket; until per-environment apps exist, one app serves one environment at a time, and the switch is said where it happens."
 type: design-doc
-status: proposed
+status: implemented
 updated: 2026-10-08
 ---
 
 # Channels across environments
 
-**Status: proposed.** It answers #749 for what can be done with one set of credentials, and leaves per-environment
+**Status: implemented.** It answers #749 for what can be done with one set of credentials, and leaves per-environment
 apps (staging, production, a laptop beside them) to the multi-environment work.
 
 ## 1. The problem
@@ -65,14 +65,22 @@ moves an app says so where it happens (§4.4).
 - `FEISHU_INGRESS` (`LARK_INGRESS`) = `webhook` | `websocket`, read from the environment.
 - **Unset means `webhook`.** That is the channel's own default, and what `start` serves: every deploy host runs
   `start`, so a deployment receives by webhook with nothing set, and `deploy` injects nothing.
-- **`dev` supplies `websocket` when it is unset**, with or without `--tunnel`. The serving command hands its default
-  to the channel when it mounts it; the environment is not rewritten. Testing webhook on a laptop means naming it.
+- **`dev` supplies `websocket` when it is unset**, with or without `--tunnel`. `dev` marks its process
+  (`FASTAGENT_DEV=1`, inherited by its worker) before any channel file is imported, and the channel's rule reads
+  the mark. The mark lives in the environment because the channel imports the agent's own installed copy of
+  fastagent, which shares nothing else with the CLI's; `FEISHU_INGRESS` itself is never rewritten. Testing webhook
+  on a laptop means naming it.
 - A value in `.secrets/.env` wins for both commands. Since the file is shared, `FEISHU_INGRESS=websocket` there keeps
   WebSocket on the deployment and on the laptop alike; that is how an author opts a deployment out of webhook.
 - The webhook credentials (`FEISHU_VERIFICATION_TOKEN`, optional `FEISHU_ENCRYPT_KEY`) are required only when the
   ingress is `webhook`, and the channel names the one that is missing.
 - `start` on a laptop follows the deployment's default: it is the serving command a host runs, so it needs a public
   URL for Feishu/Lark, or `FEISHU_INGRESS=websocket`.
+- The channel file picks its factory at import (`feishuIngress()`), so the module's shape carries the answer, and
+  every reader that already read the shape (the secrets gate, `deploy`'s preflight, residency, registration) needs
+  no change. A webhook module declares the Verification Token; a WebSocket one does not.
+- `add feishu|lark --ingress webhook|websocket` writes the setting for both commands; with `webhook` it also
+  prepares the app at once (§4.2). Without the flag `add` writes nothing.
 
 *Rejected: `deploy` setting the value on the box.* Then the default lives in a second place, and a box started
 any other way (a hand-written Dockerfile, `fastagent start` on a server) would fall back to WebSocket. The command
@@ -84,12 +92,13 @@ webhook too, without anyone choosing.
 
 ### 4.2 `deploy` prepares the app for webhook
 
-When the deployment's ingress is webhook (the value file does not name `websocket`) and the app is not ready for it,
-`deploy` prepares it before it builds
-anything, with the machinery `add feishu` already has:
+When the deployment's ingress is webhook (the value file does not name `websocket`) and the value file has no
+Verification Token, `deploy --run` prepares the app before it builds anything (`prepareWebhookApps`), with the
+machinery `add feishu` already has:
 
 1. **`patch` scope.** `checkAgentScopes` with the webhook scopes: if `application:application:patch` is missing, it
-   opens the console page that requests it, and `deploy` stops until it is granted and a version published. In a
+   opens the console page that requests it; the token then cannot be captured, and the deploy's gate on declared
+   values stops the run until it is granted and a version published. In a
    tenant that reviews `patch`, the admin approves here, once, at a deliberate moment, and no longer at the first
    `add feishu`.
 2. **Verification Token.** Captured as `add feishu --ingress webhook` does today (a temporary tunnel answers the
@@ -110,8 +119,9 @@ Feishu/Lark channel cannot receive and names both options.
 - `deploy --run` ends by saying the app now points at the deployment, and that `dev` on this machine will not receive
   that channel's messages (Feishu/Lark: the app is in webhook mode; `dev --tunnel` would take it back).
 - `dev --tunnel`, before it points an app at the laptop, says it is taking that channel's messages from wherever the
-  app pointed, and that `deploy --run` points it back. Where the platform can say what the app points at now
-  (Telegram `getWebhookInfo`), the line names it.
+  app pointed, and that `deploy --run` points it back.
+- Preparing a Feishu/Lark app for webhook says the app is in webhook mode now, so `dev` on this machine receives
+  nothing from it.
 
 ## 5. What changes for the author
 
