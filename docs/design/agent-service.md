@@ -302,7 +302,7 @@ back to it by its id. A run is the unit the session plane already reports, with 
 | | Today | Proposed |
 |---|---|---|
 | Ownership | A caller that stops reading aborts the run (SPEC MUST 3) | Once taken, the run is the service's: a caller that stops reading detaches, and the run goes on until it settles or is canceled (§7.5) |
-| Identity | None on the data plane; the observation plane reports a `runId` | The stream's first event says how the invoke was taken, and `run_started` names the run |
+| Identity | None on the data plane; the observation plane reports a `runId` | The stream's first event says how the invoke was taken and names the run, so a pending follow-up has its id before it starts |
 | A busy session | Fails with `session_busy`. Channels queue their own turns and poll while another caller's run holds the session; schedules skip; wake-ups retry | The invoke says what its message is: `followUp` (the default) runs it next, `steer` joins the running run, `reject` answers `busy` (§7.4) |
 | How it ends | `completed` or `failed` | One terminal event, `run_settled`, carrying the outcome and the usage |
 | Events | Two vocabularies: the invoke stream's (`text`, `completed`) and the session stream's (`message_delta`, `run_settled`) | One: the session stream's (§7.3) |
@@ -564,7 +564,7 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | Unchanged |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/remove` edit `contexts.json`; how a local checkout is linked at `contexts/<name>/` is settled with that file's shape (§13) |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | Unchanged: the one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds |
 | Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` installs `environment` in the image it generates |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
@@ -625,7 +625,7 @@ entries. Clients live outside this repository.
 ### 9.1 Two contracts: the agent and the harness
 
 ```text
-Callers ──► Agent (SPEC v1)      invoke; sessions
+Callers ──► Agent (SPEC v1)      invoke; runs; sessions
               │  the run layer: whenBusy, runs that outlive their callers, cancel, the terminal event. Written once
               ▼
             Harness (the port)   run one turn on a session and steer it; the session operations
@@ -669,7 +669,9 @@ Works with      Contexts (contexts/<name>/) · Connectors (tools, MCP) · Enviro
 
 It keeps nothing on disk. In memory, per session, it holds the running run, to steer and cancel it, and the pending
 follow-ups (§7.4); and for a while, the status of each run that settled, so a caller that went away can read how its
-run ended (§7.5).
+run ended (§7.5). That status goes with the process: a restart, a deploy, and on AgentCore the microVM scaling to
+zero, 180 idle seconds after the run settles by default. A caller that comes back later finds no run, though what the
+run recorded is in its session. Where a settled status should live instead is open (§13).
 
 Memory is enough because a run lives in one process, and process affinity exists only while a run is active, with
 routing across instances belonging to a session router above FastAgent
@@ -785,7 +787,7 @@ entries, where the harness records each answer's usage.
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior |
 | 2 | Upgrade to pi 1.0.4 |
 | 3 | Declarations as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/`; `tools/` anchored on `defineTool`; `environment` with `apt`, `npm`, `pip` and `run` |
-| 4 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
+| 4 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy`, `cancel` and `runs` |
 | 5 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more context kinds |
 
@@ -796,15 +798,16 @@ entries, where the harness records each answer's usage.
 2. How `fork.at` names the point a thread starts from: an entry id the service gave out, which each channel would map
    its messages to, or the platform message id, which the service would record on the entry it belongs to. Feishu,
    the only user, holds message ids; today it finds the point by searching the parent's text for them.
-3. The exact event vocabulary, the error codes, the cap on runs in flight, and how long a settled run's status is kept,
-   in the SPEC v1 draft.
+3. The exact event vocabulary, the error codes and the cap on runs in flight, in the SPEC v1 draft.
 4. Scaling out on AgentCore: how the ingress routes each message to its conversation's runtime session; a lease that
    holds across processes; how state is split by writer (each conversation's own, and what spans conversations:
    redelivery dedup, the session list, schedules); and which API storage holds each part. Pending wake-ups are part
    of it: a deploy must not wipe them.
-5. What the port adds for a harness that checkpoints its runs, so a run survives a restart (pi-durable).
-6. Contexts that are not directories, such as S3.
-7. Acting as the member who asked (§6.3), with permissions.
+5. Where a settled run's status lives, so a caller can come back after a restart or a scale to zero (§9.3), and how a
+   run id reaches its session's microVM once each conversation has its own runtime session.
+6. What the port adds for a harness that checkpoints its runs, so a run survives a restart (pi-durable).
+7. Contexts that are not directories, such as S3.
+8. Acting as the member who asked (§6.3), with permissions.
 
 ## 14. Decisions made in review
 
