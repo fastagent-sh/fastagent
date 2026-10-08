@@ -74,7 +74,7 @@ Agent = model + harness + context, composed by a definition
   harness        the loop that runs it: pi (§9.1)
   contexts       the data it works on and knows: directories and repositories (contexts.json)
   connectors     the other systems it reaches: APIs, tools, MCP servers (mcp.json, tools/)
-  environment    what it runs in: the commands and runtimes the deployment provides (Dockerfile.environment)
+  environment    what it runs in: the commands and runtimes the deployment provides (environment, in the config)
   definition     its own directory: who it is and how it works, and which model and context it uses
   remembers in   sessions: conversations
   started by     triggers: requests, messages, events, time, itself
@@ -103,7 +103,7 @@ everything an agent touches outside its model, and they do not overlap.
 | Access | None needed | Read and write, plus the credentials to sync it | Authority delegated per action (OAuth, API keys), scoped |
 | Credentials (§6) | Supplied at start, never built in | Declared by the context | Declared by the connector |
 | Shared across a team's agents | The declaration; each agent runs its own instance | The same data: a team asset | The same integration, with per-agent scopes |
-| Fails as | A missing command, said at start | Unreachable, or a conflicting write | Authorization, rate limits, an effect whose outcome is unknown |
+| Fails as | A missing command, when something runs it | Unreachable, or a conflicting write | Authorization, rate limits, an effect whose outcome is unknown |
 
 Three invariants follow:
 
@@ -167,34 +167,38 @@ system: messages arrive through it, and the agent's send tool posts through it.
 
 Today an agent inherits the machine it runs on, the way `bash` inherits the `PATH`, and `deploy.apt` adds apt packages
 to the generated image. The image is the environment a team's cloud agent runs in, so what it installs belongs to the
-agent rather than to one deploy. The way to say what an image installs already exists, and every coding agent writes
-it: Dockerfile instructions. So the environment is declared in `Dockerfile.environment`, at the agent's root:
+agent rather than to one deploy. Most of what an image installs is packages, so the environment is declared as lists,
+one per package manager, the way Claude Managed Agents (`packages`), Modal (`apt_install`, `pip_install`) and Railway's
+Nixpacks (`aptPkgs`) declare it, with shell commands for the rest:
 
-```Dockerfile
-# Dockerfile.environment: what the agent's image installs (the slim base has no curl or gpg of its own)
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg gh ripgrep \
- && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public \
-      | gpg --dearmor -o /usr/share/keyrings/stripe.gpg \
- && echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" \
-      > /etc/apt/sources.list.d/stripe.list \
- && apt-get update && apt-get install -y stripe
+```ts
+export default {
+  environment: {
+    apt: ["gh", "ripgrep"],                                  // Debian packages
+    npm: ["@mermaid-js/mermaid-cli"],                        // CLIs, installed globally
+    pip: ["pypdf", "openpyxl==3.1.5"],                       // Python libraries for skills' scripts
+    run: ["curl -fsSL https://example.com/install.sh | sh"], // anything else: shell commands, run as root
+  },
+};
 ```
 
-- It holds any instruction but `FROM`, and `deploy` splices it into the `Dockerfile` it generates, right after `FROM`,
-  where the apt layer is today: it runs as root, before the working directory is set and the definition is copied in,
-  so its layers stay cached while the definition changes. Every installer works: apt, a vendor's apt repository, a
-  `curl` installer, `pip`, `npm -g`, a downloaded binary.
-- Nothing translates it, so nothing lags behind it. `deploy.apt` goes: an apt package is one `RUN` line.
-- An edit to it makes the generated `Dockerfile` stale, which is reported and gates `--run` until `--force`
-  regenerates it, as for any generated artifact today.
-- An author who wants the whole image keeps writing their own `Dockerfile`, which `deploy` keeps byte for byte, as
-  today. `Dockerfile.environment` spares everyone else the runtime half of the image (the CLI, the dependencies, the
-  start command), which changes with FastAgent's versions.
-- AgentCore builds `linux/arm64`: a binary the file downloads must be built for it.
+- `deploy` turns it into the install steps of the `Dockerfile` it generates, right after `FROM`, where the apt layer
+  is today, in this order: `apt`, `npm`, `pip`, `run`. It writes what authors get wrong by hand, such as refreshing and
+  then cleaning apt's lists, and its layers come before the definition is copied in, so they stay cached while the
+  definition changes. A version is written the package manager's own way (`openpyxl==3.1.5`, `express@4.18.0`).
+- `npm` installs with the agent's package manager: npm, or Bun's for a Bun agent.
+- `pip` installs into a virtual environment `deploy` creates and puts on the `PATH`, after adding `python3` and
+  `python3-venv` to the apt packages: the base image has no Python, and Debian refuses `pip` into the system's own.
+- `run` holds what no list covers, such as a CLI from a vendor's own apt repository (Stripe's), as shell commands that
+  need no Dockerfile. Each command can rely on what the lists installed before it.
+- `deploy.apt` becomes `environment.apt`. An edit makes the generated `Dockerfile` stale, which is reported and gates
+  `--run` until `--force` regenerates it, as for any generated artifact today.
+- An author who wants the whole image keeps writing their own `Dockerfile`, which `deploy` keeps byte for byte;
+  `environment` does not apply to it, and `deploy` says so.
+- AgentCore builds `linux/arm64`: a binary a `run` command downloads must be built for it.
 
-Locally the machine still lends the agent its environment, and nothing compares the two: what a Dockerfile installs is
-not a list of commands a check could look for.
+Locally the machine still lends the agent its environment, and nothing compares the two: a package is not the command
+it installs (`ripgrep` installs `rg`).
 
 ## 5. Connectors are declared
 
@@ -210,14 +214,14 @@ because its server connections live as long as a session and a served session li
 
   | The service offers | Reach it with | Declared in | Its credential |
   |---|---|---|---|
-  | A CLI (`gh`, `aws`, `stripe`) | The CLI in the environment, and a skill that teaches it | `Dockerfile.environment`, `skills/` | The variable the CLI reads |
+  | A CLI (`gh`, `aws`, `stripe`) | The CLI in the environment, and a skill that teaches it | `environment` (`apt`, `npm` or `run`), `skills/` | The variable the CLI reads |
   | An API this agent calls | Code tools, one per operation, beside the client they share | `tools/` (`defineTool`, §8.1) | `defineTool({ secrets })` |
   | An API several agents or harnesses reuse | An MCP server of one's own, run locally (stdio) or hosted | `mcp.json` | `${VAR}` in `env` or `headers` |
   | An OpenAPI or Smithy description, or a Lambda function, on AWS | AgentCore Gateway, which turns it into an MCP server and handles the outbound authorization | `mcp.json` (`url`) | The Gateway's own |
   | A REST call or two | A skill with a script (`curl`, Python) | `skills/` | The variable the script reads |
 
-- `fastagent info` lists every connector in one place: the MCP servers and the code tools with the secrets they
-  declare, and it names `Dockerfile.environment` when the agent has one.
+- `fastagent info` lists every connector in one place: the MCP servers, the code tools with the secrets they declare,
+  and what `environment` installs.
 - An MCP connection lives as long as the process or the conversation, not one turn, which is #678.
 
 ## 6. Credentials
@@ -501,17 +505,16 @@ my-agent/
   contexts.json                               contexts: the data it works on and knows
   contexts/<name>/                            where each context is: a clone, a link, a mount; never in git
   mcp.json                                    connectors that speak MCP
-  Dockerfile.environment                      what the image installs: Dockerfile instructions (§4)
-  fastagent.config.ts                         what only the author sets: the model, serving, deploy, code tools
+  fastagent.config.ts                         what only the author sets: the model, environment, serving, deploy
   .secrets/ · .state/                         machinery, never in git
 ```
 
 A declaration that has a standard format, or that the agent, a `fastagent` command or another tool writes, is a file of
-its own: contexts (`fastagent context add`), MCP servers (`mcp.json`, which `pi mcp add -l` writes), the environment
-(`Dockerfile.environment`, in Dockerfile's own syntax), schedules (the agent). None of them edits TypeScript, and each
-is in a format others already read or plain enough for a model to write. The config keeps what only the author sets
-and nothing standard describes: the model, serving and deploy options, and `tools`, code tools defined in code beside
-`tools/`. Code stays code (`tools/`, `channels/`, `extensions/`).
+its own: contexts (`fastagent context add`), MCP servers (`mcp.json`, which `pi mcp add -l` writes), schedules (the
+agent). None of them edits TypeScript, and each is in a format others already read or plain enough for a model to
+write. The config keeps what only the author sets and nothing standard describes: the model, the environment (§4),
+serving and deploy options, and `tools`, code tools defined in code beside `tools/`. Code stays code (`tools/`,
+`channels/`, `extensions/`).
 
 `tools/` is anchored on `defineTool`, the way Trigger.dev finds every exported `task()` in its task directories:
 
@@ -552,6 +555,7 @@ includes it.
 ```ts
 export default {
   model: "openai-codex/gpt-5.5",
+  environment: { apt: ["gh"] },
   http: { port: 8787 },
 } satisfies FastagentConfig;
 ```
@@ -562,7 +566,7 @@ export default {
 |---|---|---|
 | Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | Unchanged |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | Unchanged: the one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` splices `Dockerfile.environment` into the image it generates |
+| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` installs `environment` in the image it generates |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 In code
@@ -759,7 +763,7 @@ entries, where the harness records each answer's usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `deploy.apt` in the config | `Dockerfile.environment`: Dockerfile instructions `deploy` splices into the image it generates (§4) |
+| Environment | `deploy.apt` in the config | `environment`: `apt`, `npm`, `pip` and `run`, which `deploy` turns into the install steps of the image it generates (§4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
 | Contexts | `contexts` in the config, cloned into `.contexts/` | `contexts.json`; each at `contexts/<name>/`: a clone, a link to the author's checkout, a mount (§8.1). Later, more storage kinds; writable contexts as long-term memory |
 | State | `.state/` on the host's storage | Declared apart from the contexts; on AgentCore, API storage when scaling out (§10.2) |
@@ -780,7 +784,7 @@ entries, where the harness records each answer's usage.
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior |
 | 2 | Upgrade to pi 1.0.4 |
-| 3 | Declarations as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/`, `Dockerfile.environment`; `tools/` anchored on `defineTool` |
+| 3 | Declarations as files: `mcp.json` (#678), `contexts.json` and `contexts/<name>/`; `tools/` anchored on `defineTool`; `environment` with `apt`, `npm`, `pip` and `run` |
 | 4 | SPEC v1 and the harness port, after `fork` is re-checked (§13); channels, schedules, wake-ups and duang move to `whenBusy` and `cancel` |
 | 5 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; pi-durable as a harness; more context kinds |
@@ -817,9 +821,10 @@ entries, where the harness records each answer's usage.
 - The context is declared side by side, not nested: contexts (the data it works on and knows), connectors (the other
   systems it reaches) and environment (what the deployment provides). The test in §3.2 separates contexts from
   connectors.
-- The deployed environment is declared in `Dockerfile.environment`: Dockerfile instructions, any but `FROM`, that
-  `deploy` splices into the image it generates, right after `FROM`. `deploy.apt` goes, an author's own `Dockerfile`
-  stays the way to own the whole image, and locally the machine still lends its environment (§4).
+- The deployed environment is declared in the config as `environment`: package lists (`apt`, `npm`, `pip`) and `run`
+  shell commands for the rest, which `deploy` turns into the install steps of the image it generates. `pip` installs
+  into a virtual environment on the `PATH`. An author's own `Dockerfile` stays the way to own the whole image, and
+  locally the machine still lends its environment (§4).
 - A busy session: each invoke says what its message is (`whenBusy`: `followUp` by default, `steer`, `reject`). Pending
   follow-ups live in memory, at most 20 per session, and share the process's fate (§7.4).
 - `invoke` is the one way to hand a session a message: `steer` and `followUp` leave the session control plane (§7.4).
@@ -856,8 +861,8 @@ entries, where the harness records each answer's usage.
   the session storage until scaling out moves it to API storage; no EFS stopgap (§10.2).
 - Evaluation comes later.
 - A declaration that has a standard format, or that the agent or a tool writes, is a file of its own (contexts, MCP
-  servers, the environment, schedules); the config keeps what only the author sets and nothing standard describes:
-  the model, serving and deploy options, and `tools` (§8.1).
+  servers, schedules); the config keeps what only the author sets and nothing standard describes: the model, the
+  environment, serving and deploy options, and `tools` (§8.1).
 - Contexts are declared in `contexts.json` (JSON, a map by name, with a description for the agent and a JSON Schema),
   and each is materialized at `contexts/<name>/`: a clone, a link to the author's checkout, or a mount, never committed
   (§8.1).
