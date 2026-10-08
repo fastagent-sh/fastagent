@@ -208,7 +208,7 @@ counts as two-party.
 
 ### Place history
 
-A place is a channel's top level or a thread in it. When a turn in a channel runs, the channel reads the place's
+A place is a channel's or DM's top level, or a thread in one. When a turn runs, the channel reads the place's
 messages from Slack (`conversations.history` for the top level, `conversations.replies` for a thread) and folds what
 was said since the Agent last answered there into the prompt, as `[recent discussion here: …]`. The first turn in a
 place reads its newest 20 messages. The read ends at the turn's own ask: an ask queued behind it, and anything said
@@ -235,7 +235,8 @@ belongs to that thread. What the Agent posted itself, with `slack-send` from a s
 - A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
   a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
   the turn waits for it.
-- Direct messages and turns from a custom `route` read no history.
+- A direct message is a place too: its turns read what was posted there since the last answer, which in practice is
+  what the agent sent there itself with a send tool (a schedule's digest). Turns from a custom `route` read no history.
 
 This deliberately lets the app read messages in channels where it is installed; invite it only to channels
 it may read. State is local to the deployment and gitignored from git, but operators still own

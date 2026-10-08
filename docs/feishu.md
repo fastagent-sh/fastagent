@@ -271,7 +271,7 @@ Practical consequences in groups:
 
 ### Place history
 
-A place is a group chat or a thread in one. When a turn in a group runs, the channel reads the place's messages from
+A place is a chat (a group or a DM) or a thread in one. When a turn runs, the channel reads the place's messages from
 the platform (`GET /im/v1/messages`) and folds what was said since the Agent last answered there into the prompt, as
 `[recent discussion here: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
 own ask: an ask queued behind it, and anything said after it, are read by their own turn. Within that, the read leaves
@@ -291,7 +291,8 @@ schedule for example, stays, labelled `you`, so a later "what did point 3 mean?"
 - A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
   a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
   the turn waits for it.
-- Direct messages and turns from a custom `route` read no history.
+- A direct message is a place too: its turns read what was posted there since the last answer, which in practice is
+  what the agent sent there itself with a send tool (a schedule's digest). Turns from a custom `route` read no history.
 
 ### Reading threads
 

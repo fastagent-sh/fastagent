@@ -496,8 +496,8 @@ from Slack when the turn runs (`history.ts`: `conversations.history` for a chann
 `conversations.replies` for a thread), up to the turn's own ask, the commit being a per-place cursor in
 `history.json` ([place-history.md](place-history.md)). An answer is recorded in the place it lands in
 (`SlackApi.recordingSends`; an answer to a top-level ask lands in the thread it opens), so that place's
-next read leaves it out, while what `slack-send` posts stays discussion. A DM or a custom-`route` turn
-reads no history.
+next read leaves it out, while what `slack-send` posts stays discussion. A DM reads its history too (what a
+send tool posted there); a custom-`route` turn reads none.
 
 File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated
 downloads are host-restricted, timeout/cap guarded, and translated to vision images or absolute local
@@ -595,7 +595,7 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   one shared text budget, a visible truncation line when the walk ends short of the root — see
   participant-model.md §8).
 - **The platform is the place's memory; the channel stores none of it** (design:
-  [place-history.md](place-history.md)). A group turn reads its place's messages since the agent last
+  [place-history.md](place-history.md)). A turn reads its place's messages (a group, a thread, a DM) since the agent last
   answered there (`history.ts` over `GET /im/v1/messages`) and folds them into the prompt under the same
   peek→commit-on-`completed` invariant, the commit being a per-place cursor in `history.json`. The read
   ends at the turn's own ask, so a queued ask is never folded into an earlier turn, whatever state survived;

@@ -2343,7 +2343,7 @@ describe("turn flow", () => {
     expect(bufferFetches).toHaveLength(1);
   });
 
-  it("a routed turn and a direct message read no place history; a group under the default routing does", async () => {
+  it("a routed turn reads no place history; a DM reads what a send tool posted there, and not its own asks", async () => {
     const fx = feishuFetch();
     const routed = buildChannel({ route: (event) => (event.message?.chat_type === "group" ? {} : null) });
     await routed.handler(feishuRequest(messageEvent({ id: "om_routed", chatType: "group", text: "routed ask" })));
@@ -2352,10 +2352,24 @@ describe("turn flow", () => {
     expect(fx.calls("container_id_type", "GET")).toHaveLength(0); // the router decides what a session's place is
 
     const direct = buildChannel();
-    await direct.handler(feishuRequest(messageEvent({ id: "om_dm", chatType: "p2p", text: "dm ask" })));
+    await direct.handler(feishuRequest(messageEvent({ id: "om_dm_1", chatType: "p2p", text: "first ask" })));
     await direct.idle();
-    expect(direct.calls).toHaveLength(1);
-    expect(fx.calls("container_id_type", "GET")).toHaveLength(0); // every DM message is a turn: nothing to fold
+    // A schedule's digest, sent into the DM with feishu-send: on the platform, in no session.
+    platformAdd({
+      message_id: "om_digest",
+      chat_id: "oc_1",
+      msg_type: "text",
+      body: { content: JSON.stringify({ text: "Weekly digest: 3. ship it" }) },
+      sender: { id: "app", id_type: "app_id", sender_type: "app" },
+    });
+    await direct.handler(feishuRequest(messageEvent({ id: "om_dm_2", chatType: "p2p", text: "what did 3 mean?" })));
+    await direct.idle();
+    expect(direct.calls).toHaveLength(2);
+    const second = direct.calls[1]?.prompt.text ?? "";
+    expect(second).toContain("you (msg om_digest): Weekly digest: 3. ship it");
+    expect(second).not.toContain("first ask"); // an earlier ask is the session's already
+    // …and so is the answer to it: the digest is the only line of the agent's own.
+    expect(second.match(/^you \(msg /gm)).toHaveLength(1);
   });
 
   it("startup names each agent scope the app lacks, and a superset counts as the scope it covers", async () => {
@@ -2498,6 +2512,7 @@ describe("turn flow", () => {
           seq: 1,
           session: "oc_9",
           baseText: "what a prior run never finished",
+          group: false,
           askAt: 1_700_000_000_000,
           chatId: "oc_9",
           images: [],

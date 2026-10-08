@@ -76,8 +76,10 @@ const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question o
 interface StoredSlackTurn extends TurnRecordBase {
   seq: number;
   baseText: string;
-  /** The place whose history this turn reads (a channel's top level, or a thread); absent outside a group. */
+  /** The place whose history this turn reads (a channel's or DM's top level, or a thread); absent for a routed turn. */
   historyKey?: string;
+  /** Asked in a channel, not a DM: the one kind of place whose threads its tool may read. */
+  group: boolean;
   teamId: string;
   channelId: string;
   threadTs?: string;
@@ -94,6 +96,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     typeof turn.session === "string" &&
     typeof turn.baseText === "string" &&
     (turn.historyKey === undefined || typeof turn.historyKey === "string") &&
+    typeof turn.group === "boolean" &&
     typeof turn.teamId === "string" &&
     typeof turn.channelId === "string" &&
     (turn.threadTs === undefined || typeof turn.threadTs === "string") &&
@@ -308,7 +311,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
      * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
      * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
      * top-level ask lands in the thread it opens. The send tool uses the plain client, so what the agent posts itself
-     * stays discussion. A place-less turn (a DM, a routed one) reads no history.
+     * stays discussion. A routed turn has no place and reads no history.
      */
     const placeApi = (turn: { historyKey?: string; teamId: string }): SlackApi =>
       turn.historyKey === undefined
@@ -342,11 +345,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       label,
       store,
       discussion: history,
-      // A turn with a place is a group turn (DMs and routed turns have none), and its channel is its room.
+      // A channel turn under the default routing reads its channel's threads; a DM has none to read.
       room: {
         threads: rooms,
         of: (turn) => {
-          if (turn.historyKey === undefined) return undefined;
+          if (!turn.group || turn.historyKey === undefined) return undefined;
           const { teamId, channelId } = slackPlaceOf(turn.historyKey);
           return slackHistoryKey(teamId, { channelId });
         },
@@ -535,9 +538,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
       const defaultSession = threadKey(teamId, event.channel, rootTs);
-      // A group's discussion, under the default routing: a routed session's place is the router's to decide.
+      // Every place's discussion under the default routing, a DM's too (what a send tool posted there is in no session);
+      // a routed session's place is the router's to decide.
       const historyKey =
-        route === undefined && group
+        route === undefined && (group || direct)
           ? slackHistoryKey(teamId, { channelId: event.channel, threadTs: event.thread_ts })
           : undefined;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
@@ -570,6 +574,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           session: routed.session ?? defaultSession,
           baseText,
           ...(historyKey !== undefined ? { historyKey } : {}),
+          group,
           teamId,
           channelId: targetChannel,
           threadTs,
