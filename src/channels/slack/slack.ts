@@ -17,6 +17,7 @@ import { attachmentsDir } from "../kit/attachment-path.ts";
 import { ensureStateHome } from "../kit/state.ts";
 import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
+import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -288,6 +289,21 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         return seen.has(`${place.teamId}:${place.channelId}:${ts}`);
       },
     });
+    // A group turn's room, for the thread-reading tool (`slackThreads`): the channel it was asked in, and its threads.
+    const rooms = createRoomThreads({
+      list: (room) => history.threads(room),
+      read: async (room, threadTs) => {
+        if (!/^\d+\.\d+$/.test(threadTs)) {
+          throw new Error(
+            `"${threadTs}" is not a Slack thread id: pass a thread's id from the list (like 1712345678.123456)`,
+          );
+        }
+        const { teamId, channelId } = slackPlaceOf(room);
+        const key = slackHistoryKey(teamId, { channelId, threadTs });
+        return (await history.snapshot(key)).text || `(thread ${threadTs} shows no messages)`;
+      },
+    });
+    registerRoomThreads("slack", stateRoot, rooms);
     /**
      * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the session already,
      * so the place it LANDS in records it, and that place's next read leaves it out — an answer to a channel's
@@ -326,6 +342,15 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       label,
       store,
       discussion: history,
+      // A turn with a place is a group turn (DMs and routed turns have none), and its channel is its room.
+      room: {
+        threads: rooms,
+        of: (turn) => {
+          if (turn.historyKey === undefined) return undefined;
+          const { teamId, channelId } = slackPlaceOf(turn.historyKey);
+          return slackHistoryKey(teamId, { channelId });
+        },
+      },
       seen,
       toStored: ({ previewTs: _preview, nativeQueueStatus: _status, ...intent }) => ({ ...intent, attempts: 0 }),
       fromStored: ({ attempts: _attempts, ...intent }) => ({ ...intent }),

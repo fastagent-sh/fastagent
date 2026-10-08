@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
 import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
-import { type SlackChannelOptions, type SlackEventEnvelope, slackChannel, verifySlackSignature } from "../src/slack.ts";
+import {
+  type SlackChannelOptions,
+  type SlackEventEnvelope,
+  slackChannel,
+  slackThreads,
+  verifySlackSignature,
+} from "../src/slack.ts";
+import { resolveStateRoot } from "../src/paths.ts";
 
 const SECRET = "slack-signing-secret";
 const API = "https://slack.test/api";
@@ -24,6 +31,8 @@ interface PlatformMessage {
   user?: string;
   bot_id?: string;
   text?: string;
+  reply_count?: number;
+  latest_reply?: string;
 }
 const platform: PlatformMessage[] = [];
 
@@ -535,6 +544,41 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(thread).toContain("user U3 (msg 150): I think 4 is the docs");
     expect(thread).not.toContain("what did point 3 mean");
     expect(thread).not.toContain("point 3 is the cache fix");
+  });
+
+  it("a channel turn's thread tool reads that channel's threads, and a DM turn's is refused", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const cwd = root();
+    const seen: string[] = [];
+    const agent: Agent = {
+      async *invoke(scope) {
+        const ctx = { cwd, sessionManager: { getSessionId: () => scope.session } };
+        // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
+        const list = async () => slackThreads(ctx).list();
+        seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
+        if (scope.session.includes(":C1:")) {
+          const read = async () => slackThreads(ctx).read("omt_1");
+          seen.push(await read().catch((error: Error) => `refused: ${error.message}`));
+        }
+        yield { type: "text", delta: "ok" };
+        yield { type: "completed" };
+      },
+    };
+    const { handler } = mount(agent, {}, resolveStateRoot(cwd));
+    await new Promise((resolve) => setImmediate(resolve));
+    platform.push({ channel: "C1", ts: "3.0", user: "U2", text: "deploy failed", reply_count: 2, latest_reply: "4.0" });
+
+    await handler(signedRequest(message("10.0", { type: "app_mention", text: "<@UBOT> was the deploy fixed?" })));
+    await settle();
+    await handler(signedRequest(message("11.0", { channel: "D1", channel_type: "im", text: "any threads?" })));
+    await settle();
+    expect(seen[0]).toContain("- thread 3.0 (2 replies, last active 1970-01-01 00:00 UTC): user U2: deploy failed");
+    expect(seen[1]).toBe(
+      'refused: "omt_1" is not a Slack thread id: pass a thread\'s id from the list (like 1712345678.123456)',
+    );
+    expect(seen[2]).toBe(
+      "refused: this turn was not asked in a slack group chat: threads are read only from the group a turn was asked in",
+    );
   });
 
   it("records a second human who summons it by mention, so it does not barge into a crowd later", async () => {

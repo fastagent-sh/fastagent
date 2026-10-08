@@ -143,6 +143,11 @@ export interface PlaceHistory<C> extends DiscussionSource<PlaceDiscussion<C>, Pl
    * still reads it, so each place takes the discussion into its own memory.
    */
   room(key: string): Promise<{ text: string; folded: PlaceMessage[] }>;
+  /**
+   * A place as it reads now, for a tool: its newest messages, with no cursor and nothing left out (another session's
+   * asks and answers are what that place said). Rejects when the read fails: a tool's failure is the model's to see.
+   */
+  snapshot(key: string): Promise<{ text: string; folded: PlaceMessage[] }>;
 }
 
 /** What a place remembers between turns. */
@@ -256,6 +261,10 @@ export function createPlaceHistory<C>(deps: {
       } catch (error) {
         return unreadable(key, error);
       }
+    },
+    async snapshot(key) {
+      const { messages, earlier } = await deps.read(key, { drop: () => false });
+      return foldPlace(messages, earlier);
     },
   };
 }

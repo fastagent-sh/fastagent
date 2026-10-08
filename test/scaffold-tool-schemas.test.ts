@@ -22,7 +22,7 @@ const OPENAI_STRICT_FORMATS = new Set([
 
 const SRC = new URL("../src/", import.meta.url).pathname;
 
-/** Every code tool a scaffold writes into an agent: each channel's send tool. */
+/** Every code tool a scaffold writes into an agent: each channel bundle's companion tools (`scaffoldCompanionTools`). */
 function scaffoldedTools(): string[] {
   const channels = join(SRC, "channels");
   return readdirSync(channels, { withFileTypes: true })
@@ -31,7 +31,7 @@ function scaffoldedTools(): string[] {
     .filter((scaffold) => existsSync(scaffold))
     .flatMap((scaffold) =>
       readdirSync(scaffold)
-        .filter((file) => file.endsWith("-send.ts"))
+        .filter((file) => file.endsWith(".ts") && !file.startsWith("channel."))
         .map((file) => join(scaffold, file)),
     );
 }
@@ -50,8 +50,11 @@ describe("scaffolded tools", () => {
     // The list is read from disk; pin that it found what it is about, so an emptied list cannot pass.
     expect(files.map((file) => file.split("/").at(-1)).sort()).toEqual([
       "feishu-send.ts",
+      "feishu-threads.ts",
       "lark-send.ts",
+      "lark-threads.ts",
       "slack-send.ts",
+      "slack-threads.ts",
       "telegram-send.ts",
     ]);
     const offending: string[] = [];

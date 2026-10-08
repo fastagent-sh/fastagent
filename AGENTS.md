@@ -119,6 +119,8 @@ src/
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
 │   │   ├── turn-queue.ts   # per-session FIFO root fibers; queued work counts busy and survives ingress ACK
 │   │   ├── turn-store.ts   # generic durable turn intent + the answer owed to it (record shape/validator/order injected)
+│   │   ├── room-threads.ts # what a thread-reading tool may read: its turn's room (registered by the turn runner),
+│   │   │                   # never one it is told; the thread list's format and bound
 │   │   ├── place-history.ts # the DiscussionSource a turn folds + the place-history fold (budget, labels) + what a
 │   │   │                   # place remembers between platform reads (cursor, the turns' own outputs)
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (peek→completed→commit)
@@ -150,7 +152,7 @@ src/
 │   │   ├── shared-api.ts   # the ONE transport per state root the channel and the send tool share
 │   │   ├── onboard.ts, setup-server.ts, manifest.ts, config-api.ts, onboarding-state.ts, welcomed.ts,
 │   │   │                   # register-webhook.ts # `add slack`: the app-creation flow and what it remembers
-│   │   └── scaffold/       # `add slack` bundle
+│   │   └── scaffold/       # `add slack` bundle (channel.ts + slack-send + slack-threads)
 │   ├── feishu/             # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts       # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts        # explicit Feishu-reference / Lark-compatibility capability profiles
@@ -163,7 +165,7 @@ src/
 │   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
 │   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
-│   │   └── scaffold/       # `add feishu` bundle
+│   │   └── scaffold/       # `add feishu` bundle (channel + feishu-send + feishu-threads)
 │   └── lark/               # Lark compatibility/degraded edges over the Feishu engine
 │       ├── lark.ts         # thin branded adapter bound to LARK_COMPAT_CLOUD
 │       ├── onboard.ts      # unbound launcher + credentials + manual config fallback

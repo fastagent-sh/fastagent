@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ContextBuffer, createContextBuffer } from "../src/channels/kit/context-buffer.ts";
+import { createRoomThreads } from "../src/channels/kit/room-threads.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
@@ -446,5 +447,25 @@ describe("turn runner: the lifecycle order every chat channel shares", () => {
     expect(r.recover()).toHaveLength(1);
     await r.idle();
     expect(calls).toEqual(["attempt r", "peek place:s", "execute r", "remove r"]);
+  });
+
+  it("a turn's room is open to its thread tool while it executes, and closed after, whether it succeeds or fails", async () => {
+    const { store, calls } = fakeStore();
+    const threads = createRoomThreads({ list: async () => "", read: async () => "" });
+    const during = new Map<string, string | undefined>();
+    const r = runner(store, calls, {
+      room: { threads, of: (rec) => (rec.id === "dm" ? undefined : `room-of-${rec.id}`) },
+      execute: (rec) =>
+        portJoin(async () => {
+          during.set(rec.id, threads.roomOf(rec.session));
+          if (rec.id === "boom") throw new Error("transport down");
+        }),
+    });
+    r.submit({ id: "ok", session: "s1", text: "" }, true);
+    r.submit({ id: "boom", session: "s2", text: "" }, true);
+    r.submit({ id: "dm", session: "s3", text: "" }, true);
+    await r.idle();
+    expect(Object.fromEntries(during)).toEqual({ ok: "room-of-ok", boom: "room-of-boom", dm: undefined });
+    expect(["s1", "s2", "s3"].map((session) => threads.roomOf(session))).toEqual([undefined, undefined, undefined]);
   });
 });

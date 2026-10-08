@@ -131,6 +131,7 @@ export interface FeishuApiOptions {
 /** One message as `GET /im/v1/messages` lists it — the fields the history read uses. */
 export interface FeishuListedMessage {
   message_id?: string;
+  chat_id?: string;
   msg_type?: string;
   /** Milliseconds since the epoch, as a string. */
   create_time?: string;

@@ -1,5 +1,6 @@
 /** The mounted channel and proactive tools share credentials, token cache, gateway and retry policy. */
 import { resolveStateRoot } from "../../paths.ts";
+import { roomThreads } from "../kit/room-threads.ts";
 import { cloudFor, type FeishuCloudKind } from "./cloud.ts";
 import { createFeishuApi, type FeishuApi } from "./feishu-api.ts";
 
@@ -43,4 +44,17 @@ export function feishuTransport(cwd: string): FeishuTransport {
 /** Resolve the Lark transport for a tool's agent directory (`ctx.cwd`). */
 export function larkTransport(cwd: string): FeishuTransport {
   return cloudTransport(cwd, "lark");
+}
+
+/**
+ * The threads of the group chat a tool's turn was asked in, and only those (`kit/room-threads.ts`): `list()` its recent
+ * threads, `read(threadId)` one of them. Throws outside a Feishu group turn served by this process.
+ */
+export function feishuThreads(ctx: Parameters<typeof roomThreads>[1]): ReturnType<typeof roomThreads> {
+  return roomThreads("feishu", ctx);
+}
+
+/** {@link feishuThreads}, for a Lark group turn. */
+export function larkThreads(ctx: Parameters<typeof roomThreads>[1]): ReturnType<typeof roomThreads> {
+  return roomThreads("lark", ctx);
 }

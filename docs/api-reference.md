@@ -1019,10 +1019,16 @@ import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/cor
 import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
-import { slackChannel, slackTransport } from "@fastagent-sh/fastagent/slack";
-import { feishuChannel, feishuTransport, type FeishuTransport } from "@fastagent-sh/fastagent/feishu";
-import { larkChannel, larkTransport, type LarkTransport } from "@fastagent-sh/fastagent/lark";
+import { slackChannel, slackThreads, slackTransport } from "@fastagent-sh/fastagent/slack";
+import { feishuChannel, feishuThreads, feishuTransport, type FeishuTransport } from "@fastagent-sh/fastagent/feishu";
+import { larkChannel, larkThreads, larkTransport, type LarkTransport } from "@fastagent-sh/fastagent/lark";
 ```
+
+A tool reaches its channel through these. `*Transport(ctx.cwd)` sends with the mounted channel's client (or the
+environment's credentials when none is mounted). `*Threads(ctx)` reads the threads of the group a turn was asked in:
+`list()` its recent threads, `read(threadId)` one of them. The group is the turn's, never an argument, and outside a
+group turn served by this process it throws. The scaffolded `tools/<kind>-send.ts` and `tools/<kind>-threads.ts` are
+the reference uses.
 
 `/core` loads no third-party package, so a channel package can depend on it. The root entry exports everything. See
 [Telegram channel](telegram.md), [Slack channel](slack.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

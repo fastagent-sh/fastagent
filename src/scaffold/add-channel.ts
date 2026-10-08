@@ -61,6 +61,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
       "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
+      "the agent reads the threads of the channel it is asked in via the scaffolded {tools}/slack-threads.ts tool",
     ],
   },
   // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded compatibility
@@ -94,6 +95,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
+      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
   },
   lark: {
@@ -116,6 +118,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       LARK_PERMISSION_STEP,
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
+      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
   },
 };
@@ -132,6 +135,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
+      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
   },
   lark: {
@@ -142,6 +146,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
+      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
   },
 };

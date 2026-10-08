@@ -233,6 +233,19 @@ This deliberately lets the app read messages in channels where it is installed; 
 it may read. State is local to the deployment and gitignored from git, but operators still own
 retention/privacy policy.
 
+### Reading threads
+
+`fastagent add slack` also scaffolds `tools/slack-threads.ts`. In a channel turn, the agent calls it with no
+arguments to list the channel's recent threads, and with a thread id (its first message's `ts`) to read one. That is
+how a question about another thread ("was the deploy failure resolved?") reaches what a person wrote there.
+
+- Only the channel the turn was asked in: the tool takes no channel id. In a DM, a scheduled turn or a turn from a
+  custom `route` it answers that it cannot read threads.
+- The list is the threads among the channel's newest 100 messages, by their last reply, at most 20.
+- A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
+- An agent created before this release gets the tool with `fastagent add slack --no-onboard`: it keeps the channel
+  file and writes the package's tools.
+
 ## Inbound files
 
 Events persist stable Slack file IDs—never temporary private URLs. At dequeue, the channel calls

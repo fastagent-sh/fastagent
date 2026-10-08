@@ -7,7 +7,7 @@ import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 import type { SessionControl } from "../src/session.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
-import { feishuTransport } from "../src/feishu.ts";
+import { feishuThreads, feishuTransport } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
 import { cardSummary } from "../src/channels/feishu/card.ts";
 import { piSessionId } from "../src/engines/pi/session-store.ts";
@@ -730,6 +730,46 @@ describe("turn flow", () => {
     expect(fx.calls("/cardkit/v1/cards/c1", "PUT")).toHaveLength(1);
     const texts = fx.calls("receive_id_type=chat_id", "POST").filter((c) => c.body?.msg_type === "text");
     expect(texts).toHaveLength(0);
+  });
+
+  it("a group turn's thread tool reads that chat's threads, and a DM turn's is refused", async () => {
+    feishuFetch();
+    const seen: string[] = [];
+    injectedAgent = {
+      async *invoke(scope) {
+        const ctx = { cwd: "/agent", sessionManager: { getSessionId: () => scope.session } };
+        // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
+        const list = async () => feishuThreads(ctx).list();
+        seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
+        yield { type: "text", delta: "ok" };
+        yield { type: "completed" };
+      },
+    };
+    const { handler, idle, root } = buildChannel();
+    vi.stubEnv("FASTAGENT_STATE_DIR", root); // the tool's agent is the one this channel serves
+    await flush();
+    platformAdd({
+      message_id: "om_topic",
+      chat_id: "oc_1",
+      thread_id: "omt_1",
+      msg_type: "text",
+      body: { content: JSON.stringify({ text: "deploy failed" }) },
+      sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+    });
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    await handler(
+      feishuRequest(
+        messageEvent({ id: "om_ask", chatType: "group", text: "@_user_1 was it fixed?", mentions: mention }),
+      ),
+    );
+    await idle();
+    await handler(feishuRequest(messageEvent({ id: "om_dm", text: "any threads?" })));
+    await idle();
+    vi.unstubAllEnvs();
+    expect(seen[0]).toMatch(/^- thread omt_1 \(started .+ UTC\): Bob: deploy failed$/m);
+    expect(seen[1]).toBe(
+      "refused: this turn was not asked in a feishu group chat: threads are read only from the group a turn was asked in",
+    );
   });
 
   it("folds the chat's unanswered discussion into the next @mention, by name, once", async () => {

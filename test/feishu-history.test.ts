@@ -17,6 +17,7 @@ let clock = 1_700_000_000_000;
 function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}): FeishuListedMessage {
   return {
     message_id: id,
+    chat_id: "oc_1",
     msg_type: "text",
     create_time: String(++clock),
     body: { content: JSON.stringify({ text }) },
@@ -334,5 +335,43 @@ describe("Feishu place history", () => {
     expect(await answeredTurn(place)).toContain("still read");
     expect(warn.mock.calls.join("\n")).toContain("unexpected shape");
     expect(JSON.parse(readFileSync(path, "utf8")).oc_1.cursor.id).toBe("om_ask_1"); // a valid file again
+  });
+
+  it("a thread named for another chat is refused, never read into this one", async () => {
+    const place = setup();
+    place.messages.push(msg("om_secret", "the other group's plan", { chat_id: "oc_2", thread_id: "omt_9" }));
+    const key = feishuHistoryKey({ chatId: "oc_1", threadId: "omt_9" });
+    await expect(place.history.snapshot(key)).rejects.toThrow("thread omt_9 is not in chat oc_1");
+    const peeked = await place.history.peek({ key, until: { at: Date.now(), id: "om_ask" } });
+    expect(peeked.text).toContain("could not read the recent discussion here");
+    expect(peeked.text).not.toContain("plan");
+  });
+
+  it("lists the chat's threads newest first, each by its earliest message seen, and reads one whole", async () => {
+    const place = setup();
+    place.messages.push(
+      msg("om_t1", "deploy failed on staging", { thread_id: "omt_1" }),
+      msg("om_t2", "lunch plans", { thread_id: "omt_2", sender: { id: "ou_bob", sender_type: "user" } }),
+      msg("om_t1_reply", "killed the backfill, redeploy succeeded", { thread_id: "omt_1", root_id: "om_t1" }),
+      msg("om_plain", "no thread here"),
+      // A topic group lists the platform's own messages with a thread of their own.
+      msg("om_sys", "", { thread_id: "omt_3", msg_type: "system", sender: {} }),
+    );
+    const list = await place.history.threads("oc_1");
+    expect(list.split("\n")).toEqual([
+      expect.stringContaining(
+        "Threads in this room, newest first by the time shown (among this chat's newest 50 messages)",
+      ),
+      "A thread shown by when it started may have later replies this list cannot see: read it.",
+      // A reply seen in the listing (a topic group) is the thread's last activity; a root alone is only its start.
+      expect.stringMatching(
+        /^- thread omt_1 \(last active \d{4}-\d\d-\d\d \d\d:\d\d UTC\): Alice: deploy failed on staging$/,
+      ),
+      expect.stringMatching(/^- thread omt_2 \(started .+\): user ou_bob: lunch plans$/),
+    ]);
+    // A tool's read leaves nothing out: what the session holds elsewhere is what this thread said.
+    place.history.recordOutput(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }), "om_t1_reply");
+    const read = await place.history.snapshot(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }));
+    expect(read.text).toContain("killed the backfill, redeploy succeeded");
   });
 });

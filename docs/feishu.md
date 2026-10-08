@@ -293,6 +293,23 @@ schedule for example, stays, labelled `you`, so a later "what did point 3 mean?"
   the turn waits for it.
 - Direct messages and turns from a custom `route` read no history.
 
+### Reading threads
+
+`fastagent add feishu` (lark: `add lark`) also scaffolds `tools/feishu-threads.ts` (`tools/lark-threads.ts`). In a
+group turn, the agent calls it with no arguments to list the group's recent threads, and with a thread id to read one.
+That is how a question in the group about a topic ("was the deploy failure resolved?") reaches what a person wrote
+in that topic.
+
+- Only the group the turn was asked in: the tool takes no chat id, and a thread id from another chat is refused. In a
+  DM, a scheduled turn or a turn from a custom `route` it answers that it cannot read threads.
+- The list is the threads among the group's newest 50 messages, newest first, at most 20. Feishu lists an ordinary
+  group's thread by its first message only, so the list shows when such a thread started, not its last reply (it may
+  have gone on since, and the list says so), and a thread started before those 50 messages does not appear. A topic
+  group lists every message, so there a thread shows its last activity.
+- A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
+- An agent created before this release gets the tool with `fastagent add feishu --no-onboard`: it keeps the channel
+  file and writes the package's tools.
+
 ## Threads and sessions
 
 The Agent behaves as a participant in the room, so where it answers and what it remembers follow the
