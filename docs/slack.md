@@ -224,7 +224,9 @@ belongs to that thread. What the Agent posted itself, with `slack-send` from a s
   changes) and messages with nothing to show are left out.
 - An app installed before `users:read` was in the manifest shows everyone by user id, and the channel says so once.
   Add the scope under the app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it
-  in its manifest with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace.
+  in its manifest with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace. A running channel
+  asks again every 10 minutes, so names appear without a restart, unless the reinstall issued a new Bot Token: then
+  update `SLACK_BOT_TOKEN` and restart.
 - A post written as Markdown (every answer and `slack-send` post) is read from its blocks, tables included; Slack's
   plain-text rendering of such a post drops its tables.
 - The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it

@@ -206,16 +206,23 @@ export function createSlackPlaceHistory(deps: {
   const { api } = deps;
 
   /**
-   * The people already looked up, named or known to have no name to find (a failed lookup). Both halves expire
-   * together, so a failure or a renamed person is retried after the TTL, not on every turn. Without `users:read`
-   * nothing is looked up again in this process: a reinstall grants it to the same token, and the next start uses it.
+   * The people already looked up, named or known to have no name to find (a failed lookup), and whether the app
+   * lacks `users:read`. All of it expires together, so a failure, a renamed person or a scope granted by a reinstall
+   * is picked up after the TTL, not on every turn and not only at the next start.
    */
-  let names = { named: new Map<string, string>(), unnamed: new Set<string>(), at: Date.now() };
-  let scopeMissing = false;
+  const fresh = () => ({
+    named: new Map<string, string>(),
+    unnamed: new Set<string>(),
+    scopeMissing: false,
+    at: Date.now(),
+  });
+  let names = fresh();
+  /** The missing scope is said once per process: after that, each retry would only repeat it. */
+  let scopeWarned = false;
 
   /** Names for the people a fold shows; one not found is shown by user id. Never rejects: a name is a label. */
   const peopleNames = async (messages: readonly SlackListedMessage[]): Promise<ReadonlyMap<string, string>> => {
-    if (Date.now() - names.at >= NAMES_TTL_MS) names = { named: new Map(), unnamed: new Set(), at: Date.now() };
+    if (Date.now() - names.at >= NAMES_TTL_MS) names = fresh();
     const { named, unnamed } = names;
     const self = deps.self();
     const wanted = new Set(
@@ -226,7 +233,7 @@ export function createSlackPlaceHistory(deps: {
       ),
     );
     const unknown = [...wanted].filter((id) => !named.has(id) && !unnamed.has(id));
-    if (scopeMissing || unknown.length === 0) return named;
+    if (names.scopeMissing || unknown.length === 0) return named;
     const failures: unknown[] = [];
     await Promise.all(
       unknown.map(async (id) => {
@@ -244,10 +251,13 @@ export function createSlackPlaceHistory(deps: {
       (error) => error instanceof SlackApiError && error.slackError === "missing_scope",
     );
     if (missingScope) {
-      scopeMissing = true;
-      log.warn(
-        `${deps.label} users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app \`fastagent add slack\` created gets it with the next \`dev --tunnel\` or \`deploy --run\`), then Reinstall to Workspace`,
-      );
+      names.scopeMissing = true;
+      if (!scopeWarned) {
+        scopeWarned = true;
+        log.warn(
+          `${deps.label} users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app \`fastagent add slack\` created gets it with the next \`dev --tunnel\` or \`deploy --run\`), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token`,
+        );
+      }
     } else if (failures.length > 0) {
       log.warn(
         `${deps.label} could not look up ${failures.length} name(s) (shown by user id for 10 minutes): ${String(failures[0])}`,

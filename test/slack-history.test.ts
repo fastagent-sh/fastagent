@@ -333,10 +333,13 @@ describe("Slack place history", () => {
     expect(place.userName).toHaveBeenCalledTimes(3);
   });
 
-  it("without users:read, says so once with the remedy, shows ids, and stops asking", async () => {
+  it("without users:read, says so once with the remedy, shows ids, and asks again only after the TTL", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    let granted = false;
     const place = setup({
-      userName: async () => {
+      userName: async (id) => {
+        if (granted) return id === "U4" ? "Dana" : undefined;
         throw new SlackApiError("users.info", 200, "missing_scope; needed users:read", "missing_scope");
       },
     });
@@ -345,16 +348,32 @@ describe("Slack place history", () => {
     place.messages.push(msg("anyone?", { user: "U4" }));
     expect(await answeredTurn(place, place.ask())).toMatch(/^user U4 /);
     expect(place.userName).toHaveBeenCalledTimes(2);
+
+    // Still not granted at the next TTL: asked again, not said again.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("still?", { user: "U5" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^user U5 /m);
+    expect(place.userName).toHaveBeenCalledTimes(3);
+
+    // A reinstall grants the scope to the running token: the next lookup after the TTL names people, unannounced.
+    granted = true;
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("back", { user: "U4" }));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^Dana \(msg /m);
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
-      "[slack] users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace",
+      "[slack] users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace; names appear within 10 minutes, or after a restart if the reinstall issued a new Bot Token",
     ]);
     warn.mockRestore();
+    vi.useRealTimers();
   });
 
   it("a failed lookup is said, and the person shown by id until the names are read again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    let down = true;
     const place = setup({
       userName: async () => {
+        if (!down) return "Alice";
         throw new SlackApiError("users.info", 0, "fetch failed");
       },
     });
@@ -364,6 +383,13 @@ describe("Slack place history", () => {
     await answeredTurn(place, place.ask());
     expect(place.userName).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain("could not look up 1 name(s) (shown by user id for 10 minutes)");
+
+    down = false;
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    place.messages.push(msg("and now?"));
+    expect(await answeredTurn(place, place.ask())).toMatch(/^Alice \(msg [\d.]+\): and now\?$/m);
+    expect(place.userName).toHaveBeenCalledTimes(2);
     warn.mockRestore();
+    vi.useRealTimers();
   });
 });
