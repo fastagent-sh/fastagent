@@ -70,6 +70,7 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Distribution and provenance](design/distribution.md) | Why an agent directory has no manifest, and where a vendored skill's origin should be recorded |
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
+| [Channels across environments](design/channel-environments.md) | Proposed: a deployment receives Feishu/Lark by webhook by default, the laptop keeps WebSocket; one app serves one environment at a time until per-environment apps (#749) |
 | [Session control plane](design/session-control.md) | Serving extension beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).
