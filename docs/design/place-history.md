@@ -198,7 +198,7 @@ short list, a bounded read.
 - **The room is never an argument.** The bot can read every chat it is in, so a room the tool were told would let one
   chat read another ("what did they decide in the other group?"). While a group turn runs, the turn runner registers
   its room under its session (`TurnRunnerOptions.room`), and the tool, asking with its own session id, gets that room
-  or an error. DMs and routed turns have no room. A DM still has a place whose history its turns read (below).
+  or an error. DMs and routed turns have no room. A DM still has a place whose history its turns read ([Direct messages](#direct-messages)).
 - **A thread id is checked against the room.** Slack reads `conversations.replies` in the room's channel, so a thread
   is in it by construction. A Feishu `thread_id` names a thread in any chat, so the read refuses items whose `chat_id`
   is not the room's, for the history read as well.
