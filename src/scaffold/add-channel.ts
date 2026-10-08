@@ -9,6 +9,7 @@ import { SECRETS_DIRNAME, SECRET_FILE_MODE, assertInsideAgentDir, exists } from 
 import { baseTemplate, channelBundleFiles, channelTemplate } from "./templates.ts";
 import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
+import { slackBotScopes } from "../channels/slack/manifest.ts";
 
 export type ChannelKind = "telegram" | "slack" | "feishu" | "lark";
 
@@ -57,7 +58,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "SLACK_SIGNING_SECRET", hint: "Slack app → Basic Information → App Credentials", required: true },
     ],
     steps: [
-      "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write, channels:history, groups:history, mpim:history",
+      `Slack Bot Token Scopes: ${slackBotScopes().join(", ")}`,
       "enable Agents (agent_view) and leave token rotation OFF (it cannot be turned off again); subscribe app_home_opened, app_context_changed, app_mention, message.im, message.channels, message.groups, message.mpim; set Request URL to <public-url>/slack",
       "reinstall the app after changing scopes, then invite it to each channel it should read",
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",

@@ -103,6 +103,7 @@ im:history
 files:read
 files:write
 reactions:write
+users:read
 ```
 
 A `context` app additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
@@ -217,8 +218,13 @@ answer is left out of the place it lands in: the Agent answers a top-level ask i
 belongs to that thread. What the Agent posted itself, with `slack-send` from a schedule for example, stays, labelled
 `you`, so a later "what did point 3 mean?" has it.
 
-- People are shown by user id (`user U…`), other bots by name (`bot <name>`), with what an integration put in legacy
-  attachments. Slack's own messages (joins, topic changes) and messages with nothing to show are left out.
+- People are shown by name (`users.info`, the `users:read` scope), looked up only for the speakers a fold shows and
+  reused for 10 minutes; a person with no name, or a failed lookup, is shown by user id (`user U…`). Other bots are
+  shown by name (`bot <name>`), with what an integration put in legacy attachments. Slack's own messages (joins, topic
+  changes) and messages with nothing to show are left out.
+- An app installed before `users:read` was in the manifest shows everyone by user id, and the channel says so once.
+  Add the scope under the app's OAuth & Permissions → Bot Token Scopes (an app `fastagent add slack` created gets it
+  in its manifest with the next `dev --tunnel` or `deploy --run`), then Reinstall to Workspace.
 - A post written as Markdown (every answer and `slack-send` post) is read from its blocks, tables included; Slack's
   plain-text rendering of such a post drops its tables.
 - The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it

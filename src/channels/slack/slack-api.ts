@@ -146,6 +146,8 @@ export interface SlackApi {
     range: SlackRange,
     opts?: CallOptions,
   ): Promise<{ messages: SlackListedMessage[]; hasMore: boolean }>;
+  /** A person's name as the workspace shows it (`users.info`, needs `users:read`); undefined when it has none. */
+  userName(userId: string, opts?: CallOptions): Promise<string | undefined>;
   authTest(): Promise<{ teamId?: string; userId?: string; botId?: string }>;
   postMessage(target: SlackTarget, text: string): Promise<string>;
   postMarkdown(target: SlackTarget, markdown: string): Promise<string>;
@@ -398,6 +400,15 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
         opts,
       );
       return { messages: data.messages ?? [], hasMore: data.has_more === true };
+    },
+    async userName(userId, opts) {
+      const data = await call<
+        SlackBody & {
+          user?: { name?: string; real_name?: string; profile?: { display_name?: string; real_name?: string } };
+        }
+      >("users.info", { user: userId }, "GET", opts);
+      const user = data.user;
+      return user?.profile?.display_name || user?.profile?.real_name || user?.real_name || user?.name || undefined;
     },
     async authTest() {
       const data = await call<SlackBody & { team_id?: string; user_id?: string; bot_id?: string }>("auth.test", {});

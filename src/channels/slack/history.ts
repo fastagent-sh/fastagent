@@ -17,7 +17,8 @@ import {
 import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
 import { CONTEXT_READ } from "../kit/transport.ts";
 import { slackMessageText } from "./parse.ts";
-import type { SlackApi, SlackListedMessage } from "./slack-api.ts";
+import { log } from "../../log.ts";
+import { type SlackApi, SlackApiError, type SlackListedMessage } from "./slack-api.ts";
 
 /** How many of a place's newest messages one read keeps; a place busier than this since its last answer says so. */
 const PAGE_SIZE = 50;
@@ -34,6 +35,9 @@ export interface SlackPlaceHistory extends PlaceHistory<string> {
   /** The channel's threads among its newest messages, for a tool (`kit/room-threads.ts`); `room` is its place key. */
   threads(room: string): Promise<string>;
 }
+
+/** How long a person's name is reused before it is looked up again. */
+const NAMES_TTL_MS = 10 * 60_000;
 
 /** How many of a channel's newest messages a thread list looks through. */
 const THREAD_SCAN = 100;
@@ -191,7 +195,7 @@ function spokenText(message: SlackListedMessage): string {
 }
 
 export function createSlackPlaceHistory(deps: {
-  api: Pick<SlackApi, "channelHistory" | "threadReplies">;
+  api: Pick<SlackApi, "channelHistory" | "threadReplies" | "userName">;
   /** THIS app's bot user and bot ids, once `auth.test` answered: a message from either is the agent's own. */
   self(): { userId?: string; botId?: string };
   label: string;
@@ -201,8 +205,59 @@ export function createSlackPlaceHistory(deps: {
 }): SlackPlaceHistory {
   const { api } = deps;
 
-  /** Who said it: this app, another bot, or a person (by user id: names need `users:read`). */
-  const speaker = (message: SlackListedMessage): PlaceMessage["from"] => {
+  /**
+   * The people already looked up, named or known to have no name to find (a failed lookup). Both halves expire
+   * together, so a failure or a renamed person is retried after the TTL, not on every turn. Without `users:read`
+   * nothing is looked up again in this process: a reinstall grants it to the same token, and the next start uses it.
+   */
+  let names = { named: new Map<string, string>(), unnamed: new Set<string>(), at: Date.now() };
+  let scopeMissing = false;
+
+  /** Names for the people a fold shows; one not found is shown by user id. Never rejects: a name is a label. */
+  const peopleNames = async (messages: readonly SlackListedMessage[]): Promise<ReadonlyMap<string, string>> => {
+    if (Date.now() - names.at >= NAMES_TTL_MS) names = { named: new Map(), unnamed: new Set(), at: Date.now() };
+    const { named, unnamed } = names;
+    const self = deps.self();
+    const wanted = new Set(
+      messages.flatMap((message) =>
+        message.user !== undefined && message.bot_id === undefined && message.user !== self.userId
+          ? [message.user]
+          : [],
+      ),
+    );
+    const unknown = [...wanted].filter((id) => !named.has(id) && !unnamed.has(id));
+    if (scopeMissing || unknown.length === 0) return named;
+    const failures: unknown[] = [];
+    await Promise.all(
+      unknown.map(async (id) => {
+        try {
+          const name = await api.userName(id, CONTEXT_READ);
+          if (name) named.set(id, name);
+          else unnamed.add(id);
+        } catch (error) {
+          unnamed.add(id);
+          failures.push(error);
+        }
+      }),
+    );
+    const missingScope = failures.find(
+      (error) => error instanceof SlackApiError && error.slackError === "missing_scope",
+    );
+    if (missingScope) {
+      scopeMissing = true;
+      log.warn(
+        `${deps.label} users:read is not granted, so people are shown by user id — add it under the Slack app's OAuth & Permissions → Bot Token Scopes (an app \`fastagent add slack\` created gets it with the next \`dev --tunnel\` or \`deploy --run\`), then Reinstall to Workspace`,
+      );
+    } else if (failures.length > 0) {
+      log.warn(
+        `${deps.label} could not look up ${failures.length} name(s) (shown by user id for 10 minutes): ${String(failures[0])}`,
+      );
+    }
+    return named;
+  };
+
+  /** Who said it: this app, another bot, or a person (by name where `users:read` gives one). */
+  const speaker = (message: SlackListedMessage, people: ReadonlyMap<string, string>): PlaceMessage["from"] => {
     const self = deps.self();
     const own =
       (message.user !== undefined && message.user === self.userId) ||
@@ -211,7 +266,8 @@ export function createSlackPlaceHistory(deps: {
     if (message.bot_id !== undefined) {
       return { kind: "bot", label: `bot ${message.bot_profile?.name ?? message.username ?? message.bot_id}` };
     }
-    return { kind: "human", label: `user ${message.user ?? "unknown"}` };
+    const name = message.user === undefined ? undefined : people.get(message.user);
+    return { kind: "human", label: name ?? `user ${message.user ?? "unknown"}` };
   };
 
   const read = async (
@@ -241,15 +297,16 @@ export function createSlackPlaceHistory(deps: {
     const fresh = listed.filter((message) => after(message.ts));
     const earlier = page.hasMore && fresh.length === listed.length;
 
-    const messages = fresh
-      .filter(
-        (message) =>
-          message.hidden !== true &&
-          (message.subtype === undefined || SPOKEN_SUBTYPES.has(message.subtype)) &&
-          !drop(message.ts),
-      )
+    const spoken = fresh.filter(
+      (message) =>
+        message.hidden !== true &&
+        (message.subtype === undefined || SPOKEN_SUBTYPES.has(message.subtype)) &&
+        !drop(message.ts),
+    );
+    const people = await peopleNames(spoken);
+    const messages = spoken
       .map((message): PlaceMessage | undefined => {
-        const from = speaker(message);
+        const from = speaker(message, people);
         const text = slackMessageText({ text: spokenText(message), files: message.files });
         // No text, attachment or file to show: an empty line would only spend the fold's budget.
         if (text.trim() === "") return undefined;
@@ -279,17 +336,18 @@ export function createSlackPlaceHistory(deps: {
   const threads = async (room: string): Promise<string> => {
     const { channelId } = slackPlaceOf(room);
     const { messages } = await api.channelHistory(channelId, { limit: THREAD_SCAN }, CONTEXT_READ);
-    const summaries = messages.flatMap((message): ThreadSummary[] =>
-      message.ts !== undefined && (message.reply_count ?? 0) > 0
-        ? [
-            {
-              id: message.ts,
-              time: { at: Number(message.latest_reply ?? message.ts) * 1000, is: "last active" as const },
-              replies: message.reply_count as number,
-              first: { label: speaker(message).label, text: spokenText(message) },
-            },
-          ]
-        : [],
+    const roots = messages.filter(
+      (message): message is SlackListedMessage & { ts: string } =>
+        message.ts !== undefined && (message.reply_count ?? 0) > 0,
+    );
+    const people = await peopleNames(roots);
+    const summaries = roots.map(
+      (message): ThreadSummary => ({
+        id: message.ts,
+        time: { at: Number(message.latest_reply ?? message.ts) * 1000, is: "last active" },
+        replies: message.reply_count as number,
+        first: { label: speaker(message, people).label, text: spokenText(message) },
+      }),
     );
     return threadList(summaries, `this channel's newest ${THREAD_SCAN} messages`);
   };
