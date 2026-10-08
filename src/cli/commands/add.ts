@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
+import { inspectChannels } from "../../channels/discover.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
 import { DEV_SERVE_ENV } from "../../serving-command.ts";
@@ -47,6 +48,7 @@ export async function runAddChannel(
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
+  if (existsAlready && setting) await assertChannelReadsSetting(target, channelKind, setting, file);
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
@@ -172,6 +174,36 @@ function resolveIngress(
   } catch (error) {
     // A malformed value in the environment: the author's to fix, said as the rule says it.
     return failUsage((error as Error).message);
+  }
+}
+
+/**
+ * A setting only takes effect in a channel file that reads it: one scaffolded before it, or written by hand, names its
+ * factory. Writing the setting there, and preparing the app for it, would leave the channel receiving the other way
+ * with nothing failing, so the existing file is imported under the requested setting first, the way `deploy` reads
+ * a channel's shape, and must take the shape the setting names.
+ */
+async function assertChannelReadsSetting(
+  target: string,
+  kind: ChannelKind,
+  setting: Record<string, string>,
+  file: string,
+): Promise<void> {
+  Object.assign(process.env, setting); // the value this command writes anyway
+  const inspected = await inspectChannels(target).catch(failStartup);
+  const failure = inspected.failures.find((entry) => entry.file === file);
+  if (failure) failStartup(new Error(`${failure.label} failed to load (${failure.message}) — fix it and re-run`));
+  const [[name, value]] = Object.entries(setting) as [[string, string]];
+  const wanted = value === "webhook" ? "webhook" : "long-connection";
+  const shape = inspected.channels.find((channel) => channel.name === kind)?.ingress;
+  if (shape !== wanted) {
+    failStartup(
+      new Error(
+        `${relative(target, file)} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} ` +
+          `says — it names its factory instead of reading the setting, so ${name}=${value} would change nothing ` +
+          `but the app. Move the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
+      ),
+    );
   }
 }
 

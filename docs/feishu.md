@@ -78,7 +78,7 @@ the app's permissions (opening the page that requests `patch` when it is missing
 into `.secrets/.env`, and registers the deployment's Request URL once it answers `/health`. Lark sets the Request
 URL by hand when its config API answers 404. `add feishu --ingress webhook|websocket` writes `FEISHU_INGRESS` for
 both commands, and with `webhook` prepares the app at once; a later `add feishu` without the flag follows that
-setting. `deploy` refuses when `FEISHU_INGRESS` exported in its shell differs from `.secrets/.env`, since the
+setting. It refuses an existing channel file that names its factory instead of reading the setting. `deploy` refuses when `FEISHU_INGRESS` exported in its shell differs from `.secrets/.env`, since the
 deployment receives only the file. A Docker deployment without `--tunnel` has no URL to point the app at, so it
 stops instead of preparing it.
 

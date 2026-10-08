@@ -135,33 +135,32 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 /** The channel kinds `fastagent add <kind>` can scaffold. */
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
-const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
-  feishu: {
-    env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) =>
-      ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"].includes(entry.name),
+/** Where a WebSocket app's deployments receive: by webhook unless the setting pins WebSocket for them too. */
+const deploymentStep = (kind: "feishu" | "lark", pinned: boolean): string =>
+  pinned
+    ? `run \`fastagent dev\` (no tunnel needed: it connects by WebSocket); ${kind.toUpperCase()}_INGRESS=websocket is ` +
+      "set, so every deployment connects by WebSocket too: it keeps one machine running, and AgentCore refuses it"
+    : "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
+      "`deploy --run` prepares this app for it (the app-config permission, the Verification Token) and moves it to " +
+      `the deployment${kind === "lark" ? " (if Lark refuses its config API, set the Request URL in the console once)" : ""}`;
+
+const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffold => {
+  const prefix = kind.toUpperCase();
+  return {
+    env: CHANNEL_SCAFFOLDS[kind].env.filter((entry) =>
+      [`${prefix}_APP_ID`, `${prefix}_APP_SECRET`, `${prefix}_INGRESS`].includes(entry.name),
     ),
     steps: [
-      FEISHU_PERMISSION_STEP,
-      "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
+      kind === "feishu" ? FEISHU_PERMISSION_STEP : LARK_PERMISSION_STEP,
+      kind === "feishu"
+        ? "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version"
+        : "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
       "edit {channel} — routing policy",
-      "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and `deploy --run` prepares this app for it (the app-config permission, the Verification Token) and moves it to the deployment",
-      "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
-      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
+      deploymentStep(kind, pinned),
+      `the agent can push messages from scheduled turns via the scaffolded {tools}/${kind}-send.ts tool`,
+      `the agent reads the threads of the group it is asked in via the scaffolded {tools}/${kind}-threads.ts tool`,
     ],
-  },
-  lark: {
-    env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) =>
-      ["LARK_APP_ID", "LARK_APP_SECRET", "LARK_INGRESS"].includes(entry.name),
-    ),
-    steps: [
-      LARK_PERMISSION_STEP,
-      "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
-      "edit {channel} — routing policy",
-      "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and `deploy --run` prepares this app for it and moves it to the deployment (if Lark refuses its config API, set the Request URL in the console once)",
-      "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
-      "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
-    ],
-  },
+  };
 };
 
 /** The mode-specific env vars + next-step lines a scaffolded channel needs. */
@@ -172,18 +171,7 @@ export function channelSetup(
   pinned = false,
 ): { env: ChannelEnv[]; steps: string[] } {
   if (ingress !== "websocket" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
-  const setup = WEBSOCKET_SETUPS[kind];
-  if (!pinned) return setup;
-  const prefix = kind === "feishu" ? "FEISHU" : "LARK";
-  return {
-    env: setup.env,
-    steps: setup.steps.map((step) =>
-      step.startsWith("run `fastagent dev`")
-        ? `run \`fastagent dev\` (no tunnel needed: it connects by WebSocket); ${prefix}_INGRESS=websocket is set, so ` +
-          "every deployment connects by WebSocket too: it keeps one machine running, and AgentCore refuses it"
-        : step,
-    ),
-  };
+  return websocketSetup(kind, pinned);
 }
 
 /**

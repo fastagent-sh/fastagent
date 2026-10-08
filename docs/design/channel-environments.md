@@ -81,7 +81,9 @@ moves an app says so where it happens (§4.4).
   no change. A webhook module declares the Verification Token; a WebSocket one does not.
 - `add feishu|lark --ingress webhook|websocket` writes the setting for both commands; with `webhook` it also
   prepares the app at once (§4.2). Without the flag `add` writes nothing, and sets the app up for what `dev` will use
-  by the same rule, so an earlier `--ingress` is followed rather than undone.
+  by the same rule, so an earlier `--ingress` is followed rather than undone. An existing channel file must read the
+  setting: `add` imports it under the requested value first and refuses a file that names its factory (one scaffolded
+  before this, or written by hand), since the setting would change only the app.
 - `deploy` and `start` are never `dev`: both clear the mark, and the agent's bash tool does not pass it to what it
   runs, so a deploy started from inside a `dev` process plans what the box will serve. And `deploy` refuses when
   `FEISHU_INGRESS` / `LARK_INGRESS` differs between its own environment (a shell export) and `.secrets/.env`: it
@@ -131,7 +133,9 @@ console for an ingress of one's own, and `FEISHU_INGRESS=websocket`.
 - `deploy --run` ends by saying, for each app it registered, that the app now points at the deployment, that `dev` on
   this machine receives nothing from it, and the command that takes it back: `fastagent dev --tunnel` for Telegram
   and Slack, `FEISHU_INGRESS=webhook fastagent dev --tunnel` for Feishu (Lark likewise), since `dev` would otherwise
-  connect by WebSocket and point nothing back.
+  connect by WebSocket and point nothing back. A Feishu/Lark app's subscription mode is its published version's, so
+  for those the line says the move takes effect once a version in webhook mode is published: on a first deploy, `dev`
+  keeps receiving and the deployment receives nothing until then.
 - `dev --tunnel`, before it points an app at the laptop, says it is taking that channel's messages from wherever the
   app pointed, and that `deploy --run` points it back.
 
