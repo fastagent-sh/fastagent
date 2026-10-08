@@ -77,7 +77,10 @@ hold the first `add`. The first `deploy --run` then prepares the app for webhook
 the app's permissions (opening the page that requests `patch` when it is missing), captures the Verification Token
 into `.secrets/.env`, and registers the deployment's Request URL once it answers `/health`. Lark sets the Request
 URL by hand when its config API answers 404. `add feishu --ingress webhook|websocket` writes `FEISHU_INGRESS` for
-both commands, and with `webhook` prepares the app at once.
+both commands, and with `webhook` prepares the app at once; a later `add feishu` without the flag follows that
+setting. `deploy` refuses when `FEISHU_INGRESS` exported in its shell differs from `.secrets/.env`, since the
+deployment receives only the file. A Docker deployment without `--tunnel` has no URL to point the app at, so it
+stops instead of preparing it.
 
 **One app delivers to one place at a time.** The subscription mode and the Request URL belong to the app, and
 `dev` and a deployment share it (and `.secrets/.env`). Preparing the app for webhook switches it out of WebSocket

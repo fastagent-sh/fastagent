@@ -182,18 +182,23 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     expect(gate).toContain("re-run with --into-linked");
   });
 
-  it("says which apps now deliver to the deployment, and only those it registered", async () => {
+  it("says which apps now deliver to the deployment, only those it registered, each with how dev takes it back", async () => {
     const said: string[] = [];
     await registerWebhooks({
       baseUrl: "https://x",
-      channels: webhook("telegram", "slack", "feishu"),
+      channels: webhook("telegram", "slack", "feishu", "lark"),
       registrars: { telegram: async () => "failed", slack: registered, feishu: registered },
       log: (line) => said.push(line),
       retryHint: "re-run",
     });
-    expect(said.filter((line) => line.includes("now delivers to this deployment"))).toEqual([
-      "the slack, feishu app now delivers to this deployment, so `dev` on this machine receives nothing from it; " +
-        "`dev --tunnel` would take it back until the next `deploy --run`",
+    const moved = said.filter((line) => line.includes("now delivers to this deployment"));
+    expect(moved).toEqual([
+      "the slack app now delivers to this deployment, so `dev` on this machine receives nothing from it; " +
+        "`fastagent dev --tunnel` would take it back until the next `deploy --run`",
+      // `dev` connects Feishu/Lark by WebSocket unless told otherwise, and a WebSocket points nothing back.
+      "the feishu app now delivers to this deployment, so `dev` on this machine receives nothing from it; " +
+        "`FEISHU_INGRESS=webhook fastagent dev --tunnel` would take it back until the next `deploy --run`",
+      expect.stringContaining("`LARK_INGRESS=webhook fastagent dev --tunnel` would take it back"),
     ]);
   });
 });

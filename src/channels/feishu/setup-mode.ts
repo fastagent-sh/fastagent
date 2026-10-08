@@ -4,6 +4,11 @@ import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 /** Feishu/Lark app-level event subscription choice: how a channel receives, and what an app is set up for. */
 export type FeishuSubscriptionMode = "webhook" | "websocket";
 
+/** The settings {@link feishuIngressFor} reads, one per cloud: what `deploy` must read the way the box will. */
+export const FEISHU_INGRESS_SETTINGS = (["feishu", "lark"] as const).map(
+  (kind) => `${cloudFor(kind).envPrefix}_INGRESS`,
+);
+
 /**
  * How THIS process receives a Feishu/Lark channel (docs/design/channel-environments.md): `<PREFIX>_INGRESS` when the
  * environment names one, else WebSocket under `dev` (no public URL, no reviewed scope) and webhook everywhere else,

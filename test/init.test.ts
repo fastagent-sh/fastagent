@@ -486,6 +486,12 @@ describe("add: fastagent add <channel>", () => {
     const out = await cliInit(["add", "feishu", "--no-onboard", "--ingress", "webhook"], chosen);
     expect(out).not.toMatch(/Error/);
     expect(await readFile(join(chosen, ".secrets", ".env"), "utf8")).toMatch(/^FEISHU_INGRESS=webhook$/m);
+
+    // A later `add` without the flag follows the saved setting: its next steps are webhook's, not WebSocket's.
+    const again = await cliInit(["add", "feishu", "--no-onboard"], chosen);
+    expect(again).toContain("FEISHU_INGRESS=webhook is set");
+    expect(again).toContain("fastagent dev --tunnel");
+    expect(again).not.toContain("no public URL or tunnel required");
   });
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {

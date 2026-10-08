@@ -111,6 +111,29 @@ export function missingValuesGate(missing: readonly string[], valueFile: string)
 }
 
 /**
+ * The refusal for a setting that shapes what `deploy` plans (a channel's ingress, read when `deploy` imports the
+ * channel here) and differs between this process and the value file. The box imports the channel with the file's
+ * value, so planning with this one would deploy a different channel than the one planned for: an export in this shell
+ * is the usual cause.
+ */
+export function divergentSettingsGate(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv,
+  values: ReadonlyMap<string, string>,
+  valueFile: string,
+): string | undefined {
+  const differing = names.filter((name) => (env[name] ?? "") !== (values.get(name) ?? ""));
+  if (differing.length === 0) return undefined;
+  const said = differing.map(
+    (name) => `${name} is "${env[name] ?? ""}" here and "${values.get(name) ?? ""}" in ${valueFile}`,
+  );
+  return (
+    `${said.join("; ")} — the deployment receives only ${valueFile}, and this deploy would plan for a different ` +
+    `channel than the one it starts. Set it in ${valueFile} (or unset it here) and re-run`
+  );
+}
+
+/**
  * Collect a (possibly CHUNKED) carrier from the environment: `<name>` plus numbered continuations (`_2`, `_3`, …)
  * concatenated in order. A host whose env values have a length cap splits a long value this way.
  */

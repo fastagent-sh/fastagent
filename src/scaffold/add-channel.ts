@@ -168,12 +168,22 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
+  /** `<PREFIX>_INGRESS` names it, so deployments receive the same way; unset, they receive by webhook. */
+  pinned = false,
 ): { env: ChannelEnv[]; steps: string[] } {
-  const setup =
-    ingress === "websocket" && (kind === "feishu" || kind === "lark")
-      ? WEBSOCKET_SETUPS[kind]
-      : CHANNEL_SCAFFOLDS[kind];
-  return { env: setup.env, steps: setup.steps };
+  if (ingress !== "websocket" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
+  const setup = WEBSOCKET_SETUPS[kind];
+  if (!pinned) return setup;
+  const prefix = kind === "feishu" ? "FEISHU" : "LARK";
+  return {
+    env: setup.env,
+    steps: setup.steps.map((step) =>
+      step.startsWith("run `fastagent dev`")
+        ? `run \`fastagent dev\` (no tunnel needed: it connects by WebSocket); ${prefix}_INGRESS=websocket is set, so ` +
+          "every deployment connects by WebSocket too: it keeps one machine running, and AgentCore refuses it"
+        : step,
+    ),
+  };
 }
 
 /**

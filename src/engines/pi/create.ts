@@ -29,6 +29,7 @@ import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 import type { ResolvedContext } from "../../contexts/resolve.ts";
+import { unmarkDevServe } from "../../serving-command.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
@@ -45,6 +46,8 @@ export function piAllCodingTools(cwd: string): MountedTool[] {
     bash: {
       spawnHook(context) {
         const { env } = context;
+        // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
+        unmarkDevServe(env);
         const id = env.PI_SESSION_ID;
         delete env.PI_SESSION_ID_ENCODING;
         // OS environment strings cannot preserve NUL or unpaired UTF-16 surrogates.

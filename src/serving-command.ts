@@ -9,6 +9,11 @@ export function markDevServe(env: NodeJS.ProcessEnv = process.env): void {
   env[DEV_SERVE_ENV] = "1";
 }
 
+/** For a command that is never `dev` (`start`, `deploy`), run from a shell or a tool that a `dev` process spawned. */
+export function unmarkDevServe(env: NodeJS.ProcessEnv = process.env): void {
+  delete env[DEV_SERVE_ENV];
+}
+
 export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[DEV_SERVE_ENV] === "1";
 }

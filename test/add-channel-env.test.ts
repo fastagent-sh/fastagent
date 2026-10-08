@@ -47,6 +47,10 @@ describe("channel setup guidance", () => {
     expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"]);
     expect(setup.env.find((entry) => entry.name === "FEISHU_INGRESS")?.required).toBe(false);
     expect(setup.steps.join("\n")).toContain("`deploy --run` prepares this app for it");
+    // Named in the environment, WebSocket is every deployment's too: nothing is prepared, nothing moves.
+    const pinned = channelSetup("feishu", "websocket", true).steps.join("\n");
+    expect(pinned).toContain("FEISHU_INGRESS=websocket is set, so every deployment connects by WebSocket too");
+    expect(pinned).not.toContain("prepares this app");
 
     // One channel file, whichever way it receives: the setting picks the factory when the file is imported.
     const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));

@@ -80,7 +80,12 @@ moves an app says so where it happens (§4.4).
   every reader that already read the shape (the secrets gate, `deploy`'s preflight, residency, registration) needs
   no change. A webhook module declares the Verification Token; a WebSocket one does not.
 - `add feishu|lark --ingress webhook|websocket` writes the setting for both commands; with `webhook` it also
-  prepares the app at once (§4.2). Without the flag `add` writes nothing.
+  prepares the app at once (§4.2). Without the flag `add` writes nothing, and sets the app up for what `dev` will use
+  by the same rule, so an earlier `--ingress` is followed rather than undone.
+- `deploy` and `start` are never `dev`: both clear the mark, and the agent's bash tool does not pass it to what it
+  runs, so a deploy started from inside a `dev` process plans what the box will serve. And `deploy` refuses when
+  `FEISHU_INGRESS` / `LARK_INGRESS` differs between its own environment (a shell export) and `.secrets/.env`: it
+  imports the channel here, the box imports it with the file's value, and the two must be the same channel.
 
 *Rejected: `deploy` setting the value on the box.* Then the default lives in a second place, and a box started
 any other way (a hand-written Dockerfile, `fastagent start` on a server) would fall back to WebSocket. The command
@@ -93,8 +98,11 @@ webhook too, without anyone choosing.
 ### 4.2 `deploy` prepares the app for webhook
 
 When the deployment's ingress is webhook (the value file does not name `websocket`) and the value file has no
-Verification Token, `deploy --run` prepares the app before it builds anything (`prepareWebhookApps`), with the
-machinery `add feishu` already has:
+Verification Token, `deploy --run` prepares the app (`prepareWebhookApps`), with the machinery `add feishu` already
+has. Preparing is the deploy's first change to anything, so it comes after every refusal that touches nothing: the
+pre-flight, and every value the deployment lacks other than the tokens preparing captures. The pre-flight runs again
+afterwards, so what preparing wrote is what travels. Checks a host makes of its own CLI still come after; a re-run
+then finds the token and prepares nothing again.
 
 1. **`patch` scope.** `checkAgentScopes` with the webhook scopes: if `application:application:patch` is missing, it
    opens the console page that requests it; the token then cannot be captured, and the deploy's gate on declared
@@ -111,17 +119,18 @@ preparation: they are webhook already.
 ### 4.3 Docker
 
 A webhook needs a public URL. `deploy docker --tunnel` provides one that changes when the tunnel restarts (re-run
-`--run` to point the app again); a stable one is the operator's own ingress. Without either, `deploy docker` says the
-Feishu/Lark channel cannot receive and names both options.
+`--run` to point the app again); a stable one is the operator's own ingress. Without either, `deploy docker --run`
+does not prepare the app (nothing could point it anywhere) and stops, naming `--tunnel`, copying the token from the
+console for an ingress of one's own, and `FEISHU_INGRESS=websocket`.
 
 ### 4.4 Moving an app is said where it happens
 
-- `deploy --run` ends by saying the app now points at the deployment, and that `dev` on this machine will not receive
-  that channel's messages (Feishu/Lark: the app is in webhook mode; `dev --tunnel` would take it back).
+- `deploy --run` ends by saying, for each app it registered, that the app now points at the deployment, that `dev` on
+  this machine receives nothing from it, and the command that takes it back: `fastagent dev --tunnel` for Telegram
+  and Slack, `FEISHU_INGRESS=webhook fastagent dev --tunnel` for Feishu (Lark likewise), since `dev` would otherwise
+  connect by WebSocket and point nothing back.
 - `dev --tunnel`, before it points an app at the laptop, says it is taking that channel's messages from wherever the
   app pointed, and that `deploy --run` points it back.
-- Preparing a Feishu/Lark app for webhook says the app is in webhook mode now, so `dev` on this machine receives
-  nothing from it.
 
 ## 5. What changes for the author
 

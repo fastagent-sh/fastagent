@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
-import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
+import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
+import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { dotEnvPath, enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
@@ -45,7 +46,7 @@ export async function runAddChannel(
   // An existing channel file is authored glue: kept, never rewritten.
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
-  const { ingress, setting } = resolveIngress(channelKind, opts.ingress);
+  const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
@@ -74,7 +75,7 @@ export async function runAddChannel(
   } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
     created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
   }
-  const setup = channelSetup(channelKind, ingress);
+  const setup = channelSetup(channelKind, ingress, pinned);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
@@ -148,21 +149,30 @@ export async function runAddChannel(
 }
 
 /**
- * What `add` sets the app up for, and whether it writes the choice down. Unasked, the app is set up for `dev`'s
- * WebSocket (no public URL, no reviewed `patch` scope) and nothing is written: the channel's own rule then gives `dev`
- * WebSocket and every deployment webhook, which `deploy --run` prepares the app for. `--ingress` is the
- * `<PREFIX>_INGRESS` setting itself, for both commands.
+ * What `add` sets the app up for, and whether it writes the choice down. `--ingress` is the `<PREFIX>_INGRESS`
+ * setting itself, written for both commands. Unasked, the app is set up for what `dev` will use, by the channel's own
+ * rule: a setting already in the environment (an earlier `--ingress`), else WebSocket (no public URL, no reviewed
+ * `patch` scope), which leaves every deployment on webhook for `deploy --run` to prepare.
  */
 function resolveIngress(
   kind: ChannelKind,
   raw: string | undefined,
-): { ingress: FeishuSubscriptionMode; setting?: Record<string, string> } {
+): { ingress: FeishuSubscriptionMode; pinned: boolean; setting?: Record<string, string> } {
   if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
     failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
   }
-  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook" };
-  if (raw === undefined) return { ingress: "websocket" };
-  return { ingress: raw, setting: { [`${cloudFor(kind).envPrefix}_INGRESS`]: raw } };
+  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook", pinned: false };
+  const name = `${cloudFor(kind).envPrefix}_INGRESS`;
+  if (raw !== undefined) return { ingress: raw, pinned: true, setting: { [name]: raw } };
+  try {
+    return {
+      ingress: feishuIngressFor(kind, { ...process.env, [DEV_SERVE_ENV]: "1" }),
+      pinned: Boolean(process.env[name]?.trim()),
+    };
+  } catch (error) {
+    // A malformed value in the environment: the author's to fix, said as the rule says it.
+    return failUsage((error as Error).message);
+  }
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */
