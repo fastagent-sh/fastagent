@@ -35,7 +35,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createThreadParticipants } from "../kit/thread-participants.ts";
-import { FEISHU_AGENT_SCOPES, scopeSatisfied } from "./setup-mode.ts";
+import { FEISHU_AGENT_SCOPES, type FeishuSubscriptionMode, feishuIngressFor, scopeSatisfied } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -168,6 +168,11 @@ export type FeishuWebSocketChannelOptions = FeishuChannelBaseOptions & {
 /** Build the canonical Feishu Request-URL webhook channel. */
 export function feishuChannel(opts: FeishuChannelOptions): ChannelModule {
   return buildFeishuChannel(FEISHU_CLOUD, opts, feishuChannel.name);
+}
+
+/** How this process receives the Feishu channel: `FEISHU_INGRESS`, else WebSocket under `dev` and webhook otherwise. */
+export function feishuIngress(): FeishuSubscriptionMode {
+  return feishuIngressFor("feishu");
 }
 
 /** Build the canonical Feishu WebSocket long-connection channel. */
@@ -711,7 +716,13 @@ export function buildFeishuChannel(
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return (ctx) => {
     if (!opts.verificationToken) {
-      throw new Error(`${factoryName} requires a non-empty verificationToken (console → Events & Callbacks)`);
+      // The scaffolded file reaches this under `start` with nothing set, so the error names both ways out.
+      throw new Error(
+        `${factoryName} receives by webhook and needs a non-empty verificationToken: \`fastagent deploy <host> --run\` ` +
+          `or \`fastagent add ${profile.kind} --ingress webhook\` captures ${profile.envPrefix}_VERIFICATION_TOKEN ` +
+          `(console → Events & Callbacks has it too), or set ${profile.envPrefix}_INGRESS=websocket to receive by ` +
+          `WebSocket instead`,
+      );
     }
     return createFeishuWebhookRoutes(profile, opts, createRuntime(ctx));
   };

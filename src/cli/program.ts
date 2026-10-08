@@ -252,7 +252,9 @@ const start: CommandSpec = {
 
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
-  description: "Feishu/Lark ingress: websocket (default) or webhook (AgentCore, scale-to-zero)",
+  description:
+    "Feishu/Lark: write FEISHU_INGRESS (LARK_INGRESS) for dev and deployments alike, websocket or webhook; " +
+    "webhook also prepares the app now (unset: dev connects by websocket, start and deployments receive by webhook)",
 };
 const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
@@ -315,8 +317,8 @@ const add: CommandSpec = {
     channelSub(
       "feishu",
       "scaffold the Feishu channel AND create/configure the platform app",
-      "Choose WebSocket or webhook, scaffold channels/feishu.ts, and create/configure the Feishu app " +
-        "through scan-to-create, writing the matching credentials to .env.",
+      "Scaffold channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
+        "credentials to .env. The app is set up for dev's WebSocket; deploy --run prepares it for webhook.",
       "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
         "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
         "The app asks for the scopes that let the agent hear its group chats; any your tenant withholds are named.",
@@ -324,8 +326,8 @@ const add: CommandSpec = {
     channelSub(
       "lark",
       "scaffold the Lark (international) channel with guided credential setup",
-      "Choose WebSocket or webhook, scaffold channels/lark.ts, and guide credential setup against the " +
-        "international developer console.",
+      "Scaffold channels/lark.ts and guide credential setup against the international developer console. " +
+        "The app is set up for dev's WebSocket; deploy --run prepares it for webhook.",
       "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
         "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
         "back to explicit manual steps on the international config-route 404.",

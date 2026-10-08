@@ -605,13 +605,17 @@ connection protocol is not a stable hand-authored surface. What is platform-diff
   last answer). The send tool shares the plain client, so what the agent posts itself stays in the
   discussion — the gap a buffer could never fill, since a bot never receives its own messages. A failed
   read costs the discussion, never the turn.
-- **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
-  writes the corresponding factory into the channel module. WebSocket needs only App ID/Secret and
-  skips token capture, tunnel, Request URL registration, and platform crypto; the official SDK
-  authenticates and reconnects the connection and converts handler throws into 500 ACK frames. Webhook
-  retains the application-v7 PATCH/challenge flow, Verification Token, optional Encrypt Key, and Lark's
-  config-route-404 manual fallback. Subscription mode is app-level and mutually exclusive: changing the
-  factory alone does not migrate the app.
+- **The ingress is a setting, and the serving command supplies its default**
+  ([channel-environments.md](channel-environments.md)). The scaffolded channel module picks its factory at import
+  with `feishuIngress()`: `FEISHU_INGRESS` when set, else WebSocket under `dev` (which marks its process
+  `FASTAGENT_DEV`) and webhook everywhere else. Every reader of the module's shape (the secrets gate, `deploy`'s
+  preflight, residency, registration) therefore gets the same answer, and `deploy` imports it as `start` will on the
+  box. WebSocket needs only App ID/Secret and skips token capture, tunnel, Request URL registration, and platform
+  crypto; the official SDK authenticates and reconnects the connection and converts handler throws into 500 ACK
+  frames. Webhook keeps the application-v7 PATCH/challenge flow, Verification Token, optional Encrypt Key, and
+  Lark's config-route-404 manual fallback; `deploy --run` runs that preparation before it builds. Subscription mode
+  is app-level and mutually exclusive, and `dev` and a deployment share the app, so one app delivers to one place at
+  a time.
 - **A WebSocket adapter is a long-connection channel and therefore always-on.** Fly generates
   `min_machines_running=1`, Railway forbids App Sleeping, webhook registration is skipped, and only App
   ID/Secret travel as channel secrets. Event callbacks must still finish within three seconds, so the

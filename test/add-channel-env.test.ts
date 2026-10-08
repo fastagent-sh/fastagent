@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendChannelDotEnv,
+  appendChannelEnv,
   channelSetup,
   scaffoldChannel,
   scaffoldCompanionTools,
@@ -42,33 +43,43 @@ describe("channel setup guidance", () => {
     expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
   });
 
-  it("a kind with no long-connection template says so, instead of an ENOENT for a path nobody named", async () => {
-    // The CLI's resolveIngress only asks for websocket on feishu/lark, but that is the caller's
-    // guarantee, not this function's: `scaffoldChannel` is exported and a new kind may arrive first.
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-missing-"));
-    await expect(scaffoldChannel(dir, "telegram", { ingress: "websocket" })).rejects.toThrow(
-      /telegram has no websocket scaffold/,
-    );
-    // The "available" list names CHANNEL templates only — a companion tool in the same bundle is not
-    // an ingress anyone can ask for, and offering it sends the reader after the wrong file.
-    await expect(scaffoldChannel(dir, "telegram", { ingress: "websocket" })).rejects.toThrow(
-      /available: channel\.ts$/m,
-    );
-  });
-
-  it("WebSocket setup needs only App ID/Secret and writes the WebSocket factory into the scaffold", async () => {
+  it("an app set up for dev's WebSocket needs only App ID/Secret now; deploy prepares it for webhook later", async () => {
     const setup = channelSetup("feishu", "websocket");
-    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-    expect(setup.steps.join("\n")).toContain("without --tunnel");
+    expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"]);
+    expect(setup.env.find((entry) => entry.name === "FEISHU_INGRESS")?.required).toBe(false);
+    expect(setup.steps.join("\n")).toContain("`deploy --run` prepares this app for it");
+    // Named in the environment, WebSocket is every deployment's too: nothing is prepared, nothing moves.
+    const pinned = channelSetup("feishu", "websocket", true).steps.join("\n");
+    expect(pinned).toContain("FEISHU_INGRESS=websocket is set, so every deployment connects by WebSocket too");
+    expect(pinned).not.toContain("prepares this app");
 
-    const dir = await mkdtemp(join(tmpdir(), "fa-ws-scaffold-"));
-    await scaffoldChannel(dir, "feishu", { ingress: "websocket" });
+    // One channel file, whichever way it receives: the setting picks the factory when the file is imported.
+    const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));
+    await scaffoldChannel(dir, "feishu");
     const source = await readFile(join(dir, "channels", "feishu.ts"), "utf8");
-    expect(source).toContain("feishuWebSocketChannel");
-    expect(source).not.toContain("feishuChannel(");
-    expect(source).not.toContain("ingress:");
-    expect(source).not.toContain("FEISHU_VERIFICATION_TOKEN");
-    expect(source).not.toContain("FEISHU_ENCRYPT_KEY");
+    expect(source).toContain('feishuIngress() === "webhook"');
+    expect(source).toContain("feishuWebSocketChannel(");
+    expect(source).toContain("feishuChannel(");
+  });
+});
+
+describe("appendChannelEnv", () => {
+  it("lists every var the channel can declare, so a deployment's values can be filled from it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-example-"));
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env.example"), "# agent\n");
+    expect(await appendChannelEnv(dir, "feishu")).toBe(true);
+    const example = await readFile(join(dir, ".secrets", ".env.example"), "utf8");
+    for (const name of [
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_ENCRYPT_KEY",
+      "FEISHU_INGRESS",
+    ]) {
+      expect(example).toContain(`# ${name}=`);
+    }
+    expect(example).toMatch(/# webhook only \(`start`, every deployment\).*\n# FEISHU_VERIFICATION_TOKEN=/);
   });
 });
 

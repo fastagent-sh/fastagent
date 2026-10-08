@@ -6,6 +6,7 @@
  * which of those must have a value, so a missing one stops a deploy before its first side effect instead of a boot.
  */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
+import { DEV_SERVE_ENV } from "../serving-command.ts";
 
 /** Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none? */
 export function isEnvKey(source: string | undefined): source is string {
@@ -29,6 +30,7 @@ const DEPLOY_OWNED = new Set([
   "FASTAGENT_INGRESS_SECRET",
   "FASTAGENT_WAKE_SECRET",
   "FASTAGENT_DEV_WORKER",
+  DEV_SERVE_ENV,
 ]);
 
 /** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */
@@ -105,6 +107,29 @@ export function missingValuesGate(missing: readonly string[], valueFile: string)
   return (
     `no value for: ${missing.join(", ")} — the deployed environment is declared by ${valueFile}, and this deploy ` +
     `reads only that file (exporting the variable here does not reach the deployment). Add them there and re-run`
+  );
+}
+
+/**
+ * The refusal for a setting that shapes what `deploy` plans (a channel's ingress, read when `deploy` imports the
+ * channel here) and differs between this process and the value file. The box imports the channel with the file's
+ * value, so planning with this one would deploy a different channel than the one planned for: an export in this shell
+ * is the usual cause.
+ */
+export function divergentSettingsGate(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv,
+  values: ReadonlyMap<string, string>,
+  valueFile: string,
+): string | undefined {
+  const differing = names.filter((name) => (env[name] ?? "") !== (values.get(name) ?? ""));
+  if (differing.length === 0) return undefined;
+  const said = differing.map(
+    (name) => `${name} is "${env[name] ?? ""}" here and "${values.get(name) ?? ""}" in ${valueFile}`,
+  );
+  return (
+    `${said.join("; ")} — the deployment receives only ${valueFile}, and this deploy would plan for a different ` +
+    `channel than the one it starts. Set it in ${valueFile} (or unset it here) and re-run`
   );
 }
 

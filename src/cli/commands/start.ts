@@ -17,6 +17,7 @@ import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../s
 import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
 import { failStartup } from "../fail.ts";
+import { unmarkDevServe } from "../../serving-command.ts";
 import {
   announceControl,
   assertTunnelBindable,
@@ -50,6 +51,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     failStartup(error);
   }
   setLogLevel("info");
+  unmarkDevServe(); // before any channel file is imported
   if (isAgentcoreRuntime()) {
     // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
     const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;

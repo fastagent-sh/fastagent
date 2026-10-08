@@ -35,12 +35,8 @@ From an agent directory, credentials land in `.secrets/.env` — excluded by the
 commands refuse to write platform credentials into a committable file:
 
 ```bash
-fastagent add feishu   # interactive ingress choice + scan-to-create
-fastagent add lark     # interactive ingress choice + guided console setup
-
-# Non-interactive / explicit:
-fastagent add feishu --ingress websocket
-fastagent add lark --ingress webhook
+fastagent add feishu   # scan-to-create
+fastagent add lark     # guided console setup
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
@@ -57,42 +53,49 @@ then checks what the app actually holds and names any scope your tenant withheld
 What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
 credentials.
 
-WebSocket is the default ingress. Choose webhook (`--ingress webhook`) when you plan to deploy to AgentCore,
-which has no resident process, or to let a Fly/Railway machine scale to zero. An agent with a schedule keeps its
-machine up anyway (see [deploy](deploy.md)), so WebSocket costs it nothing more. Choose at `add` time: `deploy`
-does not switch it (`deploy agentcore --run` refuses a WebSocket channel), and switching later is a migration
-in which a WebSocket app also lacks the app-config permission that automates the webhook steps. The choice is persisted in
-`channels/<kind>.ts` by its factory (`feishuChannel`/`larkChannel` for webhook, or the corresponding
-`*WebSocketChannel` factory):
+### How the channel receives
 
-| | WebSocket (default) | Webhook |
+One channel file serves both ways of receiving, and `FEISHU_INGRESS` (`LARK_INGRESS`) chooses between them when it
+is imported. Unset, the command decides ([design note](design/channel-environments.md)):
+
+| | `fastagent dev` | `fastagent start`, every deployment |
+|---|---|---|
+| Unset | WebSocket long connection | webhook at `POST /feishu` |
+| `FEISHU_INGRESS=websocket` | WebSocket | WebSocket |
+| `FEISHU_INGRESS=webhook` | webhook (`dev --tunnel` gives it a public URL) | webhook |
+
+| | WebSocket | Webhook |
 |---|---|---|
 | Public URL / `--tunnel` | Not needed | Required |
 | Runtime credentials | App ID + Secret | App ID + Secret + Verification Token; Encrypt Key optional |
 | Deploy targets | local, Docker, Fly, Railway — one always-on process | all, AgentCore included |
 | Scale-to-zero / App Sleeping | Not supported; keep one process running | Supported when no other always-on producer exists |
-| App-config permission (`application:application:patch`) | Not requested | Requested: it registers the Request URL on every `dev --tunnel` and `deploy --run`; a tenant that reviews it holds the new app in review |
-| Platform configuration | Long connection + publish | Webhook mode + Request URL + publish |
+| App-config permission (`application:application:patch`) | Not needed | Needed to register the Request URL and capture the Verification Token; a tenant that reviews it holds the app's version in review once |
 
-This is an **app-level onboarding choice**, not a runtime failover switch. The platform delivers through
-one subscription mode at a time. To migrate later, change the channel factory and the console mode
-together, then publish a version; changing only one side makes the bot deaf.
+`add feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
+hold the first `add`. The first `deploy --run` then prepares the app for webhook before it builds anything: it checks
+the app's permissions (opening the page that requests `patch` when it is missing), captures the Verification Token
+into `.secrets/.env`, and registers the deployment's Request URL once it answers `/health`. Lark sets the Request
+URL by hand when its config API answers 404. `add feishu --ingress webhook|websocket` writes `FEISHU_INGRESS` for
+both commands, and with `webhook` prepares the app at once; a later `add feishu` without the flag follows that
+setting. It refuses an existing channel file that names its factory instead of reading the setting. `deploy` refuses when `FEISHU_INGRESS` exported in its shell differs from `.secrets/.env`, since the
+deployment receives only the file. A Docker deployment without `--tunnel` has no URL to point the app at, so it
+stops instead of preparing it.
 
-**Use one app per environment** (your laptop's `dev`, each deployment). Two processes on one app take each
-other's messages, in either mode: two WebSocket clients split the events between them rather than each
-receiving all of them, and a webhook `dev --tunnel` re-registers the Request URL to itself, so the deployment
-stops receiving any. `dev` and `deploy` read the same `.secrets/.env` unless `FASTAGENT_SECRETS_DIR` points one
-of them at another directory; put the second app's App ID and Secret there. Both apps use the ingress
-`channels/<kind>.ts` names, so a WebSocket app on your laptop and a webhook app in the cloud cannot yet share
-one agent directory.
+**One app delivers to one place at a time.** The subscription mode and the Request URL belong to the app, and
+`dev` and a deployment share it (and `.secrets/.env`). Preparing the app for webhook switches it out of WebSocket
+mode, so after a deploy `dev` connects and receives nothing; `FEISHU_INGRESS=webhook fastagent dev --tunnel` takes
+the app back, and the deployment receives nothing until the next `deploy --run`. Both commands say so when they move
+it. Two WebSocket clients on one app split its events between them. Separate apps per environment are not supported
+yet.
 
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work.
-Within either cloud, ingress determines the remaining work. WebSocket's runtime credential set stops at
-the validated/persisted App ID/Secret pair; onboarding continues through the permission check and
-opens Events & Callbacks so the user can select long connection and publish.
-Webhook continues through the existing temporary-tunnel challenge to capture the Verification Token and
-configure the Request URL. Onboarding then reads the App's scopes and, for any that is missing, opens the
+Within either cloud, the ingress being prepared determines the remaining work. For WebSocket (what `add` prepares),
+the runtime credential set stops at the validated/persisted App ID/Secret pair; onboarding continues through the
+permission check and opens Events & Callbacks so the user can select long connection and publish.
+For webhook (`deploy --run`, or `add --ingress webhook`), it continues through the temporary-tunnel challenge to
+capture the Verification Token and configure the Request URL. Onboarding then reads the App's scopes and, for any that is missing, opens the
 console page that requests it, pre-filled. Lark's missing config API falls back to explicit manual
 Token/mode/URL steps. Re-running a partial setup reuses the complete App ID/Secret pair rather
 than creating or attaching a different app.
@@ -112,12 +115,11 @@ It also appends the required env vars to `.env.example` when possible.
 device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
-pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. A webhook app also gets
-`application:application:patch`, which the webhook bootstrap registers the Request URL through; when the app is
-not granted it (a tenant that reviews it, or an app born WebSocket), onboarding names it and leaves the
-Verification Token and Request URL to the console instead of trying. A WebSocket app
-does not: a tenant that reviews that scope holds the app's whole first version in review, for a scope WebSocket
-never uses. A tenant may withhold any requested scope; onboarding names what it withheld. The CLI immediately persists App ID/Secret to
+pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. It does not ask for
+`application:application:patch`: a tenant that reviews that scope holds the app's whole first version in review,
+for a scope `dev`'s WebSocket never uses. Preparing the app for webhook (the first `deploy --run`) asks for it then;
+when the app is not granted it, the preparation names it and leaves the Verification Token and Request URL to the
+console instead of trying. A tenant may withhold any requested scope; onboarding names what it withheld. The CLI immediately persists App ID/Secret to
 `.secrets/.env` before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
@@ -144,9 +146,10 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
-3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
-   - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
-   - **Webhook:** choose webhook, copy the Verification Token, and optionally set an Encrypt Key.
+3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose the mode the app serves now:
+   - **WebSocket** (`dev`): choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
+   - **Webhook** (a deployment): choose webhook, copy the Verification Token, and optionally set an Encrypt Key;
+     for fastagent to register the Request URL, also grant `application:application:patch`.
 4. Put the matching credentials in the agent's `.secrets/.env`:
 
 ```bash
@@ -159,47 +162,54 @@ FEISHU_VERIFICATION_TOKEN=...
 FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
-5. For webhook, `fastagent dev --tunnel` and `deploy … --run` register the Request URL. Feishu's API
-   path needs `application:application:patch`; Lark may require manual mode/URL setup when its config API
-   returns 404. WebSocket runs with ordinary `fastagent dev` and makes no registration call.
+5. For webhook, `deploy … --run` (and `FEISHU_INGRESS=webhook fastagent dev --tunnel`) register the Request URL.
+   Feishu's API path needs `application:application:patch`; Lark may require manual mode/URL setup when its config
+   API returns 404. WebSocket runs with ordinary `fastagent dev` and makes no registration call.
 6. **Create a version and publish** the app, then add the bot to a chat.
 
 ## Scaffolded channel
 
-A minimal channel module looks like this (`channels/feishu.ts`; the lark kind mirrors it with `larkChannel` from `@fastagent-sh/fastagent/lark` and `LARK_*` vars):
+The scaffold (`channels/feishu.ts`; the lark kind mirrors it with `larkChannel`, `larkIngress` and
+`larkWebSocketChannel` from `@fastagent-sh/fastagent/lark`, and `LARK_*` vars) picks its factory with
+`feishuIngress()`, so one file serves `dev`'s WebSocket and a deployment's webhook:
 
 ```ts
-import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
+import {
+  type FeishuChannelOptions,
+  feishuChannel,
+  feishuIngress,
+  feishuWebSocketChannel,
+} from "@fastagent-sh/fastagent/feishu";
 import { defineChannel } from "@fastagent-sh/fastagent";
 
-export default defineChannel({
-  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
-  channel: (secrets) =>
-    feishuChannel({
-      appId: secrets.FEISHU_APP_ID,
-      appSecret: secrets.FEISHU_APP_SECRET,
-      verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
-      encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-      onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
-    }),
-});
+const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
+  onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
+};
+
+export default feishuIngress() === "webhook"
+  ? defineChannel({
+      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+      channel: (secrets) =>
+        feishuChannel({
+          appId: secrets.FEISHU_APP_ID,
+          appSecret: secrets.FEISHU_APP_SECRET,
+          verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
+          encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
+          ...policy,
+        }),
+    })
+  : defineChannel({
+      secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+      channel: (secrets) =>
+        feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
+    });
 ```
 
-The WebSocket form uses its transport-specific factory and has no webhook-only options:
-
-```ts
-import { feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
-import { defineChannel } from "@fastagent-sh/fastagent";
-
-export default defineChannel({
-  secrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
-  channel: (secrets) =>
-    feishuWebSocketChannel({
-      appId: secrets.FEISHU_APP_ID,
-      appSecret: secrets.FEISHU_APP_SECRET,
-    }),
-});
-```
+The webhook form declares the Verification Token, the WebSocket form does not, so `dev` never asks for a token
+it does not use. `deploy` imports the file the way `start` will on the box (not `dev`, with the same `.secrets/.env`),
+so it plans for the ingress the deployment serves. An agent scaffolded by an earlier release names one factory
+in its channel file and keeps it; re-scaffold the file (move it aside, then `add feishu --no-onboard`) to get this
+one.
 
 Credentials are checked when serving starts, before the host reports ready. Deployment planning can
 therefore import the module and inspect its function/object shape before secrets have been provisioned.
@@ -439,8 +449,9 @@ picks up the current tool.
 
 ## Limits
 
-- One app uses one subscription mode. FastAgent cannot fail over from WebSocket to webhook at runtime;
-  changing mode requires coordinated channel-source + console changes and a published app version.
+- One app uses one subscription mode, and `dev` and a deployment share the app (see
+  [How the channel receives](#how-the-channel-receives)). A mode change made by hand in the console takes effect
+  only after a published version.
 - WebSocket requires one continuously running process. Fly disables scale-to-zero and Railway forbids
   App Sleeping. Multiple clients for one app are cluster/load-balanced, not broadcast.
 - The official SDK currently carries event subscriptions over long connection; callback subscriptions

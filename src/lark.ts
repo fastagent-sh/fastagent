@@ -1,6 +1,7 @@
 /** `@fastagent-sh/fastagent/lark` — the Lark-international compatibility surface over the canonical Feishu engine. */
 export {
   larkChannel,
+  larkIngress,
   larkWebSocketChannel,
   defaultLarkRoute,
   larkEnvelope,

@@ -3,11 +3,12 @@
  * slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
-import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
+import { inspectChannels } from "../../channels/discover.ts";
+import { cloudFor } from "../../channels/feishu/cloud.ts";
+import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
+import { DEV_SERVE_ENV } from "../../serving-command.ts";
 import { dotEnvPath, enterAgentEnv } from "../../env.ts";
 import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
@@ -46,19 +47,20 @@ export async function runAddChannel(
   // An existing channel file is authored glue: kept, never rewritten.
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
-  const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
+  const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
+  if (existsAlready && setting) await assertChannelReadsSetting(target, channelKind, setting, file);
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
     await assertChannelReady(target).catch(failStartup);
-    await scaffoldChannel(target, channelKind, { ingress }).catch(failStartup);
+    await scaffoldChannel(target, channelKind).catch(failStartup);
     console.error(`[fastagent] created ${relative(target, file)}`);
   }
   // Companion tools are the package's, not authored glue.
   for (const tool of await scaffoldCompanionTools(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] wrote ${relative(target, tool)}`);
   }
-  if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
+  if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
   }
   // Stateful app onboarding is re-runnable after the scaffold boundary.
@@ -75,7 +77,7 @@ export async function runAddChannel(
   } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
     created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
   }
-  const setup = channelSetup(channelKind, ingress);
+  const setup = channelSetup(channelKind, ingress, pinned);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
@@ -94,8 +96,8 @@ export async function runAddChannel(
   const dotEnv = await appendChannelDotEnv(
     target,
     channelKind,
-    { ...generated, ...created },
-    Object.keys(created ?? {}),
+    { ...generated, ...created, ...setting },
+    [...Object.keys(created ?? {}), ...Object.keys(setting ?? {})],
     ingress,
   ).catch(failStartup);
   if (dotEnv.unprotectedSecretsDir) {
@@ -149,75 +151,60 @@ export async function runAddChannel(
 }
 
 /**
- * Feishu/Lark ingress when the author did not choose one. WebSocket: no public URL or tunnel, and no
- * `application:application:patch`, which some tenants review and which then holds a new app in review. It runs on
- * every host but AgentCore, which has no resident process; webhook is for AgentCore and for scale-to-zero.
+ * What `add` sets the app up for, and whether it writes the choice down. `--ingress` is the `<PREFIX>_INGRESS`
+ * setting itself, written for both commands. Unasked, the app is set up for what `dev` will use, by the channel's own
+ * rule: a setting already in the environment (an earlier `--ingress`), else WebSocket (no public URL, no reviewed
+ * `patch` scope), which leaves every deployment on webhook for `deploy --run` to prepare.
  */
-const DEFAULT_FEISHU_INGRESS: FeishuSubscriptionMode = "websocket";
-
-async function resolveIngress(
+function resolveIngress(
   kind: ChannelKind,
-  file: string,
-  existsAlready: boolean,
   raw: string | undefined,
-): Promise<FeishuSubscriptionMode> {
+): { ingress: FeishuSubscriptionMode; pinned: boolean; setting?: Record<string, string> } {
   if (raw !== undefined && raw !== "webhook" && raw !== "websocket") {
     failUsage(`--ingress must be "webhook" or "websocket", got "${raw}"`);
   }
-  const requested = raw as FeishuSubscriptionMode | undefined;
-  if (kind !== "feishu" && kind !== "lark") return "webhook";
+  if (kind !== "feishu" && kind !== "lark") return { ingress: "webhook", pinned: false };
+  const name = `${cloudFor(kind).envPrefix}_INGRESS`;
+  if (raw !== undefined) return { ingress: raw, pinned: true, setting: { [name]: raw } };
+  try {
+    return {
+      ingress: feishuIngressFor(kind, { ...process.env, [DEV_SERVE_ENV]: "1" }),
+      pinned: Boolean(process.env[name]?.trim()),
+    };
+  } catch (error) {
+    // A malformed value in the environment: the author's to fix, said as the rule says it.
+    return failUsage((error as Error).message);
+  }
+}
 
-  if (existsAlready) {
-    const source = await readFile(file, "utf8").catch(failStartup);
-    const factory = source.match(/\b(?:feishu|lark)(WebSocket)?Channel\s*\(/);
-    const existing: FeishuSubscriptionMode | undefined = factory
-      ? factory[1] === "WebSocket"
-        ? "websocket"
-        : "webhook"
-      : undefined;
-    if (!existing) {
-      if (!requested) {
-        failUsage(
-          `${file} uses an unrecognized channel factory — re-run with --ingress webhook|websocket to confirm its mode`,
-        );
-      }
-      return requested;
-    }
-    if (requested && requested !== existing) {
-      failStartup(
-        new Error(
-          `${file} already selects ${existing} delivery — changing mode is a migration; edit the factory and platform subscription together`,
-        ),
-      );
-    }
-    return existing;
-  }
-  if (requested) return requested;
-  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    console.error(
-      `[fastagent] no interactive terminal — defaulting ${kind} ingress to ${DEFAULT_FEISHU_INGRESS} ` +
-        "(pass --ingress webhook for AgentCore or scale-to-zero)",
+/**
+ * A setting only takes effect in a channel file that reads it: one scaffolded before it, or written by hand, names its
+ * factory. Writing the setting there, and preparing the app for it, would leave the channel receiving the other way
+ * with nothing failing, so the existing file is imported under the requested setting first, the way `deploy` reads
+ * a channel's shape, and must take the shape the setting names.
+ */
+async function assertChannelReadsSetting(
+  target: string,
+  kind: ChannelKind,
+  setting: Record<string, string>,
+  file: string,
+): Promise<void> {
+  Object.assign(process.env, setting); // the value this command writes anyway
+  const inspected = await inspectChannels(target).catch(failStartup);
+  const failure = inspected.failures.find((entry) => entry.file === file);
+  if (failure) failStartup(new Error(`${failure.label} failed to load (${failure.message}) — fix it and re-run`));
+  const [[name, value]] = Object.entries(setting) as [[string, string]];
+  const wanted = value === "webhook" ? "webhook" : "long-connection";
+  const shape = inspected.channels.find((channel) => channel.name === kind)?.ingress;
+  if (shape !== wanted) {
+    failStartup(
+      new Error(
+        `${relative(target, file)} receives by ${shape === "webhook" ? "webhook" : "WebSocket"} whatever ${name} ` +
+          `says — it names its factory instead of reading the setting, so ${name}=${value} would change nothing ` +
+          `but the app. Move the file aside and re-run to scaffold one that reads it, or edit its factory yourself`,
+      ),
     );
-    return DEFAULT_FEISHU_INGRESS;
   }
-  const answer = await select<FeishuSubscriptionMode>({
-    message: `How should ${kind === "feishu" ? "Feishu" : "Lark"} deliver events?`,
-    initialValue: DEFAULT_FEISHU_INGRESS,
-    options: [
-      {
-        value: "websocket",
-        label: "WebSocket long connection (recommended)",
-        hint: "no public URL; runs locally, on Docker, Fly and Railway with one always-on process",
-      },
-      {
-        value: "webhook",
-        label: "Webhook endpoint",
-        hint: "for AgentCore or scale-to-zero; needs a public HTTPS URL and the app-config permission",
-      },
-    ],
-  });
-  if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
-  return answer;
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

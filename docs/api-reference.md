@@ -545,7 +545,9 @@ interface LongConnectionChannelModule {
 An agent channel default-exports either a route `ChannelModule` or a
 `LongConnectionChannelModule`. Bundled webhook adapters (`telegramChannel(opts)`,
 `feishuChannel(opts)`) return `ChannelModule`; `feishuWebSocketChannel(opts)`
-and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. In both forms the channel file
+and `larkWebSocketChannel(opts)` return `LongConnectionChannelModule`. `feishuIngress()` / `larkIngress()` say which
+of the two this process serves (`FEISHU_INGRESS` / `LARK_INGRESS`, else WebSocket under `dev` and webhook
+otherwise); the scaffolded channel file picks its factory with them. In both forms the channel file
 is one expression; a channel persisting durable state derives its home from
 `ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
 `.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it.

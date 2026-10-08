@@ -73,8 +73,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // Loaded (imported + validated), not just discovered.
   const sched = await loadSchedules(agentDir).catch(failStartup);
   // What the definition DECLARED it needs, and which of those have no value here. `info` reports
-  // (never asserts): it is the read-only view of the same list `dev`/`start` refuse to boot without
-  // and `deploy` requires a value for.
+  // (never asserts) the list `start` refuses to boot without and `deploy` requires a value for: channels are
+  // imported as `start` imports them, so a Feishu/Lark channel that `dev` connects by WebSocket shows the webhook
+  // values a deployment needs, and the line says so.
   const declaredSecrets: DeclaredSecret[] = [...tools.secrets, ...allSecrets(inspected.secrets)];
   const unsetSecrets = missingSecrets(declaredSecrets);
   const schedules = sched.schedules.map((s) => ({
@@ -179,7 +180,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");
   line("secrets", declaredSecrets.length > 0 ? describeSecrets(declaredSecrets) : "(none declared)");
   if (unsetSecrets.length > 0)
-    cont(`⚠ dev/start refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
+    cont(`⚠ start and deployments refuse to boot until set: ${unsetSecrets.map((s) => s.name).join(", ")}`);
   line("state", stateRoot);
   line("sessions", sessionsDir);
   line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);

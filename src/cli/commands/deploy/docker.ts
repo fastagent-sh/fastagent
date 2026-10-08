@@ -178,8 +178,9 @@ async function runDeployDocker(params: {
   const paths = webhookPaths(channels);
   if (paths.length > 0) {
     console.error(
-      `[fastagent] note: public ingress is operator-owned — configure your tunnel/proxy, then wire the ` +
-        `default webhook path(s): ${paths.join(", ")} (or your remapped channel routes)`,
+      `[fastagent] note: ${paths.join(", ")} receive nothing until a public URL reaches this container — re-run ` +
+        `with --tunnel for a Quick Tunnel, or configure your own tunnel/proxy and point those webhook path(s) ` +
+        `(or your remapped channel routes) at it`,
     );
   }
 }

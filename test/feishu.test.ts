@@ -429,8 +429,12 @@ describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
     const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
+    // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /verificationToken/,
+      /receives by webhook .*`fastagent add feishu --ingress webhook` captures FEISHU_VERIFICATION_TOKEN.*FEISHU_INGRESS=websocket/,
+    );
+    expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
+      /LARK_VERIFICATION_TOKEN.*LARK_INGRESS=websocket/,
     );
   });
 
