@@ -704,7 +704,9 @@ Compatibility is checked in both directions, so the protocol stays expressible i
   transport) are followed as they stabilize.
 - **An ACP agent as a harness.** claude-agent-acp, codex-acp, Gemini CLI or dsh's ACP server plug in through the
   harness port (§9.1) with fewer capabilities: no steering under v1, no durable queue, and run boundaries written by
-  the serving layer.
+  the serving layer. An agent that cannot replay its history (`session/load`, which dsh's server lacks) leaves the
+  whole log to the run helper, which records every `session/update` it receives, so `read` and `follow` work as for
+  any harness.
 - **What ACP cannot express today:** caller-named sessions (the bridge maps them), idempotency keys, and a run's
   status by id. FastAgent does not use ACP's client file system and terminals, permission requests or elicitation.
 
@@ -886,8 +888,9 @@ unused.
 Steering stays a harness capability, because only the loop knows where its steps end: from outside, the serving
 layer could only stop a step, killing a tool mid-call, or wait for the run to end, which is a queued run.
 
-**pi-durable, measured.** A spike on pi-durable 1.1.0 with faux models checked each port operation against it: a run
-with a tool, a `kill -9` mid-tool and a reopen, steer, reject, abort, withdrawal, cursor reads and live events.
+**pi-durable, measured.** A spike on pi-durable 1.1.0 with faux models checked these port operations against it: a run
+with a tool, a `kill -9` mid-tool and a reopen, steer, reject, abort, withdrawal, cursor reads and live events. Fork,
+settings, `rewind` and `delete` were read from its API, not run.
 
 | The port needs | pi-durable 1.1.0 |
 |---|---|
@@ -898,6 +901,9 @@ with a tool, a `kill -9` mid-tool and a reopen, steer, reject, abort, withdrawal
 | Live events | `watchEvents()`: a snapshot, then events derived from each commit (`run_start`, `message_*`, `tool_execution_*`, …). Nothing is replayed, so `follow` reads entries first, as for every harness |
 | Withdrawing a queued run | `submission.abort()`; one already placed answers `already_placed` |
 | Stopping the running run, keeping the queue | `harness.abortTask()` on the conversation's generation task. The queued inputs stay, but start only with the next submission, so the port starts them itself; pi-durable has no call for it yet |
+| A run that fails | The same stall: after a run ends `unanswered` for any reason (`aborted`, `model_error`, `no_model`, …), queued inputs wait for the next submission (its README says so; read, not run). The port starts them, so queued runs start as usual (§7.3) |
+| `fork`, settings | `conversation.fork(entryId)` creates a new conversation with the history up to that entry; `configure()` sets the model and thinking level |
+| `rewind`, `delete` | Neither exists: no call moves a conversation's active branch, and none deletes a conversation. `rewind` can be a fork at the entry that the session id is then mapped to, the earlier conversation keeping the earlier branch; `delete` is `capabilities.delete: false`, or removes only the mapping. Both are settled in §13 |
 | Aborting the session | `conversation.abort()`: the running run and every queued input end `aborted` |
 | Models and credentials | `models` is pi-ai's `Models`, which FastAgent's `ModelRuntime` implements, so `models.json` and the grants carry over unchanged |
 | Code tools | Its `defineTool` accepts a plain JSON Schema, so a FastAgent tool (Zod) needs an adapter for `execute` only |
@@ -911,12 +917,14 @@ pinned exactly.
 
 So in step 4 pi-durable is a second harness behind the same port, chosen per agent, and pi-coding-agent stays the
 default: an agent that uses `extensions/`, MCP or `chat` keeps working, and the port is shaped by a durable harness
-from its first implementation instead of being retrofitted to one later.
+from its first implementation instead of being retrofitted to one later. An agent that chooses pi-durable and also
+declares what it cannot run (`extensions/`, `mcp.json`) is refused at start, and the error names the declaration;
+nothing it declares is dropped silently.
 
-**DeepSeek Harness, read.** dsh was read from its source (0.2.1-alpha.2) rather than run. Its npm releases are older
-(0.0.1-rc.1) and incomplete (`@deepseek-ai/dsh-base` depends on a package that is not published), and running it from
-source means installing and building its whole monorepo, the desktop and web apps included. What its code and
-documentation show:
+**DeepSeek Harness, read.** dsh was read from its source (0.2.1-alpha.2) rather than run. That version is on npm
+under the `alpha` tag, and `@deepseek-ai/dsh-base@0.2.1-alpha.2` resolves (350 packages); `latest` still points at
+0.0.1-rc.1, which does not install (it depends on a package that is not published). What its code and documentation
+show:
 
 - Its `Agent` has the operations the port needs: `followup()` (this protocol's `queue`), `steer()` and `inject()`; a
   durable inbox of messages with ids (`inbox.remove()`); and `cancel(cause, { keepInbox: true })`, which stops the
@@ -924,10 +932,13 @@ documentation show:
 - Embedding it in process means composing its cordis plugin runtime (`dsh-base`, some eighty plugins). Its
   out-of-process SDK carries only prompt and wait, with no cancel and no steer, too little for the port.
 - It ships an ACP v1 server (`dsh --profile acp`): sessions are created, listed, resumed and closed, prompts run one
-  at a time per session, and `session/cancel` stops the running work. It has no `session/load`, fork or deletion.
+  at a time per session, and `session/cancel` stops the running work. It has no `session/load`, fork or deletion, so
+  it cannot replay a session's history to a client.
 
-So DeepSeek Harness is reached first as an ACP agent (step 5), with what ACP v1 carries, and a native port for it is
-reconsidered once its packages install from npm.
+So DeepSeek Harness is reached first as an ACP agent (step 5), with what ACP v1 carries. Without `session/load`, the
+port's `read` has no source in dsh: the run helper records the whole log, every `session/update` it receives, not
+only run boundaries (§7.9). A native port for it waits for the cost of composing its plugin runtime to be worth what
+ACP leaves out, which a run against the npm `alpha` release would measure.
 
 ### 9.2 Layers
 
@@ -1082,9 +1093,9 @@ lands (§12):
 | 2 | Upgrade to pi 1.1.0. Done |
 | 3 | Declarations as files: `mcp.json` (#678); `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `mise.toml` |
 | 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it |
-| 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first agent connected inbound |
+| 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
-| Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, once its packages install from npm; more content kinds |
+| Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |
 
 ## 13. Open questions
 
@@ -1098,9 +1109,10 @@ Each is settled when the step that needs it is built (§12).
    writer (each conversation's own, and what spans conversations: redelivery dedup, the session list, schedules);
    which API storage holds each part. Pending wake-ups are part of it: a deploy must
    not wipe them.
-4. pi-durable as a harness: how an agent chooses it; starting its queued inputs after the running run is stopped
-   (no upstream call yet); which missing features it gains (skills, prompt templates, images in `read`) and which
-   stay pi-coding-agent's (extensions, MCP, codemode, `chat`).
+4. pi-durable as a harness: how an agent chooses it; starting its queued inputs after any run that does not end
+   `completed` (no upstream call yet); `rewind` (a fork the session id is remapped to) and `delete` (unsupported, or
+   the mapping only); which missing features it gains (skills, prompt templates, images in `read`) and which stay
+   pi-coding-agent's (extensions, MCP, codemode, `chat`).
 5. What the port adds for a harness whose runs continue after a restart (`durableRuns`); harnesses may differ.
 6. Content kinds beyond git repositories and directories, such as an S3 bucket synced to files.
 7. Acting as the member who asked (§6.3), with permissions.
@@ -1196,10 +1208,14 @@ The architecture and deployment:
   a loop (§9.1).
 - Steering is a harness capability; stopping a run is a signal the port receives (§9.1).
 - pi-durable is a second harness in step 4, behind the same port, which an agent opts into; pi-coding-agent stays the
-  default, so `extensions/`, MCP and `chat` keep working. A spike measured it against every port operation (§9.1).
-- DeepSeek Harness is reached through its ACP server first (step 5); a native harness for it waits until its packages
-  install from npm, since embedding it now means building its monorepo and composing its plugin runtime (§9.1).
-- After a failed run, queued runs start as usual, until a durable harness revisits it.
+  default, so `extensions/`, MCP and `chat` keep working. An agent that chooses pi-durable and declares `extensions/`
+  or `mcp.json` is refused at start. A spike measured it against the port's run, queue, stop, read and restart
+  operations; `rewind` and `delete`, which it lacks, are open (§9.1, §13).
+- DeepSeek Harness is reached through its ACP server first (step 5), with the run helper recording its whole log; a
+  native harness for it waits until a run against its npm `alpha` release shows that composing its plugin runtime is
+  worth what ACP leaves out (§9.1).
+- After a failed run, queued runs start as usual. pi-durable leaves its queue waiting after any run that does not end
+  `completed`, so its port starts the queue to keep this rule (§9.1).
 - `principal` is deferred until permissions are designed; a run records its `source` (§9.5).
 - AgentCore is the main host, because an idle agent costs nothing there. A box is disposable by design: the program
   comes from the image and what lasts lives outside the box, so a deploy wiping the box is expected. Scaling out, a
