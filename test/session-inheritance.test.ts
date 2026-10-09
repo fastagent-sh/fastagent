@@ -1,5 +1,5 @@
 /**
- * A thread starts from what the room knew (participant-model.md §5), on the AgentSession harness.
+ * A thread starts from what the room knew (participant-model.md §5), on pi's AgentSession.
  */
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
