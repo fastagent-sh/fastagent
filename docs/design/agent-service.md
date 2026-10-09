@@ -749,8 +749,11 @@ options, and `tools`, code tools defined in code beside `tools/`. Code stays cod
 
 `tools/` is anchored on `defineTool`, the way Trigger.dev finds every exported `task()` in its task directories:
 
-- Every module below `tools/` is loaded, at any depth, except tests (`*.test.*`, `*.spec.*`) and `.d.ts` files.
-  Every value a module exports that `defineTool` made is a tool; a module that exports none is a helper.
+- Every module below `tools/` is loaded, at any depth, except tests (`*.test.*`, `*.spec.*`), `.d.ts` files,
+  `node_modules` and dot-folders. Every tool a module exports is a tool: what `defineTool` makes, recognized by its
+  shape (`execute`, `description`, `parameters`) rather than a mark, so a tool made by an older copy of the package
+  than the CLI's still loads; a module that exports none is a helper. A tool re-exported by another module is one
+  tool.
 - A tool is named by `defineTool({ name })`. Without one, a module directly in `tools/` that exports only that tool
   lends it its file name, as today; a module that exports several, or one below a folder, names each tool, so two
   services' `search.ts` cannot collide by accident. Today the file name wins over a `name`; that reverses, so a tool
@@ -1150,10 +1153,11 @@ The product and the model:
 - A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
   service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
   connector file type, and `fastagent info` lists every connector (§5).
-- `tools/` is anchored on `defineTool`: every value it makes, exported from any module below `tools/` (tests and
-  `.d.ts` aside), is a tool, and a module that exports none is a helper. A tool is named by `defineTool({ name })`;
-  only a module directly in `tools/` that exports one tool may fall back to its file name. Folders only organize;
-  grouping is `namespace` (§8.1).
+- `tools/` is anchored on `defineTool`: every tool exported from any module below `tools/` (tests and `.d.ts` aside)
+  is mounted, recognized by its shape so a tool from an older copy of the package still loads, and a module that
+  exports none is a helper. A tool is named by `defineTool({ name })`; only a module directly in `tools/` that
+  exports one tool may fall back to its file name. Folders only organize; grouping is `namespace` (§8.1).
+  Implemented.
 - The deployed definition stays writable. The agent's update loop is designed later, in #605 (§2); the core now is
   serving.
 - No new waiting states for human input: steering, queued runs, cancelling and aborting cover it.

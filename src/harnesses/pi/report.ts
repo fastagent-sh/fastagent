@@ -79,6 +79,17 @@ const REACH: Record<ToolReach, string> = {
   unreachable: "unreachable: pi's settings disable the built-in extension it needs",
 };
 
+/** The report line for the authored tools: each name with where it comes from, a file below `tools/` or `config.tools`. */
+export function describeTools(names: readonly string[], sources: ReadonlyMap<string, string>): string {
+  return names
+    .map((name) => {
+      const source = sources.get(name);
+      if (source === undefined) throw new Error(`tool "${name}" has no recorded source`);
+      return `${name} (${source})`;
+    })
+    .join(", ");
+}
+
 /** The report line for the mounted tools the model is not given up front: each name with its way in. */
 export function describeIndirectTools(tools: readonly IndirectTool[]): string {
   return tools.map((tool) => `${tool.name} (${REACH[tool.reach]})`).join(", ");
@@ -86,6 +97,6 @@ export function describeIndirectTools(tools: readonly IndirectTool[]): string {
 
 export function reportToolCollisions(collisions: ToolCollision[]): void {
   for (const c of collisions) {
-    log.warn(`[fastagent] tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
+    log.warn(`[fastagent] tool "${c.name}" (${c.source}) dropped — another tool already uses that name`);
   }
 }

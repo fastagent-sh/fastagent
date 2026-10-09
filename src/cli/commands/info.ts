@@ -10,6 +10,7 @@ import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../h
 import { loadAgentDefinition } from "../../harnesses/pi/definition.ts";
 import {
   describeIndirectTools,
+  describeTools,
   describePrompt,
   reportFindingsIfChanged,
   reportToolCollisions,
@@ -52,6 +53,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const tools = await resolveAgentTools(config, agentDir)
     .then((r) => ({
       names: r.toolNames,
+      sources: r.toolSources,
       indirect: r.indirectTools,
       collisions: r.toolCollisions,
       failures: r.toolFailures,
@@ -60,6 +62,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     }))
     .catch((e: unknown) => ({
       names: [] as string[],
+      sources: new Map<string, string>(),
       indirect: [] as IndirectTool[],
       collisions: [],
       failures: [],
@@ -133,6 +136,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
           prompts: prompts.map((prompt) => ({ name: prompt.name, description: prompt.description ?? null })),
           tools: tools.names,
+          toolSources: Object.fromEntries(tools.sources),
           indirectTools: tools.indirect,
           toolError: tools.error ?? null,
           channels,
@@ -174,7 +178,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("prompt", describePrompt(definition));
   line("skills", skills.map((skill) => skill.name).join(", ") || "(none)");
   line("prompts", prompts.map((prompt) => prompt.name).join(", ") || "(none)");
-  line("tools", tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)");
+  line(
+    "tools",
+    tools.error ? "(could not load — see warning below)" : describeTools(tools.names, tools.sources) || "(none)",
+  );
   if (tools.indirect.length > 0) line("indirect", describeIndirectTools(tools.indirect));
   line("channels", channels.join(", ") || "(none)");
   line("schedules", schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)");

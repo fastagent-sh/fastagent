@@ -68,8 +68,9 @@ Check:
 - the agent ran `npm install`,
 - dependencies used by tools are in the agent's `package.json`,
 - `package.json` has `"type": "module"`,
-- the tool file default-exports `defineTool({...})`,
-- the tool file is under `tools/` and ends in `.ts`, `.js`, or `.mjs`.
+- the tool's module exports `defineTool({...})` (a module that exports no tool is a helper and mounts nothing),
+- the module is below `tools/`, ends in `.ts`, `.js`, or `.mjs`, and is not a test (`*.test.*`, `*.spec.*`),
+- `fastagent info` lists the tool with its file; one missing there was not exported as a tool.
 
 Run the tool directly for faster feedback:
 

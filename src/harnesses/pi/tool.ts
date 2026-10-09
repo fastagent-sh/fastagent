@@ -190,9 +190,41 @@ export interface ToolCollision {
   source: string;
 }
 
-/** Discover code tools in `<dir>/tools/`: each `*.ts|.js|.mjs` default-exports a tool, named from its filename. */
+/** One module's export of a tool. */
+interface ToolExport {
+  /** The module's file name without extension: the tool's name when it declares none. */
+  fileName: string;
+  label: string;
+  file: string;
+  /** Below a folder of `tools/`. */
+  nested: boolean;
+  exportName: string;
+  /** How many distinct tools the module exports. */
+  toolsInModule: number;
+}
+
+/**
+ * A value a module below `tools/` exports that the model can call: an object with `execute`, a `description` and
+ * `parameters`. That is what `defineTool` makes, from whichever copy of this package the agent installed, and a pi
+ * `AgentTool` written by hand.
+ */
+function isTool(value: unknown): value is AgentTool {
+  if (typeof value !== "object" || value === null) return false;
+  const tool = value as Partial<AgentTool>;
+  return (
+    typeof tool.execute === "function" && typeof tool.description === "string" && typeof tool.parameters === "object"
+  );
+}
+
+/**
+ * Discover code tools below `<dir>/tools/`, at any depth (tests aside): every tool a module exports is mounted, and a
+ * module that exports none is a helper. A tool is named by `defineTool({ name })`; one without a name takes its file's
+ * name only when its module sits directly in `tools/` and exports no other tool.
+ */
 export async function loadTools(dir: string): Promise<{
   tools: AgentTool[];
+  /** Where each mounted tool comes from, by tool name: the file below the agent directory. */
+  sources: Map<string, string>;
   /** What each loaded tool declared it needs, BY TOOL NAME and attributed to the file. Per tool
    *  because whether a declaration counts depends on whether that tool ends up MOUNTED — a name
    *  shadowed by a coding tool never runs ({@link resolveAgentTools} makes that call). */
@@ -202,42 +234,80 @@ export async function loadTools(dir: string): Promise<{
 }> {
   // The same containment guard channels/schedules/skills get.
   await assertInsideAgentDir(dir, "tools");
-  const { modules, failures } = await loadModuleDir(join(dir, "tools"));
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"), "tree");
+  // Every module that exports each tool: a tool re-exported by another module (an index) is one tool, named and
+  // attributed once, after every module that exports it is known.
+  const exportsOf = new Map<AgentTool, ToolExport[]>();
+  for (const { name: fileName, label, file, nested, mod } of modules) {
+    // By export name, so the order is the same whichever runtime imported the module.
+    const byExport = Object.keys(mod)
+      .sort()
+      .flatMap((key) => (isTool(mod[key]) ? [{ exportName: key, tool: mod[key] }] : []));
+    const toolsInModule = new Set(byExport.map(({ tool }) => tool)).size;
+    for (const { exportName, tool } of byExport) {
+      const where = exportsOf.get(tool) ?? [];
+      if (where.some((e) => e.label === label)) continue;
+      where.push({ fileName, label, file, nested, exportName, toolsInModule });
+      exportsOf.set(tool, where);
+    }
+  }
   const byName = new Map<string, AgentTool>();
+  const sources = new Map<string, string>();
   const collisions: ToolCollision[] = [];
   const secrets = new Map<string, DeclaredSecret[]>();
-  for (const { name, label, file, mod } of modules) {
-    const tool = mod.default as Partial<AgentTool> | undefined;
-    if (!tool || typeof tool.execute !== "function") {
-      failures.push({ label, file, message: `${label} must default-export defineTool({...})` });
-      continue;
+  for (const [tool, where] of exportsOf) {
+    // The most specific module is where the tool is defined, as far as exports can tell: an index re-exporting
+    // several tools exports more than any module defining one of them. Ties keep the inventory's order.
+    let home = [...where].sort((a, b) => a.toolsInModule - b.toolsInModule)[0] as ToolExport;
+    let name = tool.name;
+    if (!name) {
+      const lenders = where.filter((e) => !e.nested && e.toolsInModule === 1);
+      if (lenders.length !== 1) {
+        failures.push({
+          label: home.label,
+          file: home.file,
+          message:
+            lenders.length === 0
+              ? `the tool exported as "${home.exportName}" has no name — give it one with defineTool({ name }); ` +
+                `only a module directly in tools/ that exports a single tool takes its file's name`
+              : `${lenders.map((e) => e.label).join(" and ")} export the same tool without a name, and each would ` +
+                `lend it its file's name — give it one with defineTool({ name })`,
+        });
+        continue;
+      }
+      home = lenders[0] as ToolExport;
+      name = home.fileName;
     }
-    const declaration = readSecretDeclaration(tool, label);
+    const declaration = readSecretDeclaration(tool, home.label);
     if (declaration.error !== undefined) {
-      failures.push({ label, file, message: declaration.error });
+      failures.push({ label: home.label, file: home.file, message: declaration.error });
       continue;
     }
     if (byName.has(name)) {
-      collisions.push({ name, source: label });
+      collisions.push({ name, source: home.label });
       continue;
     }
-    byName.set(name, { ...(tool as AgentTool), name });
+    byName.set(name, name === tool.name ? tool : { ...tool, name, label: tool.label || name });
+    sources.set(name, home.label);
     secrets.set(name, declaration.secrets);
   }
-  return { tools: [...byName.values()], secrets, collisions, failures };
+  return { tools: [...byName.values()], sources, secrets, collisions, failures };
 }
 
 /** Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name. */
 export function mergeDiscoveredTools(
   existing: MountedTool[],
   discovered: AgentTool[],
+  sources: ReadonlyMap<string, string>,
 ): { tools: MountedTool[]; collisions: ToolCollision[] } {
   const names = new Set(existing.map((t) => t.name));
   const tools = [...existing];
   const collisions: ToolCollision[] = [];
   for (const tool of discovered) {
     if (names.has(tool.name)) {
-      collisions.push({ name: tool.name, source: `tools/${tool.name}` });
+      const source = sources.get(tool.name);
+      if (source === undefined) throw new Error(`discovered tool "${tool.name}" has no source file`);
+      collisions.push({ name: tool.name, source });
       continue;
     }
     names.add(tool.name);

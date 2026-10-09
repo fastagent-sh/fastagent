@@ -124,7 +124,7 @@ fastagent invoke "Summarize APPEND_SYSTEM.md in one sentence"
 
 ## 5. Add a tool
 
-Tools are files in `tools/`. The filename is the tool name.
+Tools are modules in `tools/`. A tool that declares no `name` takes its file's name.
 
 ```ts
 // tools/reverse.ts

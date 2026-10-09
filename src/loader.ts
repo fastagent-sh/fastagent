@@ -4,7 +4,7 @@
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, extname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { log } from "./log.ts";
 
@@ -15,6 +15,11 @@ function isModuleFile(name: string): boolean {
   return MODULE_EXTS.has(extname(name)) && !name.endsWith(".d.ts");
 }
 
+/** A test file (`*.test.*`, `*.spec.*`), which a module tree holds beside the code it tests and never loads. */
+function isTestFile(name: string): boolean {
+  return /\.(test|spec)\.[^.]+$/.test(name);
+}
+
 /** The name a module is known by: its basename without the extension. */
 function moduleName(fileName: string): string {
   return basename(fileName, extname(fileName));
@@ -22,54 +27,77 @@ function moduleName(fileName: string): string {
 
 /** One module file a directory declares. */
 interface InventoryEntry {
-  /** Basename without extension — the authoritative name for tools/channels. */
+  /** Basename without extension — the authoritative name for channels, and a tool's name when it declares none. */
   name: string;
-  /** "tools/foo.ts"-style label for errors and collisions. */
+  /** "tools/foo.ts"-style label for errors and collisions: the path below the agent directory. */
   label: string;
   file: string;
+  /** Below a folder of the directory rather than directly in it (a tree only). */
+  nested: boolean;
 }
 
 /**
  * WHAT A CODE-INPUT DIRECTORY DECLARES — the single answer to "which files here are modules", without importing any of
  * them. Internal: the loading functions below are its only consumers.
+ *
+ * Flat (`channels/`): the modules directly in the directory. A tree (`tools/`): the modules at any depth, where folders
+ * only organize, without tests (`*.test.*`, `*.spec.*`) and without `node_modules` or a dot-folder, which hold no
+ * authored module.
  */
-async function moduleInventory(subDir: string): Promise<InventoryEntry[]> {
-  let dirents: Dirent[];
-  try {
-    dirents = await readdir(subDir, { withFileTypes: true });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "not_found") return [];
-    throw new Error(`cannot read ${subDir}: ${(error as Error).message}`);
-  }
-  const sub = basename(subDir);
+async function moduleInventory(subDir: string, shape: "flat" | "tree"): Promise<InventoryEntry[]> {
+  const root = join(subDir, "..");
   const entries: InventoryEntry[] = [];
-  // Sorted by the NAME a consumer sees, so none of them re-sorts and none can disagree about order.
-  const byName = (a: Dirent, b: Dirent): number =>
-    moduleName(a.name).localeCompare(moduleName(b.name)) || a.name.localeCompare(b.name);
-  for (const dirent of dirents.sort(byName)) {
-    if (!isModuleFile(dirent.name)) continue;
-    const label = `${sub}/${dirent.name}`;
-    if (dirent.isFile()) {
-      entries.push({ name: moduleName(dirent.name), label, file: join(subDir, dirent.name) });
-    } else if (dirent.isSymbolicLink()) {
-      log.warn(`[fastagent] ${label} is a symlink — code inputs must be real files inside the agent dir — not loaded`);
-    } else if (dirent.isDirectory()) {
-      log.warn(`[fastagent] ${label} is a directory, not a file — not loaded`);
-    } else {
-      log.warn(`[fastagent] ${label} is not a regular file — not loaded`);
+  const walk = async (dir: string, nested: boolean): Promise<void> => {
+    let dirents: Dirent[];
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!nested && (code === "ENOENT" || code === "not_found")) return;
+      throw new Error(`cannot read ${dir}: ${(error as Error).message}`);
     }
-  }
+    // Sorted by the NAME a consumer sees, so none of them re-sorts and none can disagree about order.
+    const byName = (a: Dirent, b: Dirent): number =>
+      moduleName(a.name).localeCompare(moduleName(b.name)) || a.name.localeCompare(b.name);
+    for (const dirent of dirents.sort(byName)) {
+      const label = relative(root, join(dir, dirent.name)).split(sep).join("/");
+      if (shape === "tree" && dirent.isDirectory()) {
+        if (dirent.name === "node_modules" || dirent.name.startsWith(".")) continue;
+        await walk(join(dir, dirent.name), true);
+        continue;
+      }
+      // In a tree a symlinked folder could hold modules too, so every symlink is said, whatever its name.
+      const symlink = dirent.isSymbolicLink() && (shape === "tree" || isModuleFile(dirent.name));
+      if (symlink) {
+        log.warn(
+          `[fastagent] ${label} is a symlink — code inputs must be real files and folders inside the agent dir — ` +
+            `not loaded`,
+        );
+        continue;
+      }
+      if (!isModuleFile(dirent.name) || (shape === "tree" && isTestFile(dirent.name))) continue;
+      if (dirent.isFile()) {
+        entries.push({ name: moduleName(dirent.name), label, file: join(dir, dirent.name), nested });
+      } else if (dirent.isDirectory()) {
+        log.warn(`[fastagent] ${label} is a directory, not a file — not loaded`);
+      } else {
+        log.warn(`[fastagent] ${label} is not a regular file — not loaded`);
+      }
+    }
+  };
+  await walk(subDir, false);
   return entries;
 }
 
 export interface DiscoveredModule {
-  /** Basename without extension — the authoritative name for tools/channels. */
+  /** Basename without extension — the authoritative name for channels, and a tool's name when it declares none. */
   name: string;
   /** "tools/foo.ts"-style label for errors and collisions. */
   label: string;
   file: string;
-  mod: { default?: unknown };
+  /** Below a folder of the directory (a tree only). */
+  nested: boolean;
+  mod: Record<string, unknown> & { default?: unknown };
 }
 
 /** An agent module that failed to load, surfaced as data so its caller can report the exact file. */
@@ -107,17 +135,18 @@ export function refuseBrokenDeclarations(failures: readonly ModuleLoadFailure[])
   );
 }
 
-/** Import every module the directory declares ({@link moduleInventory}). */
+/** Import every module the directory declares ({@link moduleInventory}): directly in it, or at any depth. */
 export async function loadModuleDir(
   subDir: string,
+  shape: "flat" | "tree" = "flat",
 ): Promise<{ modules: DiscoveredModule[]; failures: ModuleLoadFailure[] }> {
-  const entries = await moduleInventory(subDir);
+  const entries = await moduleInventory(subDir, shape);
   const modules: DiscoveredModule[] = [];
   const failures: ModuleLoadFailure[] = [];
-  for (const { name, label, file } of entries) {
+  for (const { name, label, file, nested } of entries) {
     try {
-      const mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
-      modules.push({ name, label, file, mod });
+      const mod = (await import(pathToFileURL(file).href)) as DiscoveredModule["mod"];
+      modules.push({ name, label, file, nested, mod });
     } catch (error) {
       failures.push({
         label,
