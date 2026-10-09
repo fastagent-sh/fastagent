@@ -4,8 +4,8 @@ import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
 import * as Effect from "effect/Effect";
-import type { Lease } from "../src/engines/pi/turn-kit.ts";
-import { acquireSessionLease } from "../src/engines/pi/session-effects.ts";
+import type { Lease } from "../src/harnesses/pi/turn-kit.ts";
+import { acquireSessionLease } from "../src/harnesses/pi/session-effects.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
 const until = async (cond: () => boolean): Promise<void> => {

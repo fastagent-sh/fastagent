@@ -31,7 +31,7 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 /** How many rate-limit rejects one call absorbs before giving up. */
 const RETRIES = 3;
 
-/** Download sanity cap; a larger resource is rejected visibly (the engine resizes vision images
+/** Download sanity cap; a larger resource is rejected visibly (the harness resizes vision images
  *  anyway, so this is a transport guard, not a model limit). */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 /** Refresh the cached tenant token this long before its stated expiry. */

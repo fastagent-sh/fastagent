@@ -9,7 +9,7 @@ status: current
 This is a compact reference for the all-in-one `@fastagent-sh/fastagent` entry. The same exports are
 layered across subpaths by what each costs to import:
 
-| | engine-neutral | runtime-neutral | pulls |
+| | harness-neutral | runtime-neutral | pulls |
 |---|---|---|---|
 | `/core`, `/session` | yes | yes | nothing |
 | `/node` | yes | no | the Node HTTP bridge and a cron |

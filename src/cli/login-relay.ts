@@ -9,7 +9,7 @@
  */
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import type { IoOption, LoginIO, LoginMethod } from "../engines/pi/login.ts";
+import type { IoOption, LoginIO, LoginMethod } from "../harnesses/pi/login.ts";
 
 /** How a login on the box ended, as the box reports it. */
 export type RelayResult =

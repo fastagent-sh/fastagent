@@ -1,6 +1,6 @@
 /** `fastagent context list|add|remove`: what the agent works on and knows, as fastagent.config.ts declares it. */
 import { resolve } from "node:path";
-import { ContextNameError, addContext, listContexts, removeContext } from "../../engines/pi/authoring.ts";
+import { ContextNameError, addContext, listContexts, removeContext } from "../../harnesses/pi/authoring.ts";
 import { type SourceOptions, declarationFor } from "../../contexts/source.ts";
 import { contextLines } from "../contexts-view.ts";
 import { failStartup, failUsage } from "../fail.ts";

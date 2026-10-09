@@ -117,7 +117,7 @@ export function telegramChannel({
     const decide =
       route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/telegram` (engine state at
+    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/telegram` (harness state at
     // the root, channel state under `channels/<kind>/`).
     if (!isAbsolute(stateRoot)) {
       throw new Error(`telegramChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildModelPickerOptions, formatModelsCommand } from "../src/cli/models-view.ts";
-import type { ProviderAuthStatus } from "../src/engines/pi/models.ts";
+import type { ProviderAuthStatus } from "../src/harnesses/pi/models.ts";
 
 describe("models-view: formatModelsCommand (`fastagent models [search]` stdout/stderr)", () => {
   it("no search → all lines; a substring filters; a miss → empty lines + an stderr diagnostic", () => {

@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveNode } from "../../src/channels/serve.ts";
 import { registerFeishuWebhook } from "../../src/channels/feishu/register-webhook.ts";
-import { createAgentService } from "../../src/engines/pi/service.ts";
+import { createAgentService } from "../../src/harnesses/pi/service.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
 import { requireEnv } from "./env.ts";

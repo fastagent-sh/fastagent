@@ -150,7 +150,7 @@ describe("durable group buffer (single-process restarts)", () => {
   const route = (u: TelegramUpdate) =>
     (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? {} : null;
 
-  it("runs the real engine after ACK and commits only the folded discussion on completion", async () => {
+  it("runs the real harness after ACK and commits only the folded discussion on completion", async () => {
     const entered = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     let sawDiscussion = false;

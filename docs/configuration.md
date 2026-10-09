@@ -326,7 +326,7 @@ A deployed image has only what its build put in it. The machine's extensions and
 name matches a platform command (`prompts/start.md` against Telegram's `/start`) rewrites that message. Keep the
 machine's `prompts/` for `chat`, or put a template that belongs to the agent in its definition's `prompts/`.
 
-## Engine settings: `~/.pi/agent/settings.json`
+## Harness settings: `~/.pi/agent/settings.json`
 
 Compaction, retries, prompt-cache warming and transport timeouts are pi settings. `dev`, `start` and `chat` read
 the machine's `~/.pi/agent/settings.json` and the agent directory's `.pi/settings.json` (deep-merged, the agent's

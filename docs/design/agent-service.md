@@ -884,9 +884,7 @@ unused.
 | pi, an ACP agent (the run helper) | Remove it from the helper's queue | The `AbortSignal` given to the turn | Both |
 
 Steering stays a harness capability, because only the loop knows where its steps end: from outside, the serving
-layer could only stop a step, killing a tool mid-call, or wait for the run to end, which is a queued run. The code and
-the SPEC call this layer the engine today (`src/engines/`, "engine-neutral"); they take the name harness in a
-refactor of their own (§12, step 1).
+layer could only stop a step, killing a tool mid-call, or wait for the run to end, which is a queued run.
 
 ### 9.2 Layers
 
@@ -1037,7 +1035,7 @@ lands (§12):
 | Step | Work |
 |---|---|
 | 0 | Finish this design |
-| 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior |
+| 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.0.4 |
 | 3 | Declarations as files: `mcp.json` (#678); `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `mise.toml` |
 | 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi, and its conformance suite; the SPEC rewritten; channels, schedules, wake-ups and duang move to it |

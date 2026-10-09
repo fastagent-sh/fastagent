@@ -135,7 +135,7 @@ const ACTION_BODY_LIMIT = MAX_BODY_BYTES;
 
 /**
  * Parse-don't-validate at the wire: a remote client can send any JSON, and the hub's inner layers trust action shapes
- * (a malformed `steer` would surface as an ENGINE failure misclassified as `run_command_failed`).
+ * (a malformed `steer` would surface as a HARNESS failure misclassified as `run_command_failed`).
  */
 function parseWireAction(raw: unknown): SessionAction | undefined {
   // COMPILE-TIME drift guard, variant level: this switch hand-mirrors the SessionAction union, and a new variant
@@ -159,12 +159,12 @@ function parseWireAction(raw: unknown): SessionAction | undefined {
     if (typeof p !== "object" || p === null) return false;
     if (typeof (p as { text?: unknown }).text !== "string") return false;
     const images = (p as { images?: unknown }).images;
-    // Element-level: `images: [42]` reaching the engine would resurface exactly the misclassified failure this parser
+    // Element-level: `images: [42]` reaching the harness would resurface exactly the misclassified failure this parser
     // exists to prevent (ImageRef shape from src/session.ts's Prompt).
     return images === undefined || (Array.isArray(images) && images.every(imageOk));
   };
   // REBUILD, never pass raw through: "typed out" must be construction, not assertion — a passed-through object would
-  // carry arbitrary extra keys into the engine.
+  // carry arbitrary extra keys into the harness.
   const rebuildPrompt = (p: { text: string }): { text: string; images?: { data: string; mimeType: string }[] } => {
     const images = (p as { images?: { data: string; mimeType: string }[] }).images;
     return {

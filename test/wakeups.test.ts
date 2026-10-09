@@ -13,9 +13,9 @@ import {
   removeWakeup,
   takeFirstDueWakeup,
 } from "../src/schedule/wakeups.ts";
-import { makeWakeTool, parseDelayMs, withWakeTool } from "../src/engines/pi/wake-tool.ts";
+import { makeWakeTool, parseDelayMs, withWakeTool } from "../src/harnesses/pi/wake-tool.ts";
 import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
-import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 
 const root = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-wake-"));
 const NOW = new Date("2026-07-07T12:00:00Z");

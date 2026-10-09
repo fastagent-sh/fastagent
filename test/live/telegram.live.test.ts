@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveNode } from "../../src/channels/serve.ts";
 import { registerTelegramWebhook } from "../../src/channels/telegram/register-webhook.ts";
-import { createAgentService } from "../../src/engines/pi/service.ts";
+import { createAgentService } from "../../src/harnesses/pi/service.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { startCloudflareTunnel } from "../../src/tunnel.ts";
 import { requireEnv } from "./env.ts";

@@ -10,7 +10,7 @@ import { larkChannel } from "../src/lark.ts";
 import { feishuThreads, feishuTransport } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
 import { cardSummary } from "../src/channels/feishu/card.ts";
-import { piSessionId } from "../src/engines/pi/session-store.ts";
+import { piSessionId } from "../src/harnesses/pi/session-store.ts";
 import { log } from "../src/log.ts";
 
 const TOKEN = "verif-token";
@@ -1513,7 +1513,7 @@ describe("turn flow", () => {
     const fx = feishuFetch();
     injectedAgent = {
       async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "failed", details: "boom: engine exploded", retryable: false };
+        yield { type: "failed", details: "boom: harness exploded", retryable: false };
       },
     };
     const { handler, idle } = buildChannel({ onError: (f) => `⚠️ ${f.details}` });
@@ -1521,7 +1521,7 @@ describe("turn flow", () => {
     await idle();
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
     const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
-    expect(settled.body.elements[0].content).toBe("⚠️ boom: engine exploded");
+    expect(settled.body.elements[0].content).toBe("⚠️ boom: harness exploded");
   });
 
   it("logs terminal-notice delivery failures without replacing the Agent/stream failure", async () => {
@@ -1532,11 +1532,11 @@ describe("turn flow", () => {
         id: "om_failed_delivery",
         agent: {
           async *invoke(): AsyncIterable<AgentEvent> {
-            yield { type: "failed", details: "engine exploded", retryable: false };
+            yield { type: "failed", details: "harness exploded", retryable: false };
           },
         },
         delivery: "failed to deliver the agent-failure notice",
-        primary: "agent failed: engine exploded",
+        primary: "agent failed: harness exploded",
       },
       {
         id: "om_abnormal_delivery",

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { collect } from "../src/collect.ts";
-import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { availableModelsFromDir, createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { makeFaux } from "./faux.ts";
 
 const directories: string[] = [];

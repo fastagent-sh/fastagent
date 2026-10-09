@@ -17,7 +17,7 @@ import {
 } from "../add-feishu.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { loadConfig } from "../../engines/pi/config.ts";
+import { loadConfig } from "../../harnesses/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { enterAgentDirectory, isInteractive } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";

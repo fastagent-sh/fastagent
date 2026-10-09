@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
 let tool: { execute: RawExecute; description: string };

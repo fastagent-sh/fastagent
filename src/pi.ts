@@ -4,7 +4,7 @@ export {
   createPiAgentFromDefinition,
   type CreatePiAgentFromDefinitionOptions,
   type CreatePiAgentOptions,
-} from "./engines/pi/create.ts";
+} from "./harnesses/pi/create.ts";
 
 export {
   defineTool,
@@ -13,8 +13,8 @@ export {
   type MountedTool,
   type ToolCollision,
   type ToolContext,
-} from "./engines/pi/tool.ts";
-export type { ReadonlySessionManager, ToolActivation } from "./engines/pi/tool-context.ts";
+} from "./harnesses/pi/tool.ts";
+export type { ReadonlySessionManager, ToolActivation } from "./harnesses/pi/tool-context.ts";
 export { z } from "zod";
 export type { AgentTool } from "@earendil-works/pi-agent-core";
 export type { Skill } from "@earendil-works/pi-coding-agent";
@@ -27,7 +27,7 @@ export {
   type CreatePiAgentFromDirOptions,
   refreshMachineModelCatalog,
   refreshModelCatalog,
-} from "./engines/pi/open.ts";
+} from "./harnesses/pi/open.ts";
 export type {
   DefinitionDiagnostic,
   DefinitionFile,
@@ -35,14 +35,14 @@ export type {
   DefinitionShadow,
   LoadedDefinition,
   SkillCollision,
-} from "./engines/pi/definition.ts";
+} from "./harnesses/pi/definition.ts";
 
 export {
   defineConfig,
   listModels,
   resolveModel,
   type FastagentConfig,
-} from "./engines/pi/config.ts";
+} from "./harnesses/pi/config.ts";
 // Creating an agent and editing its contexts: what `fastagent init` and `fastagent context` run.
 export {
   addContext,
@@ -53,23 +53,23 @@ export {
   type ContextEdit,
   type CreateAgentOptions,
   type CreatedAgent,
-} from "./engines/pi/authoring.ts";
-export type { SessionObserver } from "./engines/pi/turn-kit.ts";
-export { inProcessLease, type Lease, type Release } from "./engines/pi/turn-kit.ts";
+} from "./harnesses/pi/authoring.ts";
+export type { SessionObserver } from "./harnesses/pi/turn-kit.ts";
+export { inProcessLease, type Lease, type Release } from "./harnesses/pi/turn-kit.ts";
 export {
   createPiSessionControl,
   type CreatePiSessionControlOptions,
-} from "./engines/pi/session-control.ts";
+} from "./harnesses/pi/session-control.ts";
 export {
   piInMemorySessionRecordStore,
   piSessionRecordStore,
   type PiSessionRecordStore,
-} from "./engines/pi/session-store.ts";
-export type { SessionInheritance } from "./engines/pi/session-inheritance.ts";
+} from "./harnesses/pi/session-store.ts";
+export type { SessionInheritance } from "./harnesses/pi/session-inheritance.ts";
 
-export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";
-export { createPiModels, type CreatePiModelsOptions } from "./engines/pi/agent-models.ts";
-export { probeAuthSource } from "./engines/pi/models.ts";
+export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/pi/auth.ts";
+export { createPiModels, type CreatePiModelsOptions } from "./harnesses/pi/agent-models.ts";
+export { probeAuthSource } from "./harnesses/pi/models.ts";
 export {
   login,
   loginOptions,
@@ -78,7 +78,7 @@ export {
   type LoginOption,
   type LoginRequest,
   type LoginResult,
-} from "./engines/pi/login.ts";
+} from "./harnesses/pi/login.ts";
 /** pi-ai's sign-in types, and the `CredentialStore` a caller supplies as `credentialStore` (with what it holds). */
 export type { AuthEvent, AuthInteraction, AuthPrompt, Credential, CredentialStore } from "@earendil-works/pi-ai";
 export type { Models } from "@earendil-works/pi-ai";
@@ -87,4 +87,4 @@ export type { Provider, ProviderAuth } from "@earendil-works/pi-ai";
 export type { Model } from "@earendil-works/pi-ai";
 
 // The product's one-call assembly: a directory becomes a live service.
-export { createAgentService, type CreateAgentServiceOptions } from "./engines/pi/service.ts";
+export { createAgentService, type CreateAgentServiceOptions } from "./harnesses/pi/service.ts";

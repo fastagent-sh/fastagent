@@ -14,11 +14,11 @@ import type { AgentEvent } from "../src/agent.ts";
 import { controlPlaneRoutes, createControlPlane, mountControlPlane } from "../src/channels/control.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
 import { log } from "../src/log.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
-import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
-import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { createPiSessionControl } from "../src/harnesses/pi/session-control.ts";
+import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/harnesses/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import {
@@ -617,7 +617,8 @@ describe("session control over HTTP", () => {
         .map((e) => (e.data as { delta: string }).delta)
         .join("");
       expect(text).toBe("hello over the wire");
-      // The prompt crosses the wire with its data intact (its ordering and backfill rules are the engine's, tested there).
+      // The prompt crosses the wire with its data intact (its ordering and backfill rules are the harness's, tested
+      // there).
       expect(seen.find((e) => e.type === "user_message")?.data).toEqual({ entryId: expect.any(String), text: "hi" });
       // Envelope fields never leak into the semantic event.
       for (const e of seen) {
@@ -1405,9 +1406,9 @@ describe("SSE response lifecycle", () => {
 
 // ── SPEC conformance for the REMOTE Agent ────────────────────────────────────
 // connectAgent claims to be "a REAL Agent, failure discipline included" — so it runs the same
-// executable SPEC the reference engine does. Each posture serves a real HTTP server; the wire is in
+// executable SPEC the reference harness does. Each posture serves a real HTTP server; the wire is in
 // the loop for every MUST (incl. MUST 3: a consumer break must abort the fetch AND release the
-// server-side engine work).
+// server-side harness work).
 
 const conformanceServers: Array<() => void> = [];
 afterAll(() => {
@@ -1418,7 +1419,7 @@ afterAll(() => {
 async function serveRemoteAgent(opts: {
   responses?: FauxResponseStep[];
   tools?: AgentTool[];
-  /** Replace the engine binding entirely — the setup-failure posture. */
+  /** Replace the harness binding entirely — the setup-failure posture. */
   sessionFactory?: PiAgentSessionFactory;
 }): Promise<ReturnType<typeof connectAgent>> {
   const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
@@ -1442,7 +1443,7 @@ describeSpecConformance("remote agent over /invoke", {
   failing: () =>
     serveRemoteAgent({
       sessionFactory: async () => {
-        throw new Error("engine setup exploded");
+        throw new Error("harness setup exploded");
       },
     }),
   hanging: (onCleanup) => {
@@ -1456,7 +1457,7 @@ describeSpecConformance("remote agent over /invoke", {
           signal?.addEventListener(
             "abort",
             () => {
-              onCleanup(); // the engine's in-flight work was actually released
+              onCleanup(); // the harness's in-flight work was actually released
               reject(new Error("aborted"));
             },
             { once: true },

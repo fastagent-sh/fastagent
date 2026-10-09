@@ -6,17 +6,17 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, join, relative } from "node:path";
 import { isModelSpec, isReleaseAgentName } from "./workspace.ts";
-import { type FastagentConfig, providerOf } from "../engines/pi/config.ts";
-import { resolveAuthPath } from "../engines/pi/auth.ts";
+import { type FastagentConfig, providerOf } from "../harnesses/pi/config.ts";
+import { resolveAuthPath } from "../harnesses/pi/auth.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
-import { resolveAgentTools } from "../engines/pi/create.ts";
-import { loadAgentDefinition } from "../engines/pi/definition.ts";
+import { resolveAgentTools } from "../harnesses/pi/create.ts";
+import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
 import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
-import { agentModels } from "../engines/pi/agent-models.ts";
+import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
   createPiModelRuntime,
@@ -29,7 +29,7 @@ import {
   inGlobalCatalog,
   interactiveLoginKind,
   loginProviders,
-} from "../engines/pi/models.ts";
+} from "../harnesses/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";

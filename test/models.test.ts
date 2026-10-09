@@ -24,11 +24,11 @@ import {
   providerAuthStatuses,
   refreshCatalog,
   modelRuntimeFiles,
-} from "../src/engines/pi/models.ts";
-import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
-import { agentModels, createPiModels } from "../src/engines/pi/agent-models.ts";
-import { resolveModel } from "../src/engines/pi/config.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+} from "../src/harnesses/pi/models.ts";
+import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { agentModels, createPiModels } from "../src/harnesses/pi/agent-models.ts";
+import { resolveModel } from "../src/harnesses/pi/config.ts";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 
 type FakeProvider = {
   id: string;

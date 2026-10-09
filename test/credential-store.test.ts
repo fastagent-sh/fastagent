@@ -18,13 +18,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
-import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
-import { createPiAgent } from "../src/engines/pi/create.ts";
-import { createAgentService } from "../src/engines/pi/service.ts";
-import { login, loginOptions } from "../src/engines/pi/login.ts";
-import { probeAuthSource } from "../src/engines/pi/models.ts";
-import { createPiModels } from "../src/engines/pi/agent-models.ts";
-import { availableModelsFromDir, createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
+import { createPiAgent } from "../src/harnesses/pi/create.ts";
+import { createAgentService } from "../src/harnesses/pi/service.ts";
+import { login, loginOptions } from "../src/harnesses/pi/login.ts";
+import { probeAuthSource } from "../src/harnesses/pi/models.ts";
+import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
+import { availableModelsFromDir, createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { makeFaux } from "./faux.ts";
 
 /** pi's in-memory store, with every call recorded. */

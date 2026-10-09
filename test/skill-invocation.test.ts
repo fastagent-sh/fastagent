@@ -1,7 +1,7 @@
 /**
  * RUNNING a listed command, over the data plane (docs/design/session-control.md §5.1.1).
  *
- * `commands()` publishes names; this is what sending one back means. The whole reason it is the ENGINE's job and
+ * `commands()` publishes names; this is what sending one back means. The whole reason it is the HARNESS's job and
  * not a client's: the expansion reads the definition's own files, so it works the same for an in-process caller
  * and for one holding nothing but an HTTP connection. A client that reconstructed the prompt from
  * `skills/<name>/SKILL.md` would be re-implementing definition loading AND would break against a remote agent,
@@ -9,7 +9,7 @@
  *
  * THE REAL ASSEMBLY, not a hand-built session: the behaviour needs two things to hold at once — pi's
  * `AgentSession.prompt()` expands the prefix, and fastagent hands it the definition's skills with a readable
- * `filePath` while never passing `expandPromptTemplates: false` (src/engines/pi/turn-kit.ts). Either half can
+ * `filePath` while never passing `expandPromptTemplates: false` (src/harnesses/pi/turn-kit.ts). Either half can
  * regress without a word changing in this file, so the assertion is on the bytes the model receives, through
  * `createPiAgentFromDefinition`.
  */
@@ -24,10 +24,10 @@ import type { Agent } from "../src/agent.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { log } from "../src/log.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
+import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
 import { makeFaux } from "./faux.ts";
 
 const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather.\n---\n${body}\n`;
@@ -56,7 +56,7 @@ it("`/skill:<name>` arrives as the skill's BODY, re-read per turn, with the argu
   const { agent, skillPath, sent } = await agentWithSkill();
   await collect(agent.invoke({ session: "s" }, { text: "/skill:weather in Berlin" }));
 
-  // The engine read the file and sent its contents; the client sent 23 characters.
+  // The harness read the file and sent its contents; the client sent 23 characters.
   expect(sent()).toContain("Call the METAR endpoint.");
   expect(sent()).toContain('<skill name=\\"weather\\"');
   expect(sent()).toContain("in Berlin");
@@ -69,7 +69,7 @@ it("`/skill:<name>` arrives as the skill's BODY, re-read per turn, with the argu
   expect(sent()).not.toContain("Call the METAR endpoint.");
 });
 
-it("the same prompt over HTTP produces the same expansion — the point of putting it in the engine", async () => {
+it("the same prompt over HTTP produces the same expansion — the point of putting it in the harness", async () => {
   // A remote client has no access to `skills/weather/SKILL.md`; it sends the spelling and nothing else. If this
   // ever diverged from the in-process path, every GUI would have to reimplement definition loading to compensate.
   const { agent, sent } = await agentWithSkill();
@@ -154,7 +154,7 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
     lease: inProcessLease(),
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd: dir }),
-      engine: async () => ({ modelRuntime }),
+      createModelRuntime: async () => modelRuntime,
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       // A list that still names the skill, pinned the way a run in flight pins it.
       readDefinition: () => ({

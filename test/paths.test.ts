@@ -1,5 +1,5 @@
 /**
- * ADDRESSING and the neutral path helpers (src/paths.ts): engine-neutral by nature, so their spec lives here rather
+ * ADDRESSING and the neutral path helpers (src/paths.ts): harness-neutral by nature, so their spec lives here rather
  * than inside the config or scaffold suites.
  */
 import { describe, expect, it } from "vitest";

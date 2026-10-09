@@ -11,7 +11,7 @@
  *
  * SPEC conformance therefore stays where it can be asserted honestly: test/conformance-session.test.ts
  * runs the full suite (MUST 1/2/3/6) against the L0 on a faux model. Cancellation in particular gains
- * nothing from a live provider — the assertion is that the engine's abort ran, which is identical in
+ * nothing from a live provider — the assertion is that the harness's abort ran, which is identical in
  * both worlds. What only a real provider can settle is here: a real stream completes, a real HTTP
  * error becomes a `failed` terminal with the right `retryable`, a real record carries a conversation
  * across two independent instances, and a real model CALLS a tool this repo described to it.
@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { AgentEvent } from "../../src/agent.ts";
 import { collect } from "../../src/collect.ts";
-import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
+import { createPiAgentFromDir } from "../../src/harnesses/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
 

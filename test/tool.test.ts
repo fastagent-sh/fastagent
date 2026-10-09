@@ -6,14 +6,14 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collect, defineTool, z } from "../src/index.ts";
-import { loadTools } from "../src/engines/pi/tool.ts";
+import { loadTools } from "../src/harnesses/pi/tool.ts";
 import {
   CODING_TOOL_NAMES,
   createPiAgentFromDefinition,
   fastagentPromptSections,
   piAllCodingTools,
   resolveAgentTools,
-} from "../src/engines/pi/create.ts";
+} from "../src/harnesses/pi/create.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 

@@ -1,17 +1,17 @@
 /**
  * One faux-backed agent, assembled the way serving assembles one. Tests that care about a channel,
- * the control plane or the HTTP surface should not each re-derive the engine wiring.
+ * the control plane or the HTTP surface should not each re-derive the harness wiring.
  */
 import { dirname } from "node:path";
 import type { FauxResponseStep } from "@earendil-works/pi-ai";
 import { ModelRuntime, type Skill } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import type { MountedTool } from "../src/engines/pi/tool.ts";
-import { type Lease, type SessionObserver, inProcessLease } from "../src/engines/pi/turn-kit.ts";
-import { type CreatePiSessionControlOptions, createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
+import type { MountedTool } from "../src/harnesses/pi/tool.ts";
+import { type Lease, type SessionObserver, inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
+import { type CreatePiSessionControlOptions, createPiSessionControl } from "../src/harnesses/pi/session-control.ts";
 import type { SessionControl } from "../src/session.ts";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { makeFaux } from "./faux.ts";
@@ -56,10 +56,10 @@ export function fauxAgent(
     ...(options.observer ? { observer: options.observer } : {}),
     sessionFactory: piAgentSessionFactory({
       sessions,
-      engine: async () => {
+      createModelRuntime: async () => {
         const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         modelRuntime.registerNativeProvider(faux.provider);
-        return { modelRuntime };
+        return modelRuntime;
       },
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       ...(options.tools ? { tools: options.tools } : {}),
@@ -116,10 +116,10 @@ export async function fauxControlledAgent(
   const lease = options.lease ?? inProcessLease();
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    engine: async () => {
+    createModelRuntime: async () => {
       const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
       runtime.registerNativeProvider(modelRuntime.getProvider(faux.provider.id) ?? faux.provider);
-      return { modelRuntime: runtime };
+      return runtime;
     },
     ...(options.noDefaultModel ? {} : { modelSpec: `${model.provider}/${model.id}` }),
     ...(options.tools ? { tools: options.tools } : {}),

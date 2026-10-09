@@ -425,7 +425,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       if (!runStarted && extensionMayTakeInput) return { type: "completed" } as const;
       return {
         type: "failed",
-        details: "the engine settled the run without ending an assistant message",
+        details: "the harness settled the run without ending an assistant message",
         retryable: false,
       } as const;
     }).pipe(Effect.onError((cause) => Deferred.failCause(bound, cause)));

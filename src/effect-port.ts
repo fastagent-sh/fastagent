@@ -16,7 +16,7 @@
  *     platform error types and every operator-facing message read the ORIGINAL error, so the
  *     wrapper carries it verbatim and {@link portError} is how a caller gets it back.
  *
- * The channel kit, the pi engine, the AgentCore runtime and the scheduler all cross through here, so each rule is
+ * The channel kit, the pi harness, the AgentCore runtime and the scheduler all cross through here, so each rule is
  * written once.
  *
  * What is NOT here is a policy: whether a failure rejects a request, is logged, or ends a turn stays

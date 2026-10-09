@@ -15,9 +15,9 @@ import {
   piInMemorySessionRecordStore,
   piSessionId,
   piSessionRecordStore,
-} from "../src/engines/pi/session-store.ts";
+} from "../src/harnesses/pi/session-store.ts";
 import { log } from "../src/log.ts";
-import { publishedLeaf } from "../src/engines/pi/session-markers.ts";
+import { publishedLeaf } from "../src/harnesses/pi/session-markers.ts";
 
 /** What the built-in channels and a custom route() produce. */
 const CHANNEL_IDS = [
@@ -79,7 +79,7 @@ describe("piSessionRecordStore", () => {
     const after = await piSessionRecordStore({ dir, cwd }).openOrCreate("42");
 
     expect(after.getBranch().some((e) => JSON.stringify(e).includes("what did I ask?"))).toBe(true);
-    // One conversation, one record - this engine keeps its own under a subdirectory of the store.
+    // One conversation, one record - this harness keeps its own under a subdirectory of the store.
     expect((await SessionManager.list(cwd, join(dir, "agent-session"))).length).toBe(1);
   });
 });
@@ -199,7 +199,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     ).toHaveLength(1); // still just the one from the solo move
   });
 
-  it("a fork carries the ENGINE's custom entries and drops only the plane's own", async () => {
+  it("a fork carries the HARNESS's custom entries and drops only the plane's own", async () => {
     // An extension's fastagent-prefixed state is conversation history, not plane-owned machinery.
     // The fork stamp and leaf anchor describe the record and stay behind.
     const dir = await mkdtemp(join(tmpdir(), "fa-store-markers-"));

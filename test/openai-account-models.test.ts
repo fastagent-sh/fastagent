@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Models, OAuthCredential, Provider, ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { availableModelsFromDir } from "../src/engines/pi/open.ts";
-import { agentModels } from "../src/engines/pi/agent-models.ts";
-import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
-import { machineModelRuntime, piModelsOver } from "../src/engines/pi/models.ts";
-import { withAccountModels } from "../src/engines/pi/openai-account-models.ts";
+import { availableModelsFromDir } from "../src/harnesses/pi/open.ts";
+import { agentModels } from "../src/harnesses/pi/agent-models.ts";
+import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
+import { machineModelRuntime, piModelsOver } from "../src/harnesses/pi/models.ts";
+import { withAccountModels } from "../src/harnesses/pi/openai-account-models.ts";
 
 const MODELS_URL = "https://api.openai.com/v1/models";
 const TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token";

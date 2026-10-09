@@ -3,9 +3,9 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
-import type { FastagentConfig } from "../src/engines/pi/config.ts";
-import { globalCatalogPath } from "../src/engines/pi/models.ts";
-import { createPiModels } from "../src/engines/pi/agent-models.ts";
+import type { FastagentConfig } from "../src/harnesses/pi/config.ts";
+import { globalCatalogPath } from "../src/harnesses/pi/models.ts";
+import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
 
 /** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
  *  directory's, and the temp prefix would not pass the release-name rule. */

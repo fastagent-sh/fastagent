@@ -4,7 +4,7 @@
 
 fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`SYSTEM.md` / `APPEND_SYSTEM.md` prompt, `skills/`, tools, and existing `AGENTS.md` project context) into a live service inside an app, in Telegram, Slack or Feishu, or behind a custom channel without a new authoring DSL.
 
-The stable design center is the engine-neutral Agent Handler contract (`docs/SPEC.md`); pi (`@earendil-works/pi-*`) is the reference implementation.
+The stable design center is the harness-neutral Agent Handler contract (`docs/SPEC.md`); pi (`@earendil-works/pi-*`) is the reference implementation.
 
 ## Source of truth
 
@@ -26,7 +26,7 @@ one place that cannot drift away from the code it explains. Directories that hav
 
 ```
 src/
-├── agent.ts                # the Agent Handler contract (pure types, no engine import)
+├── agent.ts                # the Agent Handler contract (pure types, no harness import)
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
 ├── session.ts              # the session-control contract: state/entries/events + dispatch, error codes
 ├── service.ts              # THE PRODUCT AS ONE CALL — a directory becomes a live service (mountAgentService),
@@ -36,7 +36,7 @@ src/
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
 ├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
-│                           # engine-neutral but needs Node / names the engine. Asserted in package-boundary.test.ts
+│                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
 ├── index.ts                # supported all-in-one entry (re-exports core + node + session + pi)
 ├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                    # the CLI, built on clig.dev
@@ -69,7 +69,7 @@ src/
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/.contexts)
-├── contexts/               # what an agent works on and knows — engine-neutral
+├── contexts/               # what an agent works on and knows — harness-neutral
 │   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
 │   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses
 │   ├── git.ts              # a GitHub context's git: which repository a checkout is of, its ref, a fresh clone
@@ -104,7 +104,7 @@ src/
 │   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
 │   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
-│   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), engine-neutral
+│   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), harness-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
 │   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
 │   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate serve.ts applies, responses)
@@ -217,20 +217,20 @@ src/
 │   ├── eventbridge-cron.ts # a cron in EventBridge's dialect; discovery refuses what it cannot express
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
-└── engines/pi/             # the pi reference implementation
-    ├── service.ts          # createAgentService: this engine's opener + the neutral mountAgentService
-    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, engine thunk)
+└── harnesses/pi/           # the pi reference implementation
+    ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
+    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, default model)
     ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
     │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
     ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
     ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
-    ├── agent-session-factory.ts # the engine binding: assembly → one record per invoke (bindPiSession)
+    ├── agent-session-factory.ts # the harness binding: assembly → one record per invoke (bindPiSession)
     ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
     ├── session-control.ts  # the pi control hub: observation projections + dispatch
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
     ├── session-markers.ts  # which journal entries are POSITIONS, which are the plane's own bookkeeping, and
-    │                       # which are conversation turns (vs the engine's own `system` entries)
+    │                       # which are conversation turns (vs the harness's own `system` entries)
     ├── entry-images.ts     # which images an entry publishes, their refs, and the read back from a ref
     ├── session-settings.ts # what a session is SET TO and may be set to (model + thinking level are ONE setting)
     ├── session-builder.ts  # definition-aware builder: assembly → resident pi AgentSessionRuntime (chat's TUI)
@@ -242,7 +242,7 @@ src/
     ├── wake-tool.ts        # the built-in `wake` tool; withWakeTool mounts it (serving path only)
     ├── definition.ts       # AGENTS.md + skills loading and bundling
     ├── machine.ts          # the machine an agent inherits: its skills, prompt templates (installed pi packages
-    │                       # included — never installed by us), engine settings and which Pi built-in extensions
+    │                       # included — never installed by us), harness settings and which Pi built-in extensions
     │                       # (codemode, tool-search; never mcp) stay enabled, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
     ├── authoring.ts        # creating an agent + editing its contexts as an API; `init`/`context` are thin wrappers
@@ -272,19 +272,19 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 1. **Focus on the user (foundation).** The author already has `AGENTS.md` + `skills/`; our job is velocity, not ceremony. Optimize, in order: workflow performance (`dev`/`start` must be fast), **actionable signal** (every failure surfaces as a `failed` event with a diagnosable message — never a silent fallback or a swallowed throw), reliability, documentation (`init` is complete-by-default so authors self-unblock), and scalability. Do the boring author-facing win over the shiny internal rewrite. Serve tomorrow's author too: prefer changes that keep large/growing definitions maintainable.
 2. **Incremental migration.** Both directions. For users: adoption is incremental (existing definition → service, a few rough edges acceptable if the path forward is viable). For us: migrate systems in place; a full rewrite pauses maintenance and usually loses. If you *must* rewrite, say so explicitly and own the risk.
 3. **Clarity.** Surface the *right* level of complexity at the best interaction point — do not mask it in the name of "getting out of the way." The `docs/SPEC.md` contract is the narrative; keep plans, APIs, and names plain. It's never too early to share a draft (this is what the PR loop is for) — test changes with whoever has the most context before building.
-4. **Re-evaluate assumptions, constraints, trade-offs.** Engine-/model-/cloud-neutrality exists *because* these change. Old code wasn't bad — its constraints differed; gain that context before reshaping it. Be honest that most solutions carry negative trade-offs; refuse the ones that put us in a worse future position, and don't stack complex abstractions on complex systems.
-5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionRecordStore` port, `engines/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
+4. **Re-evaluate assumptions, constraints, trade-offs.** Harness-/model-/cloud-neutrality exists *because* these change. Old code wasn't bad — its constraints differed; gain that context before reshaping it. Be honest that most solutions carry negative trade-offs; refuse the ones that put us in a worse future position, and don't stack complex abstractions on complex systems.
+5. **Maximize option value.** Every change should unlock more future options, not fewer. This is the architecture's design center: a neutral contract, clear API boundaries, swappable implementations (the `PiSessionRecordStore` port, `harnesses/pi/`), and carefully chosen dependencies. Prefer modular seams that let a piece be replaced over monoliths that must move as one.
 
 ## Working rules specific to this repo
 
-- **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
+- **The contract is harness-neutral.** `src/agent.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
 - **Per-invoke state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per invoke and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what satisfies SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
-- **Public surface is scoped on purpose.** `src/core.ts` is engine- and runtime-neutral (zero packages), `src/node.ts` is engine-neutral but needs a Node runtime, `src/pi.ts` names the engine, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (zero packages), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
-- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, `tools/`, `channels/`, `schedules/`, its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and engine settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
-- **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What an engine needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
+- **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, `tools/`, `channels/`, `schedules/`, its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and harness settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.
+- **A session id belongs to the Caller.** `scope.session` is opaque and arbitrary — a telegram group is `-1001234567890`, a feishu thread carries `:` and `/`. What a harness needs to store it (pi rejects all of those as record names, so they are encoded) is storage detail and must not leak back out: a tool asking which conversation it is in gets the id the channel minted, not the record's name.
 - **The run plane and the observation plane read the same state, through the same function.** They answer different questions about one session — what will execute, and what to report — so deriving them separately is how they come to disagree. The concrete failures this rule is made of: a turn running on assembly defaults while `state()` reported the recorded override, and one plane refusing a record with a cut parent chain while the other silently ran on the truncated path.
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `writeFileAtomic` and `sessionToolActivation` are that shape.
 - **A shared rule is tested once, where it lives; a caller's test proves only its own wiring.** Four hosts calling one `registerWebhooks` do not each owe a "long-connection is not registered" test — that belongs to `deploy-channel-ingress.test.ts`, and a host test owes the URL it hands over and what it does with the gate. Same for the two SSE routes over one `sseResponse`, the Lark scaffold that is the Feishu one with the cloud swapped, and a chat channel over `channels/kit/turn-*` (its own tests cover the record shape, the ACK boundary, and how a dropped or deferred turn reaches the asker — not the ceiling arithmetic). A list-driven structural guard is likewise ONE test whose assertion names the offending file, not one `it` per file: `package-boundary.test.ts` shed 40 cases that way without losing a line of coverage.

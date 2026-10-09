@@ -2,22 +2,22 @@
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
 import { inspectChannels } from "../../channels/discover.ts";
-import { loadConfig, providerOf, resolveModel, resolveModelSpec } from "../../engines/pi/config.ts";
-import { machineModels } from "../../engines/pi/models.ts";
-import { agentModels } from "../../engines/pi/agent-models.ts";
+import { loadConfig, providerOf, resolveModel, resolveModelSpec } from "../../harnesses/pi/config.ts";
+import { machineModels } from "../../harnesses/pi/models.ts";
+import { agentModels } from "../../harnesses/pi/agent-models.ts";
 import { resolveSessionsDir, resolveStateRoot } from "../../paths.ts";
-import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../engines/pi/create.ts";
-import { loadAgentDefinition } from "../../engines/pi/definition.ts";
+import { CODING_TOOL_NAMES, type IndirectTool, resolveAgentTools } from "../../harnesses/pi/create.ts";
+import { loadAgentDefinition } from "../../harnesses/pi/definition.ts";
 import {
   describeIndirectTools,
   describePrompt,
   reportFindingsIfChanged,
   reportToolCollisions,
-} from "../../engines/pi/report.ts";
+} from "../../harnesses/pi/report.ts";
 import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { readMachine, withMachine } from "../../engines/pi/machine.ts";
+import { readMachine, withMachine } from "../../harnesses/pi/machine.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";

@@ -80,7 +80,7 @@ function boldText(value: string): string {
 /**
  * One trace line: the tool, what it was called on, and — on the failure line — that it failed.
  *
- * Tool OUTPUT never leaves the process, failed or not: the channel would have to guess the engine's
+ * Tool OUTPUT never leaves the process, failed or not: the channel would have to guess the harness's
  * result shape to read it, and the agent already explains a failure it recovered from in its answer.
  * The failure line therefore repeats the operation instead of adding one: it states WHICH call failed
  * (six `Bash` calls in a turn are otherwise indistinguishable) without exposing anything the start

@@ -2,7 +2,7 @@
  * Which journal entries are POSITIONS, which are the control plane's own bookkeeping, and which are turns in the
  * CONVERSATION. pi's journal has one shape for everything, so the plane writes what it needs to remember into the
  * same log the conversation lives in (what fork a record is, and the anchor that makes a leaf move survive a
- * reopen) — and since 0.86 the ENGINE writes its own bookkeeping there too, as the `system` entries carrying the
+ * reopen) — and since 0.86 the HARNESS writes its own bookkeeping there too, as the `system` entries carrying the
  * assembled prompt. Three questions, one file: a reader of the journal answers them here or it answers them alone,
  * which is how one reader came to count the prompt as history.
  */
@@ -29,7 +29,7 @@ export function isPlaneMarker(entry: { type?: string; customType?: string }): bo
  * An entry that is a TURN IN THE CONVERSATION — what a reader counting, previewing or searching the history means
  * by "a message".
  *
- * The line it draws is the ENGINE's prompt state. Since pi 0.86 pi writes `system` messages into the same log the
+ * The line it draws is the HARNESS's prompt state. Since pi 0.86 pi writes `system` messages into the same log the
  * conversation lives in, carrying the assembled prompt (system prompt, project context, skill and tool descriptions)
  * plus one more per prompt or tool-set change. They are bookkeeping, not something anyone said, and every reader
  * of the journal has to decide about them. Deciding once, here, is the point: the first reader that forgot cut

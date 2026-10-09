@@ -1,6 +1,6 @@
 /**
- * Agent assembly (configuration-time): the engine assets (tools, prompt) plus the reusable ladder that puts a pi agent
- * together.
+ * Agent assembly (configuration-time): the definition's assets (tools, prompt) plus the reusable ladder that puts a
+ * pi agent together.
  */
 import { toUSVString } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -305,10 +305,11 @@ export interface PiAssembly {
   /** A fresh runtime for every session, before loading its extensions. */
   createModelRuntime: () => Promise<ModelRuntime>;
   /**
-   * The registry and the default model, resolved on first use (a credential read is async). No model when the
-   * assembly has no default: each session then runs on the model it records (agent-session-factory.ts).
+   * The default model, resolved against the catalog on first use (a credential read is async); throws when it does not
+   * resolve. Undefined when the assembly has no default: each session then runs on the model it records
+   * (agent-session-factory.ts).
    */
-  engine: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
+  resolveDefaultModel: () => Promise<AnyModel | undefined>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
   /** The tools every session mounts. */
@@ -354,18 +355,15 @@ function assemblePi(opts: {
   const createModelRuntime = opts.models;
   // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
   const modelRuntime = opts.catalog;
-  const resolveEngine = () => {
-    const spec = opts.model;
-    return modelRuntime().then((runtime) => ({
-      modelRuntime: runtime,
-      ...(spec ? { model: resolveModel(runtime, spec) } : {}),
-    }));
+  const resolveDefaultModel = async (): Promise<AnyModel | undefined> => {
+    const runtime = await modelRuntime();
+    return opts.model ? resolveModel(runtime, opts.model) : undefined;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    engine: async () => ({ modelRuntime: await createModelRuntime() }),
+    createModelRuntime,
     ...(opts.model ? { modelSpec: opts.model } : {}),
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
@@ -380,7 +378,7 @@ function assemblePi(opts: {
     sessionFactory,
     modelRuntime,
     createModelRuntime,
-    engine: resolveEngine,
+    resolveDefaultModel,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     tools: opts.tools ?? [],
     excludedToolNames,
@@ -402,8 +400,8 @@ export interface CreatePiAgentOptions {
   /** Reasoning effort (pi's scale). */
   thinkingLevel?: ThinkingLevel;
   /**
-   * The system prompt itself — no engine base and no wrapping (unlike the directory path, where pi builds its default
-   * prompt, or SYSTEM.md replaces it, and AGENTS.md, APPEND_SYSTEM.md and FastAgent's sections are added).
+   * The system prompt itself — no harness base and no wrapping (unlike the directory path, where pi builds its
+   * default prompt, or SYSTEM.md replaces it, and AGENTS.md, APPEND_SYSTEM.md and FastAgent's sections are added).
    */
   instructions?: string | (() => string);
   /** The tool set to mount: authored tools or pi's cwd-bound coding tools, both AgentTool. */

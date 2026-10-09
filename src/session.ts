@@ -1,5 +1,6 @@
 /**
- * Session control plane — the engine-neutral serving extension beside Agent Handler (docs/design/session-control.md).
+ * Session control plane — the harness-neutral serving extension beside Agent Handler
+ * (docs/design/session-control.md).
  */
 import type { ImageRef, Json, Prompt } from "./agent.ts";
 
@@ -194,7 +195,7 @@ export const NOTHING_TO_COMPACT_CODE = "nothing_to_compact";
 
 /**
  * Stable `SessionResult.error.code` for a run action that reached an active run but could not take effect because the
- * run raced to settlement (or the engine refused it).
+ * run raced to settlement (or the harness refused it).
  */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
@@ -215,7 +216,7 @@ export const PARTIAL_UPDATE_CODE = "partial_update";
  *
  * `ok: false` means the command did not COMPLETE, which is not the same as "nothing happened". Every code except
  * {@link PARTIAL_UPDATE_CODE} is a rejection before acceptance with nothing durable landed; that one reports fields
- * that did land, because properties are separate journal entries and no engine here can roll them back. So the
+ * that did land, because properties are separate journal entries and no harness here can roll them back. So the
  * question "may I send this again" is answered by `retryable`, never by `ok` — a client that blindly re-sends every
  * `ok: false` re-applies what a partial update already wrote.
  */
@@ -225,7 +226,7 @@ export type SessionResult =
 
 /**
  * What became of an accepted `steer`/`followUp` prompt — present on exactly those results. `queued`: it waits in
- * {@link PendingPrompts} until the run takes it in. `handled`: the engine consumed it before the queue (in pi, a
+ * {@link PendingPrompts} until the run takes it in. `handled`: the harness consumed it before the queue (in pi, a
  * definition extension's `input` handler), so it never enters the conversation, and no `queue_changed` or
  * `user_message` reports it.
  */
@@ -285,7 +286,7 @@ export interface SessionEntries {
 
 /**
  * A durable append-only session record. `kind` guarantees a minimum vocabulary of "user" | "assistant" | "tool";
- * engine-specific kinds beyond it MUST be skippable.
+ * harness-specific kinds beyond it MUST be skippable.
  */
 export interface SessionEntry {
   id: string;
@@ -371,7 +372,7 @@ export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" 
  * `message_finished` and durably by its `assistant` entry, so a reopened conversation reads what a watcher saw.
  * `truncated` is an answer cut off at the output limit — a property of the answer, not of its run, which may still
  * complete. An answer whose entry a `context_edit { omitted }` targets (`failed` or `truncated`) is an attempt the
- * engine abandoned; a retry usually, but not always, follows it.
+ * harness abandoned; a retry usually, but not always, follows it.
  */
 export type AnswerOutcome = { status: "failed" | "aborted" | "truncated"; error?: { message: string } };
 export type MessageFinishedEvent = SessionEvent<"message_finished", { outcome?: AnswerOutcome }> & { runId: string };
@@ -400,7 +401,7 @@ export type ToolFinishedEvent = SessionEvent<
   runId: string;
 };
 /**
- * The prompts queued on the active run, oldest first, as the engine queued them: plain text as sent, a slash command
+ * The prompts queued on the active run, oldest first, as the harness queued them: plain text as sent, a slash command
  * already expanded (a `/skill:…` becomes the skill's text), without its images (its `user_message` carries them). A
  * prompt LEAVES its list when it enters the conversation as a user message: from then on it is in the record and in
  * every later model call (an abort can still end the run before the model answers it). Whatever is still listed when
@@ -438,7 +439,7 @@ export type RetryScheduledEvent = SessionEvent<
   "retry_scheduled",
   {
     /**
-     * "assistant" is an engine that retries the ANSWER request itself (pi's AgentSession does; pi's own session does;
+     * "assistant" is a harness that retries the ANSWER request itself (pi's AgentSession does; pi's own session does;
      * a summarization call is the other two).
      */
     operation: "assistant" | "compaction" | "branch_summary";

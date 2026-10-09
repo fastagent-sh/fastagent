@@ -1,6 +1,6 @@
 /** `fastagent invoke <message> [agent]`: run ONE turn against the assembled agent, then exit. */
 import { randomUUID } from "node:crypto";
-import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { failStartup } from "../fail.ts";
 import { enterAgentCommand, reportAuth } from "../shared.ts";

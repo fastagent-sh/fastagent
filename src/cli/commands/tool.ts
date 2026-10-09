@@ -1,11 +1,11 @@
 /** `fastagent tool <name> '<json>' [agent]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
 import { enterAgentEnv } from "../../env.ts";
-import { loadConfig } from "../../engines/pi/config.ts";
+import { loadConfig } from "../../harnesses/pi/config.ts";
 
-import { resolveAgentTools } from "../../engines/pi/create.ts";
+import { resolveAgentTools } from "../../harnesses/pi/create.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
-import { turnContext } from "../../engines/pi/tool-context.ts";
+import { turnContext } from "../../harnesses/pi/tool-context.ts";
 import { resolveContexts } from "../../contexts/resolve.ts";
 import { agentDirOrExit, failStartup, failUsage, gateSecretsOrExit } from "../fail.ts";
 

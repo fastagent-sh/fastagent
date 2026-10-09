@@ -8,7 +8,7 @@ import { type Server, createServer } from "node:http";
 import { type BoxShell, deploymentLoginCommand } from "../deploy/box-shell.ts";
 import { boxLoginCommand } from "../deploy/container.ts";
 import type { DeployHost } from "../deploy/hosts.ts";
-import type { LoginIO } from "../engines/pi/login.ts";
+import type { LoginIO } from "../harnesses/pi/login.ts";
 import { relayLogin } from "./login-relay.ts";
 import { terminalLoginIO } from "./shared.ts";
 

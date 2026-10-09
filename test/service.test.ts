@@ -11,9 +11,9 @@ import { pathToFileURL } from "node:url";
 import { getEventListeners } from "node:events";
 import { log } from "../src/log.ts";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentService } from "../src/engines/pi/service.ts";
+import { createAgentService } from "../src/harnesses/pi/service.ts";
 import { mountAgentService } from "../src/service.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 
 async function agentDir(
   files: Record<string, string> = {},

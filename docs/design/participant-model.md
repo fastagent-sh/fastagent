@@ -19,7 +19,7 @@ invalidates the rules rather than adjusting them.
 
 ## 0.1 What a participant's text can invoke
 
-A participant's message is prompt TEXT, and the engine expands two spellings in it before the model
+A participant's message is prompt TEXT, and the harness expands two spellings in it before the model
 sees them: `/skill:<name>` and the bare `/<name>` of a prompt template. Both resolve against what this
 process loaded — the definition's skills plus the machine's (`docs/configuration.md`).
 
@@ -184,8 +184,8 @@ The unit of concurrency is the session, and the session is the place:
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and the engine's single-writer
-lease in `engines/pi/turn-kit.ts`). Two turns in different places run concurrently.
+Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and the harness's single-writer
+lease in `harnesses/pi/turn-kit.ts`). Two turns in different places run concurrently.
 
 Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs
 convergence, and a tree only provides divergence. Concatenating two independently computed turns
@@ -244,7 +244,7 @@ cannot read the session).
 **Rungs 3 and 4 are one mechanism with two parameters, implemented as session inheritance.** The
 channel states two facts only it knows — which place this one branched from (`scope.parentSession`,
 SPEC §8's extension mechanism) and which message ids may locate the branch point (`scope.branchHints`:
-the referent and its reply chain) — and the engine does the rest ONCE, when the thread's session is
+the referent and its reply chain) — and the harness does the rest ONCE, when the thread's session is
 first created: the session existing is the record that the decision was taken, so there is no marker
 to persist and no decision to retry. The fork copies the room's active path up to the branch point (a
 hit is extended to the end of its exchange, so a mid-exchange fork does not inherit a question without

@@ -11,7 +11,7 @@ import { declareContexts } from "../src/contexts/declare.ts";
 import { declarationFor } from "../src/contexts/source.ts";
 import { contextsAbsentHere, resolveContexts } from "../src/contexts/resolve.ts";
 import { rewriteContexts } from "../src/contexts/config-text.ts";
-import { writeContexts } from "../src/engines/pi/config.ts";
+import { writeContexts } from "../src/harnesses/pi/config.ts";
 
 const AGENT = "/home/me/agents/reviewer";
 

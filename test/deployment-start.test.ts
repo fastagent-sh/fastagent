@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
-// This test pays a project compile plus TWO cold engine starts in child processes: ~3s on an idle
+// This test pays a project compile plus TWO cold harness starts in child processes: ~3s on an idle
 // machine, but a full `npm test` run puts a fork on every core and has been measured past the old 30s
 // ceiling. The budget is raised, not the parallelism (vitest.config.ts states why). The child ceiling
 // stays the tighter of the two so a hung child is reported as itself, not as an opaque test timeout.

@@ -7,7 +7,7 @@ import { log } from "../src/log.ts";
 import { attachedFilesManifest } from "../src/channels/kit/invoke-turn-kit.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { toSessionEvent } from "../src/engines/pi/invoke-session.ts";
+import { toSessionEvent } from "../src/harnesses/pi/invoke-session.ts";
 import {
   agentEventProjection,
   answerThinking,
@@ -16,7 +16,7 @@ import {
   errorToTerminal,
   toPiPromptOptions,
   toTerminal,
-} from "../src/engines/pi/turn-kit.ts";
+} from "../src/harnesses/pi/turn-kit.ts";
 import type { Json } from "../src/agent.ts";
 
 describe("classifyRetryable (structured signal first, prose as the ceiling)", () => {
@@ -42,7 +42,7 @@ describe("classifyRetryable (structured signal first, prose as the ceiling)", ()
   });
 });
 
-describe("terminals read the engine's own signal", () => {
+describe("terminals read the harness's own signal", () => {
   const message = (over: Record<string, unknown>) =>
     ({
       role: "assistant",

@@ -1,4 +1,4 @@
-// Engine-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
+// Harness-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
 // VALUES, not types: each caller does something DIFFERENT with these codes (busy: retry with backoff, skip the
 // occurrence, or steer the live run instead of failing; aborted: settle a deliberate stop, never replay it;

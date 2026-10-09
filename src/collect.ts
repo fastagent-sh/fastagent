@@ -6,7 +6,7 @@
  * consumers for-await themselves.
  *
  * Agent side: the cancellation protocol (SPEC MUST 3), in two halves that only work together —
- * `abortFirstIterator` delivers the consumer's knock, `cancellableStream` is what an engine wraps
+ * `abortFirstIterator` delivers the consumer's knock, `cancellableStream` is what a harness wraps
  * its turn in to receive it.
  */
 import type { AgentEvent, Json } from "./agent.ts";
@@ -58,9 +58,9 @@ export function abortFirstIterator<T>(gen: AsyncGenerator<T>, cancel: () => void
 
 /** What a turn generator gets so a consumer walking away can stop it. */
 export interface CancelHooks {
-  /** Publish the door: how to abort the engine work, once there is engine work to abort. */
+  /** Publish the door: how to abort the harness work, once there is harness work to abort. */
   onCancelReady: (cancel: () => void) => void;
-  /** The latch, for the window where the door is armed but the engine is still idle — knocking then
+  /** The latch, for the window where the door is armed but the harness is still idle — knocking then
    *  does nothing, so a turn must read this before committing to work no one is waiting for. */
   wasCancelled: () => boolean;
 }
@@ -93,7 +93,7 @@ export function cancellableStream<T>(start: (hooks: CancelHooks) => AsyncGenerat
 export class AgentFailure extends Error {
   readonly details: string;
   readonly retryable: boolean;
-  /** Machine-readable failure subdivision (SPEC §8), when the engine set one. */
+  /** Machine-readable failure subdivision (SPEC §8), when the harness set one. */
   readonly code?: string;
   constructor(details: string, retryable: boolean, code?: string) {
     super(details);

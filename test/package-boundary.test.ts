@@ -47,7 +47,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     for (const dep of CLI_ONLY) expect(pkgs).not.toContain(dep);
   });
 
-  it("the ./telegram subpath is neutral — no engine, no third-party SDK (it is fetch-only)", () => {
+  it("the ./telegram subpath is neutral — no harness, no third-party SDK (it is fetch-only)", () => {
     const pkgs = staticPackageGraph("telegram.ts");
     expect([...pkgs].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
   });
@@ -85,7 +85,7 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
   });
 });
 
-describe("engine neutrality: the core subpath + channel spine import no engine package", () => {
+describe("harness neutrality: the core subpath + channel spine import no harness package", () => {
   // The neutral layer (the contract and the N-side that consumes only the contract) must never pull
   // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
   const neutral = [
@@ -293,9 +293,9 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // agent.ts (what an engine implements), channel.ts (what a trigger implements) and session.ts (the
+  // agent.ts (what a harness implements), channel.ts (what a trigger implements) and session.ts (the
   // serving control plane) are the three product contracts — pure types, zero packages. The bar is
-  // ZERO rather than "no engine": an agent directory's hand-written channel imports ChannelModule,
+  // ZERO rather than "no harness": an agent directory's hand-written channel imports ChannelModule,
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
   it("each of the three pulls no package at all", () => {
@@ -306,7 +306,7 @@ describe("the contracts depend on nothing", () => {
   });
 
   it("the three neutral layers each cost exactly what their name promises", () => {
-    // Engine-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
+    // Harness-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
     // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
     // drops both. Each layer's package list is that statement, checkable.
     expect([...staticPackageGraph("core.ts")]).toEqual([]);
@@ -322,7 +322,7 @@ describe("the contracts depend on nothing", () => {
       "effect/Fiber",
       "effect/Scope",
     ]);
-    // ...and neither neutral layer names an engine (the engine-neutrality suite above covers this
+    // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this
     // for core; node now carries the assembly, so it needs the same bar).
     expect([...staticPackageGraph("node.ts")].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
   });

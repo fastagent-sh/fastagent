@@ -48,13 +48,11 @@ directory stays on this machine, and a deployment says so.
 
 FastAgent deliberately keeps the serving layer small and composable:
 
-- **Handler contract** — `invoke` is the internal seam between triggers, agents, engines, and hosts.
+- **Handler contract** — `invoke` is the internal seam between triggers, agents, harnesses, and hosts.
 - **Small core** — the stable center is the Agent Handler contract, not a platform runtime.
 - **App-owned runtime** — your app keeps auth, users, database, routes, deployment, and policy.
 - **Typed edges** — tools, events, and request bodies are explicit and validated at boundaries.
 - **Filesystem truth** — the deployable definition is the directory, not ambient machine state.
-
-Terminology: these docs and the [SPEC](SPEC.md) say *engine*; the ecosystem — and [fastagent.sh](https://fastagent.sh) — call the same seam the *agent harness*. One concept, one contract.
 
 See [Design principles](principles.md) for the full rationale and non-goals.
 
@@ -65,7 +63,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to** — no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
 - **No new format or DSL** — `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
-- **Engine-neutral contract; pi reference implementation** — channels depend on `Agent`, while the included assembly uses pi; models and hosts remain replaceable runtime choices.
+- **Harness-neutral contract; pi reference implementation** — channels depend on `Agent`, while the included assembly uses pi; models and hosts remain replaceable runtime choices.
 
 ## Two main use cases
 
@@ -144,4 +142,4 @@ Implemented today:
 Not implemented yet:
 
 - Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
-- Additional engine reference bindings beyond pi.
+- Additional harness reference bindings beyond pi.

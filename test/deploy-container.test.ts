@@ -1,8 +1,8 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts } from "../src/deploy/container.ts";
-import { fastagentPromptSections } from "../src/engines/pi/create.ts";
-import type { MountedTool } from "../src/engines/pi/tool.ts";
+import { fastagentPromptSections } from "../src/harnesses/pi/create.ts";
+import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 
 const input = {
   releaseId: "release-one",

@@ -404,7 +404,7 @@ export async function createPiAgentFromDir(
     // The plane resolves the registry and the default pair through the SAME function a turn's binding does, at each
     // use (the definition's extensions can change both). Resolved once here as well, only when the boundary is wired,
     // so a default model that does not resolve stops the open rather than the first control call.
-    if (publish) await assembly.engine();
+    if (publish) await assembly.resolveDefaultModel();
     const boundary = publish
       ? {
           lease: assembly.lease,

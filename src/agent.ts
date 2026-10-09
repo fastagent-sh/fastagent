@@ -1,6 +1,6 @@
 /**
- * Agent Handler protocol v0.1 — the engine-neutral contract (docs/SPEC.md). Pure types: importing an engine here is
- * forbidden (`@earendil-works/pi-*` may only appear under engines/).
+ * Agent Handler protocol v0.1 — the harness-neutral contract (docs/SPEC.md). Pure types: importing a harness here is
+ * forbidden (`@earendil-works/pi-*` may only appear under harnesses/).
  */
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -38,13 +38,13 @@ export type AgentEvent =
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   /**
-   * Advisory, non-terminal (engines MAY emit it): the running tool `id`'s current status, one line, replacing the last.
-   * It may be a line of the tool's output so far (trust it like `tool_ended.content`), never the whole output;
+   * Advisory, non-terminal (harnesses MAY emit it): the running tool `id`'s current status, one line, replacing the
+   * last. It may be a line of the tool's output so far (trust it like `tool_ended.content`), never the whole output;
    * untruncated, so a consumer that shows it clips it.
    */
   | { type: "tool_progress"; id: string; text: string }
   /**
-   * Advisory, non-terminal (engines MAY emit it): a transient internal failure scheduled a retry with backoff — the
+   * Advisory, non-terminal (harnesses MAY emit it): a transient internal failure scheduled a retry with backoff — the
    * turn is still alive.
    */
   | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
@@ -54,7 +54,7 @@ export type AgentEvent =
   | { type: "failed"; details: string; retryable: boolean; code?: string };
 
 /**
- * The `failed.code` (SPEC §8 failure subdivision) the reference engine sets when a turn is rejected because the
+ * The `failed.code` (SPEC §8 failure subdivision) the reference harness sets when a turn is rejected because the
  * session is BUSY.
  */
 export const SESSION_BUSY_CODE = "session_busy";

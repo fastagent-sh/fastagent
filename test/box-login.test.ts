@@ -8,7 +8,7 @@ import { boxLoginCommand } from "../src/deploy/container.ts";
 import { relayLogin } from "../src/cli/login-relay.ts";
 import { catchingRedirect, loginOnBox } from "../src/cli/box-login.ts";
 import { processShell } from "../src/deploy/box-shell.ts";
-import type { LoginIO } from "../src/engines/pi/login.ts";
+import type { LoginIO } from "../src/harnesses/pi/login.ts";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 

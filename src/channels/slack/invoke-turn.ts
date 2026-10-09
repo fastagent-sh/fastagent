@@ -1,4 +1,4 @@
-/** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
+/** Resolve Slack file IDs at dequeue, then stream one harness-neutral Agent turn. */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";

@@ -9,7 +9,7 @@ import { type AgentSession, type AgentSessionEvent, createAgentSession } from "@
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineTool } from "../src/engines/pi/tool.ts";
+import { defineTool } from "../src/harnesses/pi/tool.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,19 +22,19 @@ import {
   SUBSCRIBER_BUFFER_BYTES,
   createPiSessionControl,
   type PiBoundaryWiring,
-} from "../src/engines/pi/session-control.ts";
+} from "../src/harnesses/pi/session-control.ts";
 import {
   type PiSessionRecordStore,
   piInMemorySessionRecordStore,
   piSessionRecordStore,
-} from "../src/engines/pi/session-store.ts";
-import { activePath, describeModels, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
-import type { AnyModel } from "../src/engines/pi/models.ts";
-import { admitCompaction, piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiModelRuntime } from "../src/engines/pi/models.ts";
-import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
+} from "../src/harnesses/pi/session-store.ts";
+import { activePath, describeModels, resolveSessionSettings } from "../src/harnesses/pi/session-settings.ts";
+import type { AnyModel } from "../src/harnesses/pi/models.ts";
+import { admitCompaction, piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { createPiModelRuntime } from "../src/harnesses/pi/models.ts";
+import { fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -51,8 +51,8 @@ import {
   type StateChangedEvent,
   type SessionControl,
 } from "../src/session.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
 import { bareSessionParts, makeFaux } from "./faux.ts";
 
 const echoTool: AgentTool = {
@@ -828,7 +828,7 @@ describe("session control: run modulation", () => {
       ]);
       const factory = piAgentSessionFactory({
         sessions,
-        engine: async () => ({ modelRuntime: models }),
+        createModelRuntime: async () => models,
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ systemPrompt: "test", skills: [] }),
         cwd: process.cwd(),
@@ -1200,7 +1200,7 @@ describe("session control: run modulation", () => {
   });
 
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
-    const { toTerminal } = await import("../src/engines/pi/turn-kit.ts");
+    const { toTerminal } = await import("../src/harnesses/pi/turn-kit.ts");
     const terminal = toTerminal({
       role: "assistant",
       content: [],
@@ -1221,7 +1221,7 @@ describe("session control: run modulation", () => {
   });
 
   it("stale controls are rejected after settlement — never a silent acceptance", async () => {
-    let captured: import("../src/engines/pi/turn-kit.ts").RunControls | undefined;
+    let captured: import("../src/harnesses/pi/turn-kit.ts").RunControls | undefined;
     const { agent } = fauxAgent([fauxAssistantMessage("done")], {
       observer: (_s, ev, run) => {
         if (ev.type === "run_started") captured = run;
@@ -1983,7 +1983,7 @@ describe("session control: boundary mutations", () => {
         const sessions = piInMemorySessionRecordStore({ cwd });
         const sessionFactory = piAgentSessionFactory({
           sessions,
-          engine: async () => ({ modelRuntime }),
+          createModelRuntime: async () => modelRuntime,
           modelSpec: `${model.provider}/${model.id}`,
           thinkingLevel,
           tools: [],
@@ -2059,7 +2059,7 @@ describe("session control: boundary mutations", () => {
     const executed = resolveSessionSettings(entries, models, { model: thinker, thinkingLevel: "medium" });
 
     // The record keeps the PREFERENCE — nothing rewrote it …
-    const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
+    const { lastOverrideEntries } = await import("../src/harnesses/pi/session-settings.ts");
     expect(lastOverrideEntries(entries).thinkingLevel).toBe("high");
     // … while every surface agrees on what actually happens.
     expect(state.thinkingLevel).toBe("off");
@@ -2278,7 +2278,7 @@ describe("session control: boundary mutations", () => {
     const entries = (await control.sessions.get("sNavKinds").entries()).entries;
     const modelChange = entries.find((e) => e.kind === "model_change");
     const user = entries.find((e) => e.kind === "user") as SessionEntry;
-    // Move away, then back onto the boundary record: it is a legitimate target — the engine itself
+    // Move away, then back onto the boundary record: it is a legitimate target — the harness itself
     // leaves the leaf sitting on one after every set_model.
     expect(await control.sessions.get("sNavKinds").update({ leafEntryId: user.id })).toEqual({ ok: true });
     expect(await control.sessions.get("sNavKinds").update({ leafEntryId: modelChange!.id })).toEqual({ ok: true });
@@ -2509,7 +2509,7 @@ describe("session control: boundary mutations", () => {
     const resolved = resolveSessionSettings(entries, models, fallback);
     expect(resolved?.model).toBe(fallback.model);
     // Fact surface agrees: no override reported.
-    const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
+    const { lastOverrideEntries } = await import("../src/harnesses/pi/session-settings.ts");
     expect(lastOverrideEntries(entries).model).toBeUndefined();
   });
 

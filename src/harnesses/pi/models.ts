@@ -37,7 +37,7 @@ export function piModelsOver(credentials: CredentialStore, providers: readonly P
 }
 
 /**
- * pi's Model with the API-shape generic erased — fastagent only passes models through to the engine, so the generic
+ * pi's Model with the API-shape generic erased — fastagent only passes models through to the harness, so the generic
  * carries no information.
  */
 // biome-ignore lint/suspicious/noExplicitAny: intentional variance-friendly model type, audited at this single point

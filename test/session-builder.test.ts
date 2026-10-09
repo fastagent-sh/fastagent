@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SessionManager, initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
+import { buildAgentSessionRuntime } from "../src/harnesses/pi/session-builder.ts";
 import { log } from "../src/log.ts";
 
 // `chat` must run the SAME agent dev/start serve, presented in pi's TUI — NOT pi's vanilla

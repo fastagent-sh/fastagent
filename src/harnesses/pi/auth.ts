@@ -1,5 +1,5 @@
 /**
- * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file, consumed by the
+ * Auth for the pi harness: a read-WRITE {@link CredentialStore} over a fastagent credentials file, consumed by the
  * `Models` collection (models.ts), and which of those files an agent reads. The write path refuses to overwrite a
  * corrupt file, so a torn read never clobbers the other providers' credentials.
  */

@@ -52,7 +52,7 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
   }
   if (usable.length === 0) return undefined;
   // Serialize each conversation message ONCE — the scan is hints × entries, and stringify must not sit in the inner
-  // loop. A hint is something a participant said, so the engine's own system entries are not searched: see
+  // loop. A hint is something a participant said, so the harness's own system entries are not searched: see
   // `isConversationMessage` for what a hint landing in the assembled prompt would otherwise do here.
   const serialized = path.map((entry) => (isConversationMessage(entry) ? JSON.stringify(entry.message) : ""));
   for (const hint of usable) {
@@ -68,7 +68,7 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
 
 /**
  * Bound what the child's MODEL CONTEXT starts with. Measured on pi's projection, what the model will actually see:
- * a `context_edit` omission (an abandoned retry or overflow attempt) costs nothing, and the engine's own `system`
+ * a `context_edit` omission (an abandoned retry or overflow attempt) costs nothing, and the harness's own `system`
  * entries are not history. The newest copied compaction (its summary, then the tail it retained) reaches the model
  * only while no window is cut: pi reads the NEWEST compaction alone, so a mark placed after it drops that tail. Its
  * summary, a few hundred tokens covering everything older, is carried into the mark instead.
@@ -162,7 +162,7 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
     let childId: string | undefined;
     switch (entry.type) {
       case "message":
-        // Every message, INCLUDING the engine's system entries: the child starts from the prompt the parent was
+        // Every message, INCLUDING the harness's system entries: the child starts from the prompt the parent was
         // running under, and pi diffs its own sections against it, so the thread's first request carries that
         // prompt once rather than twice.
         childId = child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);

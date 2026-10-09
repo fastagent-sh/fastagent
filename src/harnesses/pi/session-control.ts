@@ -13,7 +13,7 @@
  * `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-// The L0 rendering payload reads message text the way the engine does — ONE reading, joined without a
+// The L0 rendering payload reads message text the way the harness does — ONE reading, joined without a
 // separator because this payload is a transcript, not a preview line.
 import { contentText } from "@earendil-works/pi-ai";
 import type * as Cause from "effect/Cause";
@@ -135,7 +135,7 @@ function sessionUsage(
 
 /**
  * pi `PiSessionEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
- * kind vocabulary (user/assistant/tool) with a minimal render payload; every other engine record
+ * kind vocabulary (user/assistant/tool) with a minimal render payload; every other harness record
  * keeps its pi type as an open-set kind with an EMPTY payload — present so `parentId` chains and
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  * One exception: `context_edit` carries `{ targetId, omitted }`, never the replacement content.
@@ -181,7 +181,7 @@ function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry 
         },
       };
     }
-    // Not a conversation turn (`isConversationMessage`): the engine's own `system` bookkeeping, or a custom
+    // Not a conversation turn (`isConversationMessage`): the harness's own `system` bookkeeping, or a custom
     // AgentMessage role a channel/extension defined. Open-set kind with an EMPTY payload, skippable by contract —
     // which is also what keeps the assembled prompt out of everything this plane publishes.
     return { ...base, kind: `message:${(m as { role: string }).role}`, data: {} };
@@ -476,7 +476,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // OBSERVATION IS TOTAL here too: a registry that cannot be built now (`extensions/` unreadable) leaves the
       // pair absent, said once; the turn and `update()` meet it with their own codes.
       const b = boundary;
-      const engine = b
+      const modelsAndDefaults = b
         ? await resolveBoundary(b, defaultFault).then(
             (resolved) => {
               registryFault.repaired();
@@ -494,11 +494,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       let usage: SessionState["usage"];
       if (!opened) {
         // An id with no record is an empty conversation at the defaults: its first turn would run on these.
-        if (engine) settings = resolveSessionSettings([], engine.models, engine.defaults);
+        if (modelsAndDefaults)
+          settings = resolveSessionSettings([], modelsAndDefaults.models, modelsAndDefaults.defaults);
       } else {
         try {
           const path = activePath(opened);
-          if (engine) settings = resolveSessionSettings(path, engine.models, engine.defaults);
+          if (modelsAndDefaults)
+            settings = resolveSessionSettings(path, modelsAndDefaults.models, modelsAndDefaults.defaults);
           const selected = settings?.model;
           const latest =
             selected?.api === "pi-virtual"
@@ -513,7 +515,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   .at(-1)
               : undefined;
           const physical =
-            latest?.role === "assistant" ? engine?.models.getModel(latest.provider, latest.model) : undefined;
+            latest?.role === "assistant"
+              ? modelsAndDefaults?.models.getModel(latest.provider, latest.model)
+              : undefined;
           usage = sessionUsage(path as unknown as PiSessionEntry[], opened, (physical ?? selected)?.contextWindow);
         } catch (error) {
           log.warn(`[fastagent] session ${session}: state unreadable (entry chain): ${String(error)}`);
@@ -816,7 +820,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         const b = boundary;
         if (!b) return unsupported(`update(${fields.join(", ")})`);
         // The registry and defaults a turn would resolve now — the same that `models()` lists.
-        const engine = yield* port(() => resolveBoundary(b, defaultFault));
+        const modelsAndDefaults = yield* port(() => resolveBoundary(b, defaultFault));
 
         // PAYLOAD validation first — before the session is even opened, and long before the lease: an
         // invalid value must not briefly block a run.
@@ -824,7 +828,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         if (patch.model !== undefined) {
           const slash = patch.model.indexOf("/");
           model =
-            slash > 0 ? engine.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) : undefined;
+            slash > 0
+              ? modelsAndDefaults.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1))
+              : undefined;
           if (!model) {
             return invalid(`unknown model "${patch.model}" — models() lists the accepted models`);
           }
@@ -867,7 +873,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // moves to can carry a model override of its own — validating on the path being left would
             // reject a level the destination supports, and accept one it does not.
             const path = existing ? activePath(existing, patch.leafEntryId) : [];
-            resolved = resolveSessionSettings(path, engine.models, engine.defaults);
+            resolved = resolveSessionSettings(path, modelsAndDefaults.models, modelsAndDefaults.defaults);
           } catch (error) {
             return failed(error);
           }
@@ -914,7 +920,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           let settings: ReturnType<typeof resolveSessionSettings> | undefined;
           if (applied.path) {
             try {
-              settings = resolveSessionSettings(applied.path, engine.models, engine.defaults);
+              settings = resolveSessionSettings(applied.path, modelsAndDefaults.models, modelsAndDefaults.defaults);
             } catch (error) {
               // Already durable, so an unresolvable pair must NOT read as "nothing took effect": report
               // the position without it and let the next invoke — which walks the same path — be where

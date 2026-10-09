@@ -11,8 +11,8 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir, defineTool } from "../src/index.ts";
-import { piAllCodingTools } from "../src/engines/pi/create.ts";
-import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
+import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { type ResolvedContext, resolveContexts } from "../src/contexts/resolve.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 

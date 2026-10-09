@@ -9,12 +9,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { inProcessLease, type RunControls } from "../src/engines/pi/turn-kit.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
+import { inProcessLease, type RunControls } from "../src/harnesses/pi/turn-kit.ts";
 import type { SessionEvent } from "../src/session.ts";
-import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
-import { readMachine } from "../src/engines/pi/machine.ts";
+import { definitionResourceLoaderOptions } from "../src/harnesses/pi/agent-session-factory.ts";
+import { readMachine } from "../src/harnesses/pi/machine.ts";
 import { bareSessionParts, makeFaux } from "./faux.ts";
 import { log } from "../src/log.ts";
 
@@ -22,8 +22,8 @@ import { log } from "../src/log.ts";
  *  call starts", which a test cannot otherwise reach. */
 const duringPromptPrep = vi.hoisted(() => ({ value: null as null | (() => Promise<void>) }));
 
-vi.mock("../src/engines/pi/turn-kit.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/engines/pi/turn-kit.ts")>();
+vi.mock("../src/harnesses/pi/turn-kit.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/harnesses/pi/turn-kit.ts")>();
   return {
     ...actual,
     toPiPromptOptions: async (...args: Parameters<typeof actual.toPiPromptOptions>) => {

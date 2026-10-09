@@ -1,9 +1,9 @@
 import { defaultExclude, defineConfig } from "vitest/config";
 
 // A handful of CLI e2e tests spawn `node src/cli.ts <cmd>` subprocesses that each cold-start the full
-// engine import graph (~0.7s+, measured; the pi packages, not TS stripping). They are deliberately few
+// harness import graph (~0.7s+, measured; the pi packages, not TS stripping). They are deliberately few
 // — only genuine process-level contracts (exit codes, stdout/stderr discipline, read-only invariants)
-// live here; command LOGIC is unit-tested against the engine functions, not re-run through a subprocess.
+// live here; command LOGIC is unit-tested against the harness functions, not re-run through a subprocess.
 // They are split by command across several files (listed in test/cli-run.ts, their shared spawn helper):
 // vitest runs files in parallel but the tests inside one file serially, and as one file they were the
 // suite's longest path.
