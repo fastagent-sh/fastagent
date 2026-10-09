@@ -244,11 +244,11 @@ ONE silent fall-back, and it is a name nothing knows: an unknown name goes throu
 because at this layer a typo and a sentence that opens with a slash are the same bytes. Checking the
 name against this list first is the client's job for exactly that reason.
 
-A skill whose FILE cannot be read is not a second one WHEN THE LIST AND THE FILE AGREE: the loader
-reads it first, so an unreadable file means the skill is not in the definition this turn — it warns
-(`read_failed`, with the errno and path), drops out of `commands()`, and the prefixed spelling behaves
-as the unknown name above, which is what it now is. That is the ordinary case, and it is why the one
-list a client compares against covers both a typo and a skill that broke.
+A skill whose FILE cannot be read is not a second one WHEN THE LIST AND THE FILE AGREE: the loader reads
+it first, so an unreadable file means the skill is not in the definition this turn — it warns (`<path>:
+<error>`, the error carrying the errno), drops out of `commands()`, and the prefixed spelling behaves as
+the unknown name above, which is what it now is. That is the ordinary case, and it is why the one list a
+client compares against covers both a typo and a skill that broke.
 
 The list can outlive the file, though: it is refreshed per invoke, while the body is read at prompt
 time. A steer or follow-up inside a run, or a definition replaced under a running container, names a
@@ -967,7 +967,7 @@ A remotely exposed control plane MUST be wrapped by a host that enforces: an aut
 and per-session authorization; separated observe and write permissions; allowed model and
 thinking-level policy; prompt and attachment size limits; opaque artifact references instead of
 filesystem paths; audit records for accepted commands. The control plane does not make local coding
-tools safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundary
+tools safe for untrusted users, and nothing in the process is a sandbox boundary
 ([core design §5](core.md#5-tools-skills-and-execution-environment)).
 
 ## 15. Decisions on the record

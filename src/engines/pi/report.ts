@@ -18,7 +18,7 @@ type Findings = {
 /** Stable identity of a definition's non-fatal findings — the dedup key below. */
 function findingsSignature(def: Findings): string {
   const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
-  const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
+  const diagnostics = def.diagnostics.map((d) => `d:${d.type}:${d.message}:${d.path}`);
   const shadowed = (def.shadowed ?? []).map((s) => `s:${s.what}:${s.winnerPath}:${s.loserPath}`);
   const ignored = (def.ignored ?? []).map((i) => `i:${i.path}`);
   return [...collisions, ...diagnostics, ...shadowed, ...ignored].sort().join("\n");
@@ -61,7 +61,7 @@ export function reportDefinitionWarnings(def: Findings): void {
     log.warn(`[fastagent] ${i.path} is ${i.reason}`);
   }
   for (const d of def.diagnostics) {
-    log.warn(`[fastagent] ${d.code}: ${d.message} (${d.path})`);
+    log.warn(`[fastagent] ${d.path ?? "definition"}: ${d.message}`);
   }
 }
 

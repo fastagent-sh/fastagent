@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { type Context, FileError, err } from "@earendil-works/pi-agent-core";
 import {
   collect,
   createPiAgent,
@@ -156,20 +154,20 @@ describe("definition: loadAgentDefinition", () => {
     expect(JSON.stringify(def.diagnostics)).toMatch(/description/); // and surfaced, not silently dropped
   });
 
-  it("SYSTEM.md read errors other than not_found throw instead of silently falling back to pi's default", async () => {
-    class DeniedEnv extends NodeExecutionEnv {
-      override async readTextFile(path: string, context: Context) {
-        if (path.endsWith("SYSTEM.md")) {
-          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
-        }
-        return super.readTextFile(path, context);
+  // Root reads a file whatever its mode bits say, so the denial below cannot happen there.
+  it.skipIf(process.getuid?.() === 0)(
+    "SYSTEM.md read errors other than not_found throw instead of silently falling back to pi's default",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-denied-system-"));
+      await writeFile(join(dir, "SYSTEM.md"), "You are a bot.\n");
+      await chmod(join(dir, "SYSTEM.md"), 0o000);
+      try {
+        await expect(loadAgentDefinition(dir)).rejects.toThrow(/cannot read .*SYSTEM\.md.*permission denied/);
+      } finally {
+        await chmod(join(dir, "SYSTEM.md"), 0o644);
       }
-    }
-    const env = new DeniedEnv({ cwd: fixtureDir });
-    await expect(loadAgentDefinition(fixtureDir, { env })).rejects.toThrow(
-      /cannot read .*SYSTEM\.md.*permission denied/,
-    );
-  });
+    },
+  );
 
   it("loads only the definition's own skills/ — no external or global mount (your directory is the agent)", async () => {
     const def = await loadAgentDefinition(fixtureDir);
@@ -196,7 +194,7 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.diagnostics).toEqual([]);
     const pdf = def.skills.find((s) => s.name === "pdf");
     expect(pdf?.description).toContain("PDF files");
-    expect(pdf?.content).toContain("pypdf"); // the full SKILL.md body is loaded (for activation)
+    expect(pdf?.filePath).toBe(join(dir, "skills", "pdf", "SKILL.md")); // the body is read from here on activation
 
     // Progressive disclosure: name + description in the startup prompt; the body is deferred.
     let prompt = "";
@@ -625,38 +623,34 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     }
   });
 
-  it("a throw-class broken edit fails THAT turn as a failed event — the agent survives and the next good turn recovers", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-live-throw-"));
-    await writeFile(join(dir, "AGENTS.md"), "You are a bot.\n");
-    class FlakyEnv extends NodeExecutionEnv {
-      deny = false;
-      override async readTextFile(path: string, context: Context) {
-        if (this.deny && path.endsWith("SYSTEM.md")) {
-          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
-        }
-        return super.readTextFile(path, context);
+  // Root reads a file whatever its mode bits say, so the denial below cannot happen there.
+  it.skipIf(process.getuid?.() === 0)(
+    "a throw-class broken edit fails THAT turn as a failed event — the agent survives and the next good turn recovers",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-live-throw-"));
+      await writeFile(join(dir, "AGENTS.md"), "You are a bot.\n");
+      const system = join(dir, "SYSTEM.md");
+      await writeFile(system, "You are a bot.\n");
+      const { faux } = makeFaux();
+      faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("recovered")]);
+      const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
+      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+      await chmod(system, 0o000); // the live re-read now throws (unreadable SYSTEM.md)
+      const events: string[] = [];
+      let details = "";
+      for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
+        events.push(e.type);
+        if (e.type === "failed") details = e.details;
       }
-    }
-    const env = new FlakyEnv({ cwd: dir });
-    const { faux } = makeFaux();
-    faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("recovered")]);
-    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1", env });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
+      expect(details).toMatch(/SYSTEM\.md/);
 
-    env.deny = true; // the live re-read now throws (unreadable SYSTEM.md)
-    const events: string[] = [];
-    let details = "";
-    for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
-      events.push(e.type);
-      if (e.type === "failed") details = e.details;
-    }
-    expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
-    expect(details).toMatch(/SYSTEM\.md/);
-
-    env.deny = false; // the next good edit heals it — same agent, no restart
-    const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
-    expect(text).toBe("recovered");
-  });
+      await chmod(system, 0o644); // the next good edit heals it — same agent, no restart
+      const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
+      expect(text).toBe("recovered");
+    },
+  );
 });
 
 describe("definition: skills/ gets the same containment guard as tools/channels/schedules", () => {

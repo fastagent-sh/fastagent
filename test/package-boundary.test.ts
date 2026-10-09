@@ -316,6 +316,7 @@ describe("the contracts depend on nothing", () => {
       "croner",
       "effect/Cause",
       "effect/Clock",
+      "effect/Deferred",
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",

@@ -8,6 +8,7 @@ import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { router } from "../channels/serve.ts";
 import { log } from "../log.ts";
+import { once } from "../once.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
@@ -71,25 +72,16 @@ function createActivation(deps: {
   channels: Effect.Effect<ChannelHandler, PortFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
-  // UNINTERRUPTIBLE, because the outcome is CACHED: `Effect.cached` memoizes whatever exit it sees,
-  // interruption included. A once-per-process activation that remembered "interrupted" would answer
-  // every later envelope with an empty cause instead of the success or the diagnosable failure this
-  // block promises. Both are already unreachable (no caller passes a signal), which is exactly why
-  // the invariant has to be written down rather than relied on.
-  const stateReady = Effect.runSync(
-    Effect.cached(
-      portJoin(async () => {
-        onStateReady?.();
-      }).pipe(Effect.uninterruptible),
-    ),
+  const stateReady = once(
+    portJoin(async () => {
+      onStateReady?.();
+    }),
   );
-  const channels = Effect.runSync(
-    Effect.cached(
-      portJoin(async () => {
-        const surface = await deps.channels();
-        return router({ selfVerifying: surface.routes });
-      }).pipe(Effect.uninterruptible),
-    ),
+  const channels = once(
+    portJoin(async () => {
+      const surface = await deps.channels();
+      return router({ selfVerifying: surface.routes });
+    }),
   );
   return {
     prepare: (envelope) =>

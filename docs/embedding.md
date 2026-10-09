@@ -182,7 +182,7 @@ createPiAgent({
 
   // ── Tier 2: injectable ports (default values run fine) ──
   sessions,   // PiSessionRecordStore  — persistence (default: in-memory)
-  env,        // ExecutionEnv    — supplies cwd at L1; definition IO at L2
+  cwd,        // string          — working directory (default: process.cwd())
   lease,      // Lease           — concurrency floor (default: in-process fail-fast)
   providers,  // Provider[]      — your own model source (see §5)
 });
@@ -191,7 +191,7 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `env` | `process.cwd()` at L1; local `NodeExecutionEnv` at L2 | supplies cwd at L1; reads the prompt files and skills at L2; not a sandbox |
+| `cwd` | `process.cwd()` | tools should operate in another directory; it is not a sandbox |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 

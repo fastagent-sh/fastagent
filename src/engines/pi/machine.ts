@@ -24,7 +24,7 @@ import { PI_PROJECT_RESOURCE_DIRS, canonicalPath } from "./definition.ts";
 
 type Settings = ReturnType<SettingsManager["getGlobalSettings"]>;
 /** pi's own shapes, taken from its loader rather than re-declared. */
-export type MachineSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
+type MachineSkill = ReturnType<DefaultResourceLoader["getSkills"]>["skills"][number];
 export type MachinePrompt = ReturnType<DefaultResourceLoader["getPrompts"]>["prompts"][number];
 
 /** The Pi built-in extensions a definition loads, each unless the machine's settings disable it. */

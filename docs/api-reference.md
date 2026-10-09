@@ -146,7 +146,7 @@ Common options:
 | `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
 | `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads the definition's prompt files, skills and prompt templates, and each context's `AGENTS.md` and skills. Tools use the local process directly. This is not a sandbox. |
+| `cwd` | The working directory at L1 (default `process.cwd()`): where tools operate and what session records are keyed to. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 | `authPath` / `credentialStore` | Where model credentials live: a credentials file, or your own `CredentialStore` ([Auth](#config-and-models)). One or neither, not both. |
@@ -847,7 +847,8 @@ is `/skill:<name> [args]`, an extension command or a prompt template is `/<name>
 client-side.
 
 - An unknown name goes through as plain text, so check a name against this list if a typo should be visible. A
-  skill whose file cannot be read is dropped from the list (the loader warns `read_failed`).
+  skill whose file cannot be read is dropped from the list, and the server logs `<path>: <error>`, for example
+  `…/SKILL.md: EACCES: permission denied, open '…/SKILL.md'`.
 - If a file disappears after the list was read (a steer mid-run, a replaced definition), the prompt goes through
   unexpanded and the server logs `skill_expansion failed`.
 - The list is complete for a served agent. Two extensions registering the same command name are listed as

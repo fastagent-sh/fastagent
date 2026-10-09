@@ -1,5 +1,5 @@
-import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DefinitionDiagnostic } from "../src/engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/engines/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
@@ -13,13 +13,13 @@ describe("report", () => {
     reportDefinitionWarnings({
       collisions: [{ name: "greet", winnerPath: "/a/SKILL.md", loserPath: "/b/SKILL.md" }],
       diagnostics: [
-        { type: "warning", code: "invalid_metadata", message: "description is required", path: "/c/SKILL.md" },
-      ] as SkillDiagnostic[],
+        { type: "warning", message: "description is required", path: "/c/SKILL.md" },
+      ] as DefinitionDiagnostic[],
       shadowed: [{ what: "system prompt", winnerPath: "/a/SYSTEM.md", loserPath: "/a/.pi/SYSTEM.md" }],
       ignored: [{ path: "/a/.pi/extensions", reason: "not loaded: a definition's extensions live in extensions/" }],
     });
     expect(lines(err)).toMatch(/skill "greet" collision — using \/a\/SKILL.md, ignoring \/b\/SKILL.md/);
-    expect(lines(err)).toMatch(/invalid_metadata: description is required \(\/c\/SKILL.md\)/);
+    expect(lines(err)).toMatch(/\/c\/SKILL.md: description is required/);
     expect(lines(err)).toMatch(/system prompt is in two places — using \/a\/SYSTEM.md, ignoring \/a\/.pi\/SYSTEM.md/);
     expect(lines(err)).toMatch(/\/a\/.pi\/extensions is not loaded: a definition's extensions live in extensions\//);
   });
@@ -32,17 +32,17 @@ describe("report", () => {
     const findings = {
       collisions: [],
       diagnostics: [
-        { type: "warning", code: "invalid_metadata", message: "description is required", path: "/a/x/SKILL.md" },
-      ] as SkillDiagnostic[],
+        { type: "warning", message: "description is required", path: "/a/x/SKILL.md" },
+      ] as DefinitionDiagnostic[],
     };
     reportFindingsIfChanged("/agent", findings); // reader A (a turn)
-    expect(lines(err)).toMatch(/invalid_metadata/);
+    expect(lines(err)).toMatch(/description is required/);
     err.mockClear();
     reportFindingsIfChanged("/agent", findings); // reader B (commands()) — same finding, same dir
     expect(err).not.toHaveBeenCalled();
     // A DIFFERENT definition keeps its own budget …
     reportFindingsIfChanged("/other-agent", findings);
-    expect(lines(err)).toMatch(/invalid_metadata/);
+    expect(lines(err)).toMatch(/description is required/);
     err.mockClear();
     // There is no record-without-printing door: the boot report goes through this same function, so
     // a caller that never reports cannot silently consume the announcement for every later reader.

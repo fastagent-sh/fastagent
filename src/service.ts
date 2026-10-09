@@ -15,6 +15,7 @@ import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/s
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
+import { once } from "./once.ts";
 import { refuseBrokenDeclarations } from "./loader.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 
@@ -374,8 +375,9 @@ export async function mountAgentService(
         onClosed(name, error);
       };
 
-      // Scope.close alone does not join concurrent closes or retain their failure.
-      const shutdown = yield* Effect.cached(
+      // Scope.close alone does not join concurrent closes or retain their failure. Every later call, the rollback a
+      // close itself triggers included, awaits the first one's outcome.
+      const shutdown = once(
         Effect.gen(function* () {
           abort.abort();
           yield* Scope.close(lifetime, Exit.void);

@@ -8,13 +8,13 @@ import {
   DISCOVERY,
   type Machine,
   type MachinePrompt,
-  type MachineSkill,
   readMachine,
   withMachine,
 } from "./machine.ts";
-import type { Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AgentSession,
+  type Skill,
   type AgentSessionServices,
   type CompactionResult,
   type CreateAgentSessionServicesOptions,
@@ -372,7 +372,7 @@ export function definitionResourceLoaderOptions(source: {
      */
     noSkills: true,
     skillsOverride: () => ({
-      skills: withMachine(toPiSkills(definition.skills) as MachineSkill[], source.machine.skills),
+      skills: withMachine(definition.skills, source.machine.skills),
       diagnostics: [],
     }),
     noPromptTemplates: true,
@@ -677,27 +677,6 @@ function toPiPrompts(prompts: DefinitionPrompt[]) {
       content: prompt.content,
       filePath: prompt.filePath,
       sourceInfo: { path: prompt.filePath, source: "fastagent", scope: "project", origin: "top-level", baseDir },
-    };
-  });
-}
-
-/** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */
-function toPiSkills(skills: Skill[]) {
-  return skills.map((skill) => {
-    const baseDir = dirname(skill.filePath);
-    return {
-      name: skill.name,
-      description: skill.description,
-      filePath: skill.filePath,
-      baseDir,
-      sourceInfo: {
-        path: skill.filePath,
-        source: "fastagent",
-        scope: "project",
-        origin: "top-level",
-        baseDir,
-      },
-      disableModelInvocation: skill.disableModelInvocation ?? false,
     };
   });
 }

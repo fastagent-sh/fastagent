@@ -42,8 +42,8 @@ interface Tracked {
 const tracked = new Map<string, Tracked>();
 
 /**
- * Track `<agentDir>/extensions/`. `list` is the one discovery of its entry points (through the definition's
- * `ExecutionEnv`); the change check reads Node's filesystem, since it only decides WHEN pi reloads.
+ * Track `<agentDir>/extensions/`. `list` is the one discovery of its entry points; the change check only decides
+ * WHEN pi reloads.
  */
 export function liveExtensions(agentDir: string, list: () => Promise<readonly string[]>): LiveExtensions {
   const dir = resolve(agentDir);
