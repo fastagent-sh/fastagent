@@ -1,6 +1,6 @@
 /**
- * The Channel contract — the trigger side of the product boundary (core.md §1), beside `agent.ts` (what an engine
- * implements) and `session.ts` (the serving control plane). Pure types: importing a host, a framework, or an engine
+ * The Channel contract — the trigger side of the product boundary (core.md §1), beside `agent.ts` (what a harness
+ * implements) and `session.ts` (the serving control plane). Pure types: importing a host, a framework, or a harness
  * here is forbidden, as in those two.
  */
 import type { Agent } from "./agent.ts";

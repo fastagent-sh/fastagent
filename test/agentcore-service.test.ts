@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentService } from "../src/service.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../src/channels/agentcore-service.ts";
 import { openPreparedStartService } from "../src/cli/commands/start.ts";
 import { log } from "../src/log.ts";
@@ -41,7 +41,7 @@ describe("deferred AgentCore initialization", () => {
     } finally {
       exit.mockRestore();
     }
-    // The one test here that pays a full cold engine assembly: ~21s idle (measured), which the suite's
+    // The one test here that pays a full cold harness assembly: ~21s idle (measured), which the suite's
     // 30s ceiling never absorbed and 60s stopped absorbing too — a full `npm test` run puts a fork on
     // every core, and this stage is import-bound, so contention scales it by more than 3x. Raise the
     // budget rather than cap parallelism (vitest.config.ts states why). It still bounds a genuine hang:

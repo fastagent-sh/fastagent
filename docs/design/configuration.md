@@ -99,7 +99,7 @@ The defaults live in different places for exactly one reason: one can be committ
 Two properties of the credential chain are not free choices, and both were paid for:
 
 - **The fallback is per provider, not per file.** A file-level fallback would make every other provider in the global store vanish the instant `login anthropic` created a project `auth.json`.
-- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthLayers` in `src/engines/pi/auth.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
+- **An explicitly named path takes no second layer.** `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` are instructions, not preferences (`resolveAuthLayers` in `src/harnesses/pi/auth.ts`). The deployed artifacts set the third one, and a container must read its mounted credentials and nothing else — otherwise a fly/railway/agentcore box would quietly mount `$HOME/.fastagent/.secrets/auth.json` as a second layer.
 
 `deploy` carries no credentials file at all, project or global (§8).
 
@@ -216,7 +216,7 @@ Day one is built: the credential layers (§5, §8), the value-file-only delivery
 |---|---|
 | `resolveEnvValues(agentDir, envName?)` → `{ envName, file, values }`: the **one** read of the selected value file, shared by the plan side and the run side | a new module under `src/deploy/` |
 | Loading a definition under a given env's values (channel discovery) runs in a **subprocess**: a module captures `process.env` at import time, and a subprocess is cheaper than inventing ESM cache invalidation | `src/env.ts` (`loadEnvValues` already returns a Map without writing `process.env`) |
-| `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/engines/pi/config.ts` |
+| `config.name`, whose only consumer is the `<name>-<env>` prefix | `src/harnesses/pi/config.ts` |
 | `.secrets/<env>/` path derivation | `src/paths.ts` |
 | Per-env artifact names (`fly.<env>.toml`) | `src/deploy/container.ts` + each host's `plan.ts` |
 

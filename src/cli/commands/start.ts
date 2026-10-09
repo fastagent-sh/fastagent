@@ -19,7 +19,7 @@ import {
   exists,
 } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";

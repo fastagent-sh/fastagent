@@ -54,7 +54,7 @@ export interface FeishuTurnTransport {
   appId: string;
   /** The place this thread branched from (the chat's main place), when the turn runs in a thread —
    *  rides the Scope's lineage extension so a NEW thread session starts from what the room knew
-   *  (participant-model.md §5). The engine reads it once, at session creation; every later turn
+   *  (participant-model.md §5). The harness reads it once, at session creation; every later turn
    *  carries it inertly. */
   parentSession?: string;
 }
@@ -348,7 +348,7 @@ export function feishuTurnStream(
     busyRetry,
     resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({
-      // Lineage is resolved per turn; the engine reads it only when creating a new session.
+      // Lineage is resolved per turn; the harness reads it only when creating a new session.
       scope: (transport.parentSession === undefined
         ? { session }
         : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds }) satisfies Scope,

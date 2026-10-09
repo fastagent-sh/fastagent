@@ -15,8 +15,8 @@ import {
   type AgentEvent,
   z,
 } from "../src/index.ts";
-import { CODING_TOOL_NAMES, assemblePiFromDefinition, piAllCodingTools } from "../src/engines/pi/create.ts";
-import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { CODING_TOOL_NAMES, assemblePiFromDefinition, piAllCodingTools } from "../src/harnesses/pi/create.ts";
+import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/paths.ts";
 
@@ -411,7 +411,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     expect(instructions).toHaveBeenCalledTimes(2);
   });
 
-  it("resolves a model spec string and sends instructions verbatim — no engine base prepended", async () => {
+  it("resolves a model spec string and sends instructions verbatim — no harness base prepended", async () => {
     let seen: string | undefined;
     const { faux } = makeFaux();
     faux.setResponses([
@@ -428,7 +428,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\n\n<cwd>")[0]).toBe("You are a support bot.");
-    expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+    expect(seen).not.toContain("operating inside pi"); // no harness identity forced on a hand-built agent
   });
 
   it("cannot activate a coding tool omitted from its replacement set", async () => {
@@ -504,7 +504,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
       const label = String(instructions);
       expect(seen, label).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
-      expect(seen, label).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+      expect(seen, label).not.toContain("operating inside pi"); // no harness identity forced on a hand-built agent
     }
   });
 });

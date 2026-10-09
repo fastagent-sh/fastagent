@@ -6,7 +6,7 @@ import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
-import { createPiAgentFromDir } from "../../engines/pi/open.ts";
+import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { failStartup } from "../fail.ts";

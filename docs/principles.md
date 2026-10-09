@@ -12,7 +12,7 @@ The design center is **point at directory → live agent capability**. FastAgent
 
 The design choices are deliberate:
 
-- **Small callable contract** — an internal boundary that decouples callers, agents, engines (the *agent harness*, in ecosystem terms), and hosts.
+- **Small callable contract** — an internal boundary that decouples callers, agents, harnesses (the loop that runs an agent, such as pi), and hosts.
 - **Application composition** — compose with the user's application instead of owning routes, database, auth, deployment, and project layout.
 - **Typed edges** — typed tools, explicit events, and validation at the places where outside input enters the system.
 
@@ -26,10 +26,10 @@ The design choices are deliberate:
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
 | **Typed edges** | Tools use Zod schemas, events have a closed shape, and invalid inputs fail at the boundary instead of becoming hidden prompt bugs. |
 | **Filesystem as source of truth** | The deployable definition is the directory: identity, tools, channels, schedules and its own `skills/`. No hidden registry dependency, no builder-machine state baked into the artifact. |
-| **The machine is an environment, not a dependency** | An agent inherits the box it runs on — its `PATH`, and equally its Agent Skills directories, prompt templates and engine settings. Deploying ships the project scope; the environment is the machine's business, local or deployed. |
+| **The machine is an environment, not a dependency** | An agent inherits the box it runs on — its `PATH`, and equally its Agent Skills directories, prompt templates and harness settings. Deploying ships the project scope; the environment is the machine's business, local or deployed. |
 | **One path from dev to serve** | `info`, `dev`, `invoke`, and `start` assemble the same directory so local behavior matches served behavior. |
 | **Visible failures** | Runtime problems become `failed` events or diagnostics. Silent fallback is worse than a clear error. |
-| **Option value** | The contract is engine-, model-, channel-, and host-neutral so future engines and deployment targets can be added without changing agent authorship. |
+| **Option value** | The contract is harness-, model-, channel-, and host-neutral so future harnesses and deployment targets can be added without changing agent authorship. |
 
 ## Concept → primitive → implementation
 
@@ -49,7 +49,7 @@ That concept set is intentionally smaller than the implementation. Sandboxes, du
 
 ## Small contract, small core
 
-One small callable contract can collapse an integration matrix. FastAgent uses `invoke` to decouple triggers, agents, engines, and hosts.
+One small callable contract can collapse an integration matrix. FastAgent uses `invoke` to decouple triggers, agents, harnesses, and hosts.
 
 The product restraint is intentional:
 
@@ -65,7 +65,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 - **Typed tools.** `defineTool` takes a Zod input schema, turns it into model-facing JSON Schema, and validates model arguments before execution.
 - **Documented event contract.** `AgentEvent` is small and explicit, which makes channels, tests, and UI clients easier to build.
 - **Fail early at boundaries.** Bad request bodies, bad tool arguments, and same-session concurrency conflicts surface as actionable errors.
-- **Types as public API.** The package re-exports the types authors need so integrations can be written without importing engine internals.
+- **Types as public API.** The package re-exports the types authors need so integrations can be written without importing harness internals.
 
 ## Deliberate product choices
 

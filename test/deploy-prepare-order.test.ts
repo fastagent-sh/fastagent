@@ -19,8 +19,8 @@ vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
   enterAgentDirectory: async (dir: string) => ({ agentDir: dir }),
   isInteractive: () => interactive,
 }));
-vi.mock("../src/engines/pi/config.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/engines/pi/config.ts")>()),
+vi.mock("../src/harnesses/pi/config.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/harnesses/pi/config.ts")>()),
   loadConfig: async () => ({ config: {} }),
 }));
 vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({

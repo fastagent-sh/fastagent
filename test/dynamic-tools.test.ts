@@ -9,7 +9,7 @@ import { z } from "zod";
 import { collect } from "../src/collect.ts";
 import type { AgentEvent } from "../src/agent.ts";
 import type { SessionEvent } from "../src/session.ts";
-import { defineTool } from "../src/engines/pi/tool.ts";
+import { defineTool } from "../src/harnesses/pi/tool.ts";
 import { fauxControlledAgent } from "./agent.ts";
 import { sentTools } from "./faux.ts";
 

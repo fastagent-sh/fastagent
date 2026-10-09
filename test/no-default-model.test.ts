@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type AgentEvent, MISSING_MODEL_CODE } from "../src/agent.ts";
-import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
+import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { fauxControlledAgent } from "./agent.ts";
 
 const FAUX = { provider: "faux-706" };

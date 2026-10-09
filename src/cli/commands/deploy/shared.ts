@@ -13,7 +13,7 @@ import type { Registrars } from "../../../deploy/channel-ingress.ts";
 import { IMAGE_DEFINITION_DIR, isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
 import { RELEASE_FILE } from "../../../deploy/workspace.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
-import type { FastagentConfig } from "../../../engines/pi/config.ts";
+import type { FastagentConfig } from "../../../harnesses/pi/config.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
 import { loginOnBox } from "../../box-login.ts";

@@ -1,5 +1,5 @@
 /**
- * A thread starts from what the room knew (participant-model.md §5), on the AgentSession engine.
+ * A thread starts from what the room knew (participant-model.md §5), on the AgentSession harness.
  */
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,9 +8,9 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { makeFaux } from "./faux.ts";
 
 const text = (session: SessionManager) => JSON.stringify(session.getBranch());
@@ -56,7 +56,7 @@ describe("session inheritance", () => {
     const agent = createPiAgentFromSession({
       sessionFactory: piAgentSessionFactory({
         sessions,
-        engine: async () => ({ modelRuntime }),
+        harness: async () => ({ modelRuntime }),
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ skills: [] }),
         cwd,

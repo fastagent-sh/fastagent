@@ -1,5 +1,5 @@
 /**
- * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
+ * The AgentSession L0's harness binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
  * durable record, per invoke.
  */
 import { dirname } from "node:path";
@@ -76,7 +76,7 @@ export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. */
   sessions: PiSessionRecordStore;
   /** A fresh model runtime per binding: extension routers and provider registrations belong to this session. */
-  engine: () => Promise<{ modelRuntime: ModelRuntime }>;
+  harness: () => Promise<{ modelRuntime: ModelRuntime }>;
   /**
    * The default model, resolved after extensions register their models. Optional: a session that records a model
    * runs on it, and one that records none is refused with {@link MissingModel} when there is no default either.
@@ -591,7 +591,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const definition = await options.readDefinition();
-    const { modelRuntime } = await options.engine();
+    const { modelRuntime } = await options.harness();
     const extensionPaths = (await options.extensionPaths?.()) ?? [];
     const services = await definitionServices({ cwd, modelRuntime, definition, extensionPaths });
     const model = options.modelSpec ? resolveModel(modelRuntime, options.modelSpec) : undefined;

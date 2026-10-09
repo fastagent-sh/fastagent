@@ -88,7 +88,7 @@ kept, plus what it sent.
 One seam (where a place's messages come from) and one shared fold (what of them reaches a turn):
 
 ```
-channels/kit/place-history.ts        engine-neutral
+channels/kit/place-history.ts        harness-neutral
   DiscussionSource<E> { peek(place) → { text, consumed: E[] } (sync or async, never rejects); commit(place, consumed) }
   PlaceMessage        { id, at, from: { kind: "human" | "self" | "bot", label }, text, replyTo?, images, files }
   foldPlace(messages, earlier) → { text, folded }   the one budget and label format

@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
-import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 import { WEB_ACCESS_PACKAGE } from "../src/scaffold/templates.ts";
 

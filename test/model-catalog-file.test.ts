@@ -12,9 +12,9 @@ import { pathToFileURL } from "node:url";
 import type { ModelsStoreEntry } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it } from "vitest";
-import { catalogFileStore, globalCatalogPath, inGlobalCatalog } from "../src/engines/pi/models.ts";
+import { catalogFileStore, globalCatalogPath, inGlobalCatalog } from "../src/harnesses/pi/models.ts";
 
-const MODELS_MODULE = pathToFileURL(join(import.meta.dirname, "../src/engines/pi/models.ts")).href;
+const MODELS_MODULE = pathToFileURL(join(import.meta.dirname, "../src/harnesses/pi/models.ts")).href;
 
 afterEach(async () => {
   await rm(globalCatalogPath(), { force: true });

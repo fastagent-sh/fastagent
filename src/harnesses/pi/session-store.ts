@@ -364,7 +364,7 @@ function summarize(session: string, record: SessionManager): SessionSummary {
   // `|| 0` on both: an unparseable timestamp is NaN, and NaN in `updatedAt` serializes to `null` — which the contract
   // types as a number and a client sorts by.
   const lastAt = Date.parse(entries.at(-1)?.timestamp ?? "") || 0;
-  // A list row counts turns in the conversation, not the engine's system bookkeeping (`isConversationMessage`).
+  // A list row counts turns in the conversation, not the harness's system bookkeeping (`isConversationMessage`).
   const messages = entries.filter(isConversationMessage);
   const name = record.getSessionName();
   const preview = firstUserText(messages);
@@ -386,7 +386,7 @@ function firstUserText(messages: { message?: unknown }[]): string | undefined {
   for (const entry of messages) {
     const message = entry.message as { role?: string; content?: unknown } | undefined;
     if (message?.role !== "user") continue;
-    // The engine's own reading of message text, on a SPACE: this is a one-line preview, where adjacent
+    // The harness's own reading of message text, on a SPACE: this is a one-line preview, where adjacent
     // blocks running together would read as one word.
     const text = contentText(message.content as Parameters<typeof contentText>[0], " ");
     // Cut to UTF-16 units FIRST: a pasted megabyte would otherwise become a million-element array on the way to

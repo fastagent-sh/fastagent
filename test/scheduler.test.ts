@@ -607,7 +607,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
   it("a turn that really fails is `failed`, and its occurrence is spent either way", async () => {
     // The boundary this pair draws. The claim is the DECISION, so a failed turn is not retried: an
     // agent turn has external side effects (a message sent, a file written) and nothing here can tell
-    // a failure before them from one after. The engine's own retry budget is what covers a transient
+    // a failure before them from one after. The harness's own retry budget is what covers a transient
     // model error; by the time a `failed` event arrives, that budget is spent.
     const root = await freshRoot();
     const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);

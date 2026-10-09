@@ -10,7 +10,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
-import { ContextNameError, addContext, createAgent, listContexts, removeContext } from "../src/engines/pi/authoring.ts";
+import {
+  ContextNameError,
+  addContext,
+  createAgent,
+  listContexts,
+  removeContext,
+} from "../src/harnesses/pi/authoring.ts";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
@@ -21,7 +27,7 @@ const SRC = fileURLToPath(new URL("../src/", import.meta.url));
  */
 function createAndOpen(dir: string, webAccess: boolean): Promise<string> {
   const script = `
-    import { createAgent } from ${JSON.stringify(join(SRC, "engines/pi/authoring.ts"))};
+    import { createAgent } from ${JSON.stringify(join(SRC, "harnesses/pi/authoring.ts"))};
     import { createPiAgentFromDir } from ${JSON.stringify(join(SRC, "index.ts"))};
     await createAgent(${JSON.stringify(dir)}, { webAccess: ${webAccess} });
     await createPiAgentFromDir(${JSON.stringify(dir)}).then(() => console.log("opened"), (e) => console.log(e.message));

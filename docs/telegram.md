@@ -156,7 +156,7 @@ Telegram Threaded Mode is handled automatically:
 
 Replies are sent back to the same thread unless `route` overrides `threadId`.
 
-Telegram serializes updates per session in FIFO order before they reach the engine lease, so two messages for the same chat wait rather than surfacing `session busy`. Different sessions still run concurrently; a collision with an external turn, such as a self-scheduled wake-up, is retried for a bounded period.
+Telegram serializes updates per session in FIFO order before they reach the harness lease, so two messages for the same chat wait rather than surfacing `session busy`. Different sessions still run concurrently; a collision with an external turn, such as a self-scheduled wake-up, is retried for a bounded period.
 
 ## Streaming behavior
 
@@ -208,7 +208,7 @@ OWN identity, which it otherwise only learns from `getMe`, and not at all if tha
 
 Telegram media are handled by the channel before the agent turn runs.
 
-- Photos are downloaded, converted to `prompt.images`, and resized by the engine before reaching the model. The selected model must support vision.
+- Photos are downloaded, converted to `prompt.images`, and resized by the harness before reaching the model. The selected model must support vision.
 - Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/c-<chat>/` (`c-` plus the URL-encoded chat id). Their local paths are appended to the prompt so the agent can read them with tools.
 - Download failures become `failed` events, never silent drops.
 

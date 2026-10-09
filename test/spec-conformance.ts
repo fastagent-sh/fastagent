@@ -1,6 +1,6 @@
 /**
  * SPEC conformance assertions — Agent Handler v0.1 (docs/SPEC.md), runnable
- * against ANY Agent implementation. Engine-free: everything engine-specific is
+ * against ANY Agent implementation. Harness-free: everything harness-specific is
  * supplied by the subject (the WSGI-validator posture — the SPEC is the design,
  * this file is its executable form).
  *
@@ -14,15 +14,15 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 
-/** Engine-specific factories: each returns an Agent in a known behavioral posture. */
+/** Harness-specific factories: each returns an Agent in a known behavioral posture. */
 export interface ConformanceSubject {
   /** An agent whose turn succeeds (streams some events, then completes). */
   completing(): Agent | Promise<Agent>;
-  /** An agent whose turn fails INSIDE the engine (model error, setup failure, …). */
+  /** An agent whose turn fails INSIDE the harness (model error, setup failure, …). */
   failing(): Agent | Promise<Agent>;
   /**
    * An agent whose turn streams long enough for the consumer to cancel mid-flight.
-   * `onCleanup` must be called when the engine's in-flight work is actually
+   * `onCleanup` must be called when the harness's in-flight work is actually
    * aborted/released (the subject knows where its cleanup hook is).
    */
   hanging(onCleanup: () => void): Agent | Promise<Agent>;
@@ -30,7 +30,7 @@ export interface ConformanceSubject {
    * Optional (SPEC MUST 6, portable conformance): TWO independent agent instances
    * sharing only an external session backend — no in-process state in common.
    * `sawHistory` reports whether instance B's turn observed instance A's turn
-   * (the subject knows how to probe its own engine's context).
+   * (the subject knows how to probe its own harness's context).
    */
   pair?():
     | { a: Agent; b: Agent; sawHistory: () => boolean }
@@ -58,7 +58,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       expect(events.at(-1)?.type).toBe("completed");
     });
 
-    it("MUST 1+2 failures are events — engine failure does not throw during iteration and yields exactly one failed{details,retryable} terminal", async () => {
+    it("MUST 1+2 failures are events — harness failure does not throw during iteration and yields exactly one failed{details,retryable} terminal", async () => {
       const agent = await subject.failing();
       // MUST 2: the iteration itself must not throw — drain() rejecting = violation.
       const events = await drain(agent.invoke({ session: "spec-fail" }, { text: "go" }));
@@ -71,7 +71,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       }
     });
 
-    it("MUST 3 cancel — consumer break yields no terminal event and cleans up in-flight engine work", async () => {
+    it("MUST 3 cancel — consumer break yields no terminal event and cleans up in-flight harness work", async () => {
       let cleaned = false;
       let resolveCleaned!: () => void;
       const cleanedSeen = new Promise<void>((r) => (resolveCleaned = r));
@@ -89,7 +89,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       await Promise.race([
         cleanedSeen,
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("engine cleanup never ran after cancel (MUST 3)")), 3000),
+          setTimeout(() => reject(new Error("harness cleanup never ran after cancel (MUST 3)")), 3000),
         ),
       ]);
       expect(cleaned).toBe(true);
@@ -110,7 +110,7 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       it("MUST 6 portable — same session continues across instances: instance B sees instance A turn without location dependence", async () => {
         const { a, b, sawHistory } = await subject.pair!();
         // A session id in the shape a real Caller mints (a telegram group), not a tidy identifier:
-        // whatever an engine has to do to store it must survive the round trip between instances.
+        // whatever a harness has to do to store it must survive the round trip between instances.
         const session = "-1001234567890";
         const e1 = await drain(a.invoke({ session }, { text: "turn one" }));
         expect(e1.at(-1)?.type).toBe("completed");

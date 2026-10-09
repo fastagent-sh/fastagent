@@ -5,10 +5,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GLOBAL_AUTH_PATH } from "../src/engines/pi/auth.ts";
-import { assemblePiFromDefinition } from "../src/engines/pi/create.ts";
-import { probeAuthSource } from "../src/engines/pi/models.ts";
-import { agentModels } from "../src/engines/pi/agent-models.ts";
+import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
+import { assemblePiFromDefinition } from "../src/harnesses/pi/create.ts";
+import { probeAuthSource } from "../src/harnesses/pi/models.ts";
+import { agentModels } from "../src/harnesses/pi/agent-models.ts";
 
 const SPEC = "fa-layer/m1";
 const credential = { "fa-layer": { type: "api_key", key: "sk-test" } };
@@ -39,7 +39,7 @@ const GLOBAL = GLOBAL_AUTH_PATH;
 /** Where L2 (`createPiAgentFromDefinition`'s assembly) found the credential, if anywhere. */
 async function l2AuthSource(dir: string): Promise<string | undefined> {
   const { assembly } = await assemblePiFromDefinition(dir, { model: SPEC });
-  return probeAuthSource((await assembly.engine()).modelRuntime, SPEC);
+  return probeAuthSource((await assembly.harness()).modelRuntime, SPEC);
 }
 
 const saved = { auth: process.env.FASTAGENT_AUTH_PATH, secrets: process.env.FASTAGENT_SECRETS_DIR };

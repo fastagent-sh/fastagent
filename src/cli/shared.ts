@@ -15,21 +15,21 @@ import {
   providerOf,
   resolveModelSpec,
   rewriteConfigModel,
-} from "../engines/pi/config.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
-import { readMachine, withMachine } from "../engines/pi/machine.ts";
-import { providerAuthStatuses } from "../engines/pi/models.ts";
-import { type AgentModels, agentModels } from "../engines/pi/agent-models.ts";
+} from "../harnesses/pi/config.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../harnesses/pi/login.ts";
+import { readMachine, withMachine } from "../harnesses/pi/machine.ts";
+import { providerAuthStatuses } from "../harnesses/pi/models.ts";
+import { type AgentModels, agentModels } from "../harnesses/pi/agent-models.ts";
 import { formatAuthReport } from "./auth-view.ts";
-import { CODING_TOOL_NAMES, type IndirectTool } from "../engines/pi/create.ts";
-import type { LoadedDefinition } from "../engines/pi/definition.ts";
-import type { ToolCollision } from "../engines/pi/tool.ts";
+import { CODING_TOOL_NAMES, type IndirectTool } from "../harnesses/pi/create.ts";
+import type { LoadedDefinition } from "../harnesses/pi/definition.ts";
+import type { ToolCollision } from "../harnesses/pi/tool.ts";
 import {
   describeIndirectTools,
   describePrompt,
   reportFindingsIfChanged,
   reportToolCollisions,
-} from "../engines/pi/report.ts";
+} from "../harnesses/pi/report.ts";
 import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import type { ResolvedContext } from "../contexts/resolve.ts";
 import { contextLines } from "./contexts-view.ts";

@@ -7,9 +7,9 @@ import { allSecrets, describeSecrets, missingSecrets } from "../src/declared-sec
 import { gateSecrets } from "../src/secrets-gate.ts";
 import { defineChannel, defineTool, z } from "../src/index.ts";
 import { inspectChannels, loadChannels } from "../src/channels/discover.ts";
-import { loadTools } from "../src/engines/pi/tool.ts";
-import { resolveAgentTools } from "../src/engines/pi/create.ts";
-import { resolveAgentAssembly } from "../src/engines/pi/open.ts";
+import { loadTools } from "../src/harnesses/pi/tool.ts";
+import { resolveAgentTools } from "../src/harnesses/pi/create.ts";
+import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
 
 /** An agent dir: `<host>/fastagent/`. */
 async function agent(files: Record<string, string>): Promise<string> {

@@ -41,7 +41,7 @@ const FLOOD_WAIT_MAX_S = 30;
 const RETRIES = 3;
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
- *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
+ *  harness resizes images to the model's needs, so this is a transport guard, not the model size limit. */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
 /** Where a reply goes: a chat, optionally a thread (Threaded Mode), optionally replying to a message. */

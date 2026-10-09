@@ -61,7 +61,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
 - **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE — FastAgent consumes the standards you already use instead of a parallel ecosystem.
 - **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow.
-- **No model or cloud lock-in.** The Agent Handler contract is harness-neutral (the [SPEC](https://fastagent.sh/docs/spec/) says *engine* — same seam), with [pi](https://pi.dev) as the built-in harness; bring your own harness and every channel keeps working unchanged.
+- **No model or cloud lock-in.** The Agent Handler contract is harness-neutral, with [pi](https://pi.dev) as the built-in harness; bring your own harness and every channel keeps working unchanged.
 
 ## Install
 
@@ -161,10 +161,10 @@ const agent = createPiAgent({
 
 The root export intentionally contains the supported surface only.
 
-Engine-neutral and runtime-neutral are different properties, and the entries are layered by them —
+Harness-neutral and runtime-neutral are different properties, and the entries are layered by them —
 each layer drops one, and every layer's dependency list is asserted in CI:
 
-| | engine-neutral | runtime-neutral | costs |
+| | harness-neutral | runtime-neutral | costs |
 |---|---|---|---|
 | `/core`, `/session` | yes | yes | nothing |
 | `/node` | yes | no (filesystem, clock, environment) | `@hono/node-server`, `croner` |
@@ -187,9 +187,9 @@ you register a custom provider.
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`). **Zero third-party dependencies**, enforced by test;
-- `@fastagent-sh/fastagent/node` — the engine-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
-- `@fastagent-sh/fastagent/session` — the engine-neutral session-control contract (types and error codes);
+- `@fastagent-sh/fastagent/core` — harness-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`). **Zero third-party dependencies**, enforced by test;
+- `@fastagent-sh/fastagent/node` — the harness-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
+- `@fastagent-sh/fastagent/session` — the harness-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;

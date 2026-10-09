@@ -390,7 +390,7 @@ route channels, public ingress and webhook registration. A long-connection chann
 
 Resident deployments need **one active replica** with durable storage. More replicas need shared storage and
 coordination for sessions, channel state and scheduled work. The `PiSessionRecordStore` / `Lease` seams cover
-engine sessions (see [Embedding](embedding.md)), not channel state.
+harness sessions (see [Embedding](embedding.md)), not channel state.
 
 ## Where next
 

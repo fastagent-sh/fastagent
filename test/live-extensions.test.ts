@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { liveExtensions } from "../src/engines/pi/live-extensions.ts";
+import { liveExtensions } from "../src/harnesses/pi/live-extensions.ts";
 
 async function agentDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-live-ext-"));
@@ -12,7 +12,7 @@ async function agentDir(): Promise<string> {
   return dir;
 }
 
-describe("engines/pi/live-extensions", () => {
+describe("harnesses/pi/live-extensions", () => {
   it("a new generation for the extensions' own code; none for node_modules or a dot directory", async () => {
     const dir = await agentDir();
     const live = liveExtensions(dir, async () => []);

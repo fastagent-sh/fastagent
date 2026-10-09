@@ -4,12 +4,12 @@
  * agent's deployed box instead (box-login.ts); `--stdio` is the box's half of that.
  */
 import { enterAgentEnv } from "../../env.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
-import { agentModels } from "../../engines/pi/agent-models.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../harnesses/pi/auth.ts";
+import { agentModels } from "../../harnesses/pi/agent-models.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
 import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
-import { environmentAuthSource } from "../../engines/pi/models.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../../harnesses/pi/login.ts";
+import { environmentAuthSource } from "../../harnesses/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
 import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import { type RelayResult, stdioLoginIO } from "../login-relay.ts";

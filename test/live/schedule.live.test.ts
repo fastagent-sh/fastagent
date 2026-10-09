@@ -14,7 +14,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { createPiAgentFromDir } from "../../src/engines/pi/open.ts";
+import { createPiAgentFromDir } from "../../src/harnesses/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { claimSlot, type Fire, readFires } from "../../src/schedule/state.ts";
 import { loadServingSchedules, startSchedules } from "../../src/service.ts";

@@ -8,7 +8,7 @@ status: current
 
 A **channel** is an agent's inbound surface — it turns an external event into invocations: HTTP, Telegram messages, Slack events, even the clock ([schedules](quickstart.md#8-run-on-a-clock)).
 
-Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
+Channels consume only the harness-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 
 > To build a new channel adapter, see [Channel development](channel-development.md).
 

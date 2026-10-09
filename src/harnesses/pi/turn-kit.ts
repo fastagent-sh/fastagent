@@ -1,4 +1,4 @@
-/** The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. */
+/** The turn mechanism's HARNESS-agnostic half: the parts that describe a turn rather than pi. */
 import { stripVTControlCharacters } from "node:util";
 import {
   type AssistantMessage,

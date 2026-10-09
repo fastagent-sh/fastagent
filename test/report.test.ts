@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DefinitionDiagnostic } from "../src/engines/pi/definition.ts";
-import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/engines/pi/report.ts";
+import type { DefinitionDiagnostic } from "../src/harnesses/pi/definition.ts";
+import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/harnesses/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
 // module: two copies could drift). Spies on console.error rather than going through a runner.

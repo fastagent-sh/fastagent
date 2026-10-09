@@ -1,6 +1,6 @@
 ---
 title: Agent Handler — Protocol Specification
-description: "Agent Handler protocol v0.1: one invoke function and a small set of MUSTs so any caller can drive any agent without knowing its engine, model, or deployment shape."
+description: "Agent Handler protocol v0.1: one invoke function and a small set of MUSTs so any caller can drive any agent without knowing its harness, model, or deployment shape."
 type: spec
 status: locked
 version: 0.1
@@ -9,9 +9,9 @@ updated: 2026-07-18
 
 # Agent Handler — Protocol Specification v0.1 (locked)
 
-> A handler contract for the agent layer, analogous to Web fetch handlers: one function plus a small set of MUSTs so any **Caller** can drive any **Agent** without knowing its engine, model, wire protocol, or deployment shape.
+> A handler contract for the agent layer, analogous to Web fetch handlers: one function plus a small set of MUSTs so any **Caller** can drive any **Agent** without knowing its harness, model, wire protocol, or deployment shape.
 >
-> The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is engine-neutral and does not depend on any implementation.
+> The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is harness-neutral and does not depend on any implementation.
 
 ## 1. Overview
 
@@ -76,16 +76,16 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 ```
 
 - All textual output is emitted as `text` deltas; `completed` is only a terminal success signal and does not repeat the full text.
-- `thinking` deltas carry the model's reasoning when the engine and model expose it (optional — many models emit none). It is process, not output: a consumer MUST NOT fold `thinking` into the final answer (`collect` ignores it). Surface it for live/observability UIs only.
-- `completed.data` is present only when the engine produces structured data.
-- `tool_progress` is advisory and non-terminal; engines MAY emit it between a `tool_started` and the
+- `thinking` deltas carry the model's reasoning when the harness and model expose it (optional — many models emit none). It is process, not output: a consumer MUST NOT fold `thinking` into the final answer (`collect` ignores it). Surface it for live/observability UIs only.
+- `completed.data` is present only when the harness produces structured data.
+- `tool_progress` is advisory and non-terminal; harnesses MAY emit it between a `tool_started` and the
   `tool_ended` with the same `id`, any number of times. `text` is that call's current status, one line,
-  each replacing the last; an engine MAY therefore drop one its consumer has not read yet, so a consumer
-  that falls behind gets the latest. An engine MAY derive it from the tool's output so far (a shell's last printed
+  each replacing the last; a harness MAY therefore drop one its consumer has not read yet, so a consumer
+  that falls behind gets the latest. A harness MAY derive it from the tool's output so far (a shell's last printed
   line), so it carries the same trust as `tool_ended.content`: a consumer that shows it to an audience
   shows tool output. It is never the whole output, which arrives with `tool_ended`. It is not truncated;
   a consumer that shows it clips it to its own width. Terminal consumers ignore it per MUST 4.
-- `retrying` is advisory and non-terminal; engines MAY emit it when a transient internal failure
+- `retrying` is advisory and non-terminal; harnesses MAY emit it when a transient internal failure
   (e.g. a provider error during context summarization) schedules a retry with backoff. It exists so a
   live consumer can explain an otherwise-quiet gap; it is deliberately unclosed — the next event is
   its closure. Terminal consumers ignore it per MUST 4; `reason` is human-facing prose.
@@ -110,7 +110,7 @@ The following MUSTs spell out that trichotomy for both roles.
 ### Caller MUST
 
 4. **Forward compatibility**: the terminal set `{ completed, failed }` is frozen and not extensible. New event types MUST be non-terminal. A **terminal consumer** (a Caller consuming the stream to obtain a result) MUST ignore unknown non-terminal events.
-5. **Relay passthrough**: a Caller acting as **Middleware** and relaying a downstream stream MUST pass unknown non-terminal events through unchanged, and MUST NOT drop them. “Ignore” applies to terminal consumers only, not to relays; otherwise a downstream engine adding a new event type would be broken by the relay hop, defeating MUST 4.
+5. **Relay passthrough**: a Caller acting as **Middleware** and relaying a downstream stream MUST pass unknown non-terminal events through unchanged, and MUST NOT drop them. “Ignore” applies to terminal consumers only, not to relays; otherwise a downstream harness adding a new event type would be broken by the relay hop, defeating MUST 4.
 
 ### Portable conformance (optional; required for Agents claiming serverless portability)
 
@@ -121,7 +121,7 @@ The following MUSTs spell out that trichotomy for both roles.
 The protocol does **not** guarantee the following; implementations and consumers MUST NOT rely on them:
 
 - **`tool_started` / `tool_ended` pairing**: normally these events are paired by `id`, and `tool_ended` follows the matching `tool_started`; after cancellation (c), a dangling `tool_started` may remain. Tool UIs must tolerate dangling starts.
-- **Session cleanliness of `failed.retryable`**: `retryable: true` means “worth re-sending with the same `session`”. It does **not** guarantee that the failed turn was atomic with respect to session state. A partial turn may have already appended entries or run side-effecting tools. Retry side-effect safety belongs to the engine/tools, not to the protocol (§9).
+- **Session cleanliness of `failed.retryable`**: `retryable: true` means “worth re-sending with the same `session`”. It does **not** guarantee that the failed turn was atomic with respect to session state. A partial turn may have already appended entries or run side-effecting tools. Retry side-effect safety belongs to the harness/tools, not to the protocol (§9).
 
 ## 7. Consumption: streaming and buffered
 
@@ -154,12 +154,12 @@ The core stays small. The following extensions attach through additional `scope`
 |---|---|
 | Identity / multi-tenancy | `scope.principal`, e.g. `{ type, issuer, subject }` |
 | Source / trace | `scope.source` and other identifying fields |
-| Session lineage | `scope.parentSession` (+ optional `scope.branchHints`) — read once, when the named session is first CREATED, to seed it from the session it branched off; ignored for existing sessions and by engines without the capability |
+| Session lineage | `scope.parentSession` (+ optional `scope.branchHints`) — read once, when the named session is first CREATED, to seed it from the session it branched off; ignored for existing sessions and by harnesses without the capability |
 | Execution constraints such as deadline / budget | Middleware; for example, `budget_exceeded` becomes a `failed` event produced by Middleware |
 | Mid-turn steering | **Extension, not part of the v0.1 core signature** — provided by the [session control plane](design/session-control.md): `control.sessions.get(session).steer/followUp/abort(…)` modulates the run an invoke is driving, beside the invoke rather than through its signature. (An earlier sketch — an optional third `input?: AsyncIterable<Prompt>` parameter — was rejected in favor of the control plane.) If the desired behavior is “discard the current turn and go another way”, cancel + a new `invoke` with the same `session` still works without any extension. |
 | Thinking / citations / artifact streaming | Add new non-terminal `AgentEvent` types |
 | Structured / typed result | Per-invoke output-schema negotiation; the validated result rides on `completed.data`. Demand-driven (task-style embed features); not in v0.1 core, and MUST NOT change the frozen terminal set. |
-| Failure subdivision | `failed.code?` — **adopted**: an optional machine-readable code alongside `details` (e.g. the reference engine sets `session_busy` for a same-session-busy reject). |
+| Failure subdivision | `failed.code?` — **adopted**: an optional machine-readable code alongside `details` (e.g. the reference harness sets `session_busy` for a same-session-busy reject). |
 
 ## 9. Dependency inversion
 
@@ -175,7 +175,7 @@ The protocol treats an Agent as a black box. The following concerns are injected
 ## 10. Out of scope
 
 - **Wire / transport**: expose the Agent through A2A, ACP, HTTP, or any custom transport; Agent Handler is the internal layer they call.
-- **Engine internals**: turn loop, tool execution, model calls, and context management.
+- **Harness internals**: turn loop, tool execution, model calls, and context management.
 - **Agent definition format**: consume existing standards such as `AGENTS.md`, Agent Skills, and MCP; do not invent a parallel format.
 - **Packaging / deployment**: consume OCI and target runtime conventions.
 - **Task orchestration**: long-running task state machines and artifact versions belong to upper layers such as A2A Tasks or userland workflows.
@@ -186,7 +186,7 @@ The protocol treats an Agent as a black box. The following concerns are injected
 |---|---|---|
 | External wire | HTTP | A2A / ACP |
 | Gateway contract | fetch handler `(Request) => Response` | **Agent Handler `invoke(scope, prompt) => AsyncIterable<AgentEvent>`** |
-| Engine/app internals | frameworks / application code | agent engine |
+| Harness/app internals | frameworks / application code | agent harness |
 
 ## Minimal example
 

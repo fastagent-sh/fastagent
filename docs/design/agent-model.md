@@ -91,7 +91,7 @@ interface or pi's, and the definition says which:
 | `skills/<name>/SKILL.md` | Markdown with frontmatter | Open standard ([Agent Skills](https://agentskills.io/specification)) |
 | `tools/`, `channels/`, `fastagent.config.ts` | TypeScript modules (`defineTool`, `defineChannel`) | FastAgent |
 | `schedules/<name>.md` | Markdown with a `cron`/`tz` frontmatter | FastAgent |
-| `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, `extensions/`, `.pi/`, `models.json`, `models-store.json` | pi's conventions and APIs | pi, the reference engine: these do not carry over to another engine |
+| `SYSTEM.md`, `APPEND_SYSTEM.md`, `prompts/`, `extensions/`, `.pi/`, `models.json`, `models-store.json` | pi's conventions and APIs | pi, the reference harness: these do not carry over to another harness |
 | `<context>/<skill>` | A skill name | FastAgent's convention, not the Agent Skills specification (below) |
 | `package.json` | npm | npm |
 
@@ -318,7 +318,7 @@ directory-sharing service would give it another home; only the type in the decla
   context provides from its `.pi/skills/` and `.agents/skills/`, named `<context>/<skill>` (§2). No `AGENTS.md`
   above the agent directory or a context is loaded.
 - **pi's project scope is the agent's own directory.** What pi reads from a project (`.pi/settings.json`, which can
-  change engine settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
+  change harness settings and the built-in extensions, `.pi/` prompts and skills, packages) is read from the agent
   directory, so it is part of the definition and ships with it, the same on every instance. Nothing of pi's
   project scope is read from a context: a context contributes its `AGENTS.md` and its skills only.
 - **What the agent creates lands in its own directory unless it puts it elsewhere.** Whether a file is temporary

@@ -6,9 +6,9 @@
 import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { formatModelsCommand } from "../models-view.ts";
-import { listModels } from "../../engines/pi/config.ts";
-import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../../engines/pi/models.ts";
-import { refreshMachineModelCatalog, refreshModelCatalog } from "../../engines/pi/open.ts";
+import { listModels } from "../../harnesses/pi/config.ts";
+import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../../harnesses/pi/models.ts";
+import { refreshMachineModelCatalog, refreshModelCatalog } from "../../harnesses/pi/open.ts";
 import { AGENT_MODEL_CATALOG_FILE, globalHome } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { failStartup, optionalAgentDirOrExit } from "../fail.ts";

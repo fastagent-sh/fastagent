@@ -9,7 +9,7 @@ import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 export interface ChannelFailure {
   details: string;
   retryable: boolean;
-  /** The engine's failure code, when it set one. */
+  /** The harness's failure code, when it set one. */
   code?: string;
 }
 
@@ -21,7 +21,7 @@ export function defaultErrorMessage(failed: ChannelFailure): string {
 }
 
 /**
- * Customer-facing live-preview line for an engine-internal retry backoff (the advisory `retrying` event): neutral, no
+ * Customer-facing live-preview line for a harness-internal retry backoff (the advisory `retrying` event): neutral, no
  * leaked internals — the reason stays in operator logs.
  */
 export const RETRY_NOTICE = "⏳ Temporary problem — retrying…";

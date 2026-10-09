@@ -14,7 +14,7 @@ behavior belongs in the other `docs/` guides.
 
 ## 1. Product boundary
 
-FastAgent serves file-defined agents. Its stable center is the engine-neutral Agent Handler:
+FastAgent serves file-defined agents. Its stable center is the harness-neutral Agent Handler:
 
 ```ts
 agent.invoke(scope, prompt) => AsyncIterable<AgentEvent>
@@ -25,12 +25,12 @@ The contract separates three things that otherwise form an integration matrix:
 | Concern | FastAgent seam |
 |---|---|
 | Trigger: HTTP, channel, schedule | Calls an `Agent` |
-| Engine/model implementation | Implements `Agent` |
+| Harness/model implementation | Implements `Agent` |
 | Host/runtime | Supplies process, storage, credentials, and deployment |
 
 pi is the reference implementation. The contract does not require pi, but pi-specific assembly,
-sessions, models, and tool types live under `src/engines/pi/` and the public `/pi` subpath.
-Engine-neutral consumers use `/core`.
+sessions, models, and tool types live under `src/harnesses/pi/` and the public `/pi` subpath.
+Harness-neutral consumers use `/core`.
 
 ## 2. Agent shape, contexts and prompt assembly
 
@@ -62,7 +62,7 @@ it is declared as **contexts** ([agent model](agent-model.md) §3):
 contexts: [{ github: "acme/app", local: "/Users/me/code/app" }, { local: "../handbook", readonly: true }],
 ```
 
-`src/contexts/` owns them, engine-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
+`src/contexts/` owns them, harness-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
 keys, a name that is not one path segment or collides ignoring case, and a location that contains the agent
 directory or sits inside it. `resolve.ts` answers where each one is for this instance (`ResolvedContext`:
 name, kind, readonly, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
@@ -196,9 +196,9 @@ classification, the channels' platform error types and every operator-facing mes
 `portError` is how a caller gets it back.
 
 One module, because each layer re-derived both during the Effect migration: the channel kit, the pi
-engine, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
+harness, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
 join-on-interrupt combinator that differed only in the word before `Failure`. `SessionBusy` stays a
-separate tag in `engines/pi/session-effects.ts` because it is control flow, not a port failure.
+separate tag in `harnesses/pi/session-effects.ts` because it is control flow, not a port failure.
 
 ## 3. Assembly ladder
 
@@ -241,7 +241,7 @@ way to start work, and never resident process state as the source of continuity.
 pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
 a value — a turn's outcome is the assistant message the stream ended on, never an index into session
 state (compaction and overflow recovery rewrite that array mid-turn).
-`src/engines/pi/invoke-session.ts` combines the two into one async iterable. An Effect scope owns the
+`src/harnesses/pi/invoke-session.ts` combines the two into one async iterable. An Effect scope owns the
 shared lease, session and subscription; an Effect queue carries projected events. `turn-kit.ts` owns
 protocol projection and terminal classification; `session-effects.ts` supplies the scoped lease/session
 acquisition shared with control-plane writes, and the Promise crossing itself is `src/effect-port.ts`
@@ -284,14 +284,14 @@ only re-run the whole prompt and execute the tool a second time).
 
 **An agent inherits the machine it runs on**, the way it already inherits the `PATH`. Skills and
 prompt templates come from the definition's own `skills/` and from the box — pi's Agent Skills
-discovery, installed pi packages included (fastagent never installs one) — and pi's engine settings
+discovery, installed pi packages included (fastagent never installs one) — and pi's harness settings
 come from the box too. A name in the definition wins a collision; `fastagent add skill` vendors one in.
 The machine is read once per process, like any environment; the definition stays live.
 
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
 machine too, and whatever its builder put in it is that environment's answer
-(`src/engines/pi/machine.ts`).
+(`src/harnesses/pi/machine.ts`).
 
 The machine's extensions stay out of this: they are its owner's setup, and a served agent runs the
 definition's own `extensions/` (`docs/configuration.md#extensions`). So does the system prompt — inheriting
@@ -504,9 +504,9 @@ external upload three-step protocol and stays at-least-once across an ambiguous 
 
 Newly onboarded apps use Slack's `agent_view`, `assistant:write`, suggested prompts, Agent
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Markdown text events
-append to the stream; each engine-neutral tool start appends a compact factual trace, and a failed tool
+append to the stream; each harness-neutral tool start appends a compact factual trace, and a failed tool
 end appends one line naming the call. Raw model thinking and tool output stay private — reading output
-would mean guessing the engine's result shape. The compatibility renderer retains one edited message
+would mean guessing the harness's result shape. The compatibility renderer retains one edited message
 with a strict three-second mutation interval; a custom route reaching a top-level target selects it
 (both ways of getting there are listed on the `rendering` option in `slack.ts`) because native streams
 require a parent user message. HTTP Events API is the production transport; Socket Mode is a separate
@@ -654,7 +654,7 @@ duplicate delivery is INFO).
 
 **What the turn SAID is stored once, and not here.** Every fire runs in a session — `schedule:<name>` for
 a schedule, the asking conversation for a wake-up — and a session is persisted under `<stateRoot>/sessions/`
-like any other, with the engine's own storage and compaction semantics. The claim therefore carries the
+like any other, with the harness's own storage and compaction semantics. The claim therefore carries the
 outcome and nothing else, and the log carries the fact that the fire completed, plus the failure detail
 when it did not. #546 was about model output accumulating where nothing prunes it; a second copy in the
 claim file and a third in a log stream are both that same accumulation, so neither exists. A log line is
@@ -792,7 +792,7 @@ builder never predicts that answer from its own credentials: `credentialRoute` d
 deploy ships.
 
 `start` loads the actual service from the persistent definition's installed package, because its tools
-and session context must use the same runtime module instance — reusing the image's engine after
+and session context must use the same runtime module instance — reusing the image's harness after
 copying dependencies would give tools a different `AsyncLocalStorage`. Dependency installation stays
 marked until it succeeds: an interrupted install may already have created the CLI link, so link
 existence alone cannot authorize reuse.
@@ -911,7 +911,7 @@ run, because nothing can restore their ingress when compute is reclaimed.
 
 Explicit limits, not implied capabilities:
 
-- pi is the reference implementation; additional engine bindings can implement the same Agent contract;
+- pi is the reference implementation; additional harness bindings can implement the same Agent contract;
 - nothing in the process sandboxes a directory agent;
 - Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;

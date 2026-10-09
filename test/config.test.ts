@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { createPiAgentFromDir, createPiModels, type FastagentConfig, listModels, resolveModel } from "../src/index.ts";
-import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/engines/pi/auth.ts";
-import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
-import { probeAuthSource } from "../src/engines/pi/models.ts";
+import { GLOBAL_AUTH_PATH, resolveAuthLayers, resolveAuthPath } from "../src/harnesses/pi/auth.ts";
+import { loadConfig, resolveModelSpec } from "../src/harnesses/pi/config.ts";
+import { probeAuthSource } from "../src/harnesses/pi/models.ts";
 import { resolveSecretsDir, resolveSessionsDir, resolveStateRoot } from "../src/paths.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -343,7 +343,7 @@ async function agentWorkspace(): Promise<{ host: string; agent: string }> {
   return { host, agent };
 }
 
-describe("L3: createPiAgentFromDir (config-driven assembly boundary on the engine side)", () => {
+describe("L3: createPiAgentFromDir (config-driven assembly boundary on the harness side)", () => {
   it("assembles config + definition and returns everything the entrypoint needs; flag beats config", async () => {
     const { agent } = await agentWorkspace();
     await writeFile(
@@ -435,7 +435,7 @@ describe("config: resolveModelSpec (precedence flag > env > config)", () => {
 });
 
 describe("rewriteConfigModel (first-run picker write-back)", async () => {
-  const { rewriteConfigModel } = await import("../src/engines/pi/config.ts");
+  const { rewriteConfigModel } = await import("../src/harnesses/pi/config.ts");
 
   it("uncomments the scaffold's commented model placeholder", () => {
     const src = 'export default {\n  // model: "openai-codex/gpt-5.5",\n  http: { port: 8787 },\n};\n';

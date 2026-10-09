@@ -19,7 +19,7 @@ import type { AgentEvent } from "../../src/agent.ts";
 import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
 import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
-import { environmentAuthSource } from "../../src/engines/pi/models.ts";
+import { environmentAuthSource } from "../../src/harnesses/pi/models.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {

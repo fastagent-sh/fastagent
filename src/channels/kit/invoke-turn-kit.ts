@@ -94,7 +94,7 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
  * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user
  * sees the channel's "Thinking…" placeholder while waiting (the mirror of the scheduler deferring a
  * wake INTO a busy session), and only an exhausted wait surfaces the busy failure. Only a FIRST-event
- * busy retries — a fail-fast reject is the only shape the engine emits it in, so nothing that started
+ * busy retries — a fail-fast reject is the only shape the harness emits it in, so nothing that started
  * is ever re-run.
  */
 export function busyRetryStream(

@@ -1,8 +1,8 @@
 /**
- * An agent inherits the machine it runs on (src/engines/pi/machine.ts, docs/design/core.md §5).
+ * An agent inherits the machine it runs on (src/harnesses/pi/machine.ts, docs/design/core.md §5).
  *
  * It already inherited the box — `bash` runs whatever is on the PATH — so its skills, prompt templates and pi's
- * engine settings are inherited the same way. Deploying ships the project scope; nothing here is compared against a
+ * harness settings are inherited the same way. Deploying ships the project scope; nothing here is compared against a
  * deployment.
  *
  * These tests stub HOME on purpose: `test/setup.ts` gives every file an EMPTY one, so anything here is the
@@ -15,11 +15,11 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { agentCommands } from "../src/engines/pi/open.ts";
-import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
-import { readMachine } from "../src/engines/pi/machine.ts";
-import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { agentCommands } from "../src/harnesses/pi/open.ts";
+import { loadExtensionPaths } from "../src/harnesses/pi/definition.ts";
+import { readMachine } from "../src/harnesses/pi/machine.ts";
+import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { log } from "../src/log.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
@@ -275,7 +275,7 @@ it("a definition that did not change does not reload the loader per turn", async
   expect(sent[1]).not.toContain("Second description.");
 });
 
-it("pi's engine settings are inherited, the project file deep-merged over the machine's, as pi does", async () => {
+it("pi's harness settings are inherited, the project file deep-merged over the machine's, as pi does", async () => {
   // Two scopes, which is why the served settings are not `SettingsManager.inMemory` (one scope): flattening them
   // first would let a project `retry.enabled` wipe the machine's `retry.maxRetries`.
   await machine({ settings: { retry: { maxRetries: 7 } } });
@@ -288,7 +288,7 @@ it("pi's engine settings are inherited, the project file deep-merged over the ma
 
   const session = await piAgentSessionFactory({
     sessions: piInMemorySessionRecordStore({ cwd: dir }),
-    engine: async () => ({ modelRuntime }),
+    harness: async () => ({ modelRuntime }),
     modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     cwd: dir,

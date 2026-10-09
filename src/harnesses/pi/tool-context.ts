@@ -27,7 +27,7 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
 
 /**
  * The turn's tool-activation bridge — narrow closures over the CURRENT session (bound per turn), so a loader tool can
- * activate deferred tools mid-turn without tool.ts importing the engine. pi anchors the addition in the transcript
+ * activate deferred tools mid-turn without tool.ts importing the harness. pi anchors the addition in the transcript
  * (a system message carrying `toolsAdded`, written after the batch of tool results the activating call belongs to),
  * so providers with native deferred loading keep their
  * prompt-cache prefix. The same transcript declarations restore the loadout on the next binding.

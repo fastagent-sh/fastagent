@@ -1,6 +1,6 @@
 ---
 title: Session control plane
-description: "An engine-neutral serving extension beside Agent Handler: observe and modulate live runs. invoke stays the only data plane; there is no second way to start work."
+description: "A harness-neutral serving extension beside Agent Handler: observe and modulate live runs. invoke stays the only data plane; there is no second way to start work."
 type: design-doc
 status: current
 updated: 2026-07-20
@@ -53,7 +53,7 @@ minimal handler contract.
 - reconnect after a UI or network interruption without losing the conversation;
 - live model, thinking, queue, retry, compaction, tool, and usage visibility;
 - multiple observers of one session, naturally;
-- engine-neutral consumers with capability gating;
+- harness-neutral consumers with capability gating;
 - a future remote adapter without making its transport the embedded API.
 
 ## 3. Non-goals
@@ -64,7 +64,7 @@ minimal handler contract.
 - exactly-once tool execution;
 - a remote shell API;
 - a mirror of pi's TUI commands, editor state, themes, widgets, or window chrome;
-- a promise that every engine implements every capability.
+- a promise that every harness implements every capability.
 
 Product-level authorization, routing, offline queues, and durable run records belong above FastAgent.
 A product runner may expose these planes remotely, but the runner owns authentication, policy,
@@ -82,7 +82,7 @@ idempotency, and device routing.
 | ID | Minted by | Lifetime | Job |
 |---|---|---|---|
 | `sessionId` | host/product | durable | addresses the conversation; equals `Scope.session` |
-| `runId` | engine, when an invoke starts a run | one activity window | correlates control-plane acceptance with observed outcome |
+| `runId` | harness, when an invoke starts a run | one activity window | correlates control-plane acceptance with observed outcome |
 | entry `id` | session repository | durable | the reconnect cursor for `entries({ since })` |
 
 There is deliberately no `requestId`, no `runtimeId`, and no `sequence` in the embedded contract.
@@ -93,7 +93,7 @@ transport envelope ([§13](#13-transport-and-envelope)).
 ## 5. The contract
 
 Pure types under the `@fastagent-sh/fastagent/session` subpath (`src/session.ts`); the pi
-implementation lives under `engines/pi/` (`session-control.ts`, exported from `/pi`).
+implementation lives under `harnesses/pi/` (`session-control.ts`, exported from `/pi`).
 
 ```ts
 interface SessionControl {
@@ -178,7 +178,7 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 
 - A patch's VALIDATION is all-or-nothing: every field is checked before anything is written, so a
   patch rejected by validation leaves nothing behind. An empty patch is `ok: true`. The WRITES are not
-  one operation, because an engine records properties as separate journal entries: a failure between
+  one operation, because a harness records properties as separate journal entries: a failure between
   them answers `partial_update`, naming what landed, after an event reporting the record as it now is.
   A field the deployment does not know rejects `unsupported_capability`; it is never dropped.
 - `model` takes a FastAgent model spec, constrained by the assembled definition and host policy. It
@@ -187,8 +187,8 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 - `leafEntryId` moves the session's active leaf: the write verb for the tree `entries()` publishes,
   and how sibling branches come to exist (the next turn hangs off it). Every entry `entries()`
   publishes is a legal target; anything else rejects `invalid_command`. A move to where the head
-  already is writes nothing. A move that travels alone DOES write one record, and it has to: an
-  engine's leaf can be runtime state (pi's is), so a move nothing follows would be forgotten before
+  already is writes nothing. A move that travels alone DOES write one record, and it has to: a
+  harness's leaf can be runtime state (pi's is), so a move nothing follows would be forgotten before
   the next turn and `state()` would contradict the event the move just emitted. That record is the
   implementation's own bookkeeping and is never published: what `entries()` shows is a self-contained
   tree, every `parentId` resolving to something it also shows. Two deliberate omissions: no
@@ -197,7 +197,7 @@ type SessionUpdate = { name?: string; model?: string; thinkingLevel?: string; le
 - Queued messages are processed FIFO, one at a time. pi's queue-mode tuning is not exposed.
 - `followUp` is polyfillable (wait for `run_settled`, then invoke); it exists because it buys
   atomicity against competing writers and queue visibility at near-zero cost. `steer` is not
-  polyfillable — its delivery point is an engine primitive.
+  polyfillable — its delivery point is a harness primitive.
 - `fork` copies a history up to `at` into a session called `into`, the growth verb beside the leaf
   move. Cloning is this with the source's own `leafEntryId`. It is IDEMPOTENT: `into` is the Caller's
   id, the record is stamped with where it came from, and repeating a fork that already landed answers
@@ -221,7 +221,7 @@ machine's prompt templates (`docs/design/core.md` §5). `source` says how each i
 `prompt`, the two spellings below — which is the one thing a client needs to act on.
 
 NOT a dispatch surface, and a client MUST NOT expand a name itself. The data plane takes prompts as
-text; what a name means when it appears in one is the ENGINE's, because the engine is the side that
+text; what a name means when it appears in one is the HARNESS's, because the harness is the side that
 holds the definition — a client that read `skills/<name>/SKILL.md` and built the prompt would
 re-implement loading, drift from it, and break outright against a remote agent whose files are not on
 its machine. A client offers the list and sends the spelling; it does not interpret it.
@@ -234,10 +234,10 @@ whether to act on it — which is why a skill needs the prefix: without it, `/we
 rather than an instruction.
 
 ONE SPELLING, NOT A NEGOTIATED ONE, and that is a known limit rather than a design: this contract has
-one engine implementing it, so a client hard-codes the prefix. Nothing in `commands()` or
-`capabilities()` reports it, so a second engine with a different spelling — or none — cannot be told
+one harness implementing it, so a client hard-codes the prefix. Nothing in `commands()` or
+`capabilities()` reports it, so a second harness with a different spelling — or none — cannot be told
 apart from this one, and adding it is a contract change (`AgentCommand` is public surface). Until then
-the MUST NOT above is what keeps a client honest: hard-coding one engine's spelling is recoverable,
+the MUST NOT above is what keeps a client honest: hard-coding one harness's spelling is recoverable,
 expanding the name yourself is not.
 
 ONE silent fall-back, and it is a name nothing knows: an unknown name goes through as plain text,
@@ -269,8 +269,8 @@ and turns it into an `abort` before the agent sees it (`src/channels/kit/stop-co
 platform command, not a definition name.
 
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
-the list must come from that same read. `source` is free-form because which kinds exist is an engine's
-business (`"skill"` today), and an engine with none answers `[]` — a complete answer. A definition
+the list must come from that same read. `source` is free-form because which kinds exist is a harness's
+business (`"skill"` today), and a harness with none answers `[]` — a complete answer. A definition
 that cannot be READ at all is a deployment fault, and this read MAY reject.
 
 ### 5.2 Acceptance is not outcome
@@ -282,7 +282,7 @@ type SessionResult =
 ```
 
 An admitted `steer`/`follow_up` carries its `disposition`, and nothing else does. `queued`: the prompt waits in
-`pending` until the run takes it in. `handled`: the engine consumed it before the queue (in pi, an extension's
+`pending` until the run takes it in. `handled`: the harness consumed it before the queue (in pi, an extension's
 `input` handler), so it never enters the conversation and no `queue_changed` or `user_message` reports it. Without
 the field a client could only infer `handled` from an event that never arrives.
 
@@ -290,7 +290,7 @@ the field a client could only infer `handled` from an event that never arrives.
 outcomes are reported by `run_settled` and by the invoke stream's terminal event. `ok: false` means the
 command did not COMPLETE, which is not the same as nothing having happened: every code except
 `partial_update` is a rejection **before** acceptance with nothing durable landed, and that one names
-the fields that did land (a multi-field `update` writes separate journal entries, and no engine here
+the fields that did land (a multi-field `update` writes separate journal entries, and no harness here
 can roll them back). Whether a command may be re-sent is therefore answered by `retryable`, never by
 `ok` alone. Work that fails after acceptance otherwise surfaces through events and durable entries,
 never as a second result.
@@ -407,7 +407,7 @@ inside a run's activity window and reports as `running` — the observation plan
 equals the data plane's lease window, so `state()` never says idle while an invoke would be rejected
 `session_busy`.
 
-`pending` lists the prompts queued on the active run, oldest first, as the engine queued them: plain
+`pending` lists the prompts queued on the active run, oldest first, as the harness queued them: plain
 text as sent, a slash command already expanded, without its images (its `user_message` lists them). A prompt leaves its list when it
 enters the conversation as a user message, so a client that shows queued prompts apart from the
 transcript moves one into it at that point. An abort can still end the run before the model answers
@@ -448,12 +448,12 @@ interface SessionEntry {
 ```
 
 Entries are append-ordered with stable ids, including pre-compaction records and abandoned branches
-where the engine preserves them — `parentId` exists because branches objectively occur. The `since`
+where the harness preserves them — `parentId` exists because branches objectively occur. The `since`
 cursor is an APPEND-ORDER position, not a descendant filter: in a branched session it may include
 records from other branches, and the client reconstructs the active path via `parentId` chains from
 `leafEntryId`. The pi reference's payloads for the guaranteed kinds: `user` `{ text, images? }`; `assistant`
 `{ text, thinking?, toolCalls?: { id, name, args }[], outcome? }`, where `args` is the same value `tool_started` carries live;
-`tool` `{ toolCallId, toolName, isError, text, images?, terminate? }`. Engine-specific kinds may appear beyond the
+`tool` `{ toolCallId, toolName, isError, text, images?, terminate? }`. Harness-specific kinds may appear beyond the
 guaranteed minimum and MUST be skippable.
 
 `thinking` is the answer's recorded reasoning: exactly the text its live `message_delta { channel: "thinking" }`
@@ -469,13 +469,13 @@ client applies one rule to the live event and to the entry it reads back, and a 
 channel's run, a schedule's, one before a restart) still shows. `truncated` means the answer was cut off at the
 output limit: a property of the answer, not a failure of its run, which settles `completed` and may still produce
 a later complete answer. `aborted` is an answer the run's stop ended, wherever the stop landed: while the model was
-writing, or during a tool, after which the engine's next model request fails on the stop (the stopped call's own
+writing, or during a tool, after which the harness's next model request fails on the stop (the stopped call's own
 `tool` entry is `isError: true`). A failure recorded BEFORE the stop stays `failed`: a provider error whose retry
 was then stopped during its backoff failed on its own. The `toolCalls` of a `failed` or `aborted` answer never ran: no `tool_started` and no
 `tool` entry follow them. A `truncated` answer's calls do not run either, because their arguments may be cut off,
 but each is reported as failed: live as `tool_started` followed by `tool_finished { isError: true }`, durably as a
 `tool` entry with `isError: true`. An answer a `context_edit { omitted: true }` targets, `failed` or `truncated`,
-is an attempt the engine abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
+is an attempt the harness abandoned, and its `tool` entries are omitted with it. A retry usually follows, but not
 always: the retry can be stopped during its backoff, or the compaction it waits on can fail. A run whose process
 died mid-answer recorded nothing, so it reads as a user entry with no answer after it.
 
@@ -533,7 +533,7 @@ the `entryId` of a record already readable when the event arrives. Live events a
 timelines persists normalized events above FastAgent.
 
 The neutral state never exposes session file paths, working directories, provider base URLs,
-credential sources, or engine model descriptors.
+credential sources, or harness model descriptors.
 
 ## 8. Live event model
 
@@ -572,15 +572,15 @@ excludes editor replacement, themes, widgets, and all other TUI presentation sur
 ## 9. Concurrency and residency
 
 - **Single writer, run-scoped.** All writers — channel invoke, scheduler fire, desktop invoke — take
-  the same `Lease` (`engines/pi/turn-kit.ts`) for the run's activity window. A scheduler firing into a
+  the same `Lease` (`harnesses/pi/turn-kit.ts`) for the run's activity window. A scheduler firing into a
   session mid-run gets `session_busy` and defers.
 - **The plane's writes take the lease.** `update`, `compact`, `fork` and `delete` are the control
   plane's only durable writers and are rejected `session_busy` when they would race a run.
-- **Residency is an internal cache.** The serving process MAY keep a live engine session per
+- **Residency is an internal cache.** The serving process MAY keep a live harness session per
   recently-used sessionId. Before starting a run it revalidates against the durable record and reloads
   when stale — interleaved writers are correct, merely slower. Eviction is invisible in the contract.
 - Within a run: one run at a time per session; steering and follow-ups are serialized FIFO; tool calls
-  within one turn may run concurrently where the engine permits; cancellation may leave a started tool
+  within one turn may run concurrently where the harness permits; cancellation may leave a started tool
   without a finished event; side-effecting tools remain at-least-once across process failure.
 - Process affinity exists only while a run is active. Cross-instance routing belongs to a session
   router above FastAgent.
@@ -592,7 +592,7 @@ FastAgent prompt assembly, the same skills (definition and machine, core §5) an
 loadout restoration, FastAgent model auth (never implicit `~/.pi` credentials), model policy from config, and host-owned working
 directory and session repository — never client-provided paths.
 
-`src/engines/pi/session-builder.ts` proves this assembly seam: it builds a resident pi
+`src/harnesses/pi/session-builder.ts` proves this assembly seam: it builds a resident pi
 `AgentSessionRuntime` over the same `PiAssembly` serving runs on (prompt, skills, tools, auth, reasoning
 effort, agent directory), so only the session's shape differs; the TUI (`chat.ts`) is one consumer of it.
 
@@ -647,7 +647,7 @@ a name nobody can use.
 
 The pi implementation may use pi's richer session repository internally for stable entry ids and
 session reconstruction; both views point at the same durable root, and all writers share the same
-lease. Engine-specific records (pi JSONL, message classes) never cross the adapter.
+lease. Harness-specific records (pi JSONL, message classes) never cross the adapter.
 
 ## 13. Transport and envelope
 
@@ -1001,7 +1001,7 @@ tools safe for untrusted users, and nothing in the process is a sandbox boundary
   PATH, not the flat journal. An unreadable chain never resolves silently to assembly defaults:
   `state()` stays total but leaves the settings pair absent, and the fault surfaces where an error
   code exists.
-- **Transport.** `createControlPlane` (engine-neutral, unauthenticated like every other route) serves
+- **Transport.** `createControlPlane` (harness-neutral, unauthenticated like every other route) serves
   §13's surface. `connectSessionControl` re-exposes the SAME `SessionControl` and consumes the envelope
   internally. The data plane is its own root route: `POST /invoke` + `connectAgent`.
   `config.sessionControl: true` makes dev/start mount the plane; product runners own authentication,
@@ -1050,7 +1050,7 @@ Implementation review should reject changes that violate these:
 8. The embedded contract is semantic-only; correlation, ordering, and epoch identity live in the
    transport envelope.
 9. FastAgent Definition artifacts, not ambient pi globals, determine behavior; pi imports stay under
-   `src/engines/pi/`.
-10. Engine paths, models, messages, and repositories never leak into the neutral contract.
+   `src/harnesses/pi/`.
+10. Harness paths, models, messages, and repositories never leak into the neutral contract.
 11. Live events are ordered but never presented as durable history.
 12. TUI presentation APIs and remote-shell shortcuts stay out.

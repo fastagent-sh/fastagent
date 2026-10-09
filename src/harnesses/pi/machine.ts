@@ -1,6 +1,6 @@
 /**
  * THE MACHINE an agent runs on, as fastagent inherits it: the skills and prompt templates this box provides — found
- * by pi's own Agent Skills discovery, installed pi packages included — and pi's engine settings.
+ * by pi's own Agent Skills discovery, installed pi packages included — and pi's harness settings.
  *
  * An agent inherits its machine the way it already inherits the `PATH`: `bash` runs whatever is installed, and a
  * skill in `~/.pi/agent/skills` is available the same way. pi's project scope is the agent directory, so what pi reads
@@ -52,7 +52,7 @@ export interface Machine {
    * settings disables one, and the agent directory's `.pi/settings.json` overrides that either way.
    */
   builtinExtensions: string[];
-  /** pi's engine settings (retry, compaction, cache warming, …) as read at boot — a fresh manager per caller. */
+  /** pi's harness settings (retry, compaction, cache warming, …) as read at boot — a fresh manager per caller. */
   settingsManager(): SettingsManager;
 }
 

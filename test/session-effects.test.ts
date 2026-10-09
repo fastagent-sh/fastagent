@@ -6,8 +6,8 @@ import type * as Scope from "effect/Scope";
 import { expect, expectTypeOf, it } from "vitest";
 import type { PortFailure } from "../src/effect-port.ts";
 import { portAbort } from "../src/effect-port.ts";
-import { acquireSession, acquireSessionLease } from "../src/engines/pi/session-effects.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { acquireSession, acquireSessionLease } from "../src/harnesses/pi/session-effects.ts";
+import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
 
 it("retains the resource scope and both expected failure channels until explicitly handled", () => {
   const opened = acquireSession(async () => ({}) as AgentSession, "types");

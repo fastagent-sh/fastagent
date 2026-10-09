@@ -170,7 +170,7 @@ describe("fastagentCredentialStore (read-write credential file; fail-visibly dis
   }, async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-auth-mp-"));
     const path = join(dir, "auth.json");
-    const authModule = fileURLToPath(new URL("../src/engines/pi/auth.ts", import.meta.url));
+    const authModule = fileURLToPath(new URL("../src/harnesses/pi/auth.ts", import.meta.url));
     const script = join(dir, "write.mjs");
     await writeFile(
       script,

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { createPiAgentFromDefinition } from "../src/engines/pi/create.ts";
+import { createPiAgentFromDefinition } from "../src/harnesses/pi/create.ts";
 import { makeFaux } from "./faux.ts";
 
 // A schedule's body, a caller of POST /invoke and an external clock all reuse a prompt the definition holds by sending

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
-import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { slackChannel } from "../src/slack.ts";
 
 type Sender = { execute: (id: string, params: unknown) => Promise<{ details: unknown }> };

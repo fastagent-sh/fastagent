@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AuthInteraction, Credential, Provider } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { type IoOption, type LoginIO, loginFlow } from "../src/engines/pi/login.ts";
+import { type IoOption, type LoginIO, loginFlow } from "../src/harnesses/pi/login.ts";
 import { relayLogin, stdioLoginIO } from "../src/cli/login-relay.ts";
 
 const OAUTH: Credential = { type: "oauth", access: "tok", refresh: "rt", expires: Date.now() + 3_600_000 };

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { AgentEvent } from "../src/agent.ts";
-import { defineTool } from "../src/engines/pi/tool.ts";
+import { defineTool } from "../src/harnesses/pi/tool.ts";
 import { fauxAgent } from "./agent.ts";
 
 /** Call a built tool's execute directly (the `fastagent tool` path — no session binding). */

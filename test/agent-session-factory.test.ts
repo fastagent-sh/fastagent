@@ -21,19 +21,19 @@ import {
   createBashTool,
   createReadTool,
 } from "@earendil-works/pi-coding-agent";
-import type { MountedTool } from "../src/engines/pi/tool.ts";
+import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collect } from "../src/collect.ts";
-import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
 import {
   type PropertyWrites,
   piInMemorySessionRecordStore,
   piSessionRecordStore,
-} from "../src/engines/pi/session-store.ts";
+} from "../src/harnesses/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
-import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts";
-import { piAllCodingTools } from "../src/engines/pi/create.ts";
+import { type TurnContext, turnContext } from "../src/harnesses/pi/tool-context.ts";
+import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
 
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
 import { definitionSkill, fauxControlledAgent } from "./agent.ts";
@@ -51,7 +51,7 @@ async function agentWith(
   return createPiAgentFromSession({
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
-      engine: async () => {
+      harness: async () => {
         const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         runtime.registerNativeProvider(faux.provider);
         return { modelRuntime: runtime };

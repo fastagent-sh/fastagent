@@ -78,7 +78,7 @@ A path overlap is a collision: `/webhook` conflicts with `POST /webhook`; `GET /
 
 ## Public channel-authoring kit
 
-A channel adapter should depend on the engine-neutral `@fastagent-sh/fastagent/core` subpath:
+A channel adapter should depend on the harness-neutral `@fastagent-sh/fastagent/core` subpath:
 
 | Export | Use |
 |---|---|
@@ -90,7 +90,7 @@ A channel adapter should depend on the engine-neutral `@fastagent-sh/fastagent/c
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
-Do not import from `src/engines/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract, and `/core` loads no third-party package at all — which is what makes it the right dependency for a channel package.
+Do not import from `src/harnesses/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract, and `/core` loads no third-party package at all — which is what makes it the right dependency for a channel package.
 
 ## Minimal adapter
 
@@ -192,12 +192,12 @@ A channel adapter should:
 - choose clear session IDs and document same-session behavior,
 - tolerate `failed` terminal events,
 - cancel or stop work when the client disconnects if the protocol supports it,
-- avoid importing engine-specific code,
+- avoid importing harness-specific code,
 - keep provider SDK dependencies out of `@fastagent-sh/fastagent` unless the adapter is first-party and lightweight.
 
 ## Sessions and concurrency
 
-Channels choose the `session` string. The engine enforces one in-flight turn per session. A concurrent turn on the same session fails fast with a retryable `failed` event.
+Channels choose the `session` string. The harness enforces one in-flight turn per session. A concurrent turn on the same session fails fast with a retryable `failed` event.
 
 Good session choices depend on the external system:
 

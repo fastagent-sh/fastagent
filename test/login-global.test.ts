@@ -9,10 +9,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { environmentAuthSource } from "../src/engines/pi/models.ts";
+import { environmentAuthSource } from "../src/harnesses/pi/models.ts";
 
-vi.mock("../src/engines/pi/login.ts", async (original) => ({
-  ...(await original<typeof import("../src/engines/pi/login.ts")>()),
+vi.mock("../src/harnesses/pi/login.ts", async (original) => ({
+  ...(await original<typeof import("../src/harnesses/pi/login.ts")>()),
   loginFlow: vi.fn(async () => ({ provider: "anthropic", method: "oauth", verified: "n/a" })),
 }));
 vi.mock("../src/cli/shared.ts", async (original) => ({

@@ -16,8 +16,8 @@ import {
   createAgentSessionFromServices,
   createAgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
-import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
-import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/harnesses/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { collect, AgentFailure } from "../src/collect.ts";
 import { busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -36,11 +36,11 @@ import { listWakeups } from "../src/schedule/wakeups.ts";
 import { readFires } from "../src/schedule/state.ts";
 
 afterEach(() => vi.restoreAllMocks());
-import { definitionResourceLoaderOptions } from "../src/engines/pi/agent-session-factory.ts";
-import { readMachine } from "../src/engines/pi/machine.ts";
+import { definitionResourceLoaderOptions } from "../src/harnesses/pi/agent-session-factory.ts";
+import { readMachine } from "../src/harnesses/pi/machine.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
-import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
+import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
 
 /**
  * A per-invoke `AgentSession` factory over one faux model. `dir` makes the record durable (the
@@ -104,7 +104,7 @@ describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
 
   hanging: async (onCleanup) => {
     const factory = await sessionFactory([fauxAssistantMessage("a long answer that streams out slowly")]);
-    // The engine's cancel cleanup is session.abort() — intercept it as the probe.
+    // The harness's cancel cleanup is session.abort() — intercept it as the probe.
     return createPiAgentFromSession({
       sessionFactory: async (sessionId) => {
         const session = await factory(sessionId);

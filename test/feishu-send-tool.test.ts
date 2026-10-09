@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent } from "../src/agent.ts";
-import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { createPiAgentFromDefinition, type FastagentTool } from "../src/pi.ts";
 import { feishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";

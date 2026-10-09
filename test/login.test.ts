@@ -14,8 +14,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
-import * as models from "../src/engines/pi/models.ts";
-import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/engines/pi/auth.ts";
+import * as models from "../src/harnesses/pi/models.ts";
+import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../src/harnesses/pi/auth.ts";
 import {
   type IoOption,
   LoginCancelled,
@@ -26,7 +26,7 @@ import {
   loginOptions,
   loginOptionsOver,
   loginOver,
-} from "../src/engines/pi/login.ts";
+} from "../src/harnesses/pi/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
 // so these tests exercise the actual persist/corruption semantics. Only the providers' login flow

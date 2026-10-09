@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRoomThreads, registerRoomThreads } from "../src/channels/kit/room-threads.ts";
-import { turnContext } from "../src/engines/pi/tool-context.ts";
+import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import type { FastagentTool } from "../src/pi.ts";
 

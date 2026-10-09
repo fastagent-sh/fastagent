@@ -9,13 +9,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../src/engines/pi/models.ts";
+import { createPiModelRuntime, globalCatalogPath, machineModelRuntime } from "../src/harnesses/pi/models.ts";
 import {
   availableModelsFromDir,
   createPiAgentFromDir,
   refreshMachineModelCatalogOver,
   refreshModelCatalogOver,
-} from "../src/engines/pi/open.ts";
+} from "../src/harnesses/pi/open.ts";
 
 /** An agent with no model set and two custom endpoints; its credentials file sits outside it. Returns the agent. */
 async function agent(auth: string): Promise<{ dir: string; authPath: string }> {
