@@ -496,10 +496,10 @@ type AbortResult =
   | { ok: false; error: AgentError };
 ```
 
-- **`create`** names the session, or lets the service name it, and is the only way to fork: the new session starts
-  with the source's history, up to `entryId` or all of it. A fork copies the history, not the runs: the new session's
-  runs are its own, so a run the fork point cuts through is not one of them. A session that already exists is a `conflict`. An invoke
-  into a session that does not exist yet creates it empty.
+- **`create`** names the session, or lets the service name it, and is the only way to fork: the new session starts with
+  the source's history, up to `entryId` or all of it. A fork copies the history, not the runs: the new session's runs
+  are its own, so a run the fork point cuts through is not one of them. A session that already exists is a `conflict`.
+  An invoke into a session that does not exist yet creates it empty.
 - **`read`** returns the state and one page of history, after or before a cursor; `limit: 0` reads the state alone.
 - **`follow`** catches up on the history after a cursor, then continues with live events; without a cursor it starts
   from the beginning. A client that opens a session reads its latest page, then follows from its last entry. Every
@@ -768,9 +768,9 @@ session's other content, such as a direct conversation or what a schedule posted
 readers. The post still reaches the thread: it is quoted in the thread's first prompt, and the chat's discussion
 arrives through the place's history read from the platform ([place history](place-history.md)).
 
-Each passes its `source` with the invoke (§7.2). Channels keep their turn store, because it is what they owe the chat. Whether
-`idempotencyKey` replaces their redelivery dedup, and whether they keep their own queue, is decided when they move
-(§12).
+Each passes its `source` with the invoke (§7.2). Channels keep their turn store, because it is what they owe the chat.
+Whether `idempotencyKey` replaces their redelivery dedup, and whether they keep their own queue, is decided when they
+move (§12).
 
 ### 8.4 Clients
 
