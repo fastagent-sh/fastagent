@@ -33,6 +33,7 @@ src/
 │                           # plus the assembly parts dev/start share: routesFor / mountSessionControl / startSchedules
 ├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
 │                           # portRequest / portCleanup / PortFailure
+├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
 ├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
 │                           # engine-neutral but needs Node / names the engine. Asserted in package-boundary.test.ts

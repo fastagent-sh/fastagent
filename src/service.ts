@@ -1,6 +1,5 @@
 /** The product, as one call: an agent directory becomes a live service. */
 import * as Cause from "effect/Cause";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,6 +15,7 @@ import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/s
 import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
+import { once } from "./once.ts";
 import { refuseBrokenDeclarations } from "./loader.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 
@@ -375,24 +375,14 @@ export async function mountAgentService(
         onClosed(name, error);
       };
 
-      // Scope.close alone does not join concurrent closes or retain their failure. The first call closes; every later
-      // one awaits that outcome, including the rollback a close itself triggers. Effect.cached cannot be used: a call
-      // made while its run is still starting joins a fiber it has not assigned yet, and dies.
-      const closed = yield* Deferred.make<void>();
-      let closing = false;
-      const shutdown = Effect.suspend(() => {
-        if (closing) return Deferred.await(closed);
-        closing = true;
-        return Effect.gen(function* () {
+      // Scope.close alone does not join concurrent closes or retain their failure. Every later call, the rollback a
+      // close itself triggers included, awaits the first one's outcome.
+      const shutdown = once(
+        Effect.gen(function* () {
           abort.abort();
           yield* Scope.close(lifetime, Exit.void);
-        }).pipe(
-          Effect.exit,
-          Effect.flatMap((exit) => Deferred.done(closed, exit)),
-          Effect.uninterruptible,
-          Effect.andThen(Deferred.await(closed)),
-        );
-      });
+        }),
+      );
       const close = (): Promise<void> => Effect.runPromise(shutdown);
       const rollback = shutdown.pipe(
         Effect.catchCause((cause) =>

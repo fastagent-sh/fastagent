@@ -847,7 +847,8 @@ is `/skill:<name> [args]`, an extension command or a prompt template is `/<name>
 client-side.
 
 - An unknown name goes through as plain text, so check a name against this list if a typo should be visible. A
-  skill whose file cannot be read is dropped from the list (the loader warns `read_failed`).
+  skill whose file cannot be read is dropped from the list, and the server logs `<path>: <error>`, for example
+  `…/SKILL.md: EACCES: permission denied, open '…/SKILL.md'`.
 - If a file disappears after the list was read (a steer mid-run, a replaced definition), the prompt goes through
   unexpanded and the server logs `skill_expansion failed`.
 - The list is complete for a served agent. Two extensions registering the same command name are listed as

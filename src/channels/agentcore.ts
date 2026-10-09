@@ -8,6 +8,7 @@ import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
 import { router } from "../channels/serve.ts";
 import { log } from "../log.ts";
+import { once } from "../once.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
 import { readBodyCapped } from "./body.ts";
 import { createInvokeHandler } from "./http.ts";
@@ -71,24 +72,16 @@ function createActivation(deps: {
   channels: Effect.Effect<ChannelHandler, PortFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
-  // UNINTERRUPTIBLE: `Effect.cached` interrupts a run once every caller has left it, and an activation cut off
-  // halfway (the state hook run, the channels half built) would leave the next envelope a fresh run over a
-  // half-done one. Unreachable today (no caller passes a signal), which is why it is written down rather than
-  // relied on.
-  const stateReady = Effect.runSync(
-    Effect.cached(
-      portJoin(async () => {
-        onStateReady?.();
-      }).pipe(Effect.uninterruptible),
-    ),
+  const stateReady = once(
+    portJoin(async () => {
+      onStateReady?.();
+    }),
   );
-  const channels = Effect.runSync(
-    Effect.cached(
-      portJoin(async () => {
-        const surface = await deps.channels();
-        return router({ selfVerifying: surface.routes });
-      }).pipe(Effect.uninterruptible),
-    ),
+  const channels = once(
+    portJoin(async () => {
+      const surface = await deps.channels();
+      return router({ selfVerifying: surface.routes });
+    }),
   );
   return {
     prepare: (envelope) =>
