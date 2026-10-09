@@ -39,7 +39,6 @@ interface DeployContext {
   pre: Extract<DeployPreflight, { ok: true }>;
   channels: readonly DeclaredChannel[];
   webhookChannels: readonly DeclaredChannel[];
-  longConnectionChannels: readonly DeclaredChannel[];
   /** Write this host's planned artifacts into the agent directory under the ownership rule. */
   write(
     artifacts: { path: string; content: string }[],
@@ -53,6 +52,7 @@ export interface HostDeploy {
   isOurs(path: string, content: string): boolean;
   /** The shell into this agent's running box (`fastagent login --deployment`). */
   shell(agentDir: string): Promise<BoxShell>;
+  validate?(ctx: Pick<DeployContext, "opts" | "agentDir" | "pre">): void;
   /**
    * Plan the artifacts from the pre-flight facts and what is on disk, write them, then either drive the host CLI
    * (`--run`) or print the runbook.

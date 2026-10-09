@@ -8,7 +8,8 @@
  * Three edits: a directory beside this file (copy `fly/`: `plan.ts` pure, `run.ts` driving the host
  * CLI behind the runner seam), its `HostDeploy` in `cli/commands/deploy/<host>.ts` (kept-file
  * semantics, gates, the drive glue — the half that may exit the process), and its name in the array
- * below. `deploy/` itself is a neutral kernel plus one directory per host; nothing host-specific
+ * below. Locally known refusals belong in `HostDeploy.validate`: the dispatcher runs it before app onboarding
+ * and again on the facts onboarding produces. `deploy/` itself is a neutral kernel plus one directory per host; nothing host-specific
  * belongs in the kernel, and no host may hold a fact about another one (a host-only flag is a row in
  * `HOST_ONLY_FLAGS` in `cli/commands/deploy.ts`, warning elsewhere; `--tunnel` stays a usage GATE in `runDeploy`
  * because a refusal is not a row).

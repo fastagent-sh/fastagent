@@ -56,7 +56,9 @@ Interactive `deploy --run` uses the existing onboarding flow when a declared Fei
 production App ID, Secret, or webhook Verification Token. A complete app is reused without another creation flow.
 This also applies to a production environment explicitly configured for WebSocket.
 
-1. Run preflight and refuse missing values that onboarding cannot supply before creating an app.
+1. Run preflight and host validation before creating an app. AgentCore rejects long connections and names beyond
+   its resource-name limit; Docker refuses a value file that differs from the generated Compose path. Refuse
+   missing values that onboarding cannot supply.
 2. Refuse unattended setup (`--no-input` or no terminal), naming the missing production values and their file.
    CI must write those values beforehand. Generate-only deployment creates no remote app.
 3. **Feishu:** scan-to-create a separate production app. A webhook app requests the agent scopes plus
@@ -66,7 +68,7 @@ This also applies to a production environment explicitly configured for WebSocke
    mode, token and Request URL configuration remain manual.
 5. Capture the Verification Token with the existing temporary-tunnel flow and persist it to the production file.
    A withheld scope stops completion visibly. Tenant approval and version publishing remain console actions.
-6. Re-run preflight, then build and deploy with the values now in that file. Once readiness and model login pass,
+6. Re-run preflight and host validation, then build and deploy with the values now in that file. Once readiness and model login pass,
    register the deployment's stable Request URL with those same values, never shell-exported dev credentials.
 
 Feishu/Lark production App IDs that match the default dev value file are refused before onboarding or deployment.

@@ -108,8 +108,9 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }
   };
   independentApps(loadEnvValues(dotEnvPath(agentDir)));
-  const preflight = () =>
-    preflightDeploy({
+  const target = HOSTS[host];
+  const preflight = async () => {
+    const facts = await preflightDeploy({
       agentDir,
       config,
       run: !!opts.run,
@@ -121,8 +122,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
     }).catch(failStartup);
+    if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
+    target.validate?.({ opts, agentDir, pre: facts });
+    return facts;
+  };
   let pre = await preflight();
-  if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
   if (unprepared.length > 0) {
     const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
@@ -164,13 +168,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       `fastagent deploy ${host}${opts.tunnel ? " --tunnel" : ""} --run`,
     ).catch(failStartup);
     pre = await preflight();
-    if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   }
   independentApps(pre.values);
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels } = pre;
   warnHostOnlyFlags(host, opts);
-  const target = HOSTS[host];
   await target.deploy({
     opts,
     agentDir,
@@ -178,7 +180,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     pre,
     channels,
     webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
-    longConnectionChannels: channels.filter((channel) => channel.ingress === "long-connection"),
     // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
     // one.
     // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But

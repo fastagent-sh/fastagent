@@ -1,9 +1,10 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { webhookPaths } from "../../../deploy/channel-ingress.ts";
 import {
   DOCKER_COMPOSE_FILE,
+  DOCKER_VALUE_FILE,
   composeHasTunnelService,
   isGeneratedCompose,
   planDockerDeploy,
@@ -12,8 +13,7 @@ import {
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { openExternalUrl } from "../../../open-url.ts";
-import { SECRETS_DIRNAME, SECRET_FILE_MODE, exists, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
-import { dotEnvPath } from "../../../env.ts";
+import { SECRET_FILE_MODE, exists, readTextIfExists, resolveStateRoot } from "../../../paths.ts";
 import { announceWebhooks } from "../../../tunnel.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
@@ -26,25 +26,23 @@ import type { DeclaredSecret } from "../../../declared-secrets.ts";
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => path.endsWith(DOCKER_COMPOSE_FILE) && isGeneratedCompose(content),
   shell: async (agentDir) => composeShell(DOCKER_COMPOSE_FILE, agentDir),
-  async deploy(ctx) {
-    const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;
-    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
-    // Compose requires its committed env_file to exist, even when no values are declared.
-    const composeValueFile = join(agentDir, SECRETS_DIRNAME, "production", ".env");
-    await mkdir(dirname(composeValueFile), { recursive: true });
-    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
-    // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
-    // builder's path would not mean the same thing anywhere else. Under `--run` the two files disagreeing is a
-    // DETERMINISTIC failure and gates like every other one: the missing-values gate would pass on the file this
-    // machine reads while `compose up` starts a container whose declared secrets and model are all absent.
-    if (resolve(dotEnvPath(agentDir)) !== resolve(composeValueFile)) {
+  validate({ opts, agentDir, pre }) {
+    if (resolve(agentDir, pre.valueFile) !== join(agentDir, DOCKER_VALUE_FILE)) {
       const issue =
-        `FASTAGENT_SECRETS_DIR points this run's values at ${valueFile}, but the generated Compose reads ` +
-        `${relative(agentDir, composeValueFile)} (a committed artifact cannot carry this machine's path), so the ` +
+        `FASTAGENT_SECRETS_DIR points this run's values at ${pre.valueFile}, but the generated Compose reads ` +
+        `${DOCKER_VALUE_FILE} (a committed artifact cannot carry this machine's path), so the ` +
         `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
       console.error(`[fastagent] warn: ${issue}`);
     }
+  },
+  async deploy(ctx) {
+    const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;
+    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
+    // Compose requires its committed env_file to exist, even when no values are declared.
+    const composeValueFile = join(agentDir, DOCKER_VALUE_FILE);
+    await mkdir(dirname(composeValueFile), { recursive: true });
+    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
     // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
     // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
     // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and pushed
