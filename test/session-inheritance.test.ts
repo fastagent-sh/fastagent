@@ -56,7 +56,7 @@ describe("session inheritance", () => {
     const agent = createPiAgentFromSession({
       sessionFactory: piAgentSessionFactory({
         sessions,
-        harness: async () => ({ modelRuntime }),
+        createModelRuntime: async () => modelRuntime,
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ skills: [] }),
         cwd,

@@ -135,7 +135,7 @@ const ACTION_BODY_LIMIT = MAX_BODY_BYTES;
 
 /**
  * Parse-don't-validate at the wire: a remote client can send any JSON, and the hub's inner layers trust action shapes
- * (a malformed `steer` would surface as an HARNESS failure misclassified as `run_command_failed`).
+ * (a malformed `steer` would surface as a HARNESS failure misclassified as `run_command_failed`).
  */
 function parseWireAction(raw: unknown): SessionAction | undefined {
   // COMPILE-TIME drift guard, variant level: this switch hand-mirrors the SessionAction union, and a new variant

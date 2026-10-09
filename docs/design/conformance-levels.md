@@ -9,7 +9,7 @@ status: current
 ## 1. Decision
 
 **Where a session's state lives is an explicit deployment choice** — a property of a deployment, not
-of "fastagent". Which harness class serves it is a separate question, and it is settled.
+of "fastagent". Which pi class serves it is a separate question, and it is settled.
 
 The protocol says so already. [SPEC](../SPEC.md) §6, under *Portable conformance (optional; required
 for Agents claiming serverless portability)*:
@@ -65,13 +65,13 @@ a stated bill (§5).
 The seam is **L0 only** ([core.md](core.md) §3: `createPiAgentFromSession` is the L0 rung).
 
 - **`Agent`** — `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. The SPEC calls the Agent "a
-  black box to the Caller", and the harness swap was invisible through it: the conformance suite ran
-  unchanged against both classes.
+  black box to the Caller", and the `AgentHarness` → `AgentSession` swap was invisible through it: the
+  conformance suite ran unchanged against both classes.
 - **`SessionControl`** — harness-neutral, and designed when only one implementation existed. Every
-  method maps onto `AgentSession` natively, most of them more directly than onto the harness
+  method maps onto `AgentSession` natively, most of them more directly than onto `AgentHarness`
   (`dispatch`'s verbs are `steer`/`followUp`/`abort`/`compact`/`setModel`/`setThinkingLevel`/
   `navigateTree`). The migration confirmed it: nothing in the contract bent, and `compact` lost the
-  hand-assembled summarization pipeline the harness needed.
+  hand-assembled summarization pipeline `AgentHarness` needed.
 - **The assembly ladder, the definition, tools, channels, schedules** — level-agnostic. They produce
   inputs; the level decides who consumes them.
 
@@ -100,7 +100,7 @@ transcript retention at roughly the size of the record on disk (~8.6 KB per turn
 
 ## 6. Consequences for the roadmap
 
-The harness surface is no longer a choice, which retires a whole class of requests along with it.
+The serving class is no longer a choice, which retires a whole class of requests along with it.
 Extensions, slash-command dispatch, branch summaries and fork/clone are `AgentSession` features, and
 the serving path is now on `AgentSession` — so they are reachable rather than blocked. What still
 gates them is wiring, not class:
@@ -114,5 +114,5 @@ gates them is wiring, not class:
   what typing `/name` means belongs to the client — a deliberate contract line.
 
 What has NOT changed is the level: `per-invoke` remains the serving posture, and residency remains a
-deployment choice with the bill in §5. The harness swap moved which class runs a turn, not where the
-state lives.
+deployment choice with the bill in §5. The `AgentHarness` → `AgentSession` swap moved which class runs a
+turn, not where the state lives.

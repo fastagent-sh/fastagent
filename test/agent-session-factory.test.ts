@@ -51,10 +51,10 @@ async function agentWith(
   return createPiAgentFromSession({
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
-      harness: async () => {
+      createModelRuntime: async () => {
         const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         runtime.registerNativeProvider(faux.provider);
-        return { modelRuntime: runtime };
+        return runtime;
       },
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       readDefinition: () => ({ skills: [] }),

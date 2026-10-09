@@ -288,7 +288,7 @@ it("pi's harness settings are inherited, the project file deep-merged over the m
 
   const session = await piAgentSessionFactory({
     sessions: piInMemorySessionRecordStore({ cwd: dir }),
-    harness: async () => ({ modelRuntime }),
+    createModelRuntime: async () => modelRuntime,
     modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     cwd: dir,

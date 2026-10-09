@@ -56,10 +56,10 @@ export function fauxAgent(
     ...(options.observer ? { observer: options.observer } : {}),
     sessionFactory: piAgentSessionFactory({
       sessions,
-      harness: async () => {
+      createModelRuntime: async () => {
         const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
         modelRuntime.registerNativeProvider(faux.provider);
-        return { modelRuntime };
+        return modelRuntime;
       },
       modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
       ...(options.tools ? { tools: options.tools } : {}),
@@ -116,10 +116,10 @@ export async function fauxControlledAgent(
   const lease = options.lease ?? inProcessLease();
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    harness: async () => {
+    createModelRuntime: async () => {
       const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
       runtime.registerNativeProvider(modelRuntime.getProvider(faux.provider.id) ?? faux.provider);
-      return { modelRuntime: runtime };
+      return runtime;
     },
     ...(options.noDefaultModel ? {} : { modelSpec: `${model.provider}/${model.id}` }),
     ...(options.tools ? { tools: options.tools } : {}),

@@ -828,7 +828,7 @@ describe("session control: run modulation", () => {
       ]);
       const factory = piAgentSessionFactory({
         sessions,
-        harness: async () => ({ modelRuntime: models }),
+        createModelRuntime: async () => models,
         modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
         readDefinition: () => ({ systemPrompt: "test", skills: [] }),
         cwd: process.cwd(),
@@ -1983,7 +1983,7 @@ describe("session control: boundary mutations", () => {
         const sessions = piInMemorySessionRecordStore({ cwd });
         const sessionFactory = piAgentSessionFactory({
           sessions,
-          harness: async () => ({ modelRuntime }),
+          createModelRuntime: async () => modelRuntime,
           modelSpec: `${model.provider}/${model.id}`,
           thinkingLevel,
           tools: [],

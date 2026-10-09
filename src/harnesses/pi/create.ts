@@ -1,6 +1,6 @@
 /**
- * Agent assembly (configuration-time): the harness assets (tools, prompt) plus the reusable ladder that puts a pi agent
- * together.
+ * Agent assembly (configuration-time): the definition's assets (tools, prompt) plus the reusable ladder that puts a
+ * pi agent together.
  */
 import { toUSVString } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -308,7 +308,7 @@ export interface PiAssembly {
    * The registry and the default model, resolved on first use (a credential read is async). No model when the
    * assembly has no default: each session then runs on the model it records (agent-session-factory.ts).
    */
-  harness: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
+  resolveDefaultModel: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
   /** The tools every session mounts. */
@@ -354,7 +354,7 @@ function assemblePi(opts: {
   const createModelRuntime = opts.models;
   // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
   const modelRuntime = opts.catalog;
-  const resolveHarness = () => {
+  const resolveDefaultModel = () => {
     const spec = opts.model;
     return modelRuntime().then((runtime) => ({
       modelRuntime: runtime,
@@ -365,7 +365,7 @@ function assemblePi(opts: {
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
   const sessionFactory = piAgentSessionFactory({
     sessions,
-    harness: async () => ({ modelRuntime: await createModelRuntime() }),
+    createModelRuntime,
     ...(opts.model ? { modelSpec: opts.model } : {}),
     thinkingLevel: opts.thinkingLevel,
     tools: opts.tools,
@@ -380,7 +380,7 @@ function assemblePi(opts: {
     sessionFactory,
     modelRuntime,
     createModelRuntime,
-    harness: resolveHarness,
+    resolveDefaultModel,
     thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     tools: opts.tools ?? [],
     excludedToolNames,

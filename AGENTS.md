@@ -164,7 +164,7 @@ src/
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
 │   │   ├── history.ts      # a place's history read from the platform (cursor, own-output exclusion, names)
 │   │   ├── feishu-api.ts   # canonical Open API pipeline (token cache, retry, cardkit)
-│   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same harness)
+│   │   ├── ws-ingress.ts   # the long-connection ingress (the WebSocket form of the same engine)
 │   │   ├── setup-mode.ts   # the onboarding choice (webhook vs websocket) + the scopes every agent app asks for
 │   │   ├── shared-api.ts   # channel/send-tool transport sharing per cloud and state root
 │   │   ├── register-app.ts # `add feishu`: scan-to-create device flow
@@ -219,7 +219,7 @@ src/
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── harnesses/pi/             # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
-    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, harness thunk)
+    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, default model)
     ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
     │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
     ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
