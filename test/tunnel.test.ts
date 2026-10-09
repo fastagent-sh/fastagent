@@ -240,12 +240,8 @@ describe("tunnel: announceWebhooks", () => {
 
     expect(setWebhookCall(fetchMock)).toBeUndefined();
     expect(errs.some((e) => /set TELEGRAM_BOT_TOKEN/.test(e) && /x\.trycloudflare\.com\/telegram/.test(e))).toBe(true);
-    // Said before the move, whether or not it then succeeds.
-    expect(errs.filter((e) => e.includes("pointing the telegram app at this machine"))).toEqual([
-      expect.stringContaining(
-        "[fastagent] pointing the telegram app at this machine: wherever it delivered before (a deployment) " +
-          "receives nothing from it until `deploy --run` points it back",
-      ),
+    expect(errs.filter((e) => e.includes("pointing the selected telegram app"))).toEqual([
+      expect.stringContaining("only this app's Request URL changes"),
     ]);
   });
 

@@ -21,6 +21,17 @@ export function globalHome(): string {
  * ignore templates spell it out as literal text, so renaming this constant means editing them too.
  */
 export const SECRETS_DIRNAME = ".secrets";
+export const AGENT_ENVIRONMENT_ENV = "FASTAGENT_ENVIRONMENT";
+type AgentEnvironment = "dev" | "production";
+
+export function selectAgentEnvironment(environment: AgentEnvironment, env: NodeJS.ProcessEnv = process.env): void {
+  env[AGENT_ENVIRONMENT_ENV] = environment;
+}
+
+function environmentPath(dir: string, segment: string, env: NodeJS.ProcessEnv): string {
+  const root = join(resolve(dir), segment);
+  return env[AGENT_ENVIRONMENT_ENV] === "production" ? join(root, "production") : root;
+}
 
 /** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
@@ -135,10 +146,10 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 
 /**
  * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/):
- * `FASTAGENT_STATE_DIR` env > `<agentDir>/.state`.
+ * Explicit paths win; production otherwise uses `.state/production`, dev uses `.state`.
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(resolve(dir), STATE_DIRNAME);
+  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? environmentPath(dir, STATE_DIRNAME, env);
 }
 
 /**
@@ -163,10 +174,10 @@ export function resolveSessionsDir(dir: string, env: NodeJS.ProcessEnv = process
 
 /**
  * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (the agent's `.env` +
- * auth.json).
+ * auth.json). Explicit paths win; production otherwise uses `.secrets/production`, dev uses `.secrets`.
  */
 export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(resolve(dir), SECRETS_DIRNAME);
+  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? environmentPath(dir, SECRETS_DIRNAME, env);
 }
 
 /** Is this process the deployed container the generated artifacts describe? ONE reading of the

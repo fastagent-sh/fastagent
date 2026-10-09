@@ -43,15 +43,14 @@ describe("channel setup guidance", () => {
     expect(await readFile(join(dir, "tools", "slack-send.ts"), "utf8")).toContain("slackTransport(ctx.cwd)");
   });
 
-  it("an app set up for dev's WebSocket needs only App ID/Secret now; deploy prepares it for webhook later", async () => {
+  it("a dev WebSocket app needs only App ID/Secret and leaves production on its own app", async () => {
     const setup = channelSetup("feishu", "websocket");
     expect(setup.env.map((entry) => entry.name)).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_INGRESS"]);
     expect(setup.env.find((entry) => entry.name === "FEISHU_INGRESS")?.required).toBe(false);
-    expect(setup.steps.join("\n")).toContain("`deploy --run` prepares this app for it");
-    // Named in the environment, WebSocket is every deployment's too: nothing is prepared, nothing moves.
+    expect(setup.steps.join("\n")).toContain("`deploy --run` creates a separate production app");
     const pinned = channelSetup("feishu", "websocket", true).steps.join("\n");
-    expect(pinned).toContain("FEISHU_INGRESS=websocket is set, so every deployment connects by WebSocket too");
-    expect(pinned).not.toContain("prepares this app");
+    expect(pinned).toContain("FEISHU_INGRESS=websocket is set for this environment");
+    expect(pinned).toContain("production has its own app and ingress setting");
 
     // One channel file, whichever way it receives: the setting picks the factory when the file is imported.
     const dir = await mkdtemp(join(tmpdir(), "fa-feishu-scaffold-"));

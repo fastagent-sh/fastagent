@@ -34,7 +34,7 @@ import { deployedHost, isDeployedWorkspace } from "../paths.ts";
 import type { ResolvedContext } from "../contexts/resolve.ts";
 import { contextLines } from "./contexts-view.ts";
 import { log } from "../log.ts";
-import { enterAgentEnv } from "../env.ts";
+import { dotEnvPath, enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
@@ -107,7 +107,7 @@ export async function reportAssembly(
   for (const [label, value] of contextLines(a.contexts)) reportLine(label, value);
   for (const [label, value] of extras.beforeModel ?? []) reportLine(label, value);
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
-  await reportAuth(a.models, a.modelSpec);
+  await reportAuth(a.models, a.modelSpec, a.agentDir);
   reportLine("prompt", describePrompt(a.definition));
   // What this agent HAS — the definition's skills and the ones its machine lends (machine.ts).
   const skills = withMachine(a.definition.skills, (await readMachine(a.agentDir)).skills);
@@ -150,7 +150,7 @@ export function parseBind(value: string | undefined): string | undefined {
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
-export async function reportAuth(models: AgentModels, modelSpec: string): Promise<void> {
+export async function reportAuth(models: AgentModels, modelSpec: string, agentDir: string): Promise<void> {
   const provider = providerOf(modelSpec);
   // No files: the opener was handed a credential store, which is its caller's to describe.
   if (models.auth === undefined) {
@@ -165,7 +165,9 @@ export async function reportAuth(models: AgentModels, modelSpec: string): Promis
     provider,
     path: models.auth.path,
     ...status,
-    ...(isDeployedWorkspace() ? { deployed: { host: deployedHost() } } : {}),
+    ...(isDeployedWorkspace()
+      ? { deployed: { host: deployedHost() } }
+      : { local: { authPath: models.auth.path, valueFile: dotEnvPath(agentDir) } }),
   });
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);

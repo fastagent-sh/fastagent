@@ -4,6 +4,7 @@ import { agentcoreName } from "../../deploy/agentcore/plan.ts";
 import { type AgentcoreLogSource, tailAgentcoreLogs } from "../../deploy/agentcore/logs.ts";
 import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
+import { selectAgentEnvironment } from "../../paths.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface AgentcoreLogsOptions {
@@ -16,7 +17,8 @@ export async function runLogs(host: string, dirArg: string, opts: AgentcoreLogsO
   // The host argument is DISPATCHED here, as in runDeploy.
   if (host !== "agentcore") failUsage(`logs: unsupported host "${host}" — only agentcore has remote logs`);
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy
+  selectAgentEnvironment("production");
+  enterAgentEnv(agentDir);
   const source = opts.source ?? "runtime";
   if (source !== "runtime" && source !== "forwarder") {
     failUsage(`logs: --source must be "runtime" or "forwarder"`);

@@ -10,7 +10,14 @@ import {
   parseDeploymentRelease,
   prepareDeployment,
 } from "../../deploy/workspace.ts";
-import { resolveContextsDir, resolveSecretsDir, isAgentcoreRuntime, isUnderDir, exists } from "../../paths.ts";
+import {
+  selectAgentEnvironment,
+  resolveContextsDir,
+  resolveSecretsDir,
+  isAgentcoreRuntime,
+  isUnderDir,
+  exists,
+} from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService, type AgentService } from "../../service.ts";
@@ -51,7 +58,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     failStartup(error);
   }
   setLogLevel("info");
-  unmarkDevServe(); // before any channel file is imported
+  selectAgentEnvironment("production");
+  unmarkDevServe();
   if (isAgentcoreRuntime()) {
     // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
     const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;

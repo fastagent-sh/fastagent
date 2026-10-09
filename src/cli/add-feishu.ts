@@ -24,8 +24,9 @@ import {
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { onboardLarkApp } from "../channels/lark/onboard.ts";
 import type { DeclaredChannel } from "../channels/discover.ts";
-import { dotEnvPath, parseEnvContent } from "../env.ts";
+import { dotEnvPath, loadEnvValues, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
@@ -102,12 +103,11 @@ export async function onboardFeishuCloudApp(
 ): Promise<Record<string, string> | undefined> {
   const env = dotEnvPath(target); // the file actually written — never the default spelling
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
-  const requiredNames = [
-    `${envPrefix}_APP_ID`,
-    `${envPrefix}_APP_SECRET`,
-    ...(ingress === "webhook" ? [`${envPrefix}_VERIFICATION_TOKEN`] : []),
-  ];
+  const requiredNames = feishuAppSecretNames(kind, ingress);
   const existing = await activeDotEnvValues(target, requiredNames);
+  if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
+    assertIndependentFeishuApps(target, [kind], new Map(Object.entries(existing)));
+  }
   if (Object.keys(existing).length === requiredNames.length) {
     console.error(`[fastagent] ${requiredNames.join("/")} already set in ${env} — keeping them`);
     // WebSocket still needs its console mode/publish guidance.
@@ -153,6 +153,9 @@ export async function onboardFeishuCloudApp(
       ingress,
       rerun,
       verifyCredentials: async (appId, appSecret) => {
+        if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
+          assertIndependentFeishuApps(target, ["lark"], new Map([["LARK_APP_ID", appId]]));
+        }
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
       },
@@ -225,7 +228,7 @@ async function createFeishuAppFlow(
   } else {
     console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
     const app = await registerFeishuApp({
-      name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
+      name: process.env[AGENT_ENVIRONMENT_ENV] === "production" ? "{user}'s production agent" : "{user}'s agent",
       desc: "Served by fastagent",
       // The agent template alone is not enough to SERVE, nor to hear a group (see feishuAppAddons).
       addons: feishuAppAddons(ingress),
@@ -373,41 +376,60 @@ async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<
   );
 }
 
-/** The variable a Feishu/Lark webhook channel authenticates its events with, captured when its app is prepared. */
-export const verificationTokenVar = (kind: "feishu" | "lark"): string =>
-  `${cloudFor(kind).envPrefix}_VERIFICATION_TOKEN`;
-
-/** The Feishu/Lark channels a deployment receives by webhook whose app the value file holds no token for yet. */
-export function unpreparedWebhookApps(
-  channels: readonly DeclaredChannel[],
-  values: ReadonlyMap<string, string>,
-): ("feishu" | "lark")[] {
-  return (["feishu", "lark"] as const).filter(
-    (kind) =>
-      channels.some((channel) => channel.name === kind && channel.ingress === "webhook") &&
-      !values.get(verificationTokenVar(kind)),
-  );
+export function feishuAppSecretNames(kind: "feishu" | "lark", ingress: FeishuSubscriptionMode): string[] {
+  const prefix = cloudFor(kind).envPrefix;
+  return [
+    `${prefix}_APP_ID`,
+    `${prefix}_APP_SECRET`,
+    ...(ingress === "webhook" ? [`${prefix}_VERIFICATION_TOKEN`] : []),
+  ];
 }
 
-/**
- * Prepare each app for webhook, as `add --ingress webhook` does (the app-config scope, then the Verification Token),
- * writing what it captures to the value file. `deploy --run` calls it once every check that touches nothing has
- * passed, from a terminal: the flows open console pages and Lark's may ask for values. What stops a preparation
- * names `rerun`, the command that continues it. Feishu says so and leaves its token unset, for the caller's gate;
- * Lark throws.
- */
-export async function prepareWebhookApps(
+interface FeishuAppSetup {
+  kind: "feishu" | "lark";
+  ingress: FeishuSubscriptionMode;
+}
+
+export function unpreparedFeishuApps(
+  channels: readonly DeclaredChannel[],
+  values: ReadonlyMap<string, string>,
+): FeishuAppSetup[] {
+  return (["feishu", "lark"] as const).flatMap((kind) => {
+    const channel = channels.find((entry) => entry.name === kind);
+    if (!channel) return [];
+    const ingress = channel.ingress === "webhook" ? "webhook" : "websocket";
+    return feishuAppSecretNames(kind, ingress).some((name) => !values.get(name)?.trim()) ? [{ kind, ingress }] : [];
+  });
+}
+
+export function assertIndependentFeishuApps(
   agentDir: string,
   kinds: readonly ("feishu" | "lark")[],
+  values: ReadonlyMap<string, string>,
+): void {
+  const devFile = dotEnvPath(agentDir, {});
+  const devValues = loadEnvValues(devFile);
+  for (const kind of kinds) {
+    const name = `${cloudFor(kind).envPrefix}_APP_ID`;
+    const appId = values.get(name)?.trim();
+    if (appId && appId === devValues.get(name)?.trim()) {
+      throw new Error(
+        `${kind}: dev and production use the same app (${name}) — create a separate production app in ` +
+          `${dotEnvPath(agentDir)}; copying dev credentials would take its messages away`,
+      );
+    }
+  }
+}
+
+export async function prepareFeishuApps(
+  agentDir: string,
+  apps: readonly FeishuAppSetup[],
   rerun: string,
   onboard: typeof onboardFeishuCloudApp = onboardFeishuCloudApp,
 ): Promise<void> {
-  for (const kind of kinds) {
-    console.error(
-      `[fastagent] ${kind}: this deployment receives by webhook (${cloudFor(kind).envPrefix}_INGRESS is not ` +
-        `websocket), and the app has no ${verificationTokenVar(kind)} yet — preparing the app for webhook`,
-    );
-    const created = await onboard(agentDir, kind, "webhook", rerun);
-    if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), "webhook");
+  for (const { kind, ingress } of apps) {
+    console.error(`[fastagent] ${kind}: preparing the production app for ${ingress} in ${dotEnvPath(agentDir)}`);
+    const created = await onboard(agentDir, kind, ingress, rerun);
+    if (created) await appendChannelDotEnv(agentDir, kind, created, Object.keys(created), ingress);
   }
 }

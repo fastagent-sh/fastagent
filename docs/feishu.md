@@ -37,6 +37,7 @@ commands refuse to write platform credentials into a committable file:
 ```bash
 fastagent add feishu   # scan-to-create
 fastagent add lark     # guided console setup
+fastagent add feishu --env production  # prepare the independent production app before deploying
 ```
 
 The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
@@ -58,7 +59,7 @@ credentials.
 One channel file serves both ways of receiving, and `FEISHU_INGRESS` (`LARK_INGRESS`) chooses between them when it
 is imported. Unset, the command decides ([design note](design/channel-environments.md)):
 
-| | `fastagent dev` | `fastagent start`, every deployment |
+| Setting in the selected environment | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
 |---|---|---|
 | Unset | WebSocket long connection | webhook at `POST /feishu` |
 | `FEISHU_INGRESS=websocket` | WebSocket | WebSocket |
@@ -73,21 +74,20 @@ is imported. Unset, the command decides ([design note](design/channel-environmen
 | App-config permission (`application:application:patch`) | Not needed | Needed to register the Request URL and capture the Verification Token; a tenant that reviews it holds the app's version in review once |
 
 `add feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
-hold the first `add`. The first `deploy --run` then prepares the app for webhook before it builds anything: it checks
-the app's permissions (opening the page that requests `patch` when it is missing), captures the Verification Token
-into `.secrets/.env`, and registers the deployment's Request URL once it answers `/health`. Lark sets the Request
-URL by hand when its config API answers 404. `add feishu --ingress webhook|websocket` writes `FEISHU_INGRESS` for
-both commands, and with `webhook` prepares the app at once; a later `add feishu` without the flag follows that
-setting. It refuses an existing channel file that names its factory instead of reading the setting. `deploy` refuses when `FEISHU_INGRESS` exported in its shell differs from `.secrets/.env`, since the
-deployment receives only the file. A Docker deployment without `--tunnel` has no URL to point the app at, so it
-stops instead of preparing it.
+hold the first `add`. Interactive `deploy --run` creates a separate production app when credentials are missing,
+requesting webhook scopes including `patch`, then captures the Verification Token into
+`.secrets/production/.env`. It registers the deployment's Request URL once readiness and model login pass.
+Lark uses guided production-app setup and sets the Request URL by hand when its config API answers 404.
+`add feishu --ingress webhook|websocket` writes the setting only in the selected environment; add
+`--env production` to prepare production instead. It refuses an existing channel file that names its factory
+instead of reading the setting. `deploy` refuses a shell ingress that differs from the production file.
+A Docker deployment without `--tunnel` has no URL for automated webhook setup.
 
-**One app delivers to one place at a time.** The subscription mode and the Request URL belong to the app, and
-`dev` and a deployment share it (and `.secrets/.env`). Preparing the app for webhook switches it out of WebSocket
-mode, so after a deploy `dev` connects and receives nothing; `FEISHU_INGRESS=webhook fastagent dev --tunnel` takes
-the app back, and the deployment receives nothing until the next `deploy --run`. Both commands say so when they move
-it. Two WebSocket clients on one app split its events between them. Separate apps per environment are not supported
-yet.
+**Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
+`.secrets/production/.env`, with no dev fallback. Copy required provider keys explicitly, not the dev app
+credentials. A production App ID matching the default dev file is refused. Both apps can receive at the same
+time: `dev --tunnel` changes only dev's Request URL, and `deploy --run` changes only production's.
+One app still has only one subscription mode and Request URL, and two WebSocket clients on that app split its events.
 
 Onboarding differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
 guided credential input, because its bound confirmation flow does not work.
@@ -117,10 +117,10 @@ printed, so you can open it in the app or scan it as a QR code instead — and y
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. It does not ask for
 `application:application:patch`: a tenant that reviews that scope holds the app's whole first version in review,
-for a scope `dev`'s WebSocket never uses. Preparing the app for webhook (the first `deploy --run`) asks for it then;
+for a scope `dev`'s WebSocket never uses. Creating a production webhook app requests it at creation;
 when the app is not granted it, the preparation names it and leaves the Verification Token and Request URL to the
 console instead of trying. A tenant may withhold any requested scope; onboarding names what it withheld. The CLI immediately persists App ID/Secret to
-`.secrets/.env` before starting later network work.
+the selected environment's `.env` before starting later network work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
 generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
@@ -206,7 +206,7 @@ export default feishuIngress() === "webhook"
 ```
 
 The webhook form declares the Verification Token, the WebSocket form does not, so `dev` never asks for a token
-it does not use. `deploy` imports the file the way `start` will on the box (not `dev`, with the same `.secrets/.env`),
+it does not use. `deploy` imports the file the way `start` will on the box (not `dev`, with production values),
 so it plans for the ingress the deployment serves. An agent scaffolded by an earlier release names one factory
 in its channel file and keeps it; re-scaffold the file (move it aside, then `add feishu --no-onboard`) to get this
 one.
@@ -449,7 +449,7 @@ picks up the current tool.
 
 ## Limits
 
-- One app uses one subscription mode, and `dev` and a deployment share the app (see
+- One app uses one subscription mode; dev and production need different apps (see
   [How the channel receives](#how-the-channel-receives)). A mode change made by hand in the console takes effect
   only after a published version.
 - WebSocket requires one continuously running process. Fly disables scale-to-zero and Railway forbids

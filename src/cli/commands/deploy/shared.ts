@@ -61,12 +61,14 @@ export interface HostDeploy {
 }
 
 /** The registrars every host driver gets. */
-export function registrarsFor(agentDir: string): Registrars {
+export function registrarsFor(agentDir: string, values: ReadonlyMap<string, string>): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
+  const env = Object.fromEntries(values);
   return {
-    telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts }),
-    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), attempts }),
-    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts }),
+    telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
+    slack: (baseUrl) =>
+      registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
+    feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts, env }),
   };
 }
 

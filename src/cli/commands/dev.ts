@@ -5,6 +5,7 @@
 import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
+import { selectAgentEnvironment } from "../../paths.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { DEFAULT_HTTP_PORT, mountAgentService } from "../../service.ts";
 import { logAgentLoop } from "../../observe.ts";
@@ -33,7 +34,8 @@ export interface DevOptions {
 
 export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
-  markDevServe(); // before any channel file is imported; the worker inherits it
+  selectAgentEnvironment("dev");
+  markDevServe(); // the worker inherits both selections
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
   // First, so a restart asked for while the worker is still assembling is heard: with nothing running it stops at once.
   if (isWorker)

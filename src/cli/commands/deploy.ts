@@ -9,7 +9,13 @@ import { FEISHU_INGRESS_SETTINGS } from "../../channels/feishu/setup-mode.ts";
 import { assembleSecrets, divergentSettingsGate, missingValuesGate } from "../../deploy/secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../../env.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { prepareWebhookApps, unpreparedWebhookApps, verificationTokenVar } from "../add-feishu.ts";
+import {
+  assertIndependentFeishuApps,
+  feishuAppSecretNames,
+  prepareFeishuApps,
+  unpreparedFeishuApps,
+} from "../add-feishu.ts";
+import { selectAgentEnvironment } from "../../paths.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 import { failStartup, failUsage } from "../fail.ts";
@@ -82,6 +88,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }
   // The picker's write-back lands the model in fastagent.config.ts. ONE deploy semantic: bake the agent directory
   // (WYSIWYG).
+  selectAgentEnvironment("production");
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
@@ -93,8 +100,14 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     relative(agentDir, dotEnvPath(agentDir)),
   );
   if (shaped) failStartup(new Error(`deploy stopped: ${shaped}`));
-  // The host-neutral pre-flight (the model and its source, channel discovery, model-auth probe, container facts +
-  // their warnings) lives in deploy/preflight.ts. Run again after a webhook app is prepared, to read what that wrote.
+  const independentApps = (values: ReadonlyMap<string, string>) => {
+    try {
+      assertIndependentFeishuApps(agentDir, ["feishu", "lark"], values);
+    } catch (error) {
+      failStartup(error);
+    }
+  };
+  independentApps(loadEnvValues(dotEnvPath(agentDir)));
   const preflight = () =>
     preflightDeploy({
       agentDir,
@@ -110,45 +123,50 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     }).catch(failStartup);
   let pre = await preflight();
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
-  // Preparing a webhook app is this deploy's first change to anything, so every refusal that touches nothing comes
-  // first: the pre-flight above, and every value the deployment lacks other than the tokens preparing captures.
-  const unprepared = opts.run ? unpreparedWebhookApps(pre.channels, pre.values) : [];
+  const unprepared = opts.run ? unpreparedFeishuApps(pre.channels, pre.values) : [];
   if (unprepared.length > 0) {
-    const tokens = unprepared.map(verificationTokenVar);
+    const supplied = unprepared.flatMap(({ kind, ingress }) => feishuAppSecretNames(kind, ingress));
+    const kinds = unprepared.map(({ kind }) => kind);
+    const { values } = pre;
+    const absent = supplied.filter((name) => !values.get(name)?.trim());
     const { missingSecrets } = assembleSecrets({
       modelAuth: pre.modelAuth,
       declared: pre.declaredSecrets,
       values: pre.values,
     });
     const missing = missingValuesGate(
-      missingSecrets.filter((name) => !tokens.includes(name)),
+      missingSecrets.filter((name) => !supplied.includes(name)),
       pre.valueFile,
     );
     if (missing) failStartup(new Error(`deploy stopped: ${missing}`));
-    if (host === "docker" && !opts.tunnel) {
+    if (host === "docker" && !opts.tunnel && unprepared.some(({ ingress }) => ingress === "webhook")) {
       failStartup(
         new Error(
-          `deploy stopped: ${unprepared.join(", ")} receive by webhook here, and this Docker deployment has no ` +
+          `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
             `public URL to point the app at — re-run with --tunnel (the app is prepared then), or set up your own ` +
-            `ingress and copy ${tokens.join(", ")} from the console (Events & Callbacks) into ${pre.valueFile}, or ` +
-            `set ${unprepared.map((kind) => `${cloudFor(kind).envPrefix}_INGRESS=websocket`).join(", ")} there`,
+            `ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
+            `set ${kinds.map((kind) => `${cloudFor(kind).envPrefix}_INGRESS=websocket`).join(", ")} there`,
         ),
       );
     }
     if (opts.input === false || !isInteractive()) {
       failStartup(
         new Error(
-          `deploy stopped: ${unprepared.join(", ")} receive by webhook here, and ${pre.valueFile} has no ` +
-            `${tokens.join(", ")}: preparing the app opens console pages and may ask for values, so it needs a ` +
-            `terminal — run this deploy in one${opts.input === false ? " without --no-input" : ""}, or copy ` +
-            `${tokens.join(", ")} from the console (Events & Callbacks) into ${pre.valueFile}`,
+          `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: creating or preparing a separate ` +
+            `production app needs a terminal — run this deploy in one${opts.input === false ? " without --no-input" : ""}, ` +
+            `or supply these values from a production app in ${pre.valueFile}`,
         ),
       );
     }
-    await prepareWebhookApps(agentDir, unprepared, `fastagent deploy ${host} --run`).catch(failStartup);
+    await prepareFeishuApps(
+      agentDir,
+      unprepared,
+      `fastagent deploy ${host}${opts.tunnel ? " --tunnel" : ""} --run`,
+    ).catch(failStartup);
     pre = await preflight();
     if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   }
+  independentApps(pre.values);
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels } = pre;
   warnHostOnlyFlags(host, opts);

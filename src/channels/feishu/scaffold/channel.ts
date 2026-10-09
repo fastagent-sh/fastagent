@@ -11,8 +11,8 @@ import { defineChannel } from "@fastagent-sh/fastagent";
 //
 // How it receives is FEISHU_INGRESS (webhook | websocket). Unset, `fastagent dev` connects OUT by
 // WebSocket (no public URL, no tunnel), and everything else — `fastagent start`, every deployment —
-// receives by webhook at POST /feishu, which `deploy --run` prepares the app for. One app delivers to
-// one place at a time: a deploy moves it to the deployment, `dev --tunnel` moves it back.
+// receives by webhook at POST /feishu. Dev reads .secrets/.env; production reads
+// .secrets/production/.env. Interactive `deploy --run` creates a separate production app.
 //
 // `fastagent add feishu` creates and configures the app (scan-to-create). For a hand-made app, in the
 // developer console:

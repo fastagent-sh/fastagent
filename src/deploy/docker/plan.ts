@@ -117,7 +117,7 @@ services:
     # source a deployment must not have. A FIXED path, never the builder's FASTAGENT_SECRETS_DIR — this file is a
     # committed artifact and must mean the same thing on every machine. \`deploy\` creates it if it is missing.
     env_file:
-      - ${SECRETS_DIRNAME}/.env
+      - ${SECRETS_DIRNAME}/production/.env
     environment:
       PORT: "${input.port}"
       # Machinery on the ONE state volume: mutable state, credentials (logged in on the box) and the clones of the

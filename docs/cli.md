@@ -143,9 +143,10 @@ fails, naming the provider, when the refresh does, and when no provider has a us
 fastagent login [provider] [-g|--global] [--deployment <host>] [--no-input]
 ```
 
-Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). `-g`, or
-running outside any agent, writes `~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it
-refuses and says where to `cd`.
+Writes to the selected environment's `auth.json` (default: `<agent dir>/.secrets/auth.json`; overrides:
+`FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). Local `start` recovery hints pin `FASTAGENT_AUTH_PATH` to the
+credential file it uses, normally `.secrets/production/auth.json`. `-g`, or running outside any agent, writes
+`~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it refuses and says where to `cd`.
 
 - An agent reads the global file for a provider it has no credential of its own for: no entry in its `auth.json`, no
   `apiKey` in its `models.json`, no env variable ([order](configuration.md#auth-and-secrets)). So one `login -g`
@@ -250,7 +251,8 @@ fastagent add telegram [agent]
 fastagent add slack [agent]    # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [agent]   # 飞书: scan-to-create the app
 fastagent add lark [agent]     # Lark international: console + credential validation
-                             # feishu/lark take --ingress websocket|webhook: writes FEISHU_INGRESS for dev and deployments
+                             # all channels take --env dev|production (default: dev)
+                             # feishu/lark take --ingress websocket|webhook: writes the selected environment's setting
                              # (unset: dev connects by websocket, start and deployments receive by webhook)
                              # slack/feishu/lark take --no-onboard: write the files, skip the app onboarding
 ```
@@ -259,6 +261,9 @@ Writes `channels/<kind>.ts` (yours after that) and the channel's companion tools
 `tools/<kind>-threads.ts` for slack/feishu/lark; rewritten on every `add`), appends variables to
 `.secrets/.env.example`, and writes generated secrets such as `TELEGRAM_SECRET_TOKEN` to `.secrets/.env`. Re-run
 `add <kind>` (`--no-onboard` to skip the app onboarding) after upgrading the package to refresh the tools.
+`--env production` selects `.secrets/production/.env` and `.state/production` without changing dev credentials.
+Interactive `deploy --run` creates the separate Feishu/Lark production app automatically; Slack needs
+`add slack --env production`, and Telegram needs a separate BotFather bot.
 
 Slack:
 
@@ -291,8 +296,8 @@ Serves without watch. Binds all interfaces by default.
 port:     --port > PORT > fastagent.config.ts http.port > 8787
 bind:     --bind > all interfaces
 /invoke:  --no-invoke > fastagent.config.ts http.invoke > served
-state:    FASTAGENT_STATE_DIR   > <agent dir>/.state
-secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets
+state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production
+secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production
 clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
 ```
 
@@ -306,7 +311,7 @@ Flags come after the command: `fastagent info --json`. Global: `-h`/`--help` (al
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
 | `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
 | `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
-| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/.env`, then `config.model`. |
+| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
 | `--json` | `info`, `schedules list`, `context list` | Machine-readable output. |
 
 ## Exit codes

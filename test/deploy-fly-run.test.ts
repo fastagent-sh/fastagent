@@ -334,6 +334,8 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
           FASTAGENT_SECRETS_DIR: "/Users/me/secrets",
           FASTAGENT_MODEL: "openai/gpt-5",
           FASTAGENT_ENV_2: "stale",
+          FASTAGENT_ENVIRONMENT: "dev",
+          FASTAGENT_DEV: "1",
         }),
       ),
     });

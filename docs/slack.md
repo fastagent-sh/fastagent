@@ -12,6 +12,7 @@ The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.
 
 ```bash
 fastagent add slack
+fastagent add slack --env production  # separate app, credentials and local onboarding state
 ```
 
 The created app subscribes the channel, private-channel and MPIM message streams with their history scopes,
@@ -37,7 +38,11 @@ Three things, in three places:
 |---|---|---|---|
 | App Configuration Token pair (`xoxe.xoxp-…` + `xoxe-…`) | You, once, at [Your Apps](https://api.slack.com/apps) | `apps.manifest.create` / `apps.manifest.update`: creating the app, and updating its Request URL on `dev --tunnel` and `deploy --run`. Slack expires it in 12 hours; the CLI rotates it. | Builder machine only: `<state root>/channels/slack/onboarding.json` (0600). Never `.env`, never a deploy. |
 | OAuth client id / secret | `apps.manifest.create` | The one OAuth code exchange that installs the app. Setup-only. | `onboarding.json`; the secret is dropped once the install completes. |
-| `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | `.secrets/.env`, and the deploy's secrets. |
+| `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_SIGNING_SECRET` | The OAuth install / `apps.manifest.create` | Everything at runtime: replies, files, `slack-send`, and verifying each inbound webhook. Long-lived. | Dev: `.secrets/.env`; production: `.secrets/production/.env` and the deploy's secrets. |
+
+Production onboarding state lives at `.state/production/channels/slack/` by default; dev uses
+`.state/channels/slack/`. The production config token updates only the production app. `deploy` does not
+create Slack apps automatically, and never copies the dev app or its runtime credentials.
 
 Bot-token rotation is off in the manifest. Do not turn it on: it cannot be turned off again, and FastAgent does not
 support it.

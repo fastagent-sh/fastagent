@@ -4,6 +4,7 @@ import { destroyAgentcoreDeployment } from "../../deploy/agentcore/destroy.ts";
 import { agentcoreName } from "../../deploy/agentcore/plan.ts";
 import { awsRunner } from "../../deploy/runner.ts";
 import { enterAgentEnv } from "../../env.ts";
+import { selectAgentEnvironment } from "../../paths.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface DestroyOptions {
@@ -17,7 +18,8 @@ export async function runDestroy(host: string, dirArg: string, opts: DestroyOpti
   // treated as agentcore.
   if (host !== "agentcore") failUsage(`destroy: unsupported host "${host}"`);
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(agentDir); // AWS_PROFILE/region/proxy may be definition-local, as on deploy
+  selectAgentEnvironment("production");
+  enterAgentEnv(agentDir);
   const name = agentcoreName(basename(agentDir));
   const outcome = await destroyAgentcoreDeployment({ name, run: opts.run === true }, awsRunner(agentDir), (message) =>
     console.error(`[fastagent] destroy: ${message}`),
