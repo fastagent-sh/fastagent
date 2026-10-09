@@ -458,14 +458,20 @@ describe("Slack internal-app onboarding", () => {
 });
 
 describe("Slack Request URL registration", () => {
-  it("degrades to a truthful manual step without local onboarding state", async () => {
-    const stateRoot = await root();
-    const logs: string[] = [];
-    await expect(
-      registerSlackWebhook("https://agent.test", { stateRoot, log: (line) => logs.push(line) }),
-    ).resolves.toBe("manual");
-    expect(logs.join("\n")).toContain("https://agent.test/slack");
-  });
+  it.each(["dev", "production"] as const)(
+    "names %s onboarding in the manual step without state",
+    async (environment) => {
+      const stateRoot = await root();
+      const logs: string[] = [];
+      await expect(
+        registerSlackWebhook("https://agent.test", { stateRoot, environment, log: (line) => logs.push(line) }),
+      ).resolves.toBe("manual");
+      expect(logs.join("\n")).toContain("https://agent.test/slack");
+      expect(logs.join("\n")).toContain(
+        `fastagent add slack${environment === "production" ? " --env production" : ""} --replace-config`,
+      );
+    },
+  );
 
   it("updates an onboarded app from the local machine without deploying the config token", async () => {
     const stateRoot = await root();
@@ -559,33 +565,42 @@ describe("Slack Request URL registration", () => {
     expect(updates).toBe(3);
   });
 
-  it("reports a credential failure once instead of retrying it", async () => {
-    const stateRoot = await root();
-    writeSlackOnboardingState(stateRoot, {
-      ...newSlackOnboardingState({
-        appName: "Agent",
-        configToken: "xoxe.config",
-        configRefreshToken: "xoxe-refresh",
-      }),
-      appId: "A1",
-      installedAt: new Date().toISOString(),
-    });
-    let updates = 0;
-    const fetchMock = vi.fn<typeof fetch>(async () => {
-      updates++;
-      return Response.json({ ok: false, error: "invalid_auth" });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const logs: string[] = [];
-    await expect(
-      registerSlackWebhook("https://agent.test", {
-        stateRoot,
-        fetch: fetchMock,
-        retryMs: 1,
-        log: (line) => logs.push(line),
-      }),
-    ).resolves.toBe("failed");
-    expect(updates).toBe(1);
-    expect(logs.join("\n")).toContain("invalid_auth");
-  });
+  it.each(["refresh", "manifest"] as const)(
+    "reports a %s credential failure once with production repair",
+    async (stage) => {
+      const stateRoot = await root();
+      writeSlackOnboardingState(stateRoot, {
+        ...newSlackOnboardingState({
+          appName: "Agent",
+          configToken: "xoxe.config",
+          configRefreshToken: "xoxe-refresh",
+        }),
+        appId: "A1",
+        installedAt: new Date().toISOString(),
+      });
+      if (stage === "refresh") {
+        const state = readSlackOnboardingState(stateRoot)!;
+        writeSlackOnboardingState(stateRoot, { ...state, configTokenExpiresAt: 0 });
+      }
+      let updates = 0;
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        updates++;
+        return Response.json({ ok: false, error: "invalid_auth" });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const logs: string[] = [];
+      await expect(
+        registerSlackWebhook("https://agent.test", {
+          stateRoot,
+          environment: "production",
+          fetch: fetchMock,
+          retryMs: 1,
+          log: (line) => logs.push(line),
+        }),
+      ).resolves.toBe("failed");
+      expect(updates).toBe(1);
+      expect(logs.join("\n")).toContain("invalid_auth");
+      expect(logs.join("\n")).toContain("fastagent add slack --env production --replace-config");
+    },
+  );
 });

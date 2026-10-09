@@ -153,12 +153,34 @@ describe("reportAuth (which layer the line names)", () => {
     const out: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
     try {
-      await reportAuth(agentModels(agentDir), "p/m");
+      await reportAuth(agentModels(agentDir), "p/m", agentDir);
     } finally {
       spy.mockRestore();
     }
     return out.find((l) => l.includes("auth:")) ?? "";
   };
+
+  it.each([false, true])(
+    "production recovery names the selected files (explicit auth override: %s)",
+    async (override) => {
+      const held = layers("fallback");
+      vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
+      vi.stubEnv("FASTAGENT_RELEASE_FILE", undefined);
+      const authPath = override ? join(held.dir, "custom-auth.json") : join(held.dir, ".secrets/production/auth.json");
+      if (override) vi.stubEnv("FASTAGENT_AUTH_PATH", authPath);
+      const out: string[] = [];
+      vi.spyOn(console, "error").mockImplementation((m: unknown) => void out.push(String(m)));
+      await reportAuth(agentModels(held.dir), "p/m", held.dir);
+      expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
+      if (!override) expect(out.join("\n")).toContain(held.fallback);
+
+      rmSync(GLOBAL_AUTH_PATH);
+      out.length = 0;
+      await reportAuth(agentModels(held.dir), "p/m", held.dir);
+      expect(out.join("\n")).toContain(join(held.dir, ".secrets/production/.env"));
+      expect(out.join("\n")).toContain(`FASTAGENT_AUTH_PATH='${authPath}' fastagent login`);
+    },
+  );
 
   it("names the fallback only when the fallback is the layer holding the credential", async () => {
     // Provider "p" is not a real pi provider, so nothing satisfies auth and the line reports what is STORED —

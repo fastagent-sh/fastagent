@@ -69,6 +69,10 @@ fastagent login openai-codex --deployment fly
 The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one
 directory can hold several hosts' files.
 
+`login --deployment`, `logs agentcore`, and `destroy agentcore` select the same production environment as `deploy`:
+`.secrets/production/.env` supplies the host account, region, and proxy. `FASTAGENT_SECRETS_DIR` still overrides that
+location, and shell variables still outrank file values.
+
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
 `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` signed with your AWS CLI credentials). This terminal
 shows its prompts and opens the browser. After you sign in, the browser returns to a `localhost` address; this

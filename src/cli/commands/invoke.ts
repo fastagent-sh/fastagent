@@ -15,7 +15,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
   const { agent, models } = await createPiAgentFromDir(agentDir, { model: modelSpec }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
-  await reportAuth(models, modelSpec);
+  await reportAuth(models, modelSpec, agentDir);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
   const exitCode = await runInvokeStream(

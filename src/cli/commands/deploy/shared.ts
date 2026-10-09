@@ -66,7 +66,8 @@ export function registrarsFor(agentDir: string, values: ReadonlyMap<string, stri
   const env = Object.fromEntries(values);
   return {
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
-    slack: (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), attempts }),
+    slack: (baseUrl) =>
+      registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(agentDir), environment: "production", attempts }),
     feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts, env }),
   };
 }

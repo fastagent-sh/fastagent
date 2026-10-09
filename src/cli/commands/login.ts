@@ -7,7 +7,7 @@ import { enterAgentEnv } from "../../env.ts";
 import { GLOBAL_AUTH_PATH, resolveAuthPath } from "../../engines/pi/auth.ts";
 import { agentModels } from "../../engines/pi/agent-models.ts";
 import { DEPLOY_HOSTS, type DeployHost } from "../../deploy/hosts.ts";
-import { findAgentDir, globalHome } from "../../paths.ts";
+import { findAgentDir, globalHome, selectAgentEnvironment } from "../../paths.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../../engines/pi/login.ts";
 import { environmentAuthSource } from "../../engines/pi/models.ts";
 import { loginOnBox } from "../box-login.ts";
@@ -101,7 +101,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
 async function runDeploymentLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   if (opts.global) failUsage("--deployment logs the deployment in; -g names this machine's global file — pick one");
   const agentDir = agentDirOrExit(process.cwd());
-  // The host's CLI must reach the account/region/proxy the deploy used, and those may be definition-local.
+  selectAgentEnvironment("production");
   enterAgentEnv(agentDir);
   if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment as string)) {
     failUsage(

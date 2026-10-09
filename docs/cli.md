@@ -143,9 +143,10 @@ fails, naming the provider, when the refresh does, and when no provider has a us
 fastagent login [provider] [-g|--global] [--deployment <host>] [--no-input]
 ```
 
-Writes to `<agent dir>/.secrets/auth.json` (overrides: `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). `-g`, or
-running outside any agent, writes `~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it
-refuses and says where to `cd`.
+Writes to the selected environment's `auth.json` (default: `<agent dir>/.secrets/auth.json`; overrides:
+`FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`). Local `start` recovery hints pin `FASTAGENT_AUTH_PATH` to the
+credential file it uses, normally `.secrets/production/auth.json`. `-g`, or running outside any agent, writes
+`~/.fastagent/.secrets/auth.json`. Inside an agent but not at its root, it refuses and says where to `cd`.
 
 - An agent reads the global file for a provider it has no credential of its own for: no entry in its `auth.json`, no
   `apiKey` in its `models.json`, no env variable ([order](configuration.md#auth-and-secrets)). So one `login -g`

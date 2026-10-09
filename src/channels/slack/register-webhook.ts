@@ -10,6 +10,7 @@ import { currentSlackConfigToken, readSlackOnboardingState } from "./onboarding-
 
 export interface RegisterSlackWebhookOptions {
   stateRoot: string;
+  environment?: "dev" | "production";
   log?: (message: string) => void;
   attempts?: number;
   retryMs?: number;
@@ -24,6 +25,8 @@ export async function registerSlackWebhook(
 ): Promise<RegistrationOutcome> {
   const note = options.log ?? ((message: string) => console.error(message));
   const publicBaseUrl = baseUrl.replace(/\/$/, "");
+  const add = `fastagent add slack${options.environment === "production" ? " --env production" : ""}`;
+  const repair = `${add} --replace-config`;
   let state: ReturnType<typeof readSlackOnboardingState>;
   try {
     state = readSlackOnboardingState(options.stateRoot);
@@ -33,9 +36,9 @@ export async function registerSlackWebhook(
   }
   if (!state?.appId || !state.installedAt) {
     note(
-      `[fastagent] slack: no completed local onboarding state on this machine — the config credential lives only where \`fastagent add slack\` ran. ` +
+      `[fastagent] slack: no completed local onboarding state on this machine — the config credential lives only where \`${add}\` ran. ` +
         `Set Event Subscriptions → Request URL = ${publicBaseUrl}/slack manually in the Slack console, or re-run this command from the onboarding machine ` +
-        `(repair its expired/revoked tokens with \`fastagent add slack --replace-config\`)`,
+        `(repair its expired/revoked tokens with \`${repair}\`)`,
     );
     return "manual";
   }
@@ -50,7 +53,7 @@ export async function registerSlackWebhook(
   } catch (error) {
     note(
       `[fastagent] slack: could not refresh the App Configuration token: ${String(error)} — ` +
-        `re-run \`fastagent add slack --replace-config\` to repair it, or ${consoleFallback}`,
+        `re-run \`${repair}\` to repair it, or ${consoleFallback}`,
     );
     return "failed";
   }
@@ -93,7 +96,7 @@ export async function registerSlackWebhook(
         ? `[fastagent] slack: Slack could not verify ${publicBaseUrl}/slack after retries (last error: ${String(error)}) — ` +
             `once the app is up, ${consoleFallback}`
         : `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
-            `re-run \`fastagent add slack --replace-config\` to repair the configuration tokens, or ${consoleFallback}`,
+            `re-run \`${repair}\` to repair the configuration tokens, or ${consoleFallback}`,
     );
     return "failed";
   }

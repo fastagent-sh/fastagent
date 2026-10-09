@@ -15,13 +15,15 @@ export function formatAuthReport(status: {
   stored?: string;
   shadowed?: string;
   deployed?: { host: DeployHost | undefined };
+  local?: { authPath: string; valueFile: string };
 }): { line: string; warn?: string } {
-  const { provider, path, source, error, stored, shadowed, deployed } = status;
+  const { provider, path, source, error, stored, shadowed, deployed, local } = status;
   const because = error === undefined ? "" : ` (${error})`;
+  const authOverride = local ? `FASTAGENT_AUTH_PATH='${local.authPath.replaceAll("'", "'\\''")}' ` : "";
   const login = (name: string) =>
     deployed
       ? `\`${name} --deployment ${deployed.host ?? "<host>"}\` from the agent directory this was deployed from`
-      : `\`${name}\``;
+      : `\`${authOverride}${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;
     if (shadowed === undefined) return { line };
@@ -41,6 +43,6 @@ export function formatAuthReport(status: {
   }
   return {
     line: `auth:   (none found) — ${path}`,
-    warn: `no credentials for "${provider}"${because} — run ${login("fastagent login")}, or set the provider's API key in ${deployed ? "the deployment's value file" : ".env"}; invokes will fail until then`,
+    warn: `no credentials for "${provider}"${because} — run ${login("fastagent login")}, or set the provider's API key in ${deployed ? "the deployment's value file" : (local?.valueFile ?? ".env")}; invokes will fail until then`,
   };
 }

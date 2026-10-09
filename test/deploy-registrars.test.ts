@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { registrarsFor } from "../src/cli/commands/deploy/shared.ts";
 import { announceWebhooks } from "../src/tunnel.ts";
+import { registerSlackWebhook } from "../src/channels/slack/register-webhook.ts";
+
+vi.mock("../src/channels/slack/register-webhook.ts", () => ({
+  registerSlackWebhook: vi.fn(async () => "manual"),
+}));
 
 function platformFetch() {
   const requests: { url: string; body: Record<string, unknown> }[] = [];
@@ -19,6 +24,7 @@ function platformFetch() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.clearAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -57,6 +63,30 @@ it("a deployment with no app credentials never registers the shell's dev app", a
   const requests = platformFetch();
   expect(await registrarsFor("/agent", new Map()).feishu?.("https://production.test", "feishu")).toBe("manual");
   expect(requests).toEqual([]);
+});
+
+it("deploy and production tunnel registration pass Slack the selected environment and state", async () => {
+  vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
+  vi.stubEnv("FASTAGENT_STATE_DIR", "");
+  await registrarsFor("/agent", new Map()).slack?.("https://production.test");
+  expect(registerSlackWebhook).toHaveBeenLastCalledWith(
+    "https://production.test",
+    expect.objectContaining({
+      stateRoot: "/agent/.state/production",
+      environment: "production",
+    }),
+  );
+  await announceWebhooks("/agent", "https://production.test", [{ name: "slack", ingress: "webhook" }], {
+    stateRoot: "/custom/state",
+    env: {},
+  });
+  expect(registerSlackWebhook).toHaveBeenLastCalledWith(
+    "https://production.test",
+    expect.objectContaining({
+      stateRoot: "/custom/state",
+      environment: "production",
+    }),
+  );
 });
 
 it("Docker tunnel registration uses its selected production values, not dev's exported bot token", async () => {

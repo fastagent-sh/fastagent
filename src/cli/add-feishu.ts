@@ -105,6 +105,9 @@ export async function onboardFeishuCloudApp(
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
   const requiredNames = feishuAppSecretNames(kind, ingress);
   const existing = await activeDotEnvValues(target, requiredNames);
+  if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
+    assertIndependentFeishuApps(target, [kind], new Map(Object.entries(existing)));
+  }
   if (Object.keys(existing).length === requiredNames.length) {
     console.error(`[fastagent] ${requiredNames.join("/")} already set in ${env} — keeping them`);
     // WebSocket still needs its console mode/publish guidance.
@@ -150,6 +153,9 @@ export async function onboardFeishuCloudApp(
       ingress,
       rerun,
       verifyCredentials: async (appId, appSecret) => {
+        if (process.env[AGENT_ENVIRONMENT_ENV] === "production") {
+          assertIndependentFeishuApps(target, ["lark"], new Map([["LARK_APP_ID", appId]]));
+        }
         await createFeishuApi({ kind: "lark", baseUrl: apiBase, appId, appSecret }).verifyCredentials();
         console.error(`[fastagent] Lark App ID / Secret verified`);
       },
@@ -405,7 +411,8 @@ export function assertIndependentFeishuApps(
   const devValues = loadEnvValues(devFile);
   for (const kind of kinds) {
     const name = `${cloudFor(kind).envPrefix}_APP_ID`;
-    if (values.get(name) && values.get(name) === devValues.get(name)) {
+    const appId = values.get(name)?.trim();
+    if (appId && appId === devValues.get(name)?.trim()) {
       throw new Error(
         `${kind}: dev and production use the same app (${name}) — create a separate production app in ` +
           `${dotEnvPath(agentDir)}; copying dev credentials would take its messages away`,

@@ -12,7 +12,7 @@ import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts
 import { pointChannelsAt, webhookKinds } from "./deploy/channel-ingress.ts";
 import { dotEnvPath, loadDotEnv } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
-import { resolveStateRoot } from "./paths.ts";
+import { AGENT_ENVIRONMENT_ENV, resolveStateRoot } from "./paths.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -192,6 +192,7 @@ export async function announceWebhooks(
       slack: (url) =>
         registerSlackWebhook(url, {
           stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
+          environment: process.env[AGENT_ENVIRONMENT_ENV] === "production" ? "production" : "dev",
           log: (message) => log.info(message),
         }),
       feishu: (url, kind) => registerFeishuWebhook(url, kind, feishuOptions),
