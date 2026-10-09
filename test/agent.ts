@@ -2,8 +2,9 @@
  * One faux-backed agent, assembled the way serving assembles one. Tests that care about a channel,
  * the control plane or the HTTP surface should not each re-derive the engine wiring.
  */
+import { dirname } from "node:path";
 import type { FauxResponseStep } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type Skill } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
 import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
@@ -14,6 +15,19 @@ import { type CreatePiSessionControlOptions, createPiSessionControl } from "../s
 import type { SessionControl } from "../src/session.ts";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { makeFaux } from "./faux.ts";
+
+/** A definition skill as the loader hands it to a session: pi reads its body from `filePath` when it is used. */
+export function definitionSkill(
+  fields: Pick<Skill, "name" | "description" | "filePath"> & { disableModelInvocation?: boolean },
+): Skill {
+  const baseDir = dirname(fields.filePath);
+  return {
+    disableModelInvocation: false,
+    ...fields,
+    baseDir,
+    sourceInfo: { path: fields.filePath, source: "fastagent", scope: "project", origin: "top-level", baseDir },
+  };
+}
 
 export interface FauxAgentOptions {
   /** Defaults to a fresh in-memory store; pass one to share continuity across agents. */

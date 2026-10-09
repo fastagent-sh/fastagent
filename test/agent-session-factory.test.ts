@@ -36,7 +36,7 @@ import { type TurnContext, turnContext } from "../src/engines/pi/tool-context.ts
 import { piAllCodingTools } from "../src/engines/pi/create.ts";
 
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
-import { fauxControlledAgent } from "./agent.ts";
+import { definitionSkill, fauxControlledAgent } from "./agent.ts";
 import type { SessionEvent } from "../src/session.ts";
 import { log } from "../src/log.ts";
 
@@ -549,13 +549,12 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       readDefinition: async () => ({
         systemPrompt: "test",
         skills: [
-          {
+          definitionSkill({
             name: "visible-skill",
             description: "A skill",
             filePath: "/skills/visible/SKILL.md",
-            content: "body",
             disableModelInvocation: disabled,
-          },
+          }),
         ],
       }),
     });
@@ -640,7 +639,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         tools: piAllCodingTools(process.cwd()),
         readDefinition: () => ({
           systemPrompt: "base",
-          skills: [{ name: "release", description: "Cut a release", filePath: skillFile, content }],
+          skills: [definitionSkill({ name: "release", description: "Cut a release", filePath: skillFile })],
         }),
       },
     );

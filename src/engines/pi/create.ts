@@ -3,8 +3,8 @@
  * together.
  */
 import { toUSVString } from "node:util";
-import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import {
   createCodingTools,
   createPowerShellTool,
@@ -337,7 +337,6 @@ function assemblePi(opts: {
   sessions?: PiSessionRecordStore;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
   extensionPaths?: () => Promise<readonly string[]>;
-  env?: ExecutionEnv;
   /**
    * The working directory: where tools operate, what the model is told its working directory is, and what session
    * records are keyed to. The agent directory on the directory path.
@@ -347,7 +346,7 @@ function assemblePi(opts: {
   contexts?: readonly ResolvedContext[];
   lease?: Lease;
 }): PiAssembly {
-  const cwd = opts.cwd ?? opts.env?.cwd ?? process.cwd();
+  const cwd = opts.cwd ?? process.cwd();
   // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the agent runs under
   // — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
@@ -422,8 +421,8 @@ export interface CreatePiAgentOptions {
   credentialStore?: CredentialStore;
 
   sessions?: PiSessionRecordStore;
-  /** Supplies the working directory at L1 (default: process.cwd()), which loads no definition. */
-  env?: ExecutionEnv;
+  /** Where tools operate and what session records are keyed to (default `process.cwd()`). */
+  cwd?: string;
   /** Single-writer lease. */
   lease?: Lease;
   /** Observation-plane tap (session control): every rich session event of every run. */
@@ -447,7 +446,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       }),
       tools: options.tools,
       sessions: options.sessions,
-      env: options.env,
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       lease: options.lease,
     }),
     options.observer,
@@ -485,15 +484,13 @@ export interface CreatePiAgentFromDefinitionOptions {
   credentialStore?: CredentialStore;
 
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. */
-  env?: ExecutionEnv;
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
   observer?: SessionObserver;
 }
 
 /**
- * L2, as the value: load the directory (base + AGENTS.md + skills + env) and assemble. `models` is the directory's
+ * L2, as the value: load the directory (base + AGENTS.md + skills) and assemble. `models` is the directory's
  * model environment when the caller already built it (the opener, whose report must describe what runs); otherwise it
  * is built here from the credential options.
  */
@@ -503,11 +500,10 @@ export async function assemblePiFromDefinition(
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // The agent directory is the working directory: where tools operate and what session records are keyed to.
   const cwd = dir;
-  const env = options.env ?? new NodeExecutionEnv({ cwd });
   const contexts = options.contexts ?? [];
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to report
   // (skills/diagnostics/collisions).
-  const definition = await loadAgentDefinition(dir, { env, contexts });
+  const definition = await loadAgentDefinition(dir, { contexts });
   const tools = options.tools ?? piAllCodingTools(cwd);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
@@ -522,7 +518,6 @@ export async function assemblePiFromDefinition(
   const models =
     options.models ??
     agentModels(dir, options, {
-      env,
       ...(providers ? { providers } : {}),
       ...(options.model ? { keepsModel: options.model } : {}),
     });
@@ -547,7 +542,7 @@ export async function assemblePiFromDefinition(
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
     // are reserved for code (tools/channels/config, module cache).
     readDefinition: async () => {
-      const def = await loadAgentDefinition(dir, { env, contexts });
+      const def = await loadAgentDefinition(dir, { contexts });
       reportFindingsIfChanged(def.dir, def);
       const systemPrompt = options.base ?? def.systemPrompt?.content;
       refuseDefaultPromptOverReplacedTools(tools, systemPrompt !== undefined);
@@ -566,7 +561,6 @@ export async function assemblePiFromDefinition(
     extensionPaths: models.extensionPaths,
     cwd,
     contexts,
-    env,
     lease: options.lease,
   });
   return { assembly, definition };

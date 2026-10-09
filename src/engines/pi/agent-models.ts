@@ -6,7 +6,6 @@
  * does. Each used to compose these parts itself, and two of those copies drifted from the rule (#636, #660).
  */
 import { stat } from "node:fs/promises";
-import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
 import { liveExtensions } from "./live-extensions.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -83,8 +82,6 @@ export interface AgentModels {
 }
 
 export interface AgentModelsOptions {
-  /** Where `extensions/` is listed from; Node's filesystem by default. */
-  env?: ExecutionEnv;
   /** Extra providers registered on top of the built-ins (a same id replaces one). */
   providers?: readonly Provider[];
   /**
@@ -160,9 +157,7 @@ export function agentModels(
       ...(machineLayer !== undefined ? { machineLayer } : {}),
     });
   // Only a definition has extensions/; the low-level paths (no directory) load none and watch nothing.
-  const live = agentDir
-    ? liveExtensions(agentDir, () => loadExtensionPaths(agentDir, options.env ? { env: options.env } : {}))
-    : undefined;
+  const live = agentDir ? liveExtensions(agentDir, () => loadExtensionPaths(agentDir)) : undefined;
   const loadable = (): Promise<{ paths: readonly string[]; generation: number }> =>
     live?.paths() ?? Promise.resolve({ paths: [], generation: 0 });
   const extensionPaths = async (): Promise<readonly string[]> => (await loadable()).paths;

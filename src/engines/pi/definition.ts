@@ -5,17 +5,14 @@
  * docs/design/agent-model.md §2 is the rule this follows.
  */
 import { realpathSync } from "node:fs";
+import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  BACKGROUND_CONTEXT,
-  type ExecutionEnv,
-  type PromptTemplateDiagnostic,
+  parseFrontmatter,
+  type ResourceDiagnostic,
   type Skill,
-  type SkillDiagnostic,
-  loadPromptTemplates,
-  loadSkills,
-} from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+  loadSkillsFromDir,
+} from "@earendil-works/pi-coding-agent";
 import { warnWhenChanged } from "./report.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 import type { ResolvedContext } from "../../contexts/resolve.ts";
@@ -52,7 +49,8 @@ export interface DefinitionPrompt {
   filePath: string;
 }
 
-export type DefinitionDiagnostic = SkillDiagnostic | PromptTemplateDiagnostic;
+/** A per-file problem pi's skill loader, or the prompt-template reader, found and skipped. */
+export type DefinitionDiagnostic = ResourceDiagnostic;
 
 /** Result of loading a definition directory. */
 export interface LoadedDefinition {
@@ -79,7 +77,6 @@ export interface LoadedDefinition {
 }
 
 export interface LoadAgentDefinitionOptions {
-  env?: ExecutionEnv;
   /** The agent's contexts, resolved: their AGENTS.md and skills are read with the definition. */
   contexts?: readonly ResolvedContext[];
 }
@@ -107,37 +104,31 @@ export async function loadAgentDefinition(
   agentDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
-  const e = options.env ?? new NodeExecutionEnv({ cwd: agentDir });
-  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
-  if (!rootResult.ok) {
-    throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  }
-  const root = rootResult.value;
+  const root = resolve(agentDir);
 
-  await refuseRetiredPersona(e, root);
+  await refuseRetiredPersona(root);
 
   const shadowed: DefinitionShadow[] = [];
   const ignored: LoadedDefinition["ignored"] = [];
-  const systemPrompt = await readFirstFile(e, root, SYSTEM_PROMPT_FILES, "system prompt", shadowed, ignored);
+  const systemPrompt = await readFirstFile(root, SYSTEM_PROMPT_FILES, "system prompt", shadowed, ignored);
   const appendSystemPrompt = await readFirstFile(
-    e,
     root,
     APPEND_SYSTEM_PROMPT_FILES,
     "appended prompt",
     shadowed,
     ignored,
   );
-  const { skills, diagnostics: skillDiagnostics, collisions } = await readSkills(e, root);
-  const { prompts, diagnostics: promptDiagnostics } = await readPrompts(e, root, shadowed);
-  ignored.push(...(await ignoredPaths(e, root)));
+  const { skills, diagnostics: skillDiagnostics, collisions } = await readSkills(root);
+  const { prompts, diagnostics: promptDiagnostics } = await readPrompts(root, shadowed);
+  ignored.push(...(await ignoredPaths(root)));
   // The agent works in its own directory, so its AGENTS.md is read like any working directory's: it is how this agent
   // is built and how to change it, which is the agent's own business when it improves itself.
-  const own = await readIfExists(e, join(root, "AGENTS.md"));
+  const own = await readIfExists(join(root, "AGENTS.md"));
   const contextFiles: DefinitionFile[] = own === undefined ? [] : [own];
   for (const context of options.contexts ?? []) {
-    const instructions = await readIfExists(e, join(context.location, "AGENTS.md"));
+    const instructions = await readIfExists(join(context.location, "AGENTS.md"));
     if (instructions !== undefined) contextFiles.push(instructions);
-    const provided = await readContextSkills(e, context, ignored);
+    const provided = readContextSkills(context, ignored);
     skills.push(...provided.skills);
     skillDiagnostics.push(...provided.diagnostics);
     collisions.push(...provided.collisions);
@@ -157,11 +148,61 @@ export async function loadAgentDefinition(
 }
 
 /** The file's content, or undefined when there is none; any other read failure throws. */
-async function readIfExists(e: ExecutionEnv, path: string): Promise<DefinitionFile | undefined> {
-  const read = await e.readTextFile(path, BACKGROUND_CONTEXT);
-  if (read.ok) return { path, content: read.value };
-  if (read.error.code === "not_found") return undefined;
-  throw new Error(`cannot read ${path}: ${read.error.message}`);
+async function readIfExists(path: string): Promise<DefinitionFile | undefined> {
+  const content = await readText(path);
+  return content === undefined ? undefined : { path, content };
+}
+
+/** The file's text, or undefined when there is none; any other read failure throws. */
+async function readText(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    throw new Error(`cannot read ${path}: ${errorMessage(error)}`);
+  }
+}
+
+/** The entry's own kind, symlinks not followed; undefined when there is none; any other failure throws. */
+async function entryKind(path: string): Promise<"file" | "directory" | "symlink" | "other" | undefined> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) return "symlink";
+    if (info.isFile()) return "file";
+    return info.isDirectory() ? "directory" : "other";
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    throw new Error(`cannot read ${path}: ${errorMessage(error)}`);
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * pi's own skill loader, the one its sessions use, over each directory in order; each skill is marked the
+ * definition's, as the session's resource loader lists it.
+ */
+function loadSkills(dirs: readonly string[]): { skills: Skill[]; diagnostics: DefinitionDiagnostic[] } {
+  const skills: Skill[] = [];
+  const diagnostics: DefinitionDiagnostic[] = [];
+  for (const dir of dirs) {
+    const loaded = loadSkillsFromDir({ dir, source: "fastagent" });
+    for (const skill of loaded.skills) {
+      skills.push({
+        ...skill,
+        sourceInfo: { ...skill.sourceInfo, scope: "project", origin: "top-level", baseDir: skill.baseDir },
+      });
+    }
+    diagnostics.push(...loaded.diagnostics);
+  }
+  return { skills, diagnostics };
 }
 
 /** Where a context's skills are read from, in order: the places pi reads a project's. */
@@ -172,16 +213,11 @@ const CONTEXT_SKILL_DIRS = [".pi/skills", ".agents/skills"] as const;
  * own or another context's. A skill of the project's whose own name holds a `/` is left out and said; it is not the
  * author's to rename.
  */
-async function readContextSkills(
-  e: ExecutionEnv,
+function readContextSkills(
   context: ResolvedContext,
   ignored: LoadedDefinition["ignored"],
-): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
-  const { skills: raw, diagnostics } = await loadSkills(
-    e,
-    CONTEXT_SKILL_DIRS.map((dir) => join(context.location, dir)),
-    BACKGROUND_CONTEXT,
-  );
+): { skills: Skill[]; diagnostics: DefinitionDiagnostic[]; collisions: SkillCollision[] } {
+  const { skills: raw, diagnostics } = loadSkills(CONTEXT_SKILL_DIRS.map((dir) => join(context.location, dir)));
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
   for (const skill of raw) {
@@ -200,16 +236,13 @@ async function readContextSkills(
   return { skills: [...byName.values()], diagnostics, collisions };
 }
 
-async function exists(e: ExecutionEnv, path: string): Promise<boolean> {
-  const info = await e.fileInfo(path, BACKGROUND_CONTEXT);
-  if (info.ok) return true;
-  if (info.error.code === "not_found") return false;
-  throw new Error(`cannot read ${path}: ${info.error.message}`);
+async function exists(path: string): Promise<boolean> {
+  return (await entryKind(path)) !== undefined;
 }
 
-async function refuseRetiredPersona(e: ExecutionEnv, root: string): Promise<void> {
+async function refuseRetiredPersona(root: string): Promise<void> {
   const path = join(root, RETIRED_PERSONA);
-  if (!(await exists(e, path))) return;
+  if (!(await exists(path))) return;
   throw new Error(
     `${path} is no longer read. Move its text to SYSTEM.md to replace pi's default prompt with an identity of the ` +
       `agent's own, or to APPEND_SYSTEM.md to add standing instructions to pi's default prompt, which already says ` +
@@ -223,7 +256,6 @@ async function refuseRetiredPersona(e: ExecutionEnv, root: string): Promise<void
  * of the agent's own.
  */
 async function readFirstFile(
-  e: ExecutionEnv,
   root: string,
   names: readonly string[],
   what: string,
@@ -233,61 +265,59 @@ async function readFirstFile(
   let found: DefinitionFile | undefined;
   for (const name of names) {
     const path = join(root, name);
-    const read = await e.readTextFile(path, BACKGROUND_CONTEXT);
-    if (!read.ok) {
-      if (read.error.code === "not_found") continue;
-      throw new Error(`cannot read ${path}: ${read.error.message}`);
-    }
-    if (read.value.trim() === "") {
+    const content = await readText(path);
+    if (content === undefined) continue;
+    if (content.trim() === "") {
       ignored.push({ path, reason: `empty, so it is not used as the ${what}` });
       continue;
     }
     if (found) shadowed.push({ what, winnerPath: found.path, loserPath: path });
-    else found = { path, content: read.value };
+    else found = { path, content };
   }
   return found;
 }
 
 /** `.pi/extensions/` is pi's place for project extensions; a definition's are `extensions/`, and only those load. */
-async function ignoredPaths(e: ExecutionEnv, root: string): Promise<LoadedDefinition["ignored"]> {
+async function ignoredPaths(root: string): Promise<LoadedDefinition["ignored"]> {
   const path = join(root, ".pi", "extensions");
-  return (await exists(e, path)) ? [{ path, reason: "not loaded: a definition's extensions live in extensions/" }] : [];
+  return (await exists(path)) ? [{ path, reason: "not loaded: a definition's extensions live in extensions/" }] : [];
 }
 
 /** Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none. */
-export async function loadExtensionPaths(agentDir: string, options: { env?: ExecutionEnv } = {}): Promise<string[]> {
-  const e = options.env ?? new NodeExecutionEnv({ cwd: agentDir });
-  const rootResult = await e.absolutePath(agentDir, BACKGROUND_CONTEXT);
-  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  const root = rootResult.value;
+export async function loadExtensionPaths(agentDir: string): Promise<string[]> {
+  const root = resolve(agentDir);
   await assertInsideAgentDir(root, "extensions");
   const dir = join(root, "extensions");
-  const listed = await e.listDir(dir, BACKGROUND_CONTEXT);
-  if (!listed.ok) {
-    if (listed.error.code === "not_found") return [];
-    throw new Error(`cannot read ${dir}: ${listed.error.message}`);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error) {
+    if (isNotFound(error)) return [];
+    throw new Error(`cannot read ${dir}: ${errorMessage(error)}`);
   }
   const paths: string[] = [];
   // Said when the set changes, not on every listing: the directory is listed again for every session.
   const notices: string[] = [];
-  for (const entry of listed.value) {
-    if (entry.kind === "symlink") {
+  for (const name of names) {
+    const path = join(dir, name);
+    const kind = await entryKind(path);
+    if (kind === "symlink") {
       // EVERY symlink here is announced, without guessing whether it meant to be an extension.
-      notices.push(symlinkRefused(entry.path));
+      notices.push(symlinkRefused(path));
       continue;
     }
-    if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
-      if (entry.kind === "file") paths.push(entry.path);
+    if (name.endsWith(".ts") || name.endsWith(".js")) {
+      if (kind === "file") paths.push(path);
       continue;
     }
-    if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
-    const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")], notices);
+    if (kind !== "directory") continue; // a README, a .json — not an extension, not a problem
+    const index = await firstRealFile([join(path, "index.ts"), join(path, "index.js")], notices);
     if (index.path) {
       paths.push(index.path);
     } else if (!index.refused) {
       // Silent when the index WAS found and refused for being a symlink.
       notices.push(
-        `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
+        `[fastagent] ${path} is not a loadable extension: expected index.ts or index.js ` +
           `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
       );
     }
@@ -297,20 +327,12 @@ export async function loadExtensionPaths(agentDir: string, options: { env?: Exec
 }
 
 /** The first candidate that is a REAL file, and whether one was found but REFUSED as a symlink. */
-async function firstRealFile(
-  e: ExecutionEnv,
-  candidates: string[],
-  notices: string[],
-): Promise<{ path?: string; refused: boolean }> {
+async function firstRealFile(candidates: string[], notices: string[]): Promise<{ path?: string; refused: boolean }> {
   let refused = false;
   for (const candidate of candidates) {
-    const info = await e.fileInfo(candidate, BACKGROUND_CONTEXT);
-    if (!info.ok) {
-      if (info.error.code === "not_found") continue;
-      throw new Error(`cannot read ${candidate}: ${info.error.message}`);
-    }
-    if (info.value.kind === "file") return { path: candidate, refused };
-    if (info.value.kind === "symlink") {
+    const kind = await entryKind(candidate);
+    if (kind === "file") return { path: candidate, refused };
+    if (kind === "symlink") {
       notices.push(symlinkRefused(candidate));
       refused = true;
     }
@@ -328,17 +350,12 @@ function symlinkRefused(path: string): string {
 
 /** The skills half of {@link loadAgentDefinition}. */
 async function readSkills(
-  e: ExecutionEnv,
   root: string,
-): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
+): Promise<{ skills: Skill[]; diagnostics: DefinitionDiagnostic[]; collisions: SkillCollision[] }> {
   // The definition's OWN skills — its half of the answer, from every place it may keep one, the root spelling first.
   // The machine's half is machine.ts's, and `withMachine` decides a name collision in this half's favour.
   for (const dir of SKILL_DIRS) await assertInsideAgentDir(root, dir);
-  const { skills: raw, diagnostics } = await loadSkills(
-    e,
-    SKILL_DIRS.map((dir) => join(root, dir)),
-    BACKGROUND_CONTEXT,
-  );
+  const { skills: raw, diagnostics } = loadSkills(SKILL_DIRS.map((dir) => join(root, dir)));
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
   for (const skill of raw) {
@@ -362,37 +379,76 @@ async function readSkills(
 
 /** The prompt-template half: `prompts/`, then `.pi/prompts/`, first wins. */
 async function readPrompts(
-  e: ExecutionEnv,
   root: string,
   shadowed: DefinitionShadow[],
-): Promise<{ prompts: DefinitionPrompt[]; diagnostics: PromptTemplateDiagnostic[] }> {
+): Promise<{ prompts: DefinitionPrompt[]; diagnostics: DefinitionDiagnostic[] }> {
   const byName = new Map<string, DefinitionPrompt>();
-  const diagnostics: PromptTemplateDiagnostic[] = [];
+  const diagnostics: DefinitionDiagnostic[] = [];
   for (const dir of PROMPT_DIRS) {
     await assertInsideAgentDir(root, dir);
-    const loaded = await loadPromptTemplates(e, join(root, dir), BACKGROUND_CONTEXT);
-    diagnostics.push(...loaded.diagnostics);
-    for (const template of loaded.promptTemplates) {
-      // pi's loader names a template after its file and reads direct children only, so this is its file.
-      const filePath = join(root, dir, `${template.name}.md`);
+    for (const template of await readPromptDir(join(root, dir), diagnostics)) {
       const existing = byName.get(template.name);
       if (existing) {
         shadowed.push({
           what: `prompt template "${template.name}"`,
           winnerPath: existing.filePath,
-          loserPath: filePath,
+          loserPath: template.filePath,
         });
         continue;
       }
-      byName.set(template.name, {
-        name: template.name,
-        ...(template.description ? { description: template.description } : {}),
-        content: template.content,
-        filePath,
-      });
+      byName.set(template.name, template);
     }
   }
   return { prompts: [...byName.values()], diagnostics };
+}
+
+/** Description of a template that declares none: its first line, as pi's own loader writes it. */
+const PROMPT_DESCRIPTION_CHARS = 60;
+
+/**
+ * One directory's prompt templates, read the way pi reads a project's: its direct `.md` children (a symlink counts as
+ * what it points to), named after the file. pi's own loader is not exported, and it has no place to report a
+ * template it could not read, which is reported here; a missing directory has none.
+ */
+async function readPromptDir(dir: string, diagnostics: DefinitionDiagnostic[]): Promise<DefinitionPrompt[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error) {
+    if (isNotFound(error)) return [];
+    diagnostics.push({ type: "warning", message: errorMessage(error), path: dir });
+    return [];
+  }
+  const prompts: DefinitionPrompt[] = [];
+  for (const name of names.filter((n) => n.endsWith(".md")).sort((a, b) => a.localeCompare(b))) {
+    const filePath = join(dir, name);
+    let parsed: { frontmatter: Record<string, unknown>; body: string };
+    try {
+      if (!(await stat(filePath)).isFile()) continue;
+      parsed = parseFrontmatter(await readFile(filePath, "utf8"));
+    } catch (error) {
+      if (isNotFound(error)) continue; // a symlink to nothing
+      diagnostics.push({ type: "warning", message: errorMessage(error), path: filePath });
+      continue;
+    }
+    const declared = parsed.frontmatter.description;
+    const firstLine = parsed.body.split("\n").find((line) => line.trim());
+    const description =
+      typeof declared === "string" && declared
+        ? declared
+        : firstLine === undefined
+          ? undefined
+          : firstLine.length > PROMPT_DESCRIPTION_CHARS
+            ? `${firstLine.slice(0, PROMPT_DESCRIPTION_CHARS)}...`
+            : firstLine;
+    prompts.push({
+      name: name.slice(0, -".md".length),
+      ...(description ? { description } : {}),
+      content: parsed.body,
+      filePath,
+    });
+  }
+  return prompts;
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath. */

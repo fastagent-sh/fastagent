@@ -334,13 +334,11 @@ retains `parentToolCallId` on nested events. The Agent Handler/channel projectio
 Pi display details include bounded nested traces, and reports each nested call starting as its outer call's
 `tool_progress` status; machine-readable `structuredContent` stays internal.
 
-**`ExecutionEnv` governs definition loading, not the tools.** All seven coding tools come from
-pi-coding-agent and reach `node:fs` directly. Routing them through `env` was tried and given up: the
-seam never closed anything by itself — author-written `tools/` import whatever they like — while it
-cost a 167-line parity suite and a hand-built image pipeline. `env` is therefore **not** a sandbox: the
-default tools bypass it, `tools/` is author code, `loadProjectContextFiles` reads ② context through
-node fs directly, and `deploy`/channel machinery runs outside it entirely. A sandbox adapter constrains
-the process it runs in.
+**Nothing here is a sandbox.** The definition is read from the local filesystem, with pi's own skill
+loader, and all seven coding tools come from pi-coding-agent and reach `node:fs` directly. An execution
+seam for the tools was tried and given up: it never closed anything by itself — author-written `tools/`
+import whatever they like — while it cost a 167-line parity suite and a hand-built image pipeline. A
+sandbox adapter constrains the process it runs in.
 
 ## 6. Sessions and concurrency
 
@@ -914,7 +912,7 @@ run, because nothing can restore their ingress when compute is reclaimed.
 Explicit limits, not implied capabilities:
 
 - pi is the reference implementation; additional engine bindings can implement the same Agent contract;
-- `ExecutionEnv` alone is not a complete sandbox for directory agents;
+- nothing in the process sandboxes a directory agent;
 - Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
 - the AgentCore target has no resident process: long-connection channels are unsupported there, and a

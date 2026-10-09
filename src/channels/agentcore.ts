@@ -71,11 +71,10 @@ function createActivation(deps: {
   channels: Effect.Effect<ChannelHandler, PortFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
-  // UNINTERRUPTIBLE, because the outcome is CACHED: `Effect.cached` memoizes whatever exit it sees,
-  // interruption included. A once-per-process activation that remembered "interrupted" would answer
-  // every later envelope with an empty cause instead of the success or the diagnosable failure this
-  // block promises. Both are already unreachable (no caller passes a signal), which is exactly why
-  // the invariant has to be written down rather than relied on.
+  // UNINTERRUPTIBLE: `Effect.cached` interrupts a run once every caller has left it, and an activation cut off
+  // halfway (the state hook run, the channels half built) would leave the next envelope a fresh run over a
+  // half-done one. Unreachable today (no caller passes a signal), which is why it is written down rather than
+  // relied on.
   const stateReady = Effect.runSync(
     Effect.cached(
       portJoin(async () => {

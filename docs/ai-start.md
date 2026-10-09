@@ -396,7 +396,7 @@ that imports it; keep package versions aligned.
 
 The application owns authentication, users, session ownership, database, and deployment. Preserve raw
 webhook bodies when mounting under a framework. Follow [Embedding](embedding.md) rather than rebuilding
-the service assembly, Slack transport, or a separate scheduler. `ExecutionEnv` is not process isolation.
+the service assembly, Slack transport, or a separate scheduler. Nothing in the assembly isolates the process.
 
 ## 9. Deploy and preserve the right data
 

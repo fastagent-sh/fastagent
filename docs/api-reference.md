@@ -146,7 +146,7 @@ Common options:
 | `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
 | `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` supplies `cwd` at L1; at L2 it also reads the definition's prompt files, skills and prompt templates, and each context's `AGENTS.md` and skills. Tools use the local process directly. This is not a sandbox. |
+| `cwd` | The working directory at L1 (default `process.cwd()`): where tools operate and what session records are keyed to. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 | `authPath` / `credentialStore` | Where model credentials live: a credentials file, or your own `CredentialStore` ([Auth](#config-and-models)). One or neither, not both. |

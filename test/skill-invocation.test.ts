@@ -18,6 +18,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { definitionSkill } from "./agent.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../src/agent.ts";
 import { createInvokeHandler } from "../src/channels/http.ts";
@@ -124,7 +125,7 @@ it("a skill whose FILE went unreadable leaves the definition, loudly, and then r
     warn.mockRestore();
   }
 
-  expect(warned.join("\n")).toMatch(/read_failed:.*(EACCES|permission denied)/);
+  expect(warned.join("\n")).toMatch(/SKILL\.md: .*(EACCES|permission denied)/);
   expect(sent()).toContain("/skill:weather now"); // unexpanded, like any name the definition does not have
 });
 
@@ -158,7 +159,7 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
       // A list that still names the skill, pinned the way a run in flight pins it.
       readDefinition: () => ({
         systemPrompt: "test",
-        skills: [{ name: "weather", description: "Report weather.", filePath: skillPath, content: "body" }],
+        skills: [definitionSkill({ name: "weather", description: "Report weather.", filePath: skillPath })],
       }),
       cwd: dir,
     }),

@@ -83,8 +83,8 @@ describe("definition: one discovery of extensions/ for the catalog and the sessi
   });
 
   it("sessions load the list the model catalog registered from", async () => {
-    // A caller's ExecutionEnv may list a different directory than Node's filesystem: two discoveries could disagree on
-    // which extension declared a model. The assembly takes the catalog's list instead of listing again.
+    // Two discoveries could disagree on which extension declared a model. The assembly takes the catalog's list
+    // instead of listing again.
     const dir = await agentDirWith({});
     const elsewhere = join(await agentDirWith({}), "elsewhere.ts");
     await writeFile(elsewhere, "export default () => {};\n");

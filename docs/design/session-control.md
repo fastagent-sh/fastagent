@@ -967,7 +967,7 @@ A remotely exposed control plane MUST be wrapped by a host that enforces: an aut
 and per-session authorization; separated observe and write permissions; allowed model and
 thinking-level policy; prompt and attachment size limits; opaque artifact references instead of
 filesystem paths; audit records for accepted commands. The control plane does not make local coding
-tools safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundary
+tools safe for untrusted users, and nothing in the process is a sandbox boundary
 ([core design §5](core.md#5-tools-skills-and-execution-environment)).
 
 ## 15. Decisions on the record
