@@ -731,13 +731,22 @@ The entry points inside FastAgent call the protocol in process, like any other c
 | A schedule | `invoke({ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: the occurrence })`: an occurrence on a busy session is skipped |
 | A wake-up | `invoke({ sessionId, whenBusy: "queue", idempotencyKey: the wake-up and its instant })`: one that fires into a busy session runs after the running run |
 
-Where a thread forks is found through the platform's reply chain, nearest message first: the first message in the
-chain that the chat's session holds as an idempotency key names the run that took it (`runs.get({ idempotencyKey })`),
-and the thread forks at that run's answer. The agent's own reply is found through the message it replies to, as
-today's search for `msg <id>` in the parent's messages finds it, but by key instead of by text. A post that replies to
-nothing (a schedule's digest, a send tool's message) has no point in the chat's session, because it was produced
-elsewhere: the thread forks at the present, and the post reaches it through the place's history read from the
-platform ([place history](place-history.md)).
+Where a thread forks is found through the platform's reply chain: the message the thread starts from, then each
+message it replies to, nearest first. The first message in the chain that names a run decides, and the thread forks at
+that run's answer. Two kinds of message name a run:
+
+- **A message the channel posted for a run**, such as an answer or one of its chunks. The channel records each one
+  with its run, in its own state and bounded per place. This finds an answer in a direct message, which quotes
+  nothing.
+- **A user's message that a run took**, found by its idempotency key (`runs.get({ idempotencyKey })`). This replaces
+  today's search for `msg <id>` in the chat's messages, which also matches a later message that quoted the same one.
+
+When nothing in the chain names a run, the thread forks at the chat's present. That covers a thread under a message
+the agent was not asked about, and under a message the agent posted itself through a send tool, such as a schedule's
+digest. Such a post is not followed back to the session that produced it: forking from there would hand that
+session's other content, such as a direct conversation or what a schedule posted to other chats, to the thread's
+readers. The post still reaches the thread: it is quoted in the thread's first prompt, and the chat's discussion
+arrives through the place's history read from the platform ([place history](place-history.md)).
 
 Each records its `source` on the run. Channels keep their turn store, because it is what they owe the chat. Whether
 `idempotencyKey` replaces their redelivery dedup, and whether they keep their own queue, is decided when they move
@@ -1008,8 +1017,10 @@ The serving protocol:
   active branch is `rewind` (§7.4).
 - Run boundaries are entries in the session's log, so a run's status after the fact is read from the log, and
   `interrupted` is derived when read (§7.3, §9.3).
-- A thread forks at the answer of the run that took the nearest message of its reply chain, found by idempotency key;
-  a post that replies to nothing forks at the present (§8.3).
+- A thread forks at the answer of the run named by the nearest message of its reply chain: a message the channel
+  posted for a run, which it records, or a user's message, by its idempotency key. When nothing names a run,
+  including a post the agent made through a send tool, it forks at the chat's present; a post is never followed back
+  to another session, whose other content would reach the thread's readers (§8.3).
 - The operations are grouped by who uses them: the user plane (on by default) and the control plane (`/control`, off
   by default), which holds a session's name, model and thinking level, and its deletion (§7.7).
 - FastAgent authenticates nobody: exposing it belongs to an API gateway in front, and authentication inside FastAgent
