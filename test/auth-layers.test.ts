@@ -39,7 +39,7 @@ const GLOBAL = GLOBAL_AUTH_PATH;
 /** Where L2 (`createPiAgentFromDefinition`'s assembly) found the credential, if anywhere. */
 async function l2AuthSource(dir: string): Promise<string | undefined> {
   const { assembly } = await assemblePiFromDefinition(dir, { model: SPEC });
-  return probeAuthSource((await assembly.resolveDefaultModel()).modelRuntime, SPEC);
+  return probeAuthSource(await assembly.modelRuntime(), SPEC);
 }
 
 const saved = { auth: process.env.FASTAGENT_AUTH_PATH, secrets: process.env.FASTAGENT_SECRETS_DIR };

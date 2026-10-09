@@ -305,10 +305,11 @@ export interface PiAssembly {
   /** A fresh runtime for every session, before loading its extensions. */
   createModelRuntime: () => Promise<ModelRuntime>;
   /**
-   * The registry and the default model, resolved on first use (a credential read is async). No model when the
-   * assembly has no default: each session then runs on the model it records (agent-session-factory.ts).
+   * The default model, resolved against the catalog on first use (a credential read is async); throws when it does not
+   * resolve. Undefined when the assembly has no default: each session then runs on the model it records
+   * (agent-session-factory.ts).
    */
-  resolveDefaultModel: () => Promise<{ modelRuntime: ModelRuntime; model?: AnyModel }>;
+  resolveDefaultModel: () => Promise<AnyModel | undefined>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
   thinkingLevel: ThinkingLevel;
   /** The tools every session mounts. */
@@ -354,12 +355,9 @@ function assemblePi(opts: {
   const createModelRuntime = opts.models;
   // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
   const modelRuntime = opts.catalog;
-  const resolveDefaultModel = () => {
-    const spec = opts.model;
-    return modelRuntime().then((runtime) => ({
-      modelRuntime: runtime,
-      ...(spec ? { model: resolveModel(runtime, spec) } : {}),
-    }));
+  const resolveDefaultModel = async (): Promise<AnyModel | undefined> => {
+    const runtime = await modelRuntime();
+    return opts.model ? resolveModel(runtime, opts.model) : undefined;
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
