@@ -26,6 +26,7 @@ import type { LoadedDefinition } from "../harnesses/pi/definition.ts";
 import type { ToolCollision } from "../harnesses/pi/tool.ts";
 import {
   describeIndirectTools,
+  describeTools,
   describePrompt,
   reportFindingsIfChanged,
   reportToolCollisions,
@@ -89,6 +90,7 @@ export interface ReportableAssembly {
   config: { thinkingLevel?: string };
   definition: LoadedDefinition;
   toolNames: string[];
+  toolSources: Map<string, string>;
   indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
 }
@@ -113,7 +115,7 @@ export async function reportAssembly(
   const skills = withMachine(a.definition.skills, (await readMachine(a.agentDir)).skills);
   reportLine("skills", skills.map((s) => s.name).join(", ") || "(none)");
   reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
-  if (a.toolNames.length > 0) reportLine("tools", a.toolNames.join(", "));
+  if (a.toolNames.length > 0) reportLine("tools", describeTools(a.toolNames, a.toolSources));
   if (a.indirectTools.length > 0) reportLine("indirect", describeIndirectTools(a.indirectTools));
   reportToolCollisions(a.toolCollisions);
   for (const [label, value] of extras.afterTools ?? []) reportLine(label, value);

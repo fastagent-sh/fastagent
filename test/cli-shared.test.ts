@@ -26,6 +26,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
       diagnostics: [],
     },
     toolNames: ["fetch-url"],
+    toolSources: new Map([["fetch-url", "tools/web/fetch-url.ts"]]),
     indirectTools: [],
     toolCollisions: [],
     toolFailures: [],

@@ -208,10 +208,13 @@ export default defineTool({
 });
 ```
 
-The filename supplies the tool name. `defineTool` infers `items` and `size` from the Zod schema and
+The tool takes its file's name, `plan-batches`, because it declares none and its module sits directly in `tools/`
+and exports only it; a tool below a folder, or one of several in a module, names itself with
+`defineTool({ name })`. `defineTool` infers `items` and `size` from the Zod schema and
 validates incoming arguments before calling the body. TypeScript annotations alone do not validate
 external JSON. Import `z` from FastAgent so schema construction and conversion use the same Zod copy.
-Keep helpers outside `tools/`, whose files must default-export tools. Add IO and authorization checks
+A module below `tools/` that exports no tool is a helper, so helpers may sit beside the tools that use them. Add IO
+and authorization checks
 at the boundary that performs the real operation; keep imports free of network calls and side effects.
 
 **`test/batches.test.ts`**

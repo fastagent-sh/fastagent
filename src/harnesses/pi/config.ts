@@ -165,7 +165,7 @@ async function loadConfigFile(path: string, dir: string): Promise<FastagentConfi
       // The declaration's SHAPE, checked with the same read the code-input loaders use. Here rather
       // than at tool resolution because this is the author's own config file: a wrong shape in it is
       // a config error like any other (it stops the command with one line naming the entry), while a
-      // wrong shape in `tools/x.ts` is that one file's load failure and the agent serves without it.
+      // wrong shape below `tools/` is that module's load failure, reported with its file.
       const declaration = readSecretDeclaration(candidate, `${path}: "tools[${i}]"`);
       if (declaration.error !== undefined) throw new Error(declaration.error);
     }

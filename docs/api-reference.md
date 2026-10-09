@@ -340,7 +340,9 @@ export default defineTool({
 });
 ```
 
-`tools/<name>.ts` files are discovered by the assembly, and the filename becomes the tool name.
+Modules below `tools/` are discovered by the assembly, at any depth: every tool a module exports is mounted, named
+by `defineTool({ name })`. A module directly in `tools/` that exports one unnamed tool lends it its file's name;
+any other unnamed tool refuses the start ([Configuration](configuration.md#tools)).
 
 The Zod schema is also sent to the provider for **constrained sampling** (`strict: "prefer"`): on a model that
 supports it, arguments are sampled against the schema. A schema that cannot be expressed strictly, or a provider

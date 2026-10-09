@@ -146,6 +146,8 @@ export interface AgentAssembly {
   /** The full mounted tool surface (all coding tools + config.tools + discovered tools/). */
   tools: MountedTool[];
   toolNames: string[];
+  /** Where each authored tool comes from ({@link resolveAgentTools}). */
+  toolSources: Map<string, string>;
   indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
   /** Env vars the mounted tools declared, by tool name — already asserted present by this function. */
@@ -182,10 +184,8 @@ export async function resolveAgentAssembly(
     );
   }
   const modelSpec = resolveModelSpec(options.model, config);
-  const { tools, toolNames, indirectTools, toolCollisions, toolFailures, toolSecrets } = await resolveAgentTools(
-    config,
-    agentDir,
-  );
+  const { tools, toolNames, toolSources, indirectTools, toolCollisions, toolFailures, toolSecrets } =
+    await resolveAgentTools(config, agentDir);
   // THE serving-path gate for tool declarations, in the order that costs the fewest round trips. A file that could
   // not be imported declares nothing, so its `secrets:` are missing from `toolSecrets` — gating secrets first would
   // report an incomplete set, and fixing the file could then reveal more missing values. Refuse the broken file
@@ -213,6 +213,7 @@ export async function resolveAgentAssembly(
     models: agentModels(agentDir, options, modelSpec ? { keepsModel: modelSpec } : {}),
     tools,
     toolNames,
+    toolSources,
     indirectTools,
     toolCollisions,
     toolSecrets,
@@ -361,6 +362,8 @@ export async function createPiAgentFromDir(
   http?: HttpSurface;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
+  /** Where each authored tool comes from ({@link resolveAgentTools}). */
+  toolSources: Map<string, string>;
   /** Mounted authored tools the model is not given up front, with how each is reached. */
   indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
@@ -376,6 +379,7 @@ export async function createPiAgentFromDir(
     models,
     tools,
     toolNames,
+    toolSources,
     indirectTools,
     toolCollisions,
   } = front;
@@ -455,6 +459,7 @@ export async function createPiAgentFromDir(
     sessionsDir,
     models,
     toolNames,
+    toolSources,
     indirectTools,
     toolCollisions,
   };

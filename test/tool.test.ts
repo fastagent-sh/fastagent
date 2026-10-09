@@ -2,9 +2,9 @@ import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-samp
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { fauxAgent } from "./agent.ts";
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { collect, defineTool, z } from "../src/index.ts";
 import { loadTools } from "../src/harnesses/pi/tool.ts";
 import {
@@ -147,6 +147,21 @@ describe("defineTool", () => {
   });
 });
 
+/** A tool as a module below tools/ writes it, without importing this package from a temporary directory. */
+const toolSource = (name: string) =>
+  `{ name: ${JSON.stringify(name)}, description: "d", parameters: { type: "object" }, async execute() { return { content: [], details: "" }; } }`;
+
+/** An agent directory whose tools/ holds these files, by path below tools/. */
+async function toolsDir(files: Record<string, string>): Promise<string> {
+  // The real path: a module re-exported through a symlinked temp dir would otherwise load twice under vitest.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "fa-tools-tree-")));
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(dir, "tools", path)), { recursive: true });
+    await writeFile(join(dir, "tools", path), content);
+  }
+  return dir;
+}
+
 describe("loadTools (filesystem discovery)", () => {
   it("discovers tools/* and names them from the filename; missing tools/ is empty", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
@@ -204,7 +219,7 @@ describe("loadTools (filesystem discovery)", () => {
     expect(resolved.toolNames).not.toContain("read");
     expect(resolved.toolCollisions).toEqual([
       { name: "read", source: "config.tools" },
-      { name: "read", source: "tools/read" },
+      { name: "read", source: "tools/read.mjs" },
     ]);
   });
 
@@ -305,13 +320,78 @@ describe("loadTools (filesystem discovery)", () => {
     }
   });
 
-  it("isolates (surfaces, not fatal) a tool file that does not default-export a tool", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
-    await mkdir(join(dir, "tools"));
-    await writeFile(join(dir, "tools", "bad.mjs"), `export const notDefault = 1;`);
+  it("a module that exports no tool is a helper: nothing mounted, nothing refused", async () => {
+    const dir = await toolsDir({ "client.mjs": `export const client = { execute: () => 1 };\nexport const n = 1;` });
     const { tools, failures } = await loadTools(dir);
-    expect(tools).toEqual([]); // not mounted…
-    expect(failures[0]!.message).toMatch(/must default-export defineTool/); // …but surfaced, never silent
+    expect(tools).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+
+  it("loads tools at any depth, named by themselves, each with its file; folders only organize", async () => {
+    const dir = await toolsDir({
+      "github/search.mjs": `export const search = ${toolSource("gh_search")};\nexport const issues = ${toolSource("gh_issues")};`,
+      "github/client.mjs": `export const get = () => "helper";`,
+      "lookup.mjs": `export default ${toolSource("find_order")};`,
+    });
+    const { tools, sources, failures, collisions } = await loadTools(dir);
+    expect(failures).toEqual([]);
+    expect(collisions).toEqual([]);
+    expect(tools.map((t) => t.name)).toEqual(["gh_issues", "gh_search", "find_order"]);
+    // The name a tool gives itself wins over its file's.
+    expect(Object.fromEntries(sources)).toEqual({
+      gh_issues: "tools/github/search.mjs",
+      gh_search: "tools/github/search.mjs",
+      find_order: "tools/lookup.mjs",
+    });
+  });
+
+  it("only a module directly in tools/ that exports one unnamed tool lends it the file's name", async () => {
+    const dir = await toolsDir({
+      "ping.mjs": `export default ${toolSource("")};`,
+      "pair.mjs": `export const a = ${toolSource("")};\nexport const b = ${toolSource("named_b")};`,
+      "nested/deep.mjs": `export default ${toolSource("")};`,
+    });
+    const { tools, failures } = await loadTools(dir);
+    expect(tools.map((t) => t.name)).toEqual(["named_b", "ping"]);
+    expect(tools.find((t) => t.name === "ping")?.label).toBe("ping");
+    expect(failures.map((f) => `${f.label}: ${f.message}`)).toEqual([
+      'tools/nested/deep.mjs: the tool exported as "default" has no name — give it one with defineTool({ name }); only a module directly in tools/ that exports a single tool takes its file\'s name',
+      'tools/pair.mjs: the tool exported as "a" has no name — give it one with defineTool({ name }); only a module directly in tools/ that exports a single tool takes its file\'s name',
+    ]);
+  });
+
+  it("a tool re-exported by an index is one tool; two tools sharing a name are reported", async () => {
+    const dir = await toolsDir({
+      "github/index.mjs": `export { search } from "./search.mjs";`,
+      "github/search.mjs": `export const search = ${toolSource("gh_search")};`,
+      "other.mjs": `export default ${toolSource("gh_search")};`,
+    });
+    const { tools, sources, collisions } = await loadTools(dir);
+    expect(tools.map((t) => t.name)).toEqual(["gh_search"]);
+    expect(sources.get("gh_search")).toBe("tools/github/index.mjs");
+    expect(collisions).toEqual([{ name: "gh_search", source: "tools/other.mjs" }]);
+  });
+
+  it("never loads tests, node_modules or a dot-folder below tools/", async () => {
+    const boom = `throw new Error("must not be imported");`;
+    const dir = await toolsDir({
+      "search.test.mjs": boom,
+      "github/search.spec.mjs": boom,
+      "node_modules/pkg/index.mjs": boom,
+      ".cache/x.mjs": boom,
+      "ok.mjs": `export default ${toolSource("ok")};`,
+    });
+    const { tools, failures } = await loadTools(dir);
+    expect(failures).toEqual([]);
+    expect(tools.map((t) => t.name)).toEqual(["ok"]);
+  });
+
+  it("resolveAgentTools says where each authored tool comes from", async () => {
+    const dir = await toolsDir({ "github/search.mjs": `export const search = ${toolSource("gh_search")};` });
+    const configured = defineTool({ name: "gh", description: "gh", input: z.object({}), execute: () => "ok" });
+    const { toolNames, toolSources } = await resolveAgentTools({ tools: [configured] }, dir);
+    expect(toolNames).toEqual(["gh", "gh_search"]);
+    expect(Object.fromEntries(toolSources)).toEqual({ gh: "config.tools", gh_search: "tools/github/search.mjs" });
   });
 
   it("ISOLATES a tool that throws on import — reports it in failures, still loads the others (G2)", async () => {

@@ -447,7 +447,12 @@ publish a package or copy the file.
 
 Two ways to add tools:
 
-1. Files under `tools/` (the filename is the tool name: `tools/lookup-order.ts` → `lookup-order`).
+1. Modules below `tools/`, at any depth. Every tool a module exports is mounted (what `defineTool` makes, or a pi
+   `AgentTool`), and a module that exports none is a helper, so a service's tools and the client they share can sit
+   in one folder. Tests (`*.test.*`, `*.spec.*`), `.d.ts` files, `node_modules` and dot-folders are not loaded. A tool
+   is named by `defineTool({ name })`. One without a name takes its file's name (`tools/lookup-order.ts` →
+   `lookup-order`) only when its module sits directly in `tools/` and exports no other tool; any other unnamed tool
+   refuses the start. Group related tools with `defineTool({ namespace })`.
 2. `config.tools`, for programmatic injection.
 
 Every directory agent mounts pi's coding tools: `read`, `grep`, `find`, `ls`, `bash`, `edit`, and `write`. They are
@@ -457,7 +462,9 @@ capabilities, not a security policy; to isolate an agent, sandbox its whole proc
 collision is reported. Pi's codemode and tool-search extensions load by default; their settings control activation,
 and `"extensions": ["-builtin:codemode"]` in Pi's settings turns one off. Pi's MCP extension is not loaded, so
 `mcp.json` has no effect on an agent. Every serve mounts `wake`/`unwake`.
-`fastagent info --json` shows the mounted surface: `tools` are the authored tools the model gets up front, and
+The startup report and `fastagent info` list each authored tool with where it comes from (its file, or
+`config.tools`). `fastagent info --json` shows the mounted surface: `tools` are the authored tools the model gets up
+front, `toolSources` where each comes from, and
 `indirectTools` the rest, each with how it is reached (`tool_search`, `codemode`, `hidden`, `inactive` until an
 authored loader activates it, or `unreachable` when pi's settings disable the built-in extension it needs).
 

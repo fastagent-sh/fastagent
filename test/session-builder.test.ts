@@ -185,7 +185,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       try {
         errorSpy.mockRestore();
         expect(warnings.some((line) => line.includes('skill "greet" collision'))).toBe(true);
-        expect(warnings.some((line) => line.includes('tool "ping" (tools/ping) dropped'))).toBe(true);
+        expect(warnings.some((line) => line.includes('tool "ping" (tools/ping.mjs) dropped'))).toBe(true);
 
         const st = rt.session.agent.state;
         // Default coding tools (rebuilt by pi from names) PLUS the config's custom tool, registered

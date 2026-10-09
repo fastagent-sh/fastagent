@@ -123,6 +123,8 @@ export async function resolveAgentTools(
 ): Promise<{
   tools: MountedTool[];
   toolNames: string[];
+  /** Where each mounted authored tool comes from, by name: its file below `tools/`, or `config.tools`. */
+  toolSources: Map<string, string>;
   /** Mounted authored tools the model is not given up front, with how each is reached. */
   indirectTools: IndirectTool[];
   toolCollisions: ToolCollision[];
@@ -153,7 +155,7 @@ export async function resolveAgentTools(
     configured.push(tool);
     mountedConfigTools.push(tool);
   }
-  const merged = mergeDiscoveredTools(configured, discovered.tools);
+  const merged = mergeDiscoveredTools(configured, discovered.tools, discovered.sources);
   const tools = merged.tools;
   const toolCollisions = [...discovered.collisions, ...configuredCollisions, ...merged.collisions];
   // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/).
@@ -163,9 +165,14 @@ export async function resolveAgentTools(
   const { builtinExtensions } = await readMachine(agentDir);
   const defaultNames = new Set<string>(CODING_TOOL_NAMES);
   const toolNames = tools.filter((t) => !defaultNames.has(t.name) && isDefaultActiveTool(t)).map((t) => t.name);
+  const toolSources = new Map<string, string>([
+    ...mountedConfigTools.map((tool) => [tool.name, "config.tools"] as [string, string]),
+    ...[...discovered.sources].filter(([name]) => !shadowed.has(name)),
+  ]);
   return {
     tools,
     toolNames,
+    toolSources,
     indirectTools: tools.flatMap((t) => {
       const reach = defaultNames.has(t.name) ? undefined : indirectReach(t, builtinExtensions);
       return reach ? [{ name: t.name, reach }] : [];

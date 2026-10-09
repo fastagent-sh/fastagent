@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DefinitionDiagnostic } from "../src/harnesses/pi/definition.ts";
-import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/harnesses/pi/report.ts";
+import {
+  describeTools,
+  reportDefinitionWarnings,
+  reportFindingsIfChanged,
+  reportToolCollisions,
+} from "../src/harnesses/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
 // module: two copies could drift). Spies on console.error rather than going through a runner.
@@ -55,9 +60,16 @@ describe("report", () => {
   it("renders tool collisions to stderr", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     reportToolCollisions([{ name: "lookup", source: "tools/lookup.ts" }]);
-    expect(lines(err)).toMatch(
-      /tool "lookup" \(tools\/lookup.ts\) dropped — a default\/config tool already uses that name/,
-    );
+    expect(lines(err)).toMatch(/tool "lookup" \(tools\/lookup.ts\) dropped — another tool already uses that name/);
+  });
+
+  it("names each authored tool with where it comes from, and refuses one with no recorded source", () => {
+    const sources = new Map([
+      ["gh_search", "tools/github/search.ts"],
+      ["gh", "config.tools"],
+    ]);
+    expect(describeTools(["gh_search", "gh"], sources)).toBe("gh_search (tools/github/search.ts), gh (config.tools)");
+    expect(() => describeTools(["lost"], sources)).toThrow(/tool "lost" has no recorded source/);
   });
 
   it("prints nothing when there are no findings", () => {
