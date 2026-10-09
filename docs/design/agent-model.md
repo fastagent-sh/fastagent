@@ -32,7 +32,7 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 | **Agent** | A model, a harness and a context, composed by a definition, the way a program is | As declared in its directory |
 | Model | What the agent thinks with, from a model provider | The default model and thinking level. Credentials are not part of it |
 | Harness | The loop that runs it: pi | Supplied by pi. The word means what it means across the ecosystem |
-| Context | What the agent works with, from outside its definition | Contexts: each one data, a directory the agent **works on** (writable) or **knows** (read-only), whose type says how it reaches each instance (§3). Beside them, the systems it reaches and what it runs in ([agent service](agent-service.md) §3) |
+| Context | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
 | Definition | The program: who the agent is and how it works, and which model and context it uses | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
 
