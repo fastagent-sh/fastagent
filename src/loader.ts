@@ -66,13 +66,18 @@ async function moduleInventory(subDir: string, shape: "flat" | "tree"): Promise<
         await walk(join(dir, dirent.name), true);
         continue;
       }
+      // In a tree a symlinked folder could hold modules too, so every symlink is said, whatever its name.
+      const symlink = dirent.isSymbolicLink() && (shape === "tree" || isModuleFile(dirent.name));
+      if (symlink) {
+        log.warn(
+          `[fastagent] ${label} is a symlink — code inputs must be real files and folders inside the agent dir — ` +
+            `not loaded`,
+        );
+        continue;
+      }
       if (!isModuleFile(dirent.name) || (shape === "tree" && isTestFile(dirent.name))) continue;
       if (dirent.isFile()) {
         entries.push({ name: moduleName(dirent.name), label, file: join(dir, dirent.name), nested });
-      } else if (dirent.isSymbolicLink()) {
-        log.warn(
-          `[fastagent] ${label} is a symlink — code inputs must be real files inside the agent dir — not loaded`,
-        );
       } else if (dirent.isDirectory()) {
         log.warn(`[fastagent] ${label} is a directory, not a file — not loaded`);
       } else {

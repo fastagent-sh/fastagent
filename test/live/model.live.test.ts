@@ -111,8 +111,8 @@ describe(`live model: ${MODEL}`, () => {
     // never the sentence wrapped around it.
     const code = String(Math.floor(Math.random() * 90_000) + 10_000);
     const marker = join(tmpdir(), `fa-live-tool-${code}`);
-    // The FILE NAME is the tool name (tool.ts: "named from the filename"), so it is what the model is
-    // offered — a `name` field here would be redundant and, if they disagreed, misleading.
+    // An unnamed tool, alone in a module directly in tools/, takes its file's name: that is what the model is
+    // offered.
     // `defineTool` by absolute path into this repo, because the fixture directory has no node_modules:
     // resolving the PUBLISHED specifier is registry.live.test.ts's subject, not this one's. Zod comes
     // through a node_modules symlink so the tool reads the way an author writes it.

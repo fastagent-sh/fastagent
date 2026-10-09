@@ -298,8 +298,9 @@ definition's own `extensions/` (`docs/configuration.md#extensions`). So does the
 capability is one thing, inheriting an identity would be the agent becoming someone else's.
 
 A directory agent's tools merge in this order: all pi coding tools
-(`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then discovered
-`tools/*.ts|js|mjs`. Earlier names win, collisions are reported, and a broken discovered tool
+(`read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`), then `config.tools`, then the tools exported by modules at any
+depth below `tools/`, each named by `defineTool({ name })` ([configuration](../configuration.md#tools)). Earlier names
+win, collisions are reported, and a broken discovered tool
 refuses the run — an enabled file is a declaration, and the same rule covers `channels/` (a `schedules/` file that is
 not valid is logged and left unarmed instead, §8). The coding set is fixed for directory agents: isolation belongs around the whole
 agent process, where it also covers authored tools and channel code. Pi's codemode and tool-search
