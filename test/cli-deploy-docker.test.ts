@@ -53,9 +53,6 @@ describe("cli: deploy docker", () => {
   });
 
   it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
-    // The generated Compose names a FIXED `.secrets/.env`, so a relocated secrets dir means the pre-flight checks
-    // one file while the container reads another: every declared value is silently absent. Deterministic, so `--run`
-    // refuses before Docker is touched; generating artifacts only warns.
     const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
     });

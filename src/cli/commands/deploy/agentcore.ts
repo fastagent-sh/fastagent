@@ -49,8 +49,29 @@ export const agentcoreHost: HostDeploy = {
     if (!runtimeArn) throw new Error(`stack ${stack} has no RuntimeArn output — redeploy it`);
     return agentcoreShell(runtimeArn, ingressSessionId(name), aws);
   },
+  validate({ opts, agentDir, pre }) {
+    const longConnectionChannels = pre.channels.filter((channel) => channel.ingress === "long-connection");
+    if (longConnectionChannels.length > 0) {
+      const msg =
+        `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) cannot run on AgentCore — there is no ` +
+        `resident process to hold the connection, and nothing wakes a reclaimed session. Switch the channel ` +
+        `to webhook mode (its events then ride the forwarder like every other channel).`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+      console.error(`[fastagent] warn: ${msg}`);
+    }
+    const name = agentcoreName(basename(agentDir));
+    // The forwarder Lambda name embeds this name and must fit AWS's 64-character limit.
+    if (name.length > 40) {
+      failStartup(
+        new Error(
+          `deploy stopped: the directory name maps to "${name}" (${name.length} chars) — AWS resource ` +
+            `names derived from it exceed their limits past 40 chars. Deploy from a shorter directory name.`,
+        ),
+      );
+    }
+  },
   async deploy(ctx) {
-    const { opts, agentDir, config, channels, longConnectionChannels, pre, write } = ctx;
+    const { opts, agentDir, config, channels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
     if (boxLogin) {
       console.error(
@@ -59,16 +80,6 @@ export const agentcoreHost: HostDeploy = {
           `reset every turn fails until \`fastagent login ${boxLogin} --deployment agentcore\` (the runtime's log says ` +
           `so). For an agent that must keep answering unattended, set ${boxLogin}'s API key in ${valueFile}.`,
       );
-    }
-    // Long-connection channels are STRUCTURALLY unsupported: the connection is the ingress, and a reclaimed session
-    // has nothing to wake it.
-    if (longConnectionChannels.length > 0) {
-      const msg =
-        `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) cannot run on AgentCore — there is no ` +
-        `resident process to hold the connection, and nothing wakes a reclaimed session. Switch the channel ` +
-        `to webhook mode (its events then ride the forwarder like every other channel).`;
-      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
-      console.error(`[fastagent] warn: ${msg}`);
     }
     // Host capability limit, stated before the image is built rather than left to a line in CloudWatch.
     if (config.sessionControl === true) {
@@ -83,16 +94,6 @@ export const agentcoreHost: HostDeploy = {
     // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A file that is not a valid
     // schedule is the pre-flight's to report.
     const acName = agentcoreName(basename(agentDir));
-    // Every derived AWS name embeds acName; the tightest ceiling is the Lambda function name
-    // (`fastagent-<name>-forwarder` ≤ 64 chars).
-    if (acName.length > 40) {
-      failStartup(
-        new Error(
-          `deploy stopped: the directory name maps to "${acName}" (${acName.length} chars) — AWS resource ` +
-            `names derived from it exceed their limits past 40 chars. Deploy from a shorter directory name.`,
-        ),
-      );
-    }
     const plan = planAgentcoreDeploy({
       name: acName,
       boxLogin,
