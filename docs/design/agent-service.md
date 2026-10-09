@@ -913,6 +913,22 @@ So in step 4 pi-durable is a second harness behind the same port, chosen per age
 default: an agent that uses `extensions/`, MCP or `chat` keeps working, and the port is shaped by a durable harness
 from its first implementation instead of being retrofitted to one later.
 
+**DeepSeek Harness, read.** dsh was read from its source (0.2.1-alpha.2) rather than run. Its npm releases are older
+(0.0.1-rc.1) and incomplete (`@deepseek-ai/dsh-base` depends on a package that is not published), and running it from
+source means installing and building its whole monorepo, the desktop and web apps included. What its code and
+documentation show:
+
+- Its `Agent` has the operations the port needs: `followup()` (this protocol's `queue`), `steer()` and `inject()`; a
+  durable inbox of messages with ids (`inbox.remove()`); and `cancel(cause, { keepInbox: true })`, which stops the
+  running turn and keeps the queue. Turn boundaries are `turn/start` and `turn/end` events in its session log.
+- Embedding it in process means composing its cordis plugin runtime (`dsh-base`, some eighty plugins). Its
+  out-of-process SDK carries only prompt and wait, with no cancel and no steer, too little for the port.
+- It ships an ACP v1 server (`dsh --profile acp`): sessions are created, listed, resumed and closed, prompts run one
+  at a time per session, and `session/cancel` stops the running work. It has no `session/load`, fork or deletion.
+
+So DeepSeek Harness is reached first as an ACP agent (step 5), with what ACP v1 carries, and a native port for it is
+reconsidered once its packages install from npm.
+
 ### 9.2 Layers
 
 ```text
@@ -1066,9 +1082,9 @@ lands (§12):
 | 2 | Upgrade to pi 1.1.0. Done |
 | 3 | Declarations as files: `mcp.json` (#678); `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `mise.toml` |
 | 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it |
-| 5 | ACP compatibility in both directions (§7.9) |
+| 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first agent connected inbound |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
-| Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a harness; more content kinds |
+| Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, once its packages install from npm; more content kinds |
 
 ## 13. Open questions
 
@@ -1181,6 +1197,8 @@ The architecture and deployment:
 - Steering is a harness capability; stopping a run is a signal the port receives (§9.1).
 - pi-durable is a second harness in step 4, behind the same port, which an agent opts into; pi-coding-agent stays the
   default, so `extensions/`, MCP and `chat` keep working. A spike measured it against every port operation (§9.1).
+- DeepSeek Harness is reached through its ACP server first (step 5); a native harness for it waits until its packages
+  install from npm, since embedding it now means building its monorepo and composing its plugin runtime (§9.1).
 - After a failed run, queued runs start as usual, until a durable harness revisits it.
 - `principal` is deferred until permissions are designed; a run records its `source` (§9.5).
 - AgentCore is the main host, because an idle agent costs nothing there. A box is disposable by design: the program
