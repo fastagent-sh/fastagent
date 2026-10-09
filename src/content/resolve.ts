@@ -1,14 +1,16 @@
 /**
- * WHERE each declared content entry is, for THIS instance: the one answer the prompt, the coding tools, skills, authored
- * tools, `info` and `deploy` all read (docs/design/core.md §2). Reads the declaration and the
+ * WHERE each declared content entry is, for THIS instance: the one answer the prompt, the coding tools, skills,
+ * authored tools, `info` and `deploy` all read (docs/design/core.md §2). An entry is at `content/<name>` everywhere;
+ * what is there is this place's: a link to a directory of this machine, a clone fastagent made, or nothing. Reads the
  * disk (git included); never the network, never a write. Making a clone real is `cloneContent`'s, and only a process
  * that runs the agent asks for it.
  */
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { isDeployedWorkspace, resolveContextsDir } from "../paths.ts";
-import { type DeclaredContent, declareContent, nestingError } from "./declare.ts";
+import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { contentEntryPath } from "../paths.ts";
+import { type DeclaredContent, nestingError } from "./declare.ts";
 import { type CloneOutcome, checkoutProblem, refNotice, refreshClone } from "./git.ts";
+import { ensureContentDir } from "./mount.ts";
 
 /** A declared content entry, resolved for this instance. */
 export type ResolvedContent = {
@@ -16,13 +18,17 @@ export type ResolvedContent = {
   name: string;
   /** The agent knows it and does not write it. */
   readonly: boolean;
-  /** Its absolute directory on this instance. */
+  /** What the declaration tells the agent about it. */
+  description?: string;
+  /** `content/<name>` in the agent directory, absolute: where the agent reaches it on every instance. */
   location: string;
+  /** The directory of this machine `location` links to, when it is a link. */
+  linkedTo?: string;
   /** What to tell the user about how it resolved: a checkout off its `ref`, a clone not made yet. */
   notices: string[];
 } & (
   | {
-      /** A directory of this machine, which a host does not have. */
+      /** A directory of each machine that links one. */
       kind: "local";
     }
   | {
@@ -31,82 +37,84 @@ export type ResolvedContent = {
       repo: string;
       ref?: string;
       /**
-       * A clone in the instance's state, brought up to date at each start while it holds nothing of the agent's:
-       * there is no checkout of the repository on this machine to use. False when it is the user's own checkout,
-       * which is never touched.
+       * A clone fastagent makes at `location` and brings up to date at each start while it holds nothing of the
+       * agent's. False when `location` links to the user's own checkout, which is never touched.
        */
       clone: boolean;
     }
 );
 
-/** Where this instance runs: this machine, or a deployed host. */
-export type Place = "local" | "host";
-
-/** Resolve the raw `content` declaration of the agent in `agentDir`. Refuses, naming the entry, what cannot be. */
-export function resolveContent(
-  agentDir: string,
-  declaration: unknown,
-  place: Place = isDeployedWorkspace() ? "host" : "local",
-): ResolvedContent[] {
-  return declareContent(declaration, agentDir)
-    .filter((entry) => !absentFrom(place, entry))
-    .map((entry) => resolveOne(agentDir, entry, place));
+/** Resolve the agent's `declared` content. Refuses, naming the entry, what cannot be. */
+export function resolveContent(agentDir: string, declared: readonly DeclaredContent[]): ResolvedContent[] {
+  return declared.filter((entry) => !isAbsent(agentDir, entry)).map((entry) => resolveOne(agentDir, entry));
 }
 
 /**
- * The content entries declared that this instance does not have, by their type: a `local` one is a directory of the
- * author's machine, so a host has none (agent-model.md §3). Not an error: the declaration says where the data lives.
- * Whoever opens the agent says which they are, since the agent is not told of them.
+ * The declared `local` entries this instance does not have: nothing is at `content/<name>`, because this machine (a
+ * host, a teammate's laptop) has no such directory linked. Not an error: the declaration says the data lives on the
+ * machines that link it. Whoever opens the agent says which they are, since the agent is not told of them.
  */
-export function contentAbsentHere(
-  agentDir: string,
-  declaration: unknown,
-  place: Place = isDeployedWorkspace() ? "host" : "local",
-): Extract<DeclaredContent, { kind: "local" }>[] {
-  return declareContent(declaration, agentDir).filter((entry) => absentFrom(place, entry));
+export function contentAbsentHere(agentDir: string, declared: readonly DeclaredContent[]): DeclaredContent[] {
+  return declared.filter((entry) => isAbsent(agentDir, entry));
 }
 
-function absentFrom(place: Place, entry: DeclaredContent): entry is Extract<DeclaredContent, { kind: "local" }> {
-  return place === "host" && entry.kind === "local";
+function isAbsent(agentDir: string, entry: DeclaredContent): boolean {
+  return entry.kind === "local" && lstatOrMissing(contentEntryPath(agentDir, entry.name)) === undefined;
 }
 
-function resolveOne(agentDir: string, entry: DeclaredContent, place: Place): ResolvedContent {
-  const { name, readonly } = entry;
-  if (entry.kind === "github") {
-    const { repo, ref } = entry;
-    // A host has no checkout of the user's: the `local` a declaration names is a path on the author's machine.
-    const checkout = place === "host" ? undefined : entry.checkout;
-    const github = { kind: "github" as const, repo, ...(ref !== undefined ? { ref } : {}) };
-    // The user's own checkout, used as it is: never fetched, never moved to `ref`, only said to be off it.
-    const problem = checkout === undefined ? undefined : checkoutProblem(checkout, repo);
-    if (checkout !== undefined && problem === undefined) {
-      refuseNesting(agentDir, checkout, name);
-      const offRef = ref === undefined ? undefined : refNotice(checkout, ref);
-      return { name, readonly, location: checkout, notices: offRef ? [offRef] : [], ...github, clone: false };
-    }
-    // No checkout to use, so the instance clones it, into its own storage under the entry's name.
-    const location = join(resolveContextsDir(agentDir), name);
-    const notices = [
-      ...(problem ? [`${checkout} ${problem}, so github ${repo} is cloned instead`] : []),
-      ...(existsSync(location) ? [] : ["not cloned yet: it is cloned when the agent starts"]),
-    ];
-    return { name, readonly, location, notices, ...github, clone: true };
+function resolveOne(agentDir: string, entry: DeclaredContent): ResolvedContent {
+  const { name, readonly, description } = entry;
+  const location = contentEntryPath(agentDir, name);
+  const base = { name, readonly, ...(description !== undefined ? { description } : {}), location };
+  const found = lstatOrMissing(location);
+  if (found?.isSymbolicLink()) {
+    const linkedTo = linkTarget(location, name);
+    const notices = checkLinkTarget(agentDir, entry, linkedTo, `content/${name} links to ${linkedTo}, which`);
+    if (entry.kind === "local") return { ...base, linkedTo, notices, kind: "local" };
+    return { ...base, linkedTo, notices, ...github(entry), clone: false };
   }
-  const { path } = entry;
-  const stat = statOrMissing(path);
-  if (!stat) throw new Error(`content "${name}": ${path} does not exist`);
-  if (!stat.isDirectory()) throw new Error(`content "${name}": ${path} is not a directory`);
-  refuseNesting(agentDir, path, name);
-  return { name, readonly, location: path, notices: [], kind: entry.kind };
+  if (found && !found.isDirectory()) throw new Error(`content "${name}": ${location} is not a directory`);
+  // A directory this place put there itself: for a github entry, fastagent's clone.
+  if (entry.kind === "local") return { ...base, notices: [], kind: "local" };
+  const notices = found ? [] : ["not cloned yet: it is cloned when the agent starts"];
+  return { ...base, notices, ...github(entry), clone: true };
+}
+
+function github(entry: Extract<DeclaredContent, { kind: "github" }>) {
+  return { kind: "github" as const, repo: entry.repo, ...(entry.ref !== undefined ? { ref: entry.ref } : {}) };
+}
+
+/** Where the link `location` points, resolved; a link to nothing is refused with what it names. */
+function linkTarget(location: string, name: string): string {
+  try {
+    return realpathSync(location);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    throw new Error(
+      `content "${name}": content/${name} links to ${resolve(dirname(location), readlinkSync(location))}, which does ` +
+        `not exist — link it again, or remove the link`,
+    );
+  }
 }
 
 /**
- * The declaration was checked as written; a symlink can still put one inside the other, so ask again of the real
- * paths — including for an agent directory `init` is about to create, which a symlinked ancestor still places.
+ * Whether `content/<name>` can link to `target` for `entry`: a directory of this machine, apart from the agent
+ * directory, and for a github entry the root of a checkout of its repository. Returns what to tell the user (a
+ * checkout off its `ref`); refuses, naming the entry, what cannot be. `what` says `target` in the refusal.
  */
-function refuseNesting(agentDir: string, location: string, name: string): void {
-  const nested = nestingError(realPathOf(agentDir), realpathSync(location), name);
+export function checkLinkTarget(agentDir: string, entry: DeclaredContent, target: string, what = target): string[] {
+  const stat = statOrMissing(target);
+  if (!stat) throw new Error(`content "${entry.name}": ${what} does not exist`);
+  if (!stat.isDirectory()) throw new Error(`content "${entry.name}": ${what} is not a directory`);
+  // The declaration was checked as written; a symlink can still put one inside the other, so ask of the real paths —
+  // including for an agent directory `init` is about to create, which a symlinked ancestor still places.
+  const nested = nestingError(realPathOf(agentDir), realpathSync(target), entry.name);
   if (nested) throw new Error(nested);
+  if (entry.kind !== "github") return [];
+  const problem = checkoutProblem(target, entry.repo);
+  if (problem) throw new Error(`content "${entry.name}": ${what} ${problem}`);
+  const offRef = entry.ref === undefined ? undefined : refNotice(target, entry.ref);
+  return offRef ? [offRef] : [];
 }
 
 /**
@@ -115,7 +123,8 @@ function refuseNesting(agentDir: string, location: string, name: string): void {
  * with the reason. Only a process that runs the agent calls this. The user's own checkout is never cloned over.
  */
 export async function cloneContent(entry: Extract<ResolvedContent, { kind: "github" }>): Promise<CloneOutcome> {
-  if (!entry.clone) throw new Error(`content "${entry.name}" is the checkout at ${entry.location}, not a clone`);
+  if (!entry.clone) throw new Error(`content "${entry.name}" links to the checkout ${entry.linkedTo}, not a clone`);
+  ensureContentDir(dirname(entry.location));
   return refreshClone(entry.repo, entry.ref, entry.location).catch((error: unknown) => {
     throw new Error(`content "${entry.name}": ${(error as Error).message}`);
   });
@@ -134,6 +143,15 @@ function realPathOf(path: string): string {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(current) === current) throw error;
       below.push(basename(current));
     }
+  }
+}
+
+function lstatOrMissing(path: string) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
 

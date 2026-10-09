@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
 import { applyCarriedEnv } from "../../deploy/secrets.ts";
 import {
   applyReleaseEnv,
@@ -12,7 +13,7 @@ import {
 } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
-  resolveContextsDir,
+  CONTENT_DIRNAME,
   resolveSecretsDir,
   isAgentcoreRuntime,
   isUnderDir,
@@ -124,7 +125,6 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
-  process.env.FASTAGENT_CONTEXTS_DIR ||= join(root, ".contexts");
   // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).
@@ -192,10 +192,13 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  // Only when something is cloned: a clone holds what the agent changed and has not pushed.
-  if (content.some((c) => c.kind === "github" && c.clone) && isUnderDir(resolveContextsDir(agentDir), agentDir)) {
+  // Only when something is cloned: a clone holds what the agent changed and has not pushed. A deployment links
+  // content/ into its storage (workspace.ts), so this speaks to a `start` someone set up by hand.
+  const contentDir = join(agentDir, CONTENT_DIRNAME);
+  const clones = content.some((c) => c.kind === "github" && c.clone);
+  if (clones && existsSync(contentDir) && isUnderDir(realpathSync(contentDir), realpathSync(agentDir))) {
     log.info(
-      "[fastagent] note: github content clones live under the definition; use FASTAGENT_CONTEXTS_DIR on persistent storage for deployment.",
+      "[fastagent] note: github content clones live under the definition; link content/ to persistent storage for deployment.",
     );
   }
   const traced = logAgentLoop(agent);

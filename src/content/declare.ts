@@ -1,35 +1,41 @@
 /**
- * WHAT AN AUTHOR DECLARES an agent works on or knows (`content` in fastagent.config.ts), read and refused in ONE
- * place: the config loader, `fastagent content` and the resolver all go through it. Pure: whether a location exists is
- * resolve.ts's question. docs/design/agent-model.md §3 is the rule.
+ * WHAT AN AUTHOR DECLARES an agent works on or knows: the `content` map of `context.json`, read and refused in ONE
+ * place (file.ts reads the file through it). Pure: what is at `content/<name>` on this machine is resolve.ts's
+ * question. docs/design/agent-model.md §3 is the rule.
  */
-import { basename, isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 import { isUnderDir } from "../paths.ts";
 
-/** One entry of `content`, as an author writes it. */
-export type ContentDeclaration =
-  | { local: string; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+/** One content entry as `context.json` holds it, under its name. */
+export interface ContentEntry {
+  /** A repository, `owner/repo`. Without it the entry is a directory each machine links at `content/<name>`. */
+  github?: string;
+  /** With `github`: the branch, tag or commit to clone. */
+  ref?: string;
+  /** The agent knows it and does not write it. */
+  readonly?: boolean;
+  /** One sentence for the agent: what this is, and how to treat it. */
+  description?: string;
+}
 
-/** A declaration read: its name settled and its paths absolute. */
-export type DeclaredContent = { name: string; readonly: boolean } & (
-  | { kind: "local"; path: string }
-  | { kind: "github"; repo: string; ref?: string; checkout?: string }
+/** A declared entry, read. */
+export type DeclaredContent = { name: string; readonly: boolean; description?: string } & (
+  | { kind: "local" }
+  | { kind: "github"; repo: string; ref?: string }
 );
 
-/** An entry's name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
+/**
+ * The keys an entry carries, in the order they are written: where it comes from, then how it is treated. One list, so
+ * a key the reader accepts is one the writer keeps.
+ */
+const ENTRY_KEYS = ["github", "ref", "readonly", "description"] as const;
+
+/** A name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
 const NAME = /^[A-Za-z0-9_-]+$/;
 
 /** Whether `name` can name a content entry. */
 export function isContentName(name: string): boolean {
   return NAME.test(name);
-}
-
-/** The name an entry gets when it is not given one: its repository's, or its directory's. */
-export function defaultContentName(declaration: ContentDeclaration): string {
-  return "github" in declaration
-    ? declaration.github.slice(declaration.github.indexOf("/") + 1)
-    : basename(declaration.local);
 }
 
 const GITHUB_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -39,109 +45,82 @@ export function isGithubRepo(repo: string): boolean {
   return GITHUB_REPO.test(repo);
 }
 
-/**
- * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
- * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
- */
-export const CONTENT_KEYS = ["github", "local", "ref", "readonly", "name"] as const;
+/** `entry` with its keys in {@link ENTRY_KEYS} order: the form written. */
+export function canonicalEntry(entry: ContentEntry): ContentEntry {
+  const out: Record<string, unknown> = {};
+  for (const key of ENTRY_KEYS) if (entry[key] !== undefined) out[key] = entry[key];
+  return out as ContentEntry;
+}
 
-/**
- * Read `content` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
- * absolute or relative to the agent directory, and resolved here, so every reader sees the same location.
- */
-export function declareContent(raw: unknown, agentDir: string): DeclaredContent[] {
+/** Read the `content` map (undefined is none). Every refusal names the entry; nothing is defaulted silently. */
+export function declareContent(raw: unknown): DeclaredContent[] {
   if (raw === undefined) return [];
-  if (!Array.isArray(raw)) throw new Error(`"content" must be an array`);
-  const declared = raw.map((entry, i) => declareOne(entry, `content[${i}]`, agentDir));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`"content" must be an object of entries by name`);
+  }
   const seen = new Map<string, string>();
-  for (const entry of declared) {
-    const key = entry.name.toLowerCase();
+  return Object.entries(raw).map(([name, entry]) => {
+    if (!NAME.test(name)) {
+      throw new Error(`content "${name}": a name is one path segment of letters, digits, "-" and "_"`);
+    }
+    const key = name.toLowerCase();
     const taken = seen.get(key);
     // Equal ignoring case is the same name: it becomes a directory, and some filesystems do not tell them apart.
     if (taken !== undefined) {
-      throw new Error(`two content entries are named "${taken}" and "${entry.name}" — names must differ ignoring case`);
+      throw new Error(`two content entries are named "${taken}" and "${name}" — names must differ ignoring case`);
     }
-    seen.set(key, entry.name);
-  }
-  return declared;
+    seen.set(key, name);
+    return declareOne(name, entry);
+  });
 }
 
-function declareOne(entry: unknown, at: string, agentDir: string): DeclaredContent {
+function declareOne(name: string, entry: unknown): DeclaredContent {
+  const at = `content "${name}"`;
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${at} must be an object`);
   const e = entry as Record<string, unknown>;
-  if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of Object.keys(e)) {
-    if (!(CONTENT_KEYS as readonly string[]).includes(key)) {
-      throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTENT_KEYS.join(", ")})`);
+    if (!(ENTRY_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${at}: unknown key "${key}" (valid keys: ${ENTRY_KEYS.join(", ")})`);
     }
   }
-  for (const key of ["local", "github", "name", "ref"] as const) {
+  for (const key of ["github", "ref", "description"] as const) {
     if (e[key] !== undefined && (typeof e[key] !== "string" || e[key] === "")) {
       throw new Error(`${at}: "${key}" must be a non-empty string`);
     }
   }
-  for (const key of ["readonly"] as const) {
-    if (e[key] !== undefined && typeof e[key] !== "boolean") throw new Error(`${at}: "${key}" must be a boolean`);
+  if (e.readonly !== undefined && typeof e.readonly !== "boolean")
+    throw new Error(`${at}: "readonly" must be a boolean`);
+  const description = e.description as string | undefined;
+  const declared = { name, readonly: e.readonly === true, ...(description !== undefined ? { description } : {}) };
+  if (e.github === undefined) {
+    if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a github entry`);
+    return { ...declared, kind: "local" };
   }
-  const readonly = e.readonly === true;
-  const local = e.local === undefined ? undefined : resolve(agentDir, e.local as string);
-  let declared: DeclaredContent;
-  let defaultName: string;
-  if (e.github !== undefined) {
-    const repo = e.github as string;
-    if (!isGithubRepo(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
-    // git reads a leading "-" as an option, and no branch, tag or commit name has one.
-    if (e.ref !== undefined && (e.ref as string).startsWith("-")) {
-      throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${e.ref}"`);
-    }
-    declared = {
-      name: "",
-      readonly,
-      kind: "github",
-      repo,
-      ...(e.ref !== undefined ? { ref: e.ref as string } : {}),
-      ...(local !== undefined ? { checkout: local } : {}),
-    };
-    defaultName = defaultContentName({ github: repo });
-  } else if (local !== undefined) {
-    if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to github content`);
-    declared = { name: "", readonly, kind: "local", path: local };
-    defaultName = defaultContentName({ local });
-  } else {
-    throw new Error(`${at}: declare where it comes from — "local" (a directory) or "github" ("owner/repo")`);
-  }
-  const name = (e.name as string | undefined) ?? defaultName;
-  if (!NAME.test(name)) {
-    throw new Error(
-      e.name === undefined
-        ? `${at}: its default name "${name}" is not one path segment of letters, digits, "-" and "_" — give it a "name"`
-        : `${at}: "name" must be one path segment of letters, digits, "-" and "_", got "${name}"`,
-    );
-  }
-  declared.name = name;
-  const location = declared.kind === "github" ? declared.checkout : declared.path;
-  const nested = location === undefined ? undefined : nestingError(agentDir, location, name);
-  if (nested) throw new Error(nested);
-  return declared;
+  const repo = e.github as string;
+  if (!isGithubRepo(repo)) throw new Error(`${at}: "github" must be "owner/repo", got "${repo}"`);
+  const ref = e.ref as string | undefined;
+  // git reads a leading "-" as an option, and no branch, tag or commit name has one.
+  if (ref?.startsWith("-")) throw new Error(`${at}: "ref" must name a branch, tag or commit, got "${ref}"`);
+  return { ...declared, kind: "github", repo, ...(ref !== undefined ? { ref } : {}) };
 }
 
 /**
- * Content and the agent directory are kept apart (agent-model.md §2): a definition is released, writable content
- * is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks it again of the real
- * paths.
+ * A directory `content/<name>` links to and the agent directory are kept apart (agent-model.md §2): a definition is
+ * released, writable content is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks
+ * it of the real paths.
  */
 export function nestingError(agentDir: string, location: string, name: string): string | undefined {
   if (!isAbsolute(location)) throw new Error(`nestingError: "${location}" is not absolute`);
   if (isUnderDir(agentDir, location)) {
     return (
       `content "${name}" (${location}) contains the agent directory ${agentDir} — an agent lives in a directory of ` +
-      `its own: move it out of ${location}, or declare other content`
+      `its own: move it out of ${location}, or link other content`
     );
   }
   if (isUnderDir(location, agentDir)) {
     return (
       `content "${name}" (${location}) is inside the agent directory ${agentDir} — content is a directory of its ` +
-      `own: move it out, or declare other content`
+      `own: move it out, or link other content`
     );
   }
   return undefined;

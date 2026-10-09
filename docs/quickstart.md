@@ -30,7 +30,7 @@ my-agent/
 ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
 ├── extensions/web-access.ts       # web search and page fetching (@fastagent-sh/pi-web-access)
-├── fastagent.config.ts            # model, content, http
+├── fastagent.config.ts            # model, http
 ├── package.json
 ├── .secrets/.env.example          # secrets live here, never committed
 └── .gitignore

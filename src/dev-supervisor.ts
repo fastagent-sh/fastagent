@@ -7,6 +7,7 @@ import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import {
   AGENT_CONFIG_FILE,
+  CONTEXT_FILE,
   AGENT_MODEL_CATALOG_FILE,
   AGENT_MODELS_FILE,
   resolveStateRoot,
@@ -23,7 +24,7 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
  *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
 const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, .secrets/.env`;
 
 /**
  * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
@@ -44,7 +45,7 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     const rel = relative(root, path);
     // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker (a restart is
     // their only re-read).
-    if (rel === AGENT_CONFIG_FILE) return false;
+    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE) return false;
     if (rel === "package.json") return false;
     // Watched for a worker that is down ({@link revivesOnly}).
     if (revivesOnly(root, path)) return false;

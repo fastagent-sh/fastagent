@@ -7,6 +7,7 @@ import { resolveAgentTools } from "../../harnesses/pi/create.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { turnContext } from "../../harnesses/pi/tool-context.ts";
 import { resolveContent } from "../../content/resolve.ts";
+import { loadContent } from "../../content/file.ts";
 import { agentDirOrExit, failStartup, failUsage, gateSecretsOrExit } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
@@ -18,7 +19,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The same resolution a serve makes, so a tool run here sees the content it would see in a turn.
   const content = await Promise.resolve()
-    .then(() => resolveContent(agentDir, config.content))
+    .then(() => resolveContent(agentDir, loadContent(agentDir)))
     .catch(failStartup);
   // The same tool set dev/start mount (all coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served.

@@ -38,7 +38,8 @@ describe("deploy/container: shared Docker context", () => {
       ".secrets/auth.json",
       ".secrets/nested/token",
       ".state/sessions/session.jsonl",
-      ".contexts/app/README.md",
+      "content/app/README.md",
+      "content/notes",
       ".state/channels/telegram.json",
     ];
 

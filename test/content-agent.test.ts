@@ -3,7 +3,7 @@
  * reader of the declaration — the opener, `info`, `content list` — reads the same resolution.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,11 +14,18 @@ import { collect, createPiAgentFromDefinition, createPiAgentFromDir, defineTool 
 import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
+import { declareContent } from "../src/content/declare.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 
 async function skill(dir: string, name: string, description: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nBody.\n`);
+}
+
+/** Link `content/<name>` of the agent in `agentDir` to `target`, as `content add` does. */
+async function linkAt(agentDir: string, name: string, target: string): Promise<void> {
+  await mkdir(join(agentDir, "content"), { recursive: true });
+  await symlink(target, join(agentDir, "content", name));
 }
 
 /** An agent beside two projects: `app` it works on, `handbook` it knows. */
@@ -43,7 +50,13 @@ async function layout() {
 describe("an agent with content", () => {
   it("is told where it is and what it works on, reads each entry's AGENTS.md and skills, and its tools see them", async () => {
     const { agentDir, app, handbook } = await layout();
-    const content = resolveContent(agentDir, [{ local: app }, { local: handbook, readonly: true }], "local");
+    await linkAt(agentDir, "app", app);
+    await linkAt(agentDir, "handbook", handbook);
+    const content = resolveContent(
+      agentDir,
+      declareContent({ app: {}, handbook: { readonly: true, description: "The team's style rules." } }),
+    );
+    const at = (name: string) => join(agentDir, "content", name);
     const { faux } = makeFaux();
     let prompt = "";
     let seen: readonly ResolvedContent[] | undefined;
@@ -75,8 +88,10 @@ describe("an agent with content", () => {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
     expect(prompt).toContain(`Your working directory, ${agentDir}, is your own directory`);
-    expect(prompt).toContain(`You work on:\n- app: ${app} (a directory on this machine)`);
-    expect(prompt).toContain(`You know, and do not write:\n- handbook: ${handbook} (a directory on this machine)`);
+    expect(prompt).toContain(`You work on:\n- app: ${at("app")} (a directory on this machine)`);
+    expect(prompt).toContain(
+      `You know, and do not write:\n- handbook: ${at("handbook")} (a directory on this machine) The team's style rules.`,
+    );
     // The agent's own AGENTS.md is project context first, then each content entry's root one, in declaration order.
     expect(prompt.indexOf("OWN-AGENTS")).toBeGreaterThan(-1);
     expect(prompt.indexOf("OWN-AGENTS")).toBeLessThan(prompt.indexOf("APP-AGENTS"));
@@ -93,10 +108,13 @@ describe("an agent with content", () => {
     // holding one name; a project skill named with a slash is left out and said.
     const definition = await loadAgentDefinition(agentDir, { content });
     expect(definition.collisions).toEqual([
-      expect.objectContaining({ name: "app/deploy", loserPath: join(app, ".agents", "skills", "deploy", "SKILL.md") }),
+      expect.objectContaining({
+        name: "app/deploy",
+        loserPath: join(at("app"), ".agents", "skills", "deploy", "SKILL.md"),
+      }),
     ]);
     expect(definition.ignored).toContainEqual({
-      path: join(app, ".agents", "skills", "slashed", "SKILL.md"),
+      path: join(at("app"), ".agents", "skills", "slashed", "SKILL.md"),
       reason: `not loaded: a skill's name may not contain "/" ("a/b")`,
     });
   });
@@ -111,7 +129,8 @@ describe("an agent with content", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const content = resolveContent(agentDir, [{ local: handbook, readonly: true }], "local");
+    await linkAt(agentDir, "handbook", handbook);
+    const content = resolveContent(agentDir, declareContent({ handbook: { readonly: true } }));
     const { agent } = await createPiAgentFromDefinition(agentDir, {
       model: "faux/faux-1",
       providers: [faux.provider],
@@ -155,42 +174,55 @@ function cli(args: string[], cwd: string): Promise<{ code: number | null; stdout
 
 describe("one resolution", () => {
   it("the opener, `info --json` and `content list --json` change together when the declaration does", async () => {
-    // A second derivation of where the content are would disagree with this one sooner or later; here every
+    // A second derivation of where the content is would disagree with this one sooner or later; here every
     // reader is asked after each change of the declaration.
     const { root, agentDir, app, handbook } = await layout();
-    await writeFile(
-      join(agentDir, "fastagent.config.ts"),
-      `export default {\n  model: "openai-codex/gpt-5.5",\n  content: [\n    { local: "../app" },\n  ],\n};\n`,
-    );
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  model: "openai-codex/gpt-5.5",\n};\n`);
+    await writeFile(join(agentDir, "context.json"), `{\n  "content": {\n    "app": {}\n  }\n}\n`);
+    await linkAt(agentDir, "app", "../../app");
     const readers = async () => {
       const opened = await createPiAgentFromDir(agentDir);
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
       return [opened.content, info.content, list];
     };
-    const first = [{ name: "app", kind: "local", readonly: false, location: app, notices: [] }];
+    const entry = (name: string, linkedTo: string, readonly = false) => ({
+      name,
+      kind: "local",
+      readonly,
+      location: join(agentDir, "content", name),
+      linkedTo,
+      notices: [],
+    });
+    const first = [entry("app", app)];
     expect(await readers()).toEqual([first, first, first]);
 
     const added = await cli(["content", "add", handbook, agentDir, "--readonly"], root);
     expect(added.code, added.stderr).toBe(0);
     expect(added.stderr).toContain(`knows handbook  ${handbook} (local, this machine only)`);
-    const second = [...first, { name: "handbook", kind: "local", readonly: true, location: handbook, notices: [] }];
+    const second = [...first, entry("handbook", handbook, true)];
     expect(await readers()).toEqual([second, second, second]);
-    // The edit is the literal list, absolute, as `init` writes it; the hand-written relative path stays as written.
-    expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
-      `    { local: "../app" },\n    { local: ${JSON.stringify(handbook)}, readonly: true },\n`,
-    );
+    // The declaration names no path of this machine: the link does, absolute, as `init` makes it; the hand-made
+    // relative link stays as it was.
+    expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({
+      content: { app: {}, handbook: { readonly: true } },
+    });
 
     const removed = await cli(["content", "remove", "APP", agentDir], root);
     expect(removed.code, removed.stderr).toBe(0);
-    const third = [{ name: "handbook", kind: "local", readonly: true, location: handbook, notices: [] }];
+    const third = [entry("handbook", handbook, true)];
     expect(await readers()).toEqual([third, third, third]);
+    // The link goes with the entry; the directory it linked to stays.
+    await expect(lstat(join(agentDir, "content", "app"))).rejects.toThrow(/ENOENT/);
+    expect((await lstat(app)).isDirectory()).toBe(true);
   });
 
   it("`content add` asks for a name it cannot take, and refuses content around the agent", async () => {
     const { root, agentDir, app } = await layout();
-    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {\n  content: [{ local: "../app" }],\n};\n`);
-    const before = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
+    await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
+    await writeFile(join(agentDir, "context.json"), `{ "content": { "app": {} } }`);
+    await linkAt(agentDir, "app", app);
+    const before = await readFile(join(agentDir, "context.json"), "utf8");
     const other = join(root, "elsewhere", "app");
     await mkdir(other, { recursive: true });
     const taken = await cli(["content", "add", other, agentDir], root);
@@ -200,7 +232,7 @@ describe("one resolution", () => {
     ]);
     const around = await cli(["content", "add", root, agentDir], root);
     expect([around.code, around.stderr]).toEqual([1, expect.stringMatching(/contains the agent directory/)]);
-    expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toBe(before);
+    expect(await readFile(join(agentDir, "context.json"), "utf8")).toBe(before);
     const missing = await cli(["content", "remove", "nope", agentDir], root);
     expect([missing.code, missing.stderr]).toEqual([
       2,
@@ -210,9 +242,7 @@ describe("one resolution", () => {
     const named = await cli(["content", "add", other, agentDir, "--name", "app2"], root);
     expect(named.code, named.stderr).toBe(0);
     expect(named.stderr).toContain(`works on app2  ${other} (local, this machine only)`);
-    expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
-      `    { local: ${JSON.stringify(other)}, name: "app2" },\n`,
-    );
-    expect(app).toBeDefined();
+    expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8")).content).toEqual({ app: {}, app2: {} });
+    expect(await realpath(join(agentDir, "content", "app2"))).toBe(other);
   });
 });

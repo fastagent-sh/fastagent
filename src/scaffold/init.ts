@@ -129,7 +129,7 @@ const git = gitFor("no repository was created");
 /**
  * Make the new agent a git repository whose first commit is what creating it wrote (`createAgent`, which `init` and a
  * client both run). An agent changes itself, and version control is how its author goes back to a version that worked;
- * the scaffolded `.gitignore` already keeps its instance (`.state`, `.secrets`, `.contexts`) out. Returns a sentence to
+ * the scaffolded `.gitignore` already keeps its instance (`.state`, `.secrets`, `content`) out. Returns a sentence to
  * show: when there is no repository of its own or no first commit, it says which and why. The catches are this
  * step's boundary: the agent is created either way, so a git that is missing or refuses becomes that sentence rather
  * than a failed create.

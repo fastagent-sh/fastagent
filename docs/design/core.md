@@ -42,7 +42,8 @@ One agent shape, one marker:
 ├── APPEND_SYSTEM.md        # optional: standing instructions added to it
 ├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
 ├── skills/  prompts/  tools/  channels/  schedules/
-├── fastagent.config.ts     # THE marker, and the agent's declared content
+├── fastagent.config.ts     # THE marker
+├── context.json            # the agent's declared content: entries by name, no machine's path
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
 │                           # under it as environment and does not travel
@@ -51,42 +52,43 @@ One agent shape, one marker:
 ├── .gitignore              # scaffolded once by init, yours after
 ├── .secrets/               # the local instance's .env + auth.json; only .env.example + .gitignore travel
 ├── .state/                 # the local instance's mutable state: sessions, channel state, schedule state
-└── .contexts/              # the local instance's clones of its github content, one per entry name
+└── content/                # where this machine reaches each entry: a link, or a clone; its own .gitignore
 ```
 
 **The agent directory is the agent's working directory**, its coding tools' root, the key its session records
 are kept under, pi's project scope, and deploy's build context. What it works on is not derived from where it sits:
-it is declared as its **content** ([agent model](agent-model.md) §3):
+it is declared as its **content** ([agent model](agent-model.md) §3), in `context.json`:
 
-```ts
-content: [{ github: "acme/app", local: "/Users/me/code/app" }, { local: "../handbook", readonly: true }],
+```json
+{ "content": { "app": { "github": "acme/app" }, "handbook": { "readonly": true } } }
 ```
 
-`src/content/` owns it, harness-neutral. `declare.ts` reads the declaration and refuses in one place: unknown
-keys, a name that is not one path segment or collides ignoring case, and a location that contains the agent
-directory or sits inside it. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`:
-name, kind, readonly, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
-process start; the content at those locations is re-read per turn. It reads the disk and git, never the network,
-and writes nothing. The prompt's `content` section, `ctx.content`, `info`, `fastagent content list` and the opener
-all read that one resolution.
+`src/content/` owns it, harness-neutral. `declare.ts` reads the entries and refuses in one place: unknown keys, a
+name that is not one path segment or collides ignoring case; `file.ts` reads `context.json` through it, naming the
+file in every refusal. The declaration holds no path: an entry is at `content/<name>`, and what is there is this
+machine's (`mount.ts` makes `content/` with its own `.gitignore`, and the links). `resolve.ts` answers where each
+entry is for this instance (`ResolvedContent`: name, kind, readonly, description, location, the directory a link
+points to, notices, and for a `github` one its repo, ref and whether it is a clone), once per process start; the
+content at those locations is re-read per turn. It reads the disk and git, never the network, and writes nothing.
+The prompt's `content` section, `ctx.content`, `info`, `fastagent content list` and the opener all read that one
+resolution.
 
-A `github` entry whose `local` is the root of a checkout of that repository is that checkout, used as it is: never
-fetched, never moved to its `ref`, only said to be off it. Any other `github` entry is a clone in
-`.contexts/<name>` (`FASTAGENT_CONTEXTS_DIR`), which `cloneContent` makes or brings up to date each time a process
-that runs the agent opens it (the opener, before it resolves). The first clone is shallow, at `ref`, built beside and renamed into
-place (another process's clone that got there first stands). After that the clone is only ever updated IN PLACE, by
+A `github` entry whose `content/<name>` links to the root of a checkout of that repository is that checkout, used as
+it is: never fetched, never moved to its `ref`, only said to be off it; a link to anything else is refused. A `github`
+entry with nothing linked is a clone at `content/<name>`, which `cloneContent` makes or brings up to date each time a
+process that runs the agent opens it (the opener, before it resolves). The first clone is shallow, at `ref`, built
+beside and renamed into place (another process's clone that got there first stands). After that the clone is only ever updated IN PLACE, by
 git's own rules (`git.ts`): `fetch`, then `merge --ff-only` on the branch it is on, or `checkout --detach` for a tag
 or commit. git refuses whatever would overwrite the agent's work, and that refusal, a failed fetch, a clone on
 another branch than declared, or commits no branch or tag holds keep it as it is, with the reason as a startup
 warning. No directory is ever replaced or deleted, so a running agent's writes, branches and stashes are never at
 stake. A clone of another repository under the entry's name stops the start, named. `info`, `content list` and `fastagent tool` resolve without
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
-directory); `config-text.ts` rewrites the literal list `init --content` and `fastagent content add/remove` edit;
-`writeContent` imports a candidate file beside the config and replaces the config only when the import declares
-exactly the intended list. On a host (`place: "host"`) a `github` entry is always a clone, its author's `local`
-not looked for. A `local` entry is a directory of the author's machine, so a host does not have it
-(`contentAbsentHere`): it is left out of the resolution, the agent is not told of it, and the opener says so at start;
-the deploy preflight says so too, a warning for one the agent works on (agent model §3).
+directory); `authoring.ts` (pi) edits `context.json` under its lock and makes or removes the link with it, so a
+refusal leaves neither. A deployed host links each release's `content/` to its storage's (`workspace.ts`), so a `github` entry is
+a clone there that outlives releases. A `local` entry with nothing linked (a host, another machine) is left out of
+the resolution (`contentAbsentHere`): the agent is not told of it, and the opener says so at start; the deploy
+preflight says so too, a warning for one the agent works on (agent model §3).
 Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
 no credential of its own, so the token reaches git, and the agent's push, without being stored.
 
@@ -100,11 +102,12 @@ for, and no environment variable selects an agent.
   enough that scanning for them would read half the world's repositories as agents. `export default {}` is a
   signature — the same job `package.json`, `Cargo.toml` and `pyproject.toml` do.
 - **Content and the agent directory are kept apart.** A definition is released to every instance; writable
-  content must keep what an instance wrote. One directory cannot be both, so nesting is refused at load, on the
-  declared paths and again on the real ones.
+  content must keep what an instance wrote. One directory cannot be both, so a link to a directory around the agent
+  or inside it is refused, asked of the real paths. `content/` itself is only where this machine reaches each entry:
+  git and the image leave it out.
 
 `init <dir>` creates the agent in `dir` itself, which must be new or empty and not inside another agent, and
-declares each `--content` (checked before anything is written) through the same `writeContent`.
+declares each `--content` (checked before anything is written) into `context.json`, with its link.
 
 The two machinery dirs map onto deploy lifecycles: `.secrets/` values travel through the host's secret
 store, `.state/` through a volume (`FASTAGENT_SECRETS_DIR`/`FASTAGENT_STATE_DIR` point both at it in a
@@ -116,7 +119,7 @@ changes itself, and version control is how its author goes back to a version tha
 inside a repository that tracks it (a second would hide the agent's files from the first; one that ignores the
 directory tracks nothing, so the agent gets its own) or git is missing, and a failed first commit (no identity configured) keeps the repository; each case is said (`init` prints it, `createAgent` returns it). Nothing
 commits for the agent afterwards: when to commit is the author's (agent model §8). `init` also scaffolds two ignore
-files: the agent's own, which keeps the instance (`.state`, `.secrets`, `.contexts`) out, and `.secrets/.gitignore`
+files: the agent's own, which keeps the instance (`.state`, `.secrets`, `content`) out, and `.secrets/.gitignore`
 (`*` minus the template). No command reads, verifies or rewrites an ignore file. The exception: **the directory fastagent writes secrets into carries its own
 `.gitignore`**, so `add <channel>`, which mints an unrecoverable app secret, writes that file (`wx`,
 never over an existing one) when the *default* `<agentDir>/.secrets` has none. The risk is not
@@ -173,7 +176,7 @@ deleted when its stages landed:
 | When content is resolved | Once per process start; content re-read per turn | Per turn: network and git on every turn, for declarations that only change with a restart anyway |
 | Whether a local directory reaches a host | No: content reaches a host only by a type whose home the host reaches (a repository today); the agent directory reaches it as the definition, replaced by each release | A copy baked into the image (`copy: true`, removed before it was released): each instance's copy became data of its own, which nothing brought back together; it tied the data to the release cadence and image size, put local data in the image registry, and needed a staged build directory and a different build context on every host |
 | How FastAgent's sections enter the prompt | Named sections on `before_agent_start` | `APPEND_SYSTEM.md`'s slot: the author's file and ours would share one addendum, and `SYSTEM.md` users would need ours re-added by hand |
-| How `fastagent content` edits a TypeScript file | Rewrite the literal block, re-import, compare | A TypeScript parser: `typescript` is a dev dependency only, and the round-trip check gives the same safety for the one shape `init` writes |
+| Where content is declared | `context.json`, entries by name with no machine's path; each machine links `content/<name>` | The TypeScript config: a client could only edit it by rewriting a literal block and re-importing it, and its `local` paths committed one machine's layout to the definition |
 | Where an agent's work goes, apart from its definition | Content it works on, as the prompt directs; the working directory stays the agent's own directory | A content entry declared `workdir` (#716; built in #719, closed). It differs from writable content in where commands start (measured: 180 runs on three models, no difference with `cd <location> && …`) and where a file created without a path lands (directed by the prompt). It would separate pi's one cwd from the agent directory in every reader. Reopen with a measurement of results landing in the definition |
 | Whether a process restarts onto a changed definition by itself | No: code modules and configuration take effect at the author's restart or the next release (agent model §6); `dev` restarts on an edit | A supervisor on every process that checks a changed definition, drains every way a turn starts and restarts: no observed need, a large cost across four hosts. Reopen with a case where an agent must put a code module it wrote into service before the next release |
 

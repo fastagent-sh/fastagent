@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { readdirSync, readlinkSync } from "node:fs";
 import { once } from "node:events";
@@ -128,6 +128,24 @@ describe("deployed storage lifecycle", () => {
     expect(await readdir(definition)).not.toContain("scratch.txt");
     expect(await readFile(join(root, ".state/session.json"), "utf8")).toBe("conversation");
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe("rotated credential");
+  });
+
+  it("links each release's content/ to the storage's, which outlives every release", async () => {
+    const { source, root } = await fixture();
+    const definition = await applyDeploymentRelease(source, root, release("one"));
+    expect(await readlink(join(definition, "content"))).toBe(join("..", "content"));
+    await mkdir(join(definition, "content", "app"));
+    await writeFile(join(definition, "content", "app", "work.md"), "the agent's clone");
+    await writeFile(join(source, "SYSTEM.md"), "release two");
+    await applyDeploymentRelease(source, root, release("two"));
+    expect(await readFile(join(definition, "content", "app", "work.md"), "utf8")).toBe("the agent's clone");
+    expect(await readFile(join(root, "content", "app", "work.md"), "utf8")).toBe("the agent's clone");
+
+    // A release that holds content/ of its own would put the build machine's links and clones where the storage's go.
+    await mkdir(join(source, "content"));
+    await expect(applyDeploymentRelease(source, root, release("three"))).rejects.toThrow(
+      "the release holds content/, which a deploy keeps out of the image — rebuild it",
+    );
   });
 
   it("recovers an interrupted definition update, whichever step it stopped at", async () => {

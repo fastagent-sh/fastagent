@@ -81,6 +81,12 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { codingTools: false };`)).rejects.toThrow(/unknown key "codingTools"/);
     // Channels are files under channels/, never a config entry.
     await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
+    // Content moved to its own file; the refusal says where.
+    for (const key of ["content", "contexts"]) {
+      await expect(load(`export default { ${key}: [] };`)).rejects.toThrow(
+        `"${key}" is not a config key — content is declared in context.json`,
+      );
+    }
   });
 
   it("selfSchedule is not a key: every serve mounts the wake tool", async () => {

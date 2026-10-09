@@ -8,7 +8,7 @@ status: current
 
 - Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`,
   `tools/`, and what its content provides: each entry's `AGENTS.md` and skills.
-- What it works on and knows, its content, is declared in `fastagent.config.ts` as `content`.
+- What it works on and knows, its content, is declared in `context.json`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
@@ -21,7 +21,6 @@ An agent is identified by one filename, `fastagent.config.ts`. (Your own `tools/
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
-  content: [{ github: "acme/app", local: "/Users/me/code/app" }],
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
 } satisfies FastagentConfig;
@@ -34,7 +33,6 @@ Every key is optional. Unknown keys fail at startup.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `content` | `[]` | What the agent works on and knows. See [Content](#content). |
 | `model` | none | Default model spec, `provider/modelId`. With none set, the first-run picker asks and writes the choice here. |
 | `thinkingLevel` | `"medium"` | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Levels a model does not support are clamped. |
 | `tools` | `[]` | Extra programmatic tools appended after the coding tools. Prefer `tools/` files. |
@@ -199,44 +197,55 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
 
 ## Content
 
-An agent's directory is its own: its definition, its working directory, and its local instance's `.state/`,
-`.secrets/` and `.contexts/`. What it works on and knows, its content, is declared, never inferred from where the
-directory sits:
+An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
+`.secrets/`. What it works on and knows, its content, is declared in `context.json` beside the config, never
+inferred from where the directory sits:
 
-```ts
-export default {
-  content: [
-    { local: "/Users/me/notes" },                         // works on, on this machine only
-    { local: "/Users/me/handbook", readonly: true },      // knows, on this machine only
-    { github: "acme/app", local: "/Users/me/code/app" },  // works on: this checkout here, a clone on a host
-    { github: "acme/docs", ref: "main", readonly: true }, // knows: a clone, kept up to date
-  ],
-} satisfies FastagentConfig;
+```json
+{
+  "content": {
+    "notes": {},
+    "handbook": { "readonly": true, "description": "The team's style rules. Follow them." },
+    "app": { "github": "acme/app", "description": "The product. Open pull requests against main." },
+    "docs": { "github": "acme/docs", "ref": "main", "readonly": true }
+  }
+}
 ```
+
+Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case.
 
 | Key | Meaning |
 |---|---|
-| `local` | A directory, absolute or relative to the agent directory. With `github`, the checkout of that repository on this machine |
-| `github` | A repository, `owner/repo` |
+| `github` | A repository, `owner/repo`. Without it, the entry is a directory each machine links (below) |
 | `ref` | With `github`: the branch, tag or full commit to clone. Defaults to the repository's default branch |
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
-| `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's or the repository's name |
+| `description` | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
 
-A `github` entry is one of two things on this machine:
+No path of any machine is declared. On every instance the agent reaches an entry at `content/<name>` in its own
+directory, and what is there is that machine's:
 
-- **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
-  as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
-- **Otherwise, a clone** in `.contexts/<name>`, shallow, at `ref`, made the first time the agent starts (`dev`,
-  `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by git's own
-  rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it is pinned
-  to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an untracked file
-  it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone is on another
-  branch than declared, or when it holds commits no branch or tag does, it is kept as it is and startup warns with
-  the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does not touch stay.
+- **A link to a directory of this machine.** `fastagent content add <dir>` declares the entry and links
+  `content/<name>` to the directory. For a `github` entry the directory is the root of a checkout of that
+  repository, used as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say
+  so. A link to nothing, to a file, or to a checkout of another repository is refused at start, naming it. A
+  teammate, or another machine of yours, links its own: `ln -s ~/code/app content/app`.
+- **A clone**, for a `github` entry with nothing linked: shallow, at `ref`, made in `content/<name>` the first time
+  the agent starts (`dev`, `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by
+  git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it
+  is pinned to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an
+  untracked file it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone
+  is on another branch than declared, or when it holds commits no branch or tag does, it is kept as it is and
+  startup warns with the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does
+  not touch stay.
 
   `info`, `content list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
   with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
   the start and is named, never removed: move it away yourself.
+- **Nothing**, for an entry without `github` on a machine that links no directory (a host, a teammate's laptop):
+  the agent works without it, is not told of it, and the start says so by name.
+
+`content/` carries its own `.gitignore` (`*`), so what a machine keeps there never enters the agent's repository,
+and `deploy` keeps it out of the image.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). When git has none of its
@@ -244,10 +253,10 @@ own, it uses `GITHUB_TOKEN` from the environment, read each time git asks (the c
 reads it, never the token itself), and so does the agent's own `git push` in the clone. git never prompts: a
 missing credential fails the start instead of waiting.
 
-`fastagent init <dir> --content <source>` and `fastagent content add/remove` edit this list
-([CLI](cli.md#fastagent-content)); it can be edited by hand too. Their order means nothing. An entry may not
-contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one. Every
-command refuses such a declaration at load, and one whose directory does not exist.
+`fastagent init <dir> --content <source>` and `fastagent content add/remove` edit `context.json` and the links
+([CLI](cli.md#fastagent-content)); it can be edited by hand too. The entries' order means nothing. A linked directory
+may not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in
+one.
 
 What each entry gives the agent, re-read every turn:
 
@@ -255,16 +264,16 @@ What each entry gives the agent, re-read every turn:
   (how the agent is built and changed, loaded first).
 - **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<content>/<skill>`: the `deploy` skill of the
   entry `app` is `app/deploy`, so it never collides with the agent's own or another entry's.
-- **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
-  runs a command in it with `cd <location> && …`.
+- **A place in the prompt**: its name, its location, whether the agent works on it or only knows it, and its
+  `description`. The agent runs a command in it with `cd <location> && …`.
 - **Its location for tools**: an authored tool reads `ctx.content` ([API reference](api-reference.md#tool-authoring)).
 
-The locations are resolved when a process starts; editing `content` restarts `dev`. On a deployed host a `github`
-entry is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)). A
-`local` entry is a directory of this machine, which a host does not have: the deployed agent works without it,
-and `deploy` and the host's startup say so by name. To give a host what the agent only reads there, copy it into the
-agent directory, which every release ships; to have the agent work on it from a host, move it to a repository and
-declare it as `github`.
+The locations are resolved when a process starts; editing `context.json` restarts `dev`. A deployed host links its
+`content/` to its storage, so a `github` entry is a clone there, made and kept up to date the same way, and outlives
+each release ([deploy](deploy.md#before-you-deploy)). An entry without `github` is a directory of this machine,
+which a host does not have: the deployed agent works without it, and `deploy` and the host's startup say so by name.
+To give a host what the agent only reads there, copy it into the agent directory, which every release ships; to have
+the agent work on it from a host, move it to a repository and declare it as `github`.
 
 ## The system prompt
 
@@ -403,32 +412,34 @@ Channels that dial out (WebSocket) are reachable by whoever can message the bot,
 Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse a body that is not
 `application/json`, which stops cross-origin writes that skip the preflight.
 
-## Machinery: `.state/`, `.secrets/` and `.contexts/`
+## Machinery: `.state/`, `.secrets/` and `content/`
 
 - `<agent dir>/.state/` — mutable machine state: sessions, channel state (`channels/<kind>/`), schedule state.
   Single-process; point it at a volume in a container.
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
-- `<agent dir>/.contexts/` — the clones of the agent's `github` content, one per entry name. They are data the
-  agent works on, so they are not inside `.state/`; like it, they are never part of the definition, and `init`'s
-  `.gitignore` and `deploy` keep them out.
+- `<agent dir>/content/` — where this machine keeps the agent's content: links to its directories, and the clones of
+  `github` entries ([Content](#content)). They are data the agent works on, so they are not inside `.state/`; like
+  it, they are never part of the definition, and `content/.gitignore` and `deploy` keep them out. It has no
+  override: a place that wants it elsewhere links `content/` there.
 
 Generated deployments keep the deployed definition at `<persistent-root>/definition/`, replaced by every release,
-with `.state/`, `.secrets/` and `.contexts/` beside it.
+with `.state/`, `.secrets/` and `content/` beside it; each release links its own `content/` to that one.
 The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (reset by every deploy — see
 [Deploy](deploy.md#aws-bedrock-agentcore)).
 
 For a manually configured service:
 
 ```bash
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets FASTAGENT_CONTEXTS_DIR=/data/.contexts fastagent start
+ln -s /data/content content   # in the agent directory, once
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 ```txt
 state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/production)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
-clones:     FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
+content:    <agent dir>/content/<name>
 sessions:   <state root>/sessions
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
 endpoints:  FASTAGENT_MODELS_PATH  > ~/.fastagent/models.json (under the agent's own models.json)

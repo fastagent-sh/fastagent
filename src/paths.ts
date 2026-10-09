@@ -36,8 +36,14 @@ function environmentPath(dir: string, segment: string, env: NodeJS.ProcessEnv): 
 /** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
 
-/** The clones segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
-export const CONTEXTS_DIRNAME = ".contexts";
+/**
+ * Where each content entry is on this machine, `content/<name>` in the agent dir: a link to a directory of this
+ * machine, a clone fastagent made, or nothing. Never an env override: a place that wants it elsewhere links it.
+ */
+export const CONTENT_DIRNAME = "content";
+
+/** The agent's content declaration (`context.json`), beside its config. */
+export const CONTEXT_FILE = "context.json";
 
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
@@ -152,13 +158,9 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
   return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? environmentPath(dir, STATE_DIRNAME, env);
 }
 
-/**
- * Where an instance keeps the clones of its github content, each under the entry's name:
- * `FASTAGENT_CONTEXTS_DIR` env > `<agentDir>/.contexts`. Not inside the state root: a clone is data the agent works
- * on, so its location is one the agent is told and expected to write in, which `.state/` (bookkeeping) is not.
- */
-export function resolveContextsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_CONTEXTS_DIR) ?? join(resolve(dir), CONTEXTS_DIRNAME);
+/** Where the content entry `name` of the agent in `dir` is on this machine. */
+export function contentEntryPath(dir: string, name: string): string {
+  return join(resolve(dir), CONTENT_DIRNAME, name);
 }
 
 /**

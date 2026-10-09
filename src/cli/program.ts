@@ -53,7 +53,7 @@ const init: CommandSpec = {
     {
       flags: "--content <source>",
       description:
-        "a directory or github:owner/repo the agent works on (repeatable); declared in fastagent.config.ts `content`",
+        "a directory or github:owner/repo the agent works on (repeatable); declared in context.json `content`",
       repeatable: true,
     },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
@@ -233,7 +233,8 @@ const start: CommandSpec = {
     "            volume so a redeploy never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
-    "  clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts — github content\n" +
+    "  content:  <agent dir>/content/<name> — a link to a directory of this machine,\n" +
+    "            or a clone of github content; a deployment links it to its volume\n" +
     "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
@@ -437,8 +438,9 @@ const content: CommandSpec = {
   name: "content",
   summary: "list, add or remove what the agent works on and knows",
   description:
-    "Content is a directory the agent works on (or only knows, with --readonly), declared in the literal " +
-    "`content` list of fastagent.config.ts. These commands edit only that list, and refuse when it is computed.",
+    "Content is a directory the agent works on (or only knows, with --readonly), declared by name in " +
+    "context.json and reached at content/<name>: a link to a directory of this machine, or a clone of a " +
+    "GitHub repository.",
   subcommands: [
     {
       name: "list",
@@ -456,8 +458,8 @@ const content: CommandSpec = {
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
         { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
-        { flags: "--local <dir>", description: "github:owner/repo: its checkout on this machine" },
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
+        { flags: "--description <text>", description: "one sentence for the agent: what it is, how to treat it" },
       ],
       examples: [
         { cmd: "fastagent content add ~/code/app", note: "works on" },
@@ -465,22 +467,23 @@ const content: CommandSpec = {
         { cmd: "fastagent content add github:acme/docs --readonly", note: "knows a clone" },
       ],
       notes:
-        "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
-        "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
-        "place at each start where git can do so without touching the agent's work. Any other directory is " +
-        "declared `{ local }`: it stays on this machine, and a deployed instance works without it. Content may not contain " +
-        "the agent directory, nor sit inside it.",
+        "The root of a GitHub checkout is declared as that repository, and content/<name> links to the checkout, " +
+        "used as it is on this machine. github:owner/repo is cloned into content/<name> when the agent starts, " +
+        "and brought up to date in place at each start where git can do so without touching the agent's work; " +
+        "so is a repository on any machine where nothing is linked. Any other directory is declared as a " +
+        "directory of this machine and linked: a deployed instance works without it. What is linked may not " +
+        "contain the agent directory, nor sit inside it.",
       run: async (args, f) =>
         (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
           readonly: f.readonly === true,
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
-          ...(typeof f.local === "string" ? { local: f.local } : {}),
           ...(typeof f.name === "string" ? { name: f.name } : {}),
+          ...(typeof f.description === "string" ? { description: f.description } : {}),
         }),
     },
     {
       name: "remove",
-      summary: "remove a content entry from the declaration (the directory itself is untouched)",
+      summary: "remove a content entry and its link (a linked directory, and a clone, are left as they are)",
       args: [{ name: "<name>", description: "the entry's name" }, AGENT_ARG],
       examples: [{ cmd: "fastagent content remove app" }],
       run: async (args) =>

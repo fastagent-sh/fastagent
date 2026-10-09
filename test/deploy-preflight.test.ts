@@ -196,7 +196,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
     await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
-    await mkdir(join(agentDir, ".contexts")); // …and the clones of the agent's github content
+    await mkdir(join(agentDir, "content")); // …and this machine's links and clones of the agent's content
     await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
@@ -205,10 +205,15 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const text = JSON.stringify(pre.messages);
       expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
       expect(text).toMatch(/does not exclude .{0,12}\.state/); // machine state would ship
-      expect(text).toMatch(/does not exclude .{0,12}\.contexts/); // so would the clones
+      expect(text).toMatch(/does not exclude .{0,12}content.{0,12} — this machine's links and clones/); // an issue: --run gates on it
       expect(text).toMatch(/does not exclude .{0,30}node_modules/); // the native-binary clobber hazard — named
       expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
+    // Shipped content/ is refused, not only warned about: the host links its own there, and a release holding one
+    // does not start.
+    await writeFile(join(agentDir, ".dockerignore"), "**/.secrets\n**/.env\n");
+    const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(gated).toMatchObject({ ok: false, gate: expect.stringMatching(/does not exclude .content/) });
   });
 
   it("the GENERATED dockerignore passes its own leak gate — contents-only .secrets excludes are not a leak", async () => {
@@ -329,7 +334,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       if (clean.ok)
         // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
         // beside auth.json must not ship either.
-        expect(clean.container.machineryPaths).toEqual([".secrets", "creds", ".state", ".contexts"]);
+        expect(clean.container.machineryPaths).toEqual([".secrets", "creds", ".state"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
@@ -386,37 +391,35 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   });
 
   it("deploys without a directory context, saying so: a warning for one it works on, a note for one it knows", async () => {
-    const dir = await agent();
-    const pre = await call(
-      dir,
-      {
-        model: "openai/gpt-4o-mini",
-        content: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
-      },
-      { run: true },
-    );
+    const dir = await agent({
+      "context.json": JSON.stringify({
+        content: { app: {}, docs: { readonly: true }, handbook: { github: "acme/handbook" } },
+      }),
+    });
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;
     expect(pre.messages).toContainEqual({
       level: "warn",
       text:
-        "works on app: local /srv/app, stays on this machine, and the deployed agent works without it; to work on " +
-        "it from a host, move it to a GitHub repository and declare it as github",
+        "works on app: a directory of this machine (content/app), stays here, and the deployed agent works " +
+        "without it; to work on it from a host, move it to a GitHub repository and declare it as github",
     });
     expect(pre.messages).toContainEqual({
       level: "note",
       text:
-        "knows docs: local /srv/docs, stays on this machine, and the deployed agent works without it; to ship what " +
-        "the agent reads there, copy it into the agent directory, which every release carries",
+        "knows docs: a directory of this machine (content/docs), stays here, and the deployed agent works " +
+        "without it; to ship what the agent reads there, copy it into the agent directory, which every release carries",
     });
   });
 
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {
-    const dir = await agent();
-    const config = {
-      model: "openai/gpt-4o-mini",
-      content: [{ github: "acme/app" }, { github: "acme/handbook", ref: "main", readonly: true }],
-    };
+    const dir = await agent({
+      "context.json": JSON.stringify({
+        content: { app: { github: "acme/app" }, handbook: { github: "acme/handbook", ref: "main", readonly: true } },
+      }),
+    });
+    const config = { model: "openai/gpt-4o-mini" };
     const pre = await call(dir, config);
     expect(pre.ok).toBe(true);
     if (!pre.ok) return;

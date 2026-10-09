@@ -17,7 +17,8 @@ export function contentLines(content: readonly ResolvedContent[]): [label: strin
   if (content.length === 0) return [["content", "(none)"]];
   const width = Math.max(...content.map((c) => c.name.length));
   return content.flatMap((c): [string, string][] => [
-    [c.readonly ? "knows" : "works on", `${c.name.padEnd(width)}  ${c.location} (${contentKind(c)})`],
+    // Where the data is: the directory content/<name> links to, or content/<name> itself.
+    [c.readonly ? "knows" : "works on", `${c.name.padEnd(width)}  ${c.linkedTo ?? c.location} (${contentKind(c)})`],
     ...c.notices.map((notice): [string, string] => ["notice", `${c.name}: ${notice}`]),
   ]);
 }

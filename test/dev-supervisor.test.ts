@@ -20,6 +20,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
+    expect(ignored(join(root, "context.json"))).toBe(false); // content is resolved once per process
     // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
     // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
     for (const file of ["models.json", "models-store.json"]) {
@@ -45,6 +46,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "report.md"))).toBe(true); // agent work product
     expect(ignored(join(root, "out"))).toBe(true); // pruned as a directory — its subtree costs nothing
     expect(ignored(join(root, ".state"))).toBe(true);
+    expect(ignored(join(root, "content"))).toBe(true); // the agent's clones and linked directories: its work
     expect(ignored(join(root, "node_modules"))).toBe(true);
     expect(ignored(join(root, ".git"))).toBe(true);
   });
