@@ -14,6 +14,7 @@ interface FeishuManualRegistration {
 }
 
 export interface RegisterFeishuWebhookOptions {
+  env?: NodeJS.ProcessEnv;
   attempts?: number;
   retryMs?: number;
   apiBase?: string;
@@ -28,8 +29,9 @@ export async function registerFeishuWebhook(
 ): Promise<RegistrationOutcome> {
   const profile = cloudFor(kind);
   const envPrefix = profile.envPrefix;
-  const appId = process.env[`${envPrefix}_APP_ID`];
-  const appSecret = process.env[`${envPrefix}_APP_SECRET`];
+  const env = opts.env ?? process.env;
+  const appId = env[`${envPrefix}_APP_ID`];
+  const appSecret = env[`${envPrefix}_APP_SECRET`];
   const apiBase = opts.apiBase ?? profile.apiBase;
   const requestUrl = `${baseUrl}/${kind}`;
   const manual = `switch Subscription mode to webhook and set the event Request URL in the developer console (Events & Callbacks) to ${requestUrl} — keep the server running while you save (the console verifies the URL with a challenge)`;

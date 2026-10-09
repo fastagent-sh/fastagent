@@ -34,16 +34,21 @@ vi.mock("../src/deploy/preflight.ts", async (importOriginal) => ({
       messages: [],
       channels: [{ name: "feishu", ingress: "webhook" }],
       values: new Map(facts.values),
-      valueFile: ".secrets/.env",
+      valueFile: ".secrets/production/.env",
       modelAuth: facts.modelAuth,
-      declaredSecrets: [{ name: "FEISHU_VERIFICATION_TOKEN", source: "channels/feishu.ts" }],
+      declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"].map((name) => ({
+        name,
+        source: "channels/feishu.ts",
+      })),
     };
   },
 }));
 vi.mock("../src/cli/add-feishu.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/add-feishu.ts")>()),
-  prepareWebhookApps: async (_dir: string, kinds: string[], rerun: string) => {
-    calls.push(`prepare ${kinds.join(",")} rerun=${rerun}`);
+  prepareFeishuApps: async (_dir: string, apps: { kind: string }[], rerun: string) => {
+    calls.push(`prepare ${apps.map(({ kind }) => kind).join(",")} rerun=${rerun}`);
+    facts.values.set("FEISHU_APP_ID", "cli_production");
+    facts.values.set("FEISHU_APP_SECRET", "production_secret");
     facts.values.set("FEISHU_VERIFICATION_TOKEN", "captured");
   },
 }));
@@ -59,11 +64,17 @@ let said: string[];
 beforeEach(async () => {
   calls.length = 0;
   interactive = true;
-  facts = { values: new Map([["FEISHU_APP_ID", "cli_1"]]) };
+  facts = {
+    values: new Map([
+      ["FEISHU_APP_ID", "cli_1"],
+      ["FEISHU_APP_SECRET", "sec"],
+    ]),
+  };
   dir = join(await mkdtemp(join(tmpdir(), "fa-deploy-order-")), "fastagent");
   await mkdir(join(dir, ".secrets"), { recursive: true });
-  await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_1\n");
+  await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_ID=cli_dev\n");
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
+  vi.stubEnv("FASTAGENT_ENVIRONMENT", "");
   vi.stubEnv("FEISHU_INGRESS", "");
   vi.stubEnv("LARK_INGRESS", "");
   said = [];
@@ -82,7 +93,7 @@ it("refuses before anything when this shell names an ingress the value file does
   vi.stubEnv("FEISHU_INGRESS", "websocket");
   await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual([]);
-  expect(said.join("\n")).toContain('FEISHU_INGRESS is "websocket" here and "" in .secrets/.env');
+  expect(said.join("\n")).toContain('FEISHU_INGRESS is "websocket" here and "" in .secrets/production/.env');
 
   vi.stubEnv("FEISHU_INGRESS", "");
   vi.stubEnv(DEV_SERVE_ENV, "1");
@@ -117,7 +128,7 @@ it("does not prepare an app a deployment cannot point anywhere, and says what it
 
   calls.length = 0;
   await runDeploy("docker", dir, { run: true, tunnel: true });
-  expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --run");
+  expect(calls).toContain("prepare feishu rerun=fastagent deploy docker --tunnel --run");
 });
 
 it("prepares only from a terminal: unattended, it says how to supply the token instead", async () => {
@@ -125,8 +136,8 @@ it("prepares only from a terminal: unattended, it says how to supply the token i
   await expect(runDeploy("fly", dir, { run: true })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toContain(
-    "preparing the app opens console pages and may ask for values, so it needs a terminal — run this deploy in one, " +
-      "or copy FEISHU_VERIFICATION_TOKEN from the console (Events & Callbacks) into .secrets/.env",
+    "creating or preparing a separate production app needs a terminal — run this deploy in one, " +
+      "or supply these values from a production app in .secrets/production/.env",
   );
 
   interactive = true;
@@ -135,6 +146,14 @@ it("prepares only from a terminal: unattended, it says how to supply the token i
   await expect(runDeploy("fly", dir, { run: true, input: false })).rejects.toBe(stopped);
   expect(calls).toEqual(["preflight dev=- token=-"]);
   expect(said.join("\n")).toContain("run this deploy in one without --no-input");
+});
+
+it("creates an app when all production app values are absent, instead of gating on values onboarding supplies", async () => {
+  facts.values.clear();
+  await runDeploy("fly", dir, { run: true });
+  expect(calls).toContain("prepare feishu rerun=fastagent deploy fly --run");
+  expect(facts.values.get("FEISHU_APP_ID")).toBe("cli_production");
+  expect(process.env.FASTAGENT_ENVIRONMENT).toBe("production");
 });
 
 it("generating a plan prepares nothing", async () => {

@@ -91,7 +91,7 @@ async function runDeployRailway(params: {
     },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(agentDir),
+    registrarsFor(agentDir, params.values),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

@@ -30,11 +30,11 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 
 | Requirement | How |
 |---|---|
-| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
-| **`.secrets/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
-| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
+| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
+| **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
+| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/production/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `.contexts/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
-| **Contexts that reach a host** | A `github` [context](configuration.md#contexts) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` context stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, which every release ships; move what it works on and must keep to a repository. |
+| **Contexts that reach a host** | A `github` [context](configuration.md#contexts) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` context stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, which every release ships; move what it works on and must keep to a repository. |
 
 ## Chat channels
 
@@ -42,17 +42,23 @@ A deployment receives its chat channels by webhook: `--run` points each channel'
 it answers `/health` (Telegram, Slack apps `add slack` created, Feishu; Lark when its config API allows), and prints
 the steps it could not do.
 
-- **Feishu/Lark receive by webhook on every host** unless `.secrets/.env` sets `FEISHU_INGRESS=websocket`
-  (`LARK_INGRESS`), while `dev` keeps WebSocket ([design note](design/channel-environments.md)). The first
-  `--run` prepares the app for webhook before it builds: it opens the page that requests
-  `application:application:patch` when the app lacks it, and captures the Verification Token into `.secrets/.env`.
-  That needs a terminal; in CI, put the token (developer console → Events & Callbacks) in `.secrets/.env` first.
-- **One app delivers to one place.** `dev` and a deployment share each channel's app and `.secrets/.env`, so
-  `--run` moves the app to the deployment, and `dev --tunnel` moves it back until the next `--run`. Both say so.
+- **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
+  `.secrets/production/.env`. Production never falls back to dev values. Put production provider keys and other
+  required values there explicitly; use `.secrets/.env.example` as a template, not the filled dev file.
+- **Feishu/Lark receive by webhook on every host** unless the production file sets `FEISHU_INGRESS=websocket`
+  (`LARK_INGRESS`), while `dev` keeps WebSocket ([design note](design/channel-environments.md)). Interactive
+  `--run` creates a separate production app when its credentials are missing: Feishu uses scan-to-create with the
+  agent scopes plus `application:application:patch`; Lark uses guided console setup. App ID and Secret are saved
+  immediately so an interrupted token capture resumes the same app. Approval and publishing remain console steps.
+  CI must supply the production App ID, Secret and Verification Token beforehand.
+- **Other channels:** run `add slack --env production` to create the production Slack app, or
+  `add telegram --env production` and create its bot through BotFather. Their local onboarding state is separate.
+- **One app still delivers to one place.** `dev --tunnel` changes only the dev app's URL; `deploy --run` changes
+  only production. Feishu/Lark refuse a production App ID copied from the default dev file.
 
 ## Logging a deployment in
 
-A model with no API key in `.secrets/.env` (an OAuth subscription such as `openai-codex`, or a key you entered
+A model with no API key in `.secrets/production/.env` (an OAuth subscription such as `openai-codex`, or a key you entered
 with `fastagent login`) authenticates on the deployment itself:
 
 ```bash
@@ -80,7 +86,7 @@ the login with `not logged in` and the command to run, exit 1. It has registered
 the agent has any, the message also says what to re-run once the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
-added to `.secrets/.env` after the box was logged in is not used; the box's startup log says so and names the
+added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the
 command that switches it to the key (`fastagent login <provider> --deployment`, choosing "API key").
 
 **A deployment made before this login existed** still holds a copy of this machine's `auth.json`: `--run` used to
@@ -108,7 +114,7 @@ platform sets in the box's environment). A Docker box cannot tell, and leaves `<
   serving runtime with one nobody can log in; for frequent or CI deploys, use an API key. The shell needs
   `bedrock-agentcore:InvokeAgentRuntimeCommandShell`, and the login first sends the runtime a probe so its storage
   is prepared (after a reset, nothing may have invoked it yet). The shell does not inherit the runtime's environment, so
-  an egress proxy set in `.secrets/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
+  an egress proxy set in `.secrets/production/.env` (`HTTPS_PROXY`) applies to the agent's turns but not to the login: where the
   provider is reachable only through that proxy, use an API key on AgentCore.
 
 ## Local Docker
@@ -125,7 +131,7 @@ service:
 - the generated or your own Dockerfile,
 - `127.0.0.1:<port>` published on the host,
 - a named volume at `/data`,
-- `env_file: .secrets/.env` (a fixed path, created empty when missing), with `FASTAGENT_STATE_DIR`,
+- `env_file: .secrets/production/.env` (a fixed path, created empty when missing), with `FASTAGENT_STATE_DIR`,
   `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH` and `PORT` pinned after it,
 - `restart: unless-stopped`.
 
@@ -139,7 +145,7 @@ docker compose -f fastagent.compose.yml down -v  # destructive: deletes all stat
 
 `--run` checks Docker and the daemon, gates missing values before building, runs `up -d --build`, checks the
 services, and waits for `/health`. Nothing passes through Compose's environment: the container reads
-`.secrets/.env` itself.
+`.secrets/production/.env` itself.
 
 Notes:
 
@@ -273,7 +279,7 @@ The stack carries:
   manual deploy, `POST <ForwarderUrl>/__fastagent/probe` with `{"auth":"<FastagentIngressSecret>"}` once (the runbook
   prints it). An `invoke-agent-runtime` call does not, since that door is IAM's and carries no forwarder address.
 
-Variables from `.secrets/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
+Variables from `.secrets/production/.env` ride one NoEcho parameter, `FastagentEnv` (chunked), so adding a name does not
 change the template.
 
 What to know:
@@ -287,12 +293,12 @@ What to know:
 - **A login on the runtime survives neither reset**: not a deploy, and not 14 idle days. `--run` logs the runtime in
   again after every deploy and refuses to start without a terminal to do it in; after an idle reset, nothing does it
   for you and turns fail until `fastagent login <provider> --deployment agentcore`. A provider API key in
-  `.secrets/.env` avoids all of it.
+  `.secrets/production/.env` avoids all of it.
 - **Nothing opens before the first invocation.** `--run` probes that path, so a bad credential or a broken channel
   fails the deploy with the runtime's error.
 - **Redeploys stop the runtime session** so the next call uses the new image; in-flight work is lost.
 - **No long-connection channels.** Feishu/Lark receive by webhook here by default; a `FEISHU_INGRESS=websocket` in
-  `.secrets/.env` makes `--run` refuse.
+  `.secrets/production/.env` makes `--run` refuse.
 - **Programmatic invokes** use the deployment's fixed `runtimeSessionId` (printed in the runbook); the envelope's
   `session` selects the conversation.
 - **Webhook bodies over about 4 MiB** cannot pass the Lambda Function URL (6 MB request cap).

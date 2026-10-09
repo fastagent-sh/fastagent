@@ -97,7 +97,7 @@ describe("deploy/docker: planDockerDeploy", () => {
         secrets: [{ name: "GH_TOKEN", hint: "required by tools/gh.ts" }],
       }),
     );
-    expect(yaml).toContain("env_file:\n      - .secrets/.env");
+    expect(yaml).toContain("env_file:\n      - .secrets/production/.env");
     for (const name of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "FEISHU_APP_ID", "GH_TOKEN"]) {
       expect(yaml).not.toContain(name);
     }
@@ -108,7 +108,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     // The path is FIXED, never the builder's FASTAGENT_SECRETS_DIR: this file is committed and must mean the same
     // thing on every machine. `deploy` creates the file so the entry is never a missing path.
     expect(compose(planDockerDeploy({ ...base, channels: [], valueFile: "somewhere/else/.env" }))).toContain(
-      "env_file:\n      - .secrets/.env",
+      "env_file:\n      - .secrets/production/.env",
     );
 
     // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the

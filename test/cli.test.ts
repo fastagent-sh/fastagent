@@ -47,6 +47,19 @@ describe("cli: process contracts", () => {
     }
   });
 
+  it("start selects production before loading config, even when spawned with dev environment marks", async () => {
+    const dir = await agentWorkspace("fa-start-environment-", {
+      "fastagent.config.ts": `throw new Error("selected " + process.env.FASTAGENT_ENVIRONMENT + ":" + process.env.FEISHU_APP_ID);\n`,
+      ".secrets/.env": "FEISHU_APP_ID=cli_dev\n",
+      ".secrets/production/.env": "FEISHU_APP_ID=cli_production\n",
+    });
+    const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_ENVIRONMENT: "dev", FASTAGENT_DEV: "1" };
+    delete env.FEISHU_APP_ID;
+    const result = await run(["start", dir, "--no-input"], undefined, env);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("selected production:cli_production");
+  });
+
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {
     const v = await run(["--version"]);
     expect(v.code).toBe(0);

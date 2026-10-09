@@ -1,12 +1,13 @@
 /**
  * The environment a deployed agent runs with — host-neutral.
  *
- * The value file (`.secrets/.env`) IS the deployed environment: every variable in it travels, on every host. What the
+ * The production value file (`.secrets/production/.env`) IS the deployed environment: every variable in it travels, on every host. What the
  * definition declares (`defineTool`/`defineChannel`, plus the model's env key) only says
  * which of those must have a value, so a missing one stops a deploy before its first side effect instead of a boot.
  */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
 import { DEV_SERVE_ENV } from "../serving-command.ts";
+import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 
 /** Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none? */
 export function isEnvKey(source: string | undefined): source is string {
@@ -31,6 +32,7 @@ const DEPLOY_OWNED = new Set([
   "FASTAGENT_WAKE_SECRET",
   "FASTAGENT_DEV_WORKER",
   DEV_SERVE_ENV,
+  AGENT_ENVIRONMENT_ENV,
 ]);
 
 /** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */

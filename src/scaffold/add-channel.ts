@@ -24,7 +24,7 @@ export interface ChannelEnv {
 
 interface ChannelScaffold {
   env: ChannelEnv[];
-  /** Channel-specific next-step lines, printed after the env lines and before the `dev` line. */
+  /** Channel instructions with paths and the serving command filled by the CLI. */
   steps: string[];
 }
 
@@ -101,7 +101,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       FEISHU_PERMISSION_STEP,
       "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
-      "FEISHU_INGRESS=webhook is set, so `dev --tunnel` receives by webhook too; the event Request URL is registered by `dev --tunnel` / `deploy --run`",
+      "for webhook ingress, run `{serve} --tunnel` locally or `deploy --run` to register the selected app's event Request URL",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/feishu-threads.ts tool",
     ],
@@ -125,7 +125,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
       LARK_PERMISSION_STEP,
-      "LARK_INGRESS=webhook is set: run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
+      "for webhook ingress, run `{serve} --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
       "the agent reads the threads of the group it is asked in via the scaffolded {tools}/lark-threads.ts tool",
     ],
@@ -135,14 +135,13 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 /** The channel kinds `fastagent add <kind>` can scaffold. */
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
-/** Where a WebSocket app's deployments receive: by webhook unless the setting pins WebSocket for them too. */
+/** Local setup never changes the production app or ingress. */
 const deploymentStep = (kind: "feishu" | "lark", pinned: boolean): string =>
   pinned
-    ? `run \`fastagent dev\` (no tunnel needed: it connects by WebSocket); ${kind.toUpperCase()}_INGRESS=websocket is ` +
-      "set, so every deployment connects by WebSocket too: it keeps one machine running, and AgentCore refuses it"
-    : "run `fastagent dev` (no tunnel needed: it connects by WebSocket); a deployment receives by webhook, and " +
-      "`deploy --run` prepares this app for it (the app-config permission, the Verification Token) and moves it to " +
-      `the deployment${kind === "lark" ? " (if Lark refuses its config API, set the Request URL in the console once)" : ""}`;
+    ? `run \`{serve}\` (no tunnel needed: it connects by WebSocket); ${kind.toUpperCase()}_INGRESS=websocket is ` +
+      "set for this environment; production has its own app and ingress setting"
+    : "run `{serve}` (no tunnel needed: it connects by WebSocket); " +
+      "`deploy --run` creates a separate production app for webhook";
 
 const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffold => {
   const prefix = kind.toUpperCase();
@@ -167,7 +166,7 @@ const websocketSetup = (kind: "feishu" | "lark", pinned: boolean): ChannelScaffo
 export function channelSetup(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
-  /** `<PREFIX>_INGRESS` names it, so deployments receive the same way; unset, they receive by webhook. */
+  /** Whether `<PREFIX>_INGRESS` is explicitly set in this environment. */
   pinned = false,
 ): { env: ChannelEnv[]; steps: string[] } {
   if (ingress !== "websocket" || (kind !== "feishu" && kind !== "lark")) return CHANNEL_SCAFFOLDS[kind];
@@ -215,8 +214,7 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Append generated channel secrets to the agent's `.env` (`.secrets/.env` — never `.env.example`) Existing non-empty
- * values are kept.
+ * Append generated channel secrets to the selected environment's value file. Existing non-empty values are kept.
  */
 export async function appendChannelDotEnv(
   dir: string,
@@ -230,7 +228,7 @@ export async function appendChannelDotEnv(
   await mkdir(secretsDir, { recursive: true });
   // THE one exception to "fastagent has no opinion about git": the directory it writes secrets into carries its own
   // `.gitignore`.
-  const owned = secretsDir === join(dir, SECRETS_DIRNAME);
+  const owned = secretsDir === join(dir, SECRETS_DIRNAME) || secretsDir === join(dir, SECRETS_DIRNAME, "production");
   let unprotectedSecretsDir: string | undefined;
   if (owned) {
     // Only EEXIST is tolerable (already protected, or a concurrent writer).

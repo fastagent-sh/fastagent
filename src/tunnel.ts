@@ -160,11 +160,11 @@ export async function announceWebhooks(
   dir: string,
   baseUrl: string,
   channels: readonly DeclaredChannel[],
-  opts: { openUrl?: (url: string) => void; stateRoot?: string } = {},
+  opts: { openUrl?: (url: string) => void; stateRoot?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ kind: string; outcome: RegistrationOutcome }[]> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
-    loadDotEnv(dir); // webhook registrars read channel credentials from .env
+    if (!opts.env) loadDotEnv(dir);
   } catch (error) {
     // best-effort boundary: an unreadable .env (a MISSING one is already tolerated) still leaves registrars that can
     // report their own missing credentials, so this one names the file instead of aborting the tunnel announcement.
@@ -174,14 +174,13 @@ export async function announceWebhooks(
   // Readiness is the registrar's job: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before its origin
   // connects, and each registrar absorbs that by retrying the platform call whose own URL verification reports it.
   const feishuOptions = {
+    env: opts.env,
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
-  // One app delivers to one place (docs/design/channel-environments.md §3): said before the move, not discovered later.
   const moving = webhookKinds(channels);
   if (moving.length > 0) {
     log.info(
-      `[fastagent] pointing the ${moving.join(", ")} app at this machine: wherever it delivered before (a ` +
-        "deployment) receives nothing from it until `deploy --run` points it back",
+      `[fastagent] pointing the selected ${moving.join(", ")} app at ${baseUrl}; only this app's Request URL changes`,
     );
   }
   return pointChannelsAt({
@@ -189,7 +188,7 @@ export async function announceWebhooks(
     channels,
     log: (message) => log.info(`[fastagent] ${message}`),
     registrars: {
-      telegram: (url) => registerTelegramWebhook(url),
+      telegram: (url) => registerTelegramWebhook(url, { env: opts.env }),
       slack: (url) =>
         registerSlackWebhook(url, {
           stateRoot: opts.stateRoot ?? resolveStateRoot(dir),

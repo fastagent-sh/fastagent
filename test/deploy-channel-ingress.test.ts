@@ -182,7 +182,7 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     expect(gate).toContain("re-run with --into-linked");
   });
 
-  it("says which apps now deliver to the deployment, only those it registered, each with how dev takes it back", async () => {
+  it("names only the production apps it registered and says when webhook delivery starts", async () => {
     const said: string[] = [];
     await registerWebhooks({
       baseUrl: "https://x",
@@ -193,14 +193,10 @@ describe("deploy/channel-ingress: which channels have a webhook", () => {
     });
     const moved = said.filter((line) => line.includes("delivers to this deployment"));
     expect(moved).toEqual([
-      "the slack app now delivers to this deployment, so `dev` on this machine receives nothing from it; " +
-        "`fastagent dev --tunnel` would take it back until the next `deploy --run`",
-      // `dev` connects Feishu/Lark by WebSocket unless told otherwise, and a WebSocket points nothing back.
-      // The subscription mode is the published version's, so a first move waits for the publish it opened.
-      "the feishu app delivers to this deployment once its published version is in webhook mode (after a first " +
-        "deploy, publish the version it opened); from then `dev` on this machine receives nothing from it; " +
-        "`FEISHU_INGRESS=webhook fastagent dev --tunnel` would take it back until the next `deploy --run`",
-      expect.stringContaining("`LARK_INGRESS=webhook fastagent dev --tunnel` would take it back"),
+      "the selected production slack app now delivers to this deployment",
+      "the selected production feishu app delivers to this deployment once its published version is in webhook mode " +
+        "(after a first deploy, publish the version it opened)",
+      expect.stringContaining("selected production lark app delivers to this deployment"),
     ]);
   });
 });

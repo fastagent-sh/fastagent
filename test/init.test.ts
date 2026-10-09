@@ -489,9 +489,31 @@ describe("add: fastagent add <channel>", () => {
 
     // A later `add` without the flag follows the saved setting: its next steps are webhook's, not WebSocket's.
     const again = await cliInit(["add", "feishu", "--no-onboard"], chosen);
-    expect(again).toContain("FEISHU_INGRESS=webhook is set");
+    expect(again).toContain("for webhook ingress");
     expect(again).toContain("fastagent dev --tunnel");
     expect(again).not.toContain("no public URL or tunnel required");
+  });
+
+  it("add --env production keeps the dev credentials and channel file while setting up a separate app", async () => {
+    const dir = await readyAgent();
+    await cliInit(["add", "feishu", "--no-onboard"], dir);
+    const file = join(dir, "channels", "feishu.ts");
+    const channel = await readFile(file, "utf8");
+    const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_INGRESS=websocket\n";
+    await writeFile(join(dir, ".secrets", ".env"), dev);
+    const result = await cliInit(["add", "feishu", "--env", "production", "--no-onboard"], dir);
+    expect(result).not.toMatch(/Error/);
+    expect(result).toContain(".secrets/production/.env");
+    expect(result).toContain("fastagent deploy <host> --run");
+    expect(await readFile(file, "utf8")).toBe(channel);
+    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
+    expect(await readFile(join(dir, ".secrets", "production", ".env"), "utf8")).not.toContain("cli_dev");
+    const invalid = await cliInit(["add", "feishu", "--env", "../dev", "--no-onboard"], dir);
+    expect(invalid).toContain('--env must be "dev" or "production"');
+    const lark = await cliInit(["add", "lark", "--env", "production", "--no-onboard"], dir);
+    expect(lark).toContain("fastagent start --tunnel");
+    expect(lark).toContain("manually switch Subscription mode to webhook");
+    expect(lark).not.toContain("fastagent dev");
   });
 
   it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {

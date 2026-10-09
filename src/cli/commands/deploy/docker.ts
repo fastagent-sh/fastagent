@@ -29,10 +29,8 @@ export const dockerHost: HostDeploy = {
   async deploy(ctx) {
     const { opts, agentDir, channels, webhookChannels, pre, write } = ctx;
     const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
-    // The generated Compose names `.secrets/.env` unconditionally, so it has to be there — Compose refuses
-    // an `env_file` entry pointing at a missing path, and this floor predates `required: false` (Compose 2.24).
-    // Creating it empty is honest: a deployment that declares nothing declares it in an empty file.
-    const composeValueFile = join(agentDir, SECRETS_DIRNAME, ".env");
+    // Compose requires its committed env_file to exist, even when no values are declared.
+    const composeValueFile = join(agentDir, SECRETS_DIRNAME, "production", ".env");
     await mkdir(dirname(composeValueFile), { recursive: true });
     if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
     // The pre-flight read whatever `FASTAGENT_SECRETS_DIR` resolved to; the committed Compose cannot, because a
@@ -153,6 +151,7 @@ async function runDeployDocker(params: {
         announceWebhooks(agentDir, tunnelUrl, channels, {
           openUrl: openExternalUrl,
           stateRoot: resolveStateRoot(agentDir),
+          env: Object.fromEntries(params.values),
         }),
     },
     spawnRunner("docker", agentDir),

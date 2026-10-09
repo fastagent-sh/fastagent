@@ -4,13 +4,13 @@
  */
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
-import { onboardFeishuCloudApp } from "../add-feishu.ts";
+import { assertIndependentFeishuApps, onboardFeishuCloudApp } from "../add-feishu.ts";
 import { inspectChannels } from "../../channels/discover.ts";
 import { cloudFor } from "../../channels/feishu/cloud.ts";
 import { type FeishuSubscriptionMode, feishuIngressFor } from "../../channels/feishu/setup-mode.ts";
-import { DEV_SERVE_ENV } from "../../serving-command.ts";
-import { dotEnvPath, enterAgentEnv } from "../../env.ts";
-import { resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
+import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
+import { dotEnvPath, enterAgentEnv, loadEnvValues } from "../../env.ts";
+import { selectAgentEnvironment, resolveStateRoot, SECRETS_DIRNAME, isUnderDir, displayPath } from "../../paths.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
@@ -29,7 +29,7 @@ import { failStartup, failUsage, agentDirOrExit } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean },
+  opts: { ingress?: string; onboard?: boolean; replaceConfig?: boolean; environment?: string },
 ): Promise<void> {
   // The channel (glue + companion tool + secrets) is agent surface — everything lands in the AGENT DIR
   // (`fastagent/`), the same place dev/start discover channels/.
@@ -37,7 +37,21 @@ export async function runAddChannel(
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
   const target = agentDirOrExit(resolve(dirArg));
-  enterAgentEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
+  const environment = opts.environment ?? "dev";
+  if (environment !== "dev" && environment !== "production") {
+    failUsage(`--env must be "dev" or "production", got "${environment}"`);
+  }
+  selectAgentEnvironment(environment);
+  if (environment === "production") unmarkDevServe();
+  else markDevServe();
+  enterAgentEnv(target);
+  if (environment === "production" && (channelKind === "feishu" || channelKind === "lark")) {
+    try {
+      assertIndependentFeishuApps(target, [channelKind], loadEnvValues(dotEnvPath(target)));
+    } catch (error) {
+      failStartup(error);
+    }
+  }
   // Paths are printed to someone standing in their CWD, which may be elsewhere, while every file belongs to the AGENT
   // dir — prefix them, or they point at nothing.
   const agentFromCwd = displayPath(process.cwd(), target);
@@ -48,7 +62,18 @@ export async function runAddChannel(
   const file = join(target, "channels", `${channelKind}.ts`);
   const existsAlready = await channelExists(target, channelKind).catch(failStartup);
   const { ingress, pinned, setting } = resolveIngress(channelKind, opts.ingress);
-  if (existsAlready && setting) await assertChannelReadsSetting(target, channelKind, setting, file);
+  if (
+    existsAlready &&
+    (setting || (environment === "production" && opts.onboard !== false)) &&
+    (channelKind === "feishu" || channelKind === "lark")
+  ) {
+    await assertChannelReadsSetting(
+      target,
+      channelKind,
+      setting ?? { [`${cloudFor(channelKind).envPrefix}_INGRESS`]: ingress },
+      file,
+    );
+  }
   if (existsAlready) {
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
@@ -75,7 +100,8 @@ export async function runAddChannel(
       .then(() => undefined)
       .catch(failStartup);
   } else if ((channelKind === "feishu" || channelKind === "lark") && opts.onboard !== false) {
-    created = await onboardFeishuCloudApp(target, channelKind, ingress).catch(failStartup);
+    const rerun = `fastagent add ${channelKind}${environment === "production" ? " --env production" : ""}${opts.ingress ? ` --ingress ${opts.ingress}` : ""}`;
+    created = await onboardFeishuCloudApp(target, channelKind, ingress, rerun).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, pinned);
   const env = setup.env;
@@ -129,14 +155,18 @@ export async function runAddChannel(
     const action = e.required ? "set" : "optionally set";
     console.error(`    ${action} ${e.name}${value} in ${envLabel}   # ${e.hint}`);
   }
-  // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private knowledge) —
-  // resolve them to the real agent-dir-relative locations here.
+  const serveCommand = environment === "production" ? "fastagent start" : "fastagent dev";
   for (const s of steps) {
     console.error(
-      `    ${s.replace("{channel}", inAgent(relative(target, file))).replace("{tools}", inAgent("tools"))}`,
+      `    ${s
+        .replace("{channel}", inAgent(relative(target, file)))
+        .replace("{tools}", inAgent("tools"))
+        .replaceAll("{serve}", serveCommand)}`,
     );
   }
-  if (ingress === "websocket") {
+  if (environment === "production") {
+    console.error(`    fastagent deploy <host> --run   # deploy with the production app and credentials`);
+  } else if (ingress === "websocket") {
     console.error(`    fastagent dev            # no public URL or tunnel required`);
   } else if (channelKind === "slack") {
     console.error(
@@ -152,9 +182,7 @@ export async function runAddChannel(
 
 /**
  * What `add` sets the app up for, and whether it writes the choice down. `--ingress` is the `<PREFIX>_INGRESS`
- * setting itself, written for both commands. Unasked, the app is set up for what `dev` will use, by the channel's own
- * rule: a setting already in the environment (an earlier `--ingress`), else WebSocket (no public URL, no reviewed
- * `patch` scope), which leaves every deployment on webhook for `deploy --run` to prepare.
+ * setting in the selected environment. The channel rule supplies its default: WebSocket in dev, webhook in production.
  */
 function resolveIngress(
   kind: ChannelKind,
@@ -168,7 +196,7 @@ function resolveIngress(
   if (raw !== undefined) return { ingress: raw, pinned: true, setting: { [name]: raw } };
   try {
     return {
-      ingress: feishuIngressFor(kind, { ...process.env, [DEV_SERVE_ENV]: "1" }),
+      ingress: feishuIngressFor(kind, process.env),
       pinned: Boolean(process.env[name]?.trim()),
     };
   } catch (error) {

@@ -20,20 +20,16 @@ interface ChannelIngress {
   manual: (baseUrl: string) => string;
   /** The runbook block for a plan, which cannot register anything (comment lines + commands). */
   runbook: (baseUrl: string) => string[];
-  /** The `dev` command that points this channel's app back at this machine after a deploy took it. */
-  takeBack: string;
-  /** When a registered app starts delivering here, and so when `dev` stops receiving it (the clause before "`dev`"). */
+  /** When the selected app starts delivering to this deployment. */
   delivers: string;
 }
 
 const feishuCloud = (kind: "feishu" | "lark", label: string): ChannelIngress => ({
   path: `/${kind}`,
-  // `dev` connects by WebSocket unless told otherwise, and a WebSocket points nothing back.
-  takeBack: `\`${kind.toUpperCase()}_INGRESS=webhook fastagent dev --tunnel\``,
   // The subscription mode is the published version's: a switch from long connection waits for the publish.
   delivers:
     "delivers to this deployment once its published version is in webhook mode (after a first deploy, publish the " +
-    "version it opened); from then",
+    "version it opened)",
   register: (r, baseUrl) => r.feishu?.(baseUrl, kind),
   manual: (baseUrl) =>
     `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${baseUrl}/${kind} (the app must be running when you save)`,
@@ -48,8 +44,7 @@ const feishuCloud = (kind: "feishu" | "lark", label: string): ChannelIngress => 
 const INGRESS: Record<ChannelKind, ChannelIngress> = {
   telegram: {
     path: "/telegram",
-    takeBack: "`fastagent dev --tunnel`",
-    delivers: "now delivers to this deployment, so",
+    delivers: "now delivers to this deployment",
     register: (r, baseUrl) => r.telegram(baseUrl),
     manual: (baseUrl) => `telegram: set the webhook → ${baseUrl}/telegram (secret_token = TELEGRAM_SECRET_TOKEN)`,
     runbook: (baseUrl) => [
@@ -61,8 +56,7 @@ const INGRESS: Record<ChannelKind, ChannelIngress> = {
   },
   slack: {
     path: "/slack",
-    takeBack: "`fastagent dev --tunnel`",
-    delivers: "now delivers to this deployment, so",
+    delivers: "now delivers to this deployment",
     register: (r, baseUrl) => r.slack?.(baseUrl),
     manual: (baseUrl) => `slack: set Event Subscriptions → Request URL → ${baseUrl}/slack`,
     runbook: (baseUrl) => [
@@ -236,10 +230,7 @@ export async function registerWebhooks(input: {
   const outcomes = await pointChannelsAt(input);
   for (const { kind, outcome } of outcomes) reg.track(kind, outcome);
   for (const { kind } of outcomes.filter(({ outcome }) => outcome === "registered")) {
-    input.log(
-      `the ${kind} app ${INGRESS[kind].delivers} \`dev\` on this machine receives nothing from it; ` +
-        `${INGRESS[kind].takeBack} would take it back until the next \`deploy --run\``,
-    );
+    input.log(`the selected production ${kind} app ${INGRESS[kind].delivers}`);
   }
   return reg.gate();
 }

@@ -60,7 +60,8 @@ src/
 ├── proxy.ts                # the process's outbound-fetch policy: the declared proxy, loopback exempt by default
 ├── open-url.ts             # best-effort "open this in a browser" (callers still print the URL); only https or
 │                           # loopback http reaches the opener, because some URLs come from a deployed box
-├── env.ts                  # ENTERING an agent's environment: its `.env` → process.env, and the egress that follows
+├── env.ts                  # ENTERING the selected environment: dev `.secrets/.env` or production
+│                           # `.secrets/production/.env` → process.env, then the egress that follows
 ├── serving-command.ts      # which command serves this process (`dev` marks it): the default a channel's ingress
 │                           # setting falls back to, read through the process environment the CLI and the agent share
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson

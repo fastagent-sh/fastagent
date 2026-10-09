@@ -228,10 +228,11 @@ const start: CommandSpec = {
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > all interfaces (dev: 127.0.0.1)\n" +
     "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
-    "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
-    "            (sessions, channel state, schedule state); point it at a mounted\n" +
-    "            volume so a redeploy that replaces the directory never wipes it\n" +
-    "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets — .env + auth.json\n" +
+    "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state/production\n" +
+    "            mutable state (sessions, channels, schedules); use a mounted\n" +
+    "            volume so a redeploy never wipes it\n" +
+    "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
+    "            .env + auth.json\n" +
     "  clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts — github contexts\n" +
     "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
@@ -253,8 +254,13 @@ const start: CommandSpec = {
 const INGRESS: FlagSpec = {
   flags: "--ingress <mode>",
   description:
-    "Feishu/Lark: write FEISHU_INGRESS (LARK_INGRESS) for dev and deployments alike, websocket or webhook; " +
-    "webhook also prepares the app now (unset: dev connects by websocket, start and deployments receive by webhook)",
+    "Feishu/Lark: set websocket or webhook in the selected environment; webhook also prepares its app now " +
+    "(unset: dev uses websocket, production uses webhook)",
+};
+const CHANNEL_ENVIRONMENT: FlagSpec = {
+  flags: "--env <environment>",
+  description:
+    "select independent app credentials and onboarding state (default: dev; production uses .secrets/production/.env)",
 };
 const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
@@ -280,12 +286,17 @@ const channelSub = (
   description,
   args: [AGENT_ARG],
   flags:
-    kind === "feishu" || kind === "lark" ? [INGRESS, NO_ONBOARD] : kind === "slack" ? [NO_ONBOARD, REPLACE_CONFIG] : [],
+    kind === "feishu" || kind === "lark"
+      ? [CHANNEL_ENVIRONMENT, INGRESS, NO_ONBOARD]
+      : kind === "slack"
+        ? [CHANNEL_ENVIRONMENT, NO_ONBOARD, REPLACE_CONFIG]
+        : [CHANNEL_ENVIRONMENT],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
     (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, {
       ingress: f.ingress as string | undefined,
+      environment: f.env as "dev" | "production" | undefined,
       onboard: f.onboard !== false,
       replaceConfig: f.replaceConfig === true,
     }),
@@ -318,7 +329,7 @@ const add: CommandSpec = {
       "feishu",
       "scaffold the Feishu channel AND create/configure the platform app",
       "Scaffold channels/feishu.ts and create/configure the Feishu app through scan-to-create, writing its " +
-        "credentials to .env. The app is set up for dev's WebSocket; deploy --run prepares it for webhook.",
+        "credentials to the selected environment. Dev uses WebSocket; deploy --run creates a separate production app for webhook.",
       "Feishu (open.feishu.cn) is the canonical implementation. WebSocket needs only App ID/Secret and " +
         "no public URL; webhook additionally captures the Verification Token through a temporary tunnel. " +
         "The app asks for the scopes that let the agent hear its group chats; any your tenant withholds are named.",
@@ -327,7 +338,7 @@ const add: CommandSpec = {
       "lark",
       "scaffold the Lark (international) channel with guided credential setup",
       "Scaffold channels/lark.ts and guide credential setup against the international developer console. " +
-        "The app is set up for dev's WebSocket; deploy --run prepares it for webhook.",
+        "Dev uses WebSocket; deploy --run guides setup of a separate production app for webhook.",
       "Lark international (open.larksuite.com) is Feishu's compatibility profile. WebSocket stops after " +
         "App ID/Secret validation and a permission check; webhook setup probes config automation and falls " +
         "back to explicit manual steps on the international config-route 404.",
@@ -371,7 +382,9 @@ const deploy: CommandSpec = {
     "are dashboard/CLI steps the runbook states. agentcore: one " +
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "the alarms the container sets for schedules and wake-ups; linux/arm64 image built locally). Durable ingress " +
-    "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it).",
+    "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it). " +
+    "Production values come from .secrets/production/.env, never the dev file. Interactive --run creates " +
+    "a separate Feishu/Lark production app when its credentials are missing.",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
     {

@@ -70,8 +70,8 @@ fastagent dev --model openai-codex/gpt-5.5
 FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
-`deploy` evaluates the same chain in the deployed environment: `FASTAGENT_MODEL` from `.secrets/.env`, else
-`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The value from `.secrets/.env` is
+`deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
+`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is
 recorded in the release manifest (`fastagent.release.json`); a variable already set on the platform wins over it.
 `deploy` prints the effective model and its source.
 
@@ -104,7 +104,7 @@ command's stdout, anything else is a literal.
 Use a reference for a real key: the file ships inside the image. `deploy` warns about every literal `apiKey`
 (it cannot tell a placeholder such as `"ollama"` from a credential). `headers` values are not inspected.
 
-A variable referenced here travels to the host once it is in `.secrets/.env`, like every other variable there. The
+A variable referenced here travels to the host once it is in `.secrets/production/.env`, like every other production value. The
 variable backing the selected model is required: `deploy --run` refuses to start without a value for it.
 
 ### Routing a built-in provider through a proxy
@@ -359,7 +359,8 @@ others the edit still costs a cache miss. The session control plane reports that
 |---|---|
 | `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. |
 | Provider env vars | Servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
-| Agent `.env` | `<agent dir>/.secrets/.env`, loaded by CLI commands and carried whole by `deploy`. Excluded from git by the `.secrets/.gitignore` that `init` scaffolds. |
+| Dev `.env` | `<agent dir>/.secrets/.env`, loaded by local commands and `add <channel>`. Excluded from git by `.secrets/.gitignore`. |
+| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. `deploy` carries it whole, never falling back to dev. |
 
 For one provider, the agent uses the first of:
 
@@ -424,8 +425,8 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets FASTAGENT_
 ```
 
 ```txt
-state root: FASTAGENT_STATE_DIR    > <agent dir>/.state
-secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets
+state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/production)
+secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
 clones:     FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
 sessions:   <state root>/sessions
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
@@ -472,7 +473,8 @@ export default {
 ```
 
 Package tools receive the same `ToolContext` as `defineTool` tools. Their `secrets` declarations count like your
-own: `dev`/`start` refuse to boot, and `deploy --run` refuses to start, while one has no value in `.secrets/.env`.
+own: `dev`/`start` refuse to boot, and `deploy --run` refuses to start, while one has no value in the selected
+environment. Dev uses `.secrets/.env`; production uses `.secrets/production/.env`.
 
 ## Extensions
 
@@ -600,8 +602,8 @@ agent's own pending wake-ups. A wake-up is work the agent schedules for itself w
 FASTAGENT_LOG_LEVEL=debug fastagent start
 ```
 
-It is read per log line, so setting it in `.secrets/.env` works locally and, since `deploy` carries that file,
-on the deployed box too. A real environment variable wins over the file.
+It is read per log line, so set it in `.secrets/.env` for dev or `.secrets/production/.env` for deployment.
+A real environment variable wins over the file.
 
 ## Not config
 

@@ -23,10 +23,11 @@ function isTransientRegistrationError(error: string): boolean {
  */
 export async function registerTelegramWebhook(
   baseUrl: string,
-  opts: { attempts?: number; retryMs?: number } = {},
+  opts: { env?: NodeJS.ProcessEnv; attempts?: number; retryMs?: number } = {},
 ): Promise<RegistrationOutcome> {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const secret = process.env.TELEGRAM_SECRET_TOKEN;
+  const env = opts.env ?? process.env;
+  const botToken = env.TELEGRAM_BOT_TOKEN;
+  const secret = env.TELEGRAM_SECRET_TOKEN;
   const webhookUrl = `${baseUrl}/telegram`;
   if (!botToken || !secret) {
     log.info(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
@@ -7,6 +7,45 @@ import { fastagentVersion } from "../src/version.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("cli: deploy", () => {
+  it("selects the production value file and Docker env_file without reading dev values", async () => {
+    const dir = await agentWorkspace("fa-deploy-env-", {
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nFEISHU_INGRESS=websocket\nDEV_ONLY=secret\n",
+      ".secrets/production/.env": "FASTAGENT_MODEL=openai/gpt-4o-mini\nPRODUCTION_ONLY=value\n",
+    });
+    const result = await run(["deploy", "docker", dir]);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain("source: .secrets/production/.env");
+    expect(result.stdout).toContain("PRODUCTION_ONLY");
+    expect(result.stdout).not.toContain("DEV_ONLY");
+    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toContain(".secrets/production/.env");
+  });
+
+  it("an unattended first deploy requires production app values rather than reusing the dev app", async () => {
+    const dir = await agentWorkspace("fa-deploy-new-app-", {
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
+      ".secrets/.env": "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\nFEISHU_VERIFICATION_TOKEN=dev_token\n",
+      "channels/feishu.mjs": `const channel = () => ({ "POST /feishu": () => new Response("ok") });
+channel.secrets = ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"];
+export default channel;\n`,
+    });
+    const result = await run(["deploy", "fly", dir, "--run", "--no-input"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      ".secrets/production/.env has no FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN",
+    );
+    expect(result.stderr).toContain("separate production app needs a terminal");
+    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
+    await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
+
+    await mkdir(join(dir, ".secrets", "production"));
+    await writeFile(join(dir, ".secrets", "production", ".env"), await readFile(join(dir, ".secrets", ".env"), "utf8"));
+    const copied = await run(["deploy", "fly", dir, "--run", "--no-input"]);
+    expect(copied.code).toBe(1);
+    expect(copied.stderr).toContain("dev and production use the same app");
+    await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
+  });
+
   it("deploy WIRES the ownership rule — the real command keeps a file it did not generate", async () => {
     // The rule itself (exists x ours x force) is a state machine, tested at its own level in
     // test/deploy-artifacts.test.ts; eight spawns proving it here made this the slowest and only flaky

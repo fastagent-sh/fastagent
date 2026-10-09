@@ -9,6 +9,7 @@ import { isAbsolute, relative, join, sep } from "node:path";
 import ignore from "ignore";
 import {
   AGENT_CONFIG_FILE,
+  SECRETS_DIRNAME,
   exists,
   readTextIfExists,
   resolveContextsDir,
@@ -74,7 +75,11 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const secretsRel = inContext(resolveSecretsDir(agentDir));
   const authRel = inContext(authPath);
   const authElsewhere = authRel !== undefined && (secretsRel === undefined || !authRel.startsWith(`${secretsRel}/`));
-  const secretPaths = [...(secretsRel ? [secretsRel] : []), ...(authElsewhere ? [authRel] : [])];
+  const secretsDirs = [SECRETS_DIRNAME];
+  if (secretsRel && secretsRel !== SECRETS_DIRNAME && !secretsRel.startsWith(`${SECRETS_DIRNAME}/`)) {
+    secretsDirs.push(secretsRel);
+  }
+  const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : [])];
   // ONE rule for every checked path: a file that is not there cannot be baked, so gating on it would be a refusal
   // about a spelling rather than about what would ship (an agent that has never run `login` has no auth.json).
   const present = async (rels: string[]): Promise<string[]> => {
@@ -106,7 +111,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
     return files;
   };
   const leakCandidates = [
-    ...(secretsRel ? await secretDirFiles(secretsRel) : []),
+    ...(await Promise.all(secretsDirs.map(secretDirFiles))).flat(),
     ...(await present(authElsewhere && authRel !== undefined ? [authRel] : [])),
     ...envFiles,
   ];

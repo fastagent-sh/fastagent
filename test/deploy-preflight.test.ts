@@ -329,7 +329,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       if (clean.ok)
         // The DIR, not the two filenames we happen to know — an atomic-write temp or a second key file
         // beside auth.json must not ship either.
-        expect(clean.container.machineryPaths).toEqual(["creds", ".state", ".contexts"]);
+        expect(clean.container.machineryPaths).toEqual([".secrets", "creds", ".state", ".contexts"]);
 
       // A kept .dockerignore carrying only the default name-based excludes misses it → gate.
       await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n**/.secrets\n**/.state\n**/.env\n");
