@@ -348,8 +348,10 @@ interface InvokeRequest {
   prompt: { text: string; images?: ImageRef[] };
   /** What the message is when the session is running another run. Default: "queue". */
   whenBusy?: "queue" | "steer" | "reject";
-  /** The caller's key for this message, unique within the session: the same key returns the same run. */
+  /** The caller's key for this message, unique within the session: the same key returns the same run (§7.3). */
   idempotencyKey?: string;
+  /** What started the run. Set in process by channels, schedules and wake-ups; a remote caller cannot set it. */
+  source?: { kind: "channel" | "schedule" | "wake"; name?: string };
 }
 
 type InvokeEvent =
@@ -370,7 +372,7 @@ type InvokeEvent =
   | `whenBusy` | When the session is running another run |
   |---|---|
   | `queue` (the default) | A new run, queued. It starts when the runs before it end, in arrival order |
-  | `steer` | Joins the running run after its current tool round. `joined` is reported once the harness has taken the message; one that arrives too late becomes a new run |
+  | `steer` | Joins the running run, which takes the message after its current tool round. A run does not end while it holds a steered message it has not taken, so `joined` is decided when the message is accepted and the receipt does not wait for the harness. A run canceled or aborted before it takes the message withdraws it too: it stays among the run's messages, without an entry |
   | `reject` | Rejected with `busy` |
 
   An idle session starts a run whatever `whenBusy` says. pi-durable offers the same three choices with the same
@@ -381,7 +383,12 @@ type InvokeEvent =
   layer and never reach a caller.
 - **Idempotency.** A key is unique within its session and requires `sessionId`: without one, every invoke creates a
   new session, and a retry could never match. A channel uses the platform's message id, a schedule its occurrence id.
-  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message.
+  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message. The one exception
+  to "the same key returns the same run" is a run that ended `interrupted` (§7.3): an invoke with its key starts a new
+  run for the message, which the key names from then on, and the receipt says `duplicate: false`.
+- **Source.** Channels, schedules and wake-ups name themselves in `source`, and the run records it. A remote caller
+  cannot: an HTTP request or an AgentCore envelope that carries `source` is rejected with `invalid_request`, and the
+  service records `{ kind: "api" }`, so no caller can pass itself off as a channel.
 - **Without a stream.** Over HTTP, `Accept: application/json` answers `202` with the `accepted` event, and the caller
   follows or polls the run.
 
@@ -394,7 +401,7 @@ belongs to the run, which steered messages share. A caller that needs an outcome
 ```ts
 type RunStatus = {
   runId: string;
-  /** What started it: a channel, a schedule, a wake-up, or a caller of the API. */
+  /** What started it: a channel, a schedule or a wake-up (set in process), or a caller of the API. */
   source?: { kind: "channel" | "schedule" | "wake" | "api"; name?: string };
   /** The user messages it took: the one that started it and those steered into it. */
   messages: { entryId?: string; idempotencyKey?: string }[];
@@ -435,7 +442,11 @@ interface Session {
 - `run_started` and `run_ended` are entries in the session's log (§7.5), so a run's status after the fact is read from
   the log. A run that started and never ended, and is not running, is reported `interrupted`. Whether queued runs
   survive a restart, and whether a running one continues after it, depend on the harness (`durableQueue`,
-  `durableRuns`, §9.3). The service never reruns a run: its tools may already have had effects (§3.1, invariant 3).
+  `durableRuns`, §9.3). The service never reruns a run on its own: its tools may already have had effects (§3.1,
+  invariant 3). A caller that owes an answer may decide to: an invoke with the key of an `interrupted` run starts a
+  new run (§7.2), whose tools may repeat effects the interrupted one had. `runs.get({ idempotencyKey })` returns the
+  key's newest run. This keeps a channel at-least-once, as today: its turn store invokes again with the message's
+  key, at most three times per message.
 
 ### 7.4 Sessions
 
@@ -486,7 +497,8 @@ type AbortResult =
 ```
 
 - **`create`** names the session, or lets the service name it, and is the only way to fork: the new session starts
-  with the source's history, up to `entryId` or all of it. A session that already exists is a `conflict`. An invoke
+  with the source's history, up to `entryId` or all of it. A fork copies the history, not the runs: the new session's
+  runs are its own, so a run the fork point cuts through is not one of them. A session that already exists is a `conflict`. An invoke
   into a session that does not exist yet creates it empty.
 - **`read`** returns the state and one page of history, after or before a cursor; `limit: 0` reads the state alone.
 - **`follow`** catches up on the history after a cursor, then continues with live events; without a cursor it starts
@@ -597,6 +609,12 @@ middleware, per plane. The startup report keeps listing what is served unauthent
 travel as IAM-gated `InvokeAgentRuntime` envelopes, and IAM is the gateway. Channels, schedules and wake-ups call the
 protocol in process.
 
+This changes a default. Today the only route served by default is `POST /invoke`; reading sessions is the opt-in
+`/control/*`. With the user plane on by default, anyone who reaches the port can also list every session, including a
+channel's direct messages, read and follow them, and abort or rewind them, as anyone who reaches it can already make
+the agent run today. The user plane is what a client needs, so it stays on; a deployment with a public URL puts a
+gateway in front, or turns `http.api` off when only its channels are used, since they call the protocol in process.
+
 ### 7.8 SPEC changes (v1)
 
 `docs/SPEC.md` is rewritten as this protocol. Against v0.1:
@@ -604,7 +622,7 @@ protocol in process.
 | Section | Change |
 |---|---|
 | §2 | `invoke(request)` returns the receipt and then the run's events, or a single `rejected` |
-| §3 | `Scope` goes. The request carries an optional `sessionId`, `whenBusy` and `idempotencyKey`; forking is `sessions.create` |
+| §3 | `Scope` goes. The request carries an optional `sessionId`, `whenBusy`, `idempotencyKey` and, in process, `source`; forking is `sessions.create` |
 | §5 | Events are durable entries and live events (§7.5). `completed.data` goes: no harness produces it, and a structured result waits for a design |
 | §6, the three endings | (a) the run's `run_ended` entry; (b) `rejected`; (c) the caller stops reading and detaches, while the run goes on |
 | §6, MUST 1 | An invoke stream holds exactly one `rejected`, or ends with its run's `run_ended`, unless the process stops |
@@ -733,7 +751,9 @@ The entry points inside FastAgent call the protocol in process, like any other c
 
 Where a thread forks is found through the platform's reply chain: the message the thread starts from, then each
 message it replies to, nearest first. The first message in the chain that names a run decides, and the thread forks at
-that run's answer. Two kinds of message name a run:
+that run's answer. A run without one, still running or ended without an answer, forks it at the message that started
+the run: the thread has the question, and an answer still being written stays in the chat. A queued run's message is
+not in the history yet, so it forks the thread at the chat's present. Two kinds of message name a run:
 
 - **A message the channel posted for a run**, such as an answer or one of its chunks. The channel records each one
   with its run, in its own state and bounded per place. This finds an answer in a direct message, which quotes
@@ -748,7 +768,7 @@ session's other content, such as a direct conversation or what a schedule posted
 readers. The post still reaches the thread: it is quoted in the thread's first prompt, and the chat's discussion
 arrives through the place's history read from the platform ([place history](place-history.md)).
 
-Each records its `source` on the run. Channels keep their turn store, because it is what they owe the chat. Whether
+Each passes its `source` with the invoke (§7.2). Channels keep their turn store, because it is what they owe the chat. Whether
 `idempotencyKey` replaces their redelivery dedup, and whether they keep their own queue, is decided when they move
 (§12).
 
@@ -792,7 +812,7 @@ unused.
 | `cancelRun(session, runId)`, `abort(session)` | Withdraw or stop one run; stop everything the session is doing |
 | `read(session, { after })`, live events | The serving layer builds `read`, `follow` and `runs.follow` on them |
 | `create`, `open`, `fork`, `delete`, settings | Session lifecycle; the serving layer maps caller-named ids to the harness's own |
-| Capabilities | `steer`, `fork`, `durableQueue`, `durableRuns`, and whether run boundaries are native or written by the helper |
+| Capabilities | `steer`, `fork`, `durableQueue`, `durableRuns`, and whether run boundaries are native or written by the helper. A port that offers `steer` keeps a run going while it holds a steered message it has not taken |
 
 |  | Withdraw a queued run | Stop the running run, keep the queue | Abort the session |
 |---|---|---|---|
@@ -832,8 +852,9 @@ events, and for a harness that is only a loop the helper's queue and current run
 | `abort` | Stops: `canceled` by `abort` | Withdrawn: `canceled` by `abort` |
 | The process stops: a restart or a deploy | Continues with `durableRuns`; otherwise ends `interrupted`, and what it recorded stays | Stays queued with `durableQueue`; otherwise lost |
 
-The service never reruns a run: its tools may already have had effects (§3.1, invariant 3). A caller that owes an
-answer invokes again with the same idempotency key; the channels do, from their turn stores.
+The service never reruns a run on its own: its tools may already have had effects (§3.1, invariant 3). A caller that
+owes an answer invokes again with the message's key, which starts a new run only when the key's run was
+`interrupted` (§7.3); the channels do, from their turn stores, so they stay at-least-once.
 
 Process affinity exists only while a run is active, and routing across instances belongs to a session router above
 FastAgent ([session control](session-control.md) §9). FastAgent's deployments meet it by topology: one process per
@@ -925,7 +946,8 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 | Sessions | Named by the caller; created by an invoke or an `update` | Named by the caller or by the service; created by an invoke or by `sessions.create`, the only way to fork (§7.4) |
 | A busy session | Rejected; each caller waits its own way | `whenBusy`: `queue` (the default), `steer`, `reject` (§7.2) |
 | Stopping and steering | `abort`, `steer` and `followUp` on the session | `runs.cancel` and the session's `abort`; steering through `invoke` (§7.3, §7.4) |
-| HTTP | `POST /invoke` (`http.invoke`) and `/control/*` (`sessionControl`) | The user plane (`http.api`) and the control plane (`/control`, `http.control`) (§7.7) |
+| HTTP | `POST /invoke` (`http.invoke`) on by default; reading and stopping sessions only through the opt-in `/control/*` (`sessionControl`) | The user plane (`http.api`), on by default, now includes listing, reading, following, aborting and rewinding sessions; the control plane (`/control`, `http.control`) is off by default (§7.7) |
+| A channel's turn after a restart | Its turn store replays it, at most three times | The same in effect: the service never reruns, and the turn store invokes again with the message's key, which starts a new run only when the key's run was `interrupted` (§7.3) |
 | The harness boundary | `Agent` is both what callers use and what pi implements | Two contracts: the protocol above, the harness port below, with the queue behind the port (§9.1) |
 | AgentCore | One fixed runtime session for every entry point | A runtime session per conversation (§10.2) |
 | The agent's own changes on a host | Lost at the next deploy | Designed later (#605) |
@@ -1008,7 +1030,13 @@ The serving protocol:
   that exists is a `conflict`; an invoke into an unknown session creates it empty (§7.2, §7.4).
 - A busy session: each invoke says what its message is (`whenBusy`: `queue` by default, `steer`, `reject`). A session
   holds at most 20 queued runs, and a process caps its runs in flight (§7.2, §7.3).
-- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run (§7.2).
+- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run, except
+  a run that ended `interrupted`, whose key starts a new run. The service never reruns on its own; a caller that owes
+  an answer decides to, so channels stay at-least-once (§7.2, §7.3).
+- A steered message joins the running run when it is accepted, and a run does not end while it holds one it has not
+  taken, so the receipt never waits for the harness (§7.2).
+- A run's `source` is set in process by channels, schedules and wake-ups; a remote caller cannot set it and is
+  recorded as `api` (§7.2).
 - A run outlives its caller: a caller that stops reading detaches. Runs are read, followed and canceled by id; the
   session's `abort` stops the running run, every queued run and a manual compaction (§7.3, §7.4).
 - A session's history is read with `read` (state and a page, after or before a cursor) and followed with `follow`
@@ -1020,9 +1048,13 @@ The serving protocol:
 - A thread forks at the answer of the run named by the nearest message of its reply chain: a message the channel
   posted for a run, which it records, or a user's message, by its idempotency key. When nothing names a run,
   including a post the agent made through a send tool, it forks at the chat's present; a post is never followed back
-  to another session, whose other content would reach the thread's readers (§8.3).
+  to another session, whose other content would reach the thread's readers. A run without an answer forks the thread
+  at its message, and a queued one at the present; a fork copies history, not runs (§7.4, §8.3).
 - The operations are grouped by who uses them: the user plane (on by default) and the control plane (`/control`, off
   by default), which holds a session's name, model and thinking level, and its deletion (§7.7).
+- Reading, following, aborting and rewinding sessions move from the opt-in `/control/*` into the user plane, on by
+  default and unauthenticated like `POST /invoke` today; a deployment with a public URL puts a gateway in front or
+  turns `http.api` off (§7.7).
 - FastAgent authenticates nobody: exposing it belongs to an API gateway in front, and authentication inside FastAgent
   would plug in as middleware (§7.7).
 - Naming: fields are camelCase; enum values and discriminators are snake_case; a field that refers to another object
