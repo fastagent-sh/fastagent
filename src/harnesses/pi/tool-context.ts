@@ -1,7 +1,7 @@
 /** Per-turn capabilities shared by every FastAgent-defined tool. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionEntry as PiSessionEntry, AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ResolvedContext } from "../../contexts/resolve.ts";
+import type { ResolvedContent } from "../../content/resolve.ts";
 
 /** FastAgent's read-only port over the current conversation manager. */
 export interface ReadonlySessionManager {
@@ -62,8 +62,8 @@ export function sessionToolActivation(session: AgentSession): ToolActivation {
 export interface TurnContext {
   /** Working directory for this execution. */
   cwd?: string;
-  /** The agent's contexts, resolved. */
-  contexts?: readonly ResolvedContext[];
+  /** The agent's content, resolved. */
+  content?: readonly ResolvedContent[];
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
 }

@@ -31,9 +31,9 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 
 | Document | Purpose |
 |---|---|
-| [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, what it works on and what it knows, the context types, and the vocabulary later designs build on. |
+| [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on and knows, its types, and the vocabulary later designs build on. |
 | [agent-service.md](agent-service.md) | **Proposed.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (content, connectors and environment, shared as contexts; the environment in mise's `mise.toml`), state, credentials, the serving protocol that replaces the Agent Handler SPEC (sessions, runs, entries; a user plane and a control plane) and its harness port, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
-| [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing contexts, and what each command shows. |
+| [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing content, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
 | [distribution.md](distribution.md) | Why an agent directory has no manifest: what is derivable from the filesystem, what must be recorded, and where that record lives. |

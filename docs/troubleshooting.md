@@ -111,7 +111,7 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **`SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own and each context's `AGENTS.md`, skills and prompt templates** are re-read every
+- **`SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own and each content entry's `AGENTS.md`, skills and prompt templates** are re-read every
   turn.
 - **Code inputs** (`tools/`, `channels/`, `fastagent.config.ts`, `package.json`, `.secrets/.env`)
   restart the dev worker once the turns running in it finish (at most 10 minutes).
@@ -128,7 +128,7 @@ Use `--no-watch` to serve once without the supervisor.
 
 By default, machine state (sessions, channel state, schedule state) lives under the agent's
 `.state/`, the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
-github contexts under its `.contexts/`:
+github content under its `.contexts/`:
 
 ```txt
 <state root>    # default <agent dir>/.state

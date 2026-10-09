@@ -15,7 +15,7 @@ vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 describe("reportAssembly (the startup report dev and start share)", () => {
   const opened = {
     agentDir: "/w/agent",
-    contexts: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
+    content: [{ name: "app", kind: "local", readonly: false, location: "/w/app", notices: [] }],
     modelSpec: "p/m",
     models: agentModels("/w/agent", { authPath: "/w/agent/.secrets/auth.json" }),
     config: {},
@@ -66,7 +66,7 @@ describe("reportAssembly (the startup report dev and start share)", () => {
 
   it("places each command's extras where that command puts them", async () => {
     const dev = await lines({ beforeModel: [["config", "/w/agent/fastagent.config.ts"]] });
-    expect(dev.indexOf("config")).toBe(2); // after agent and its contexts, before model
+    expect(dev.indexOf("config")).toBe(2); // after agent and its content, before model
     expect(dev.indexOf("config")).toBeLessThan(dev.indexOf("model"));
 
     const start = await lines({

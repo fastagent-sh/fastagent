@@ -1,30 +1,30 @@
-/** `fastagent init <dir> [--context <dir>]...`: scaffold a runnable agent and install its dependencies. */
+/** `fastagent init <dir> [--content <dir>]...`: scaffold a runnable agent and install its dependencies. */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { createAgent } from "../../harnesses/pi/authoring.ts";
-import { declarationFor } from "../../contexts/source.ts";
-import { failEdit } from "./context.ts";
-import { contextLines } from "../contexts-view.ts";
+import { declarationFor } from "../../content/source.ts";
+import { failEdit } from "./content.ts";
+import { contentLines } from "../content-view.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
-  /** `--context` sources, each a directory the agent works on. */
-  contexts: string[];
+  /** `--content` sources, each a directory the agent works on. */
+  content: string[];
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  // Every source is read, and every context checked (by createAgent), BEFORE anything is created.
+  // Every source is read, and every entry checked (by createAgent), BEFORE anything is created.
   const read = await Promise.resolve()
-    .then(() => opts.contexts.map((source) => declarationFor(source, process.cwd())))
+    .then(() => opts.content.map((source) => declarationFor(source, process.cwd())))
     .catch(failStartup);
   // The CLI scaffold carries web access, which needs the `npm install` createAgent runs before the first commit.
   let installFailed = false;
-  const { created, contexts, repository } = await createAgent(dir, {
-    contexts: read.map((source) => source.declaration),
+  const { created, content, repository } = await createAgent(dir, {
+    content: read.map((source) => source.declaration),
     webAccess: true,
     ...(opts.install
       ? {
@@ -42,7 +42,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   }).catch(failEdit(""));
   console.error(`[fastagent] created ${dir}`);
   for (const note of read.flatMap((source) => source.notes)) console.error(`  ${note}`);
-  if (contexts.length > 0) for (const [label, value] of contextLines(contexts)) console.error(`  ${label} ${value}`);
+  if (content.length > 0) for (const [label, value] of contentLines(content)) console.error(`  ${label} ${value}`);
   console.error(`  files: ${created.join(", ")}`);
   console.error(`[fastagent] git: ${repository}`);
 

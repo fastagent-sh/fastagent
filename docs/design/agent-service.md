@@ -1059,7 +1059,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 |---|---|---|
 | Environment | `deploy.apt` in the config, Debian only; locally the machine's own | `mise.toml` and `mise.lock`: the same tools at the same versions on every platform, installed by `deploy` and by every command that runs the agent (§4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Contexts | `contexts` in the config: repositories, cloned into `.contexts/` | Content in `context.json`, at `content/<name>/`: a clone, a link to the author's checkout, a mount. A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
+| Content and contexts | `content` in the config: repositories, cloned into `.contexts/` | Content in `context.json`, at `content/<name>/`: a clone, a link to the author's checkout, a mount. A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | One per file directly in `tools/`, default-exported; helpers kept outside | Every `defineTool` value exported from any module below `tools/`; helpers beside them (§8.1) |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1076,15 +1076,15 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 ### 11.1 What changes in the agent model
 
-The [agent model](agent-model.md) describes what is implemented, in its vocabulary, and is rewritten when step 3
-lands (§12):
+The [agent model](agent-model.md) describes what is implemented. It took this design's vocabulary in step 3 (§12):
+the data an agent works on is its content, and *context* is the whole. What still differs:
 
 | Agent model (implemented) | This design |
 |---|---|
-| A context is data: a directory the agent works on or knows | That is content; *context* means the whole: content, connectors and environment, and a context is the unit of sharing (§3, §3.6) |
-| Contexts in the config (`contexts`), of type `local` or `github` | Content in `context.json`, of the same types (§8.1) |
+| Content in the config (`content`), of type `local` or `github` | Content in `context.json`, of the same types (§8.1) |
 | Cloned into `.contexts/<name>/` | Materialized at `content/<name>/`; `.contexts/<name>/` holds the fetched contexts (§8.1) |
-| A context's skills named `<context>/<skill>` | Kept, for content entries and for shared contexts alike (§3.6) |
+| A content entry's skills named `<content>/<skill>` | Kept, and a shared context's skills are named `<context>/<skill>` (§3.6) |
+| No shared contexts | A context is the unit of sharing (§3.6) |
 | The machine lends the environment | `mise.toml` declares it; the machine still lends pi's own skills, prompt templates and settings (§4) |
 
 ## 12. Order of work

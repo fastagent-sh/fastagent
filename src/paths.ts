@@ -1,7 +1,7 @@
 /**
  * ADDRESSING: which directory is the agent — the one holding `fastagent.config.ts`, named by the caller — plus the
  * machinery paths that follow from it. Nothing about what the agent works on is derived from where it sits; that is
- * its declared contexts (src/contexts/).
+ * its declared content (src/content/).
  */
 import { type Stats, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
@@ -153,7 +153,7 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
 }
 
 /**
- * Where an instance keeps the clones of its github contexts, each under the context's name:
+ * Where an instance keeps the clones of its github content, each under the entry's name:
  * `FASTAGENT_CONTEXTS_DIR` env > `<agentDir>/.contexts`. Not inside the state root: a clone is data the agent works
  * on, so its location is one the agent is told and expected to write in, which `.state/` (bookkeeping) is not.
  */

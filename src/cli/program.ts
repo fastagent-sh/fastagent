@@ -51,26 +51,26 @@ const init: CommandSpec = {
   args: [{ name: "<dir>", description: "the new agent's directory (created when missing)" }],
   flags: [
     {
-      flags: "--context <source>",
+      flags: "--content <source>",
       description:
-        "a directory or github:owner/repo the agent works on (repeatable); declared in fastagent.config.ts `contexts`",
+        "a directory or github:owner/repo the agent works on (repeatable); declared in fastagent.config.ts `content`",
       repeatable: true,
     },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
   ],
   examples: [
     { cmd: "fastagent init my-agent", note: "an agent that only talks" },
-    { cmd: "fastagent init reviewer --context ~/code/app", note: "works on ~/code/app" },
-    { cmd: "fastagent init triage --context github:acme/app", note: "works on a clone" },
+    { cmd: "fastagent init reviewer --content ~/code/app", note: "works on ~/code/app" },
+    { cmd: "fastagent init triage --content github:acme/app", note: "works on a clone" },
   ],
   notes:
     "An agent is a directory holding a fastagent.config.ts, and it is also the agent's working directory. " +
     "It lives in a directory of its own, never inside a project or another agent: what it works on is declared " +
-    "as a context. Add one it only knows later with `fastagent context add <dir> --readonly`.",
+    "as its content. Add a directory it only knows later with `fastagent content add <dir> --readonly`.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       install: f.install !== false,
-      contexts: (f.context as string[] | undefined) ?? [],
+      content: (f.content as string[] | undefined) ?? [],
     }),
 };
 
@@ -233,7 +233,7 @@ const start: CommandSpec = {
     "            volume so a redeploy never wipes it\n" +
     "  secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production\n" +
     "            .env + auth.json\n" +
-    "  clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts — github contexts\n" +
+    "  clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts — github content\n" +
     "  sessions: <state>/sessions — no separate knob; move the state root\n" +
     "  auth:     FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
     "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
@@ -433,25 +433,25 @@ const deploy: CommandSpec = {
     }),
 };
 
-const context: CommandSpec = {
-  name: "context",
+const content: CommandSpec = {
+  name: "content",
   summary: "list, add or remove what the agent works on and knows",
   description:
-    "A context is a directory the agent works on (or only knows, with --readonly), declared in the literal " +
-    "`contexts` list of fastagent.config.ts. These commands edit only that list, and refuse when it is computed.",
+    "Content is a directory the agent works on (or only knows, with --readonly), declared in the literal " +
+    "`content` list of fastagent.config.ts. These commands edit only that list, and refuse when it is computed.",
   subcommands: [
     {
       name: "list",
-      summary: "each context, where it is, and whether the agent works on it or only knows it",
+      summary: "each content entry, where it is, and whether the agent works on it or only knows it",
       args: [AGENT_ARG],
       flags: [JSON_FLAG],
-      examples: [{ cmd: "fastagent context list" }],
+      examples: [{ cmd: "fastagent content list" }],
       run: async (args, f) =>
-        (await import("./commands/context.ts")).runContextList(args[0] as string, f.json === true),
+        (await import("./commands/content.ts")).runContentList(args[0] as string, f.json === true),
     },
     {
       name: "add",
-      summary: "declare a directory or a GitHub repository as a context",
+      summary: "declare a directory or a GitHub repository as content",
       args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
       flags: [
         { flags: "--readonly", description: "the agent knows it and does not write it" },
@@ -460,18 +460,18 @@ const context: CommandSpec = {
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
       ],
       examples: [
-        { cmd: "fastagent context add ~/code/app", note: "works on" },
-        { cmd: "fastagent context add ~/handbook --readonly", note: "knows" },
-        { cmd: "fastagent context add github:acme/docs --readonly", note: "knows a clone" },
+        { cmd: "fastagent content add ~/code/app", note: "works on" },
+        { cmd: "fastagent content add ~/handbook --readonly", note: "knows" },
+        { cmd: "fastagent content add github:acme/docs --readonly", note: "knows a clone" },
       ],
       notes:
         "The root of a GitHub checkout is declared `{ github, local }`: the repository, with that checkout " +
         "used as it is on this machine. A repository with no checkout here is cloned, and brought up to date in " +
         "place at each start where git can do so without touching the agent's work. Any other directory is " +
-        "declared `{ local }`: it stays on this machine, and a deployed instance works without it. A context may not contain " +
+        "declared `{ local }`: it stays on this machine, and a deployed instance works without it. Content may not contain " +
         "the agent directory, nor sit inside it.",
       run: async (args, f) =>
-        (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
+        (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
           readonly: f.readonly === true,
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
           ...(typeof f.local === "string" ? { local: f.local } : {}),
@@ -480,11 +480,11 @@ const context: CommandSpec = {
     },
     {
       name: "remove",
-      summary: "remove a context from the declaration (the directory itself is untouched)",
-      args: [{ name: "<name>", description: "the context's name" }, AGENT_ARG],
-      examples: [{ cmd: "fastagent context remove app" }],
+      summary: "remove a content entry from the declaration (the directory itself is untouched)",
+      args: [{ name: "<name>", description: "the entry's name" }, AGENT_ARG],
+      examples: [{ cmd: "fastagent content remove app" }],
       run: async (args) =>
-        (await import("./commands/context.ts")).runContextRemove(args[0] as string, args[1] as string),
+        (await import("./commands/content.ts")).runContentRemove(args[0] as string, args[1] as string),
     },
   ],
 };
@@ -629,7 +629,7 @@ export const specs: readonly CommandSpec[] = [
   init,
   models,
   info,
-  context,
+  content,
   tool,
   invoke,
   schedules,

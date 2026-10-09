@@ -22,8 +22,8 @@ import { readMachine, withMachine } from "../../harnesses/pi/machine.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
-import { contextLines } from "../contexts-view.ts";
-import { type ResolvedContext, resolveContexts } from "../../contexts/resolve.ts";
+import { contentLines } from "../content-view.ts";
+import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -35,15 +35,15 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
-  // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a context is missing.
-  let contexts: ResolvedContext[] = [];
-  let contextsError: string | undefined;
+  // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a content entry is missing.
+  let content: ResolvedContent[] = [];
+  let contentError: string | undefined;
   try {
-    contexts = resolveContexts(agentDir, config.contexts);
+    content = resolveContent(agentDir, config.content);
   } catch (error) {
-    contextsError = (error as Error).message;
+    contentError = (error as Error).message;
   }
-  const definition = await loadAgentDefinition(agentDir, { contexts }).catch(failStartup);
+  const definition = await loadAgentDefinition(agentDir, { content }).catch(failStartup);
   // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
   const machineResources = await readMachine(agentDir);
   const skills = withMachine(definition.skills, machineResources.skills);
@@ -120,8 +120,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       JSON.stringify(
         {
           agentDir,
-          contexts,
-          contextsError: contextsError ?? null,
+          content,
+          contentError: contentError ?? null,
           contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
@@ -167,8 +167,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
-  for (const [label, value] of contextLines(contexts)) line(label, value);
-  if (contextsError) cont(`⚠ ${contextsError}`);
+  for (const [label, value] of contentLines(content)) line(label, value);
+  if (contentError) cont(`⚠ ${contentError}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);

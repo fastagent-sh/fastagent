@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, context, dev, chat, invoke, tool, start, login, models, add, schedules, and deploy commands with flags."
+description: "The fastagent CLI reference: init, info, content, dev, chat, invoke, tool, start, login, models, add, schedules, and deploy commands with flags."
 status: current
 ---
 
@@ -18,9 +18,9 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 
 | Command | Purpose |
 |---|---|
-| `init <dir>` | Create an agent in a directory of its own; `--context` declares what it works on: a directory or a GitHub repository. |
+| `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
-| `context list\|add\|remove` | List, add or remove what the agent works on and knows. |
+| `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
 | `models [search]` | List model specs. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally with watch/reload. |
@@ -45,7 +45,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 ## `fastagent init`
 
 ```bash
-fastagent init <dir> [--context <source>]... [--no-install]
+fastagent init <dir> [--content <source>]... [--no-install]
 ```
 
 Creates the agent in `<dir>` itself, which must be new or empty: `APPEND_SYSTEM.md`, a `writing-great-skills`
@@ -58,8 +58,8 @@ a home directory kept in git with `*` ignored, does not count), git is not insta
 a `user.name`/`user.email` (the repository is kept; commit yourself). A deploy then ships the agent's `.git` with
 it and installs `git` in the image ([what deploy bakes](deploy.md#what-deploy-bakes)).
 
-Each `--context <source>` declares something the agent works on in the config's `contexts` list (see
-[contexts](configuration.md#contexts)), read the way `context add` reads it:
+Each `--content <source>` declares something the agent works on in the config's `content` list (see
+[content](configuration.md#content)), read the way `content add` reads it:
 
 | `<source>` | Declared |
 |---|---|
@@ -68,12 +68,12 @@ Each `--context <source>` declares something the agent works on in the config's 
 | Any other directory, a subdirectory of such a checkout included | `{ local: "<absolute path>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
 
 A directory stays on this machine: a deployed instance works without it, and `deploy` says so. A repository is cloned
-on a host. Every context is checked before anything is written: a directory must exist,
-and no declared location may contain the agent directory or sit inside it. Without `--context` the agent has none
+on a host. Every entry is checked before anything is written: a directory must exist,
+and no declared location may contain the agent directory or sit inside it. Without `--content` the agent has none
 and works only in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
-the agent elsewhere and attaches the project: `fastagent init <new directory> --context <project>`. It also refuses a
+the agent elsewhere and attaches the project: `fastagent init <new directory> --content <project>`. It also refuses a
 directory inside another agent. To deploy, keep the directory's name to letters, digits, `-` and `_`.
 
 A `fastagent.config.ts` makes a directory an agent, whatever its name. Its contents may be `export default {}`.
@@ -86,38 +86,39 @@ fastagent info [agent] [--json] [--model provider/modelId]
 
 Prints, without serving:
 
-- the agent directory, its contexts (`works on` / `knows`, each with its location), config path, model and its
+- the agent directory, its content (`works on` / `knows`, each with its location), config path, model and its
   source,
 - the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
-- skills (each context's named `<context>/<skill>`) and their diagnostics,
+- skills (each content entry's named `<content>/<skill>`) and their diagnostics,
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
 - schedules with their next fire instant (a file that is not a valid schedule is reported),
 - declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
-A context that cannot be resolved (its directory is missing, say) is reported, not fatal. `--json` carries
-`contexts`, `contextsError` and `contextFiles` (the agent directory's `AGENTS.md`, then each context's). Read-only.
+Content that cannot be resolved (its directory is missing, say) is reported, not fatal. `--json` carries
+`content`, `contentError` and `contextFiles` (the agent directory's `AGENTS.md`, then each content entry's).
+Read-only.
 
-## `fastagent context`
+## `fastagent content`
 
 ```bash
-fastagent context list [agent] [--json]
-fastagent context add <source> [agent] [--readonly] [--ref <ref>] [--local <dir>] [--name <name>]
-fastagent context remove <name> [agent]
+fastagent content list [agent] [--json]
+fastagent content add <source> [agent] [--readonly] [--ref <ref>] [--local <dir>] [--name <name>]
+fastagent content remove <name> [agent]
 ```
 
-Edits the literal `contexts` list in `fastagent.config.ts`. `add` reads `<source>` the way `init --context` does: a
+Edits the literal `content` list in `fastagent.config.ts`. `add` reads `<source>` the way `init --content` does: a
 directory, the root of a GitHub checkout (declared as that repository, with the checkout as its `local`), or
-`github:owner/repo`. Paths are written absolute. `--readonly` makes it a context the agent knows rather than works
+`github:owner/repo`. Paths are written absolute. `--readonly` makes it content the agent knows rather than works
 on; `--ref` names a repository's branch, tag or commit; `--local` names the checkout of a
-`github:owner/repo` on this machine. A context's name defaults to its directory's or repository's; `add` asks for
+`github:owner/repo` on this machine. An entry's name defaults to its directory's or repository's; `add` asks for
 `--name` when that name is taken (ignoring case) or is not one segment of letters, digits, `-` and `_`. `remove`
 drops the declaration; the directory or checkout itself is untouched.
 
 Both write a candidate file beside the config, import it, and replace the config only when it declares exactly the
 intended list, so a refusal leaves the config as it was. A list that is computed (a variable, a spread) is refused:
-edit it by hand. `list --json` prints each context as every command resolves it, with its `notices`: a checkout off
+edit it by hand. `list --json` prints each entry as every command resolves it, with its `notices`: a checkout off
 its `ref`, a clone not made yet.
 
 ## `fastagent models`
@@ -171,8 +172,8 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, its own and each context's `AGENTS.md`, skills and prompt templates
-are re-read every turn. A supervisor restarts the
+Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, its own and each content entry's `AGENTS.md`, skills and
+prompt templates are re-read every turn. A supervisor restarts the
 worker on edits to `tools/`, `channels/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
 once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
 an agent that edits its own `tools/` does not cut off the turn that made the edit.
@@ -189,7 +190,7 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 fastagent chat [agent] [--model provider/modelId]
 ```
 
-Opens the agent in pi's TUI with the definition's prompt files, its own and its contexts' `AGENTS.md`, skills, prompt
+Opens the agent in pi's TUI with the definition's prompt files, its own and its content's `AGENTS.md`, skills, prompt
 templates, `tools/` and `extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
 - Sessions are pi's per-directory records (`~/.pi/agent/sessions/<encoded agent directory>`), separate from served
@@ -234,7 +235,7 @@ What a run said is in its session under `<state root>/sessions/`. A failure befo
 fastagent tool <name> '<json-args>' [agent]
 ```
 
-Runs one tool directly, without a model or server. It gets the agent directory as `cwd` and the agent's contexts,
+Runs one tool directly, without a model or server. It gets the agent directory as `cwd` and the agent's content,
 but no session.
 
 ```bash
@@ -312,7 +313,7 @@ Flags come after the command: `fastagent info --json`. Global: `-h`/`--help` (al
 | `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
 | `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
-| `--json` | `info`, `schedules list`, `context list` | Machine-readable output. |
+| `--json` | `info`, `schedules list`, `content list` | Machine-readable output. |
 
 ## Exit codes
 

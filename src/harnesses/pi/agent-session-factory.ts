@@ -45,7 +45,7 @@ import {
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import { warnWhenChanged } from "./report.ts";
-import type { ResolvedContext } from "../../contexts/resolve.ts";
+import type { ResolvedContent } from "../../content/resolve.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
@@ -88,8 +88,8 @@ export interface PiAgentSessionFactoryOptions {
   readDefinition: () => PiSessionDefinition | Promise<PiSessionDefinition>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /** What fastagent-defined tools see as `contexts`. */
-  contexts?: readonly ResolvedContext[];
+  /** What fastagent-defined tools see as `content`. */
+  content?: readonly ResolvedContent[];
   /** The definition's own extension entry points, asked for every bound session (and current when it answers). */
   extensionPaths?: () => Promise<readonly string[]>;
   /** Built-ins omitted by an explicit lower-level tool list. */
@@ -179,8 +179,8 @@ export interface BindPiSessionOptions {
   tools: MountedTool[];
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
-  /** What fastagent-defined tools see as `contexts`. */
-  contexts?: readonly ResolvedContext[];
+  /** What fastagent-defined tools see as `content`. */
+  content?: readonly ResolvedContent[];
   /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
   /** The CALLER's session id — what a tool asking which conversation it is in hears. */
@@ -220,7 +220,7 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
     session,
     context: {
       cwd,
-      contexts: options.contexts ?? [],
+      content: options.content ?? [],
       sessionManager: agentSessionManager(session, sessionId),
       tools: sessionToolActivation(session),
     },
@@ -620,7 +620,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       thinkingLevel: settings.thinkingLevel,
       tools,
       cwd,
-      contexts: options.contexts ?? [],
+      content: options.content ?? [],
       excludedToolNames,
       sessionId,
     });

@@ -122,7 +122,7 @@ services:
     environment:
       PORT: "${input.port}"
       # Machinery on the ONE state volume: mutable state, credentials (logged in on the box) and the clones of the
-      # agent's github contexts. Pinned AFTER env_file so a local path in that file (the scaffold lists these) cannot
+      # agent's github content. Pinned AFTER env_file so a local path in that file (the scaffold lists these) cannot
       # send the container's state, sessions, credentials or clones somewhere outside the volume — or at a host path
       # that does not exist here at all.
       FASTAGENT_STATE_DIR: "${MOUNT}/.state"

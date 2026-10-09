@@ -1,6 +1,6 @@
 ---
 title: Agent CLI
-description: "How the CLI addresses an Agent, where a local instance lives, what init declares, how contexts are edited, and what each command shows about them. The command-line side of the agent model."
+description: "How the CLI addresses an Agent, where a local instance lives, what init declares, how content is edited, and what each command shows about it. The command-line side of the agent model."
 type: design-doc
 status: implemented
 ---
@@ -16,7 +16,7 @@ Three rules shape every command:
   that directory sits.
 - **The local instance is implicit.** An author runs an agent; they do not create or name an instance on their
   own machine.
-- **Every context is resolved out loud, in the author's words.** What the agent works on and what it knows,
+- **All content is resolved out loud, in the author's words.** What the agent works on and what it knows,
   where each one is, and what a host will get are printed, never inferred silently.
 
 ## 1. Addressing an Agent
@@ -44,14 +44,14 @@ are processes serving the same instance. Its state is kept beside the definition
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
 ├── .state/                          the instance's sessions, channel and schedule state
-└── .contexts/                       the clones the instance made, under each context's name
+└── .contexts/                       the clones the instance made, under each entry's name
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
 which directory holds it. Keeping it beside the definition means moving the directory moves its conversations,
 an agent needs no name on its own machine, and there is nothing to list or clean up but the directory itself.
 Terraform keeps its local state in `.terraform/` beside the configuration for the same reasons. Since an agent
-directory is never inside a context, this state never sits in a project's tree.
+directory is never inside its content, this state never sits in a project's tree.
 
 What this asks of others: both directories stay out of version control (the ignore files `init` writes keep them out), and a tool that copies an
 Agent to give it to someone leaves them out. duang's design already excludes `.secrets`, `.env` and session state
@@ -66,12 +66,12 @@ A hosted instance keeps its state in the host's storage; how is a deployment que
 ## 3. `init`
 
 ```bash
-fastagent init <dir> [--context <source>]...
+fastagent init <dir> [--content <source>]...
 ```
 
-`init` creates the agent in `<dir>` itself, which must be new or empty, and adds one context it works on per
-`--context`. Without `--context` the agent has none and only talks. A context it only knows is added afterwards
-with `fastagent context add --readonly`.
+`init` creates the agent in `<dir>` itself, which must be new or empty, and adds one content entry it works on per
+`--content`. Without `--content` the agent has none and only talks. Content it only knows is added afterwards
+with `fastagent content add --readonly`.
 
 | `<source>` | Declared |
 |---|---|
@@ -83,8 +83,8 @@ with `fastagent context add --readonly`.
   directory when the agent directory moves.
 - **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
   agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
-- **A context may not contain the agent, or sit inside it.** `init ~/code/app/agent --context ~/code/app` is
-  refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --context ~/code/app`.
+- **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
+  refused, with the way out: put the agent beside the project, `init ~/agents/reviewer --content ~/code/app`.
 - **Run in a project, `init` says where to go.** `fastagent init .` in a directory that is not empty is refused
   with the command that creates the agent elsewhere and attaches this directory.
 - **The agent is a git repository from the start.** `init` runs `git init` and commits the scaffold, so a change the
@@ -104,25 +104,25 @@ created  ~/agents/reviewer
 works on app  ~/code/app (github acme/app); a host clones it
 ```
 
-## 4. Editing contexts: `fastagent context`
+## 4. Editing content: `fastagent content`
 
 People edit `fastagent.config.ts` by hand. A client such as duang cannot safely rewrite a TypeScript module, and
-contexts belong in the definition, not in the client, or a deployment from that directory would lose them. Both
-use one implementation: the command, or the API under it (`createAgent`, `addContext`, `removeContext`,
-`listContexts` in `/pi`; [API reference](../api-reference.md#contexts)). The command:
+content belongs in the definition, not in the client, or a deployment from that directory would lose them. Both
+use one implementation: the command, or the API under it (`createAgent`, `addContent`, `removeContent`,
+`listContent` in `/pi`; [API reference](../api-reference.md#content)). The command:
 
 ```bash
-fastagent context list [agent] [--json]
-fastagent context add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--local <dir>]
-fastagent context remove <name> [agent]
+fastagent content list [agent] [--json]
+fastagent content add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--local <dir>]
+fastagent content remove <name> [agent]
 ```
 
-- `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it a context the agent
+- `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it content the agent
   knows rather than works on.
-- `add` refuses a context that contains the agent directory or sits inside it, and asks for `--name` when the
+- `add` refuses content that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
-- The command edits only the literal `contexts` array `init` writes. When an author has replaced it with a
+- The command edits only the literal `content` array `init` writes. When an author has replaced it with a
   computed value, the command refuses and says why, rather than guessing.
 
 ## 5. Running: `dev`, `start`, `chat`, `invoke`
@@ -140,23 +140,23 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` context has no checkout here | `cloned github acme/app into .contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
-| A local context's path does not exist | Refused, naming the path and the declaration |
-| A context contains the agent directory or sits inside it | Refused, naming both and the way out |
-| Two contexts' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
+| A `github` entry has no checkout here | `cloned github acme/app into .contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
+| A `local` entry's path does not exist | Refused, naming the path and the declaration |
+| An entry contains the agent directory or sits inside it | Refused, naming both and the way out |
+| Two entries' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
 | A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |
 | The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
-| A `github` context cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
+| A `github` entry cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
 
 ## 6. `info`
 
-`info` adds each context's resolution and what a deployment would do with it, so an author sees which contexts would
-not reach a host without deploying.
+`info` adds each content entry's resolution and what a deployment would do with it, so an author sees which entries
+would not reach a host without deploying.
 
 ## 7. `deploy`
 
-The definition is shipped to the host. Preflight lists what the host gets for each context:
+The definition is shipped to the host. Preflight lists what the host gets for each content entry:
 
 ```text
 works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
@@ -173,7 +173,7 @@ knows     papers    local ~/papers                stays on this machine; the dep
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
   §3): preflight names it, a warning for one the agent works on, and the host's start names it again. The agent
   directory does reach a host, as the definition each release replaces.
-- **A `github` context's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
+- **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 
 ## 8. `login` and `add <channel>`

@@ -43,14 +43,14 @@ export {
   resolveModel,
   type FastagentConfig,
 } from "./harnesses/pi/config.ts";
-// Creating an agent and editing its contexts: what `fastagent init` and `fastagent context` run.
+// Creating an agent and editing its content: what `fastagent init` and `fastagent content` run.
 export {
-  addContext,
-  ContextNameError,
+  addContent,
+  ContentNameError,
   createAgent,
-  listContexts,
-  removeContext,
-  type ContextEdit,
+  listContent,
+  removeContent,
+  type ContentEdit,
   type CreateAgentOptions,
   type CreatedAgent,
 } from "./harnesses/pi/authoring.ts";

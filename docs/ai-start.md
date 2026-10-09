@@ -36,7 +36,7 @@ Preserve existing code, context, credentials, and deployment ownership.
 |---|---|---|
 | Ongoing goal, standing instructions, approval policy | `APPEND_SYSTEM.md` | Describe what the agent is responsible for and when it must ask. It is added to pi's default prompt, which already says who the agent is. |
 | An identity other than pi's coding assistant | `SYSTEM.md` | Replaces pi's default prompt. Write it only when the agent should be someone else; an identity in `APPEND_SYSTEM.md` gives the model two. |
-| Project facts and conventions | The project's `AGENTS.md`, with the project declared as a [context](configuration.md#contexts) | Keep project context separate from the agent's identity. FastAgent reads each context's root `AGENTS.md`, after the agent directory's own, which says how the agent is built and changed. |
+| Project facts and conventions | The project's `AGENTS.md`, with the project declared as [content](configuration.md#content) | Keep project context separate from the agent's identity. FastAgent reads each content entry's root `AGENTS.md`, after the agent directory's own, which says how the agent is built and changed. |
 | Reusable methods and domain knowledge | `skills/<name>/SKILL.md` | Explain when to use a method and what good work looks like; let the agent choose it. |
 | Deterministic operations and external-system access | `tools/<name>.ts` | Expose a small typed capability with runtime input validation, useful results, and visible failures. |
 | Event ingress and conversational replies | `channels/` | Start with a first-party channel. It owns protocol verification and routing; chat integrations also deliver normal replies. |
@@ -59,18 +59,18 @@ network, and credentials. Constrain the whole process when isolation is required
 ## 2. Create the agent beside what it works on
 
 An agent is a directory of its own. It holds `fastagent.config.ts`, the definition, and the local instance's
-`.state/`, `.secrets/` and `.contexts/` (its clones of github contexts), and it is the agent's working directory. What the agent works on (a project, a folder) is
-declared as a **context**; the agent never sits inside it, and a project never sits inside the agent.
+`.state/`, `.secrets/` and `.contexts/` (its clones of github content), and it is the agent's working directory. What the agent works on (a project, a folder) is
+declared as its **content**; the agent never sits inside it, and a project never sits inside the agent.
 
 | Situation | Do |
 |---|---|
-| A new agent | `fastagent init my-agent`. Without a context it works only in its own directory. |
-| An agent for an existing project | `fastagent init <agent dir> --context <project>`: the agent lives beside the project, which gets no writes from `init`. |
+| A new agent | `fastagent init my-agent`. Without content it works only in its own directory. |
+| An agent for an existing project | `fastagent init <agent dir> --content <project>`: the agent lives beside the project, which gets no writes from `init`. |
 | An existing application embeds the agent | Keep the definition in its own directory beside the application; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
 A config file identifies an agent, not its directory name. Before running `init`, check whether the owner already
-has an agent (a directory holding `fastagent.config.ts`) and reuse it. `fastagent context add <dir>` declares a
-context later, and `--readonly` declares one the agent only knows. See [contexts](configuration.md#contexts).
+has an agent (a directory holding `fastagent.config.ts`) and reuse it. `fastagent content add <dir>` declares
+content later, and `--readonly` declares a directory the agent only knows. See [content](configuration.md#content).
 Optional directories remain optional.
 
 The example below uses a **fresh, default scaffold**. Install the CLI once, then run:
@@ -281,7 +281,7 @@ process exit. For continuous local development, ask the owner to run:
 fastagent dev
 ```
 
-`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md`, skills and prompt
+`dev` is a long-running server. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a content entry's `AGENTS.md`, skills and prompt
 templates are
 read on the next turn.
 With watching enabled, changes under the agent's `tools/` and `channels/`
@@ -405,8 +405,8 @@ the service assembly, Slack transport, or a separate scheduler. Nothing in the a
 
 Choose a host, cost budget, credentials, and public ingress with the owner. Generate only the selected
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
-A `github` context is cloned on the host (put `GITHUB_TOKEN` in `.secrets/.env` for a private repository or for
-pushes); a `local` context stays on this machine, and the deployed agent works without it (`deploy` says so).
+A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/.env` for a private repository or for
+pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
 Copy reference material the agent only reads into the agent directory, which every release ships; move data it works
 on to a repository.
 
@@ -440,7 +440,7 @@ host. AgentCore's public webhook URL belongs to its forwarder; direct runtime in
 | Prompt files, skills, tools, config, and package lockfile | The image holds the agent directory and installs its dependencies. Definition edits survive same-release restarts; a new release replaces the definition. Git is optional version control. |
 | Runtime session journals, channel state, pending work, fired-slot claims | Keep the resolved state root on the host's volume. Docker, Fly, and Railway retain it across deploys. AgentCore's managed SessionStorage retains it across compute stop/resume, then resets on deploy or after 14 idle days. |
 | Rotated model and Slack bot credentials | Keep both the selected secrets/state roots on the volume. A model login is the box's own (`fastagent login --deployment`); a redeploy keeps it. AgentCore clears them on deploy, so a login there is repeated after every deploy; an API key in the value file avoids it. Treat backups as credential-bearing. Keep builder-only Slack onboarding credentials local. |
-| Business notes, approvals, generated artifacts | Locally, write ongoing work into a context the agent works on. On a host, the agent's own directory is replaced by every release and contexts are not deployed yet, so use an external store. |
+| Business notes, approvals, generated artifacts | Locally, write ongoing work into content the agent works on. On a host, the agent's own directory is replaced by every release and local content is not deployed, so use an external store. |
 
 Turn recovery is channel-specific: Telegram, Slack, and Feishu/Lark replay accepted turns at least once,
 so side effects must tolerate repetition.

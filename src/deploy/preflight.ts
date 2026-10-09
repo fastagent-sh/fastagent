@@ -15,7 +15,7 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
-import { type DeclaredContext, declareContexts } from "../contexts/declare.ts";
+import { type DeclaredContent, declareContent } from "../content/declare.ts";
 import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -98,27 +98,27 @@ export interface DeployReport {
 }
 
 /**
- * What each context becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
+ * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
  * repository is cloned there, as on this machine without a checkout. A directory of this machine stays here: the
  * deployed agent works without it, which the line says and says how to change. One the agent works on is a warning,
  * since the deployed agent lacks data it was meant to work on; one it only knows, a note.
  */
-function checkContexts(contexts: readonly DeclaredContext[], storageResets: boolean, report: DeployReport): void {
-  for (const context of contexts) {
-    const role = context.readonly ? "knows" : "works on";
-    if (context.kind === "github") {
+function checkContent(content: readonly DeclaredContent[], storageResets: boolean, report: DeployReport): void {
+  for (const entry of content) {
+    const role = entry.readonly ? "knows" : "works on";
+    if (entry.kind === "github") {
       const fate = storageResets
         ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
         : "cloned on the host, and brought up to date in place at each start";
-      report.note(`${role} ${context.name}: github ${context.repo}${context.ref ? `@${context.ref}` : ""}, ${fate}`);
-    } else if (context.readonly) {
+      report.note(`${role} ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
+    } else if (entry.readonly) {
       report.note(
-        `${role} ${context.name}: local ${context.path}, stays on this machine, and the deployed agent works without ` +
+        `${role} ${entry.name}: local ${entry.path}, stays on this machine, and the deployed agent works without ` +
           `it; to ship what the agent reads there, copy it into the agent directory, which every release carries`,
       );
     } else {
       report.warn(
-        `${role} ${context.name}: local ${context.path}, stays on this machine, and the deployed agent works without ` +
+        `${role} ${entry.name}: local ${entry.path}, stays on this machine, and the deployed agent works without ` +
           `it; to work on it from a host, move it to a GitHub repository and declare it as github`,
       );
     }
@@ -190,8 +190,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  const contexts = declareContexts(config.contexts, agentDir);
-  checkContexts(contexts, storageResets, report);
+  const content = declareContent(config.content, agentDir);
+  checkContent(content, storageResets, report);
 
   // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a
   // skill named with a slash) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
@@ -208,7 +208,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
   // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, which travels like every value.
-  if (contexts.some((context) => context.kind === "github") && !values.get("GITHUB_TOKEN")) {
+  if (content.some((entry) => entry.kind === "github") && !values.get("GITHUB_TOKEN")) {
     report.note(
       `no GITHUB_TOKEN in ${valueFile}: the host clones without a credential, which reaches public repositories ` +
         `only, and the agent cannot push from its clones. Set one there to give it access; it travels with the ` +
@@ -395,9 +395,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(agentDir, authPath);
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
-  // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository context is cloned on the
+  // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
   // host, which takes git too.
-  const needsGit = shipsGit || contexts.some((context) => context.kind === "github");
+  const needsGit = shipsGit || content.some((entry) => entry.kind === "github");
   const apt = needsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     releaseId: randomUUID(),

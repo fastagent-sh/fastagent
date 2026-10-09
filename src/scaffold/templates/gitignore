@@ -7,7 +7,7 @@ node_modules
 
 # machine state: sessions, channel state, schedule state
 .state
-# the clones of the agent's github contexts (each is its repository's, not this one's)
+# the clones of the agent's github content (each is its repository's, not this one's)
 .contexts
 .cache
 

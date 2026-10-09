@@ -172,7 +172,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     model: modelSpec,
     serving: true,
   });
-  const { agent, config, stateRoot, sessionsDir, contexts } = opened;
+  const { agent, config, stateRoot, sessionsDir, content } = opened;
   await reportAssembly(
     { ...opened, modelSpec },
     {
@@ -193,9 +193,9 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     );
   }
   // Only when something is cloned: a clone holds what the agent changed and has not pushed.
-  if (contexts.some((c) => c.kind === "github" && c.clone) && isUnderDir(resolveContextsDir(agentDir), agentDir)) {
+  if (content.some((c) => c.kind === "github" && c.clone) && isUnderDir(resolveContextsDir(agentDir), agentDir)) {
     log.info(
-      "[fastagent] note: github context clones live under the definition; use FASTAGENT_CONTEXTS_DIR on persistent storage for deployment.",
+      "[fastagent] note: github content clones live under the definition; use FASTAGENT_CONTEXTS_DIR on persistent storage for deployment.",
     );
   }
   const traced = logAgentLoop(agent);

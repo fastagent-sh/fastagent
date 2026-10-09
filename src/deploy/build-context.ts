@@ -60,7 +60,7 @@ export interface BuildContextPaths {
   leakCandidates: string[];
   /** The state root, when it exists inside the context. */
   stateShips?: string;
-  /** The clones of the agent's github contexts, when they exist inside the context. */
+  /** The clones of the agent's github content, when they exist inside the context. */
   clonesShip?: string;
   /** The agent's node_modules, when it exists. */
   depDirs: string[];
@@ -162,7 +162,7 @@ export async function checkKeptIgnoreFiles(
     }
     if (clonesShip && !excluded(`${clonesShip}/x`)) {
       report.warn(
-        `your ${rel} (kept) does not exclude \`${clonesShip}\` — the build machine's clones of the agent's github contexts would ship in the image. ${remedy([`/${clonesShip}`])}`,
+        `your ${rel} (kept) does not exclude \`${clonesShip}\` — the build machine's clones of the agent's github content would ship in the image. ${remedy([`/${clonesShip}`])}`,
       );
     }
     const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));

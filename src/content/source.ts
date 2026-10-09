@@ -1,16 +1,16 @@
 /**
- * What a command's `<source>` declares (`init --context`, `fastagent context add`; docs/design/agent-cli.md §3), read
+ * What a command's `<source>` declares (`init --content`, `fastagent content add`; docs/design/agent-cli.md §3), read
  * the same way by both: `github:owner/repo`, a directory in a GitHub checkout, or any other directory.
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { type ContextDeclaration, isGithubRepo } from "./declare.ts";
+import { type ContentDeclaration, isGithubRepo } from "./declare.ts";
 import { checkoutOf, githubRepoOf } from "./git.ts";
 
 export interface SourceOptions {
   readonly?: boolean;
   name?: string;
-  /** A github context's branch, tag or commit. */
+  /** A github entry's branch, tag or commit. */
   ref?: string;
   /** The checkout that stands for a `github:` source on this machine. */
   local?: string;
@@ -26,7 +26,7 @@ export function declarationFor(
   source: string,
   cwd: string,
   options: SourceOptions = {},
-): { declaration: ContextDeclaration; notes: string[] } {
+): { declaration: ContentDeclaration; notes: string[] } {
   const treated = {
     ...(options.readonly ? { readonly: true } : {}),
     ...(options.name !== undefined ? { name: options.name } : {}),

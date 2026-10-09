@@ -196,7 +196,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
     await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
-    await mkdir(join(agentDir, ".contexts")); // …and the clones of the agent's github contexts
+    await mkdir(join(agentDir, ".contexts")); // …and the clones of the agent's github content
     await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
@@ -391,7 +391,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       dir,
       {
         model: "openai/gpt-4o-mini",
-        contexts: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
+        content: [{ local: "/srv/app" }, { local: "/srv/docs", readonly: true }, { github: "acme/handbook" }],
       },
       { run: true },
     );
@@ -415,7 +415,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const dir = await agent();
     const config = {
       model: "openai/gpt-4o-mini",
-      contexts: [{ github: "acme/app" }, { github: "acme/handbook", ref: "main", readonly: true }],
+      content: [{ github: "acme/app" }, { github: "acme/handbook", ref: "main", readonly: true }],
     };
     const pre = await call(dir, config);
     expect(pre.ok).toBe(true);

@@ -43,7 +43,7 @@ src/
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
 │   ├── program.ts          # the spec registry — the CLI surface's source of truth; lazy per-command imports
 │   ├── invoke-stream.ts    # `invoke`: stream → exit code
-│   ├── models-view.ts, auth-view.ts, contexts-view.ts # `models` / auth-report / contexts output
+│   ├── models-view.ts, auth-view.ts, content-view.ts # `models` / auth-report / content output
 │   ├── add-feishu.ts, add-slack.ts # `add feishu|lark` / `add slack` onboarding
 │   ├── shared.ts, serve.ts # cross-command helpers: serve/bind reporting, tunnel (the ASSEMBLY is service.ts)
 │   ├── fail.ts             # the process-exiting failure boundary
@@ -69,12 +69,12 @@ src/
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/.contexts)
-├── contexts/               # what an agent works on and knows — harness-neutral
-│   ├── declare.ts          # the `contexts` declaration read and refused in ONE place (names, nesting)
-│   ├── resolve.ts          # where each context is for THIS instance: the one answer every reader uses
-│   ├── git.ts              # a GitHub context's git: which repository a checkout is of, its ref, a fresh clone
+├── content/                # what an agent works on and knows — harness-neutral
+│   ├── declare.ts          # the `content` declaration read and refused in ONE place (names, nesting)
+│   ├── resolve.ts          # where each entry is for THIS instance: the one answer every reader uses
+│   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   ├── source.ts           # what a command's <source> declares (github:owner/repo, a checkout, a directory)
-│   └── config-text.ts      # the literal `contexts: [...]` block `fastagent context` rewrites
+│   └── config-text.ts      # the literal `content: [...]` block `fastagent content` rewrites
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
@@ -245,7 +245,7 @@ src/
     │                       # included — never installed by us), harness settings and which Pi built-in extensions
     │                       # (codemode, tool-search; never mcp) stay enabled, read once per process
     ├── config.ts           # fastagent.config.ts loading + model/precedence
-    ├── authoring.ts        # creating an agent + editing its contexts as an API; `init`/`context` are thin wrappers
+    ├── authoring.ts        # creating an agent + editing its content as an API; `init`/`content` are thin wrappers
     ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
     ├── locked-file.ts      # the cross-process locked read-modify-write that REPLACES a file (credentials, model
     │                       # catalogs), pi's lock included, so every reader of those files reads without one

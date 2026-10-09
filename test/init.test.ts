@@ -189,7 +189,7 @@ describe("init: scaffoldAgent", () => {
   });
 
   it("undo removes what the scaffold created, and leaves a directory it was handed", async () => {
-    // What `init` runs when declaring the contexts fails after the scaffold: a retry must not find an agent there.
+    // What `init` runs when declaring the content fails after the scaffold: a retry must not find an agent there.
     const created = join(await freshDir(), "new");
     await (await scaffoldAgent(created)).undo();
     expect(await exists(created)).toBe(false);
@@ -220,36 +220,36 @@ describe("init: scaffoldAgent", () => {
     }
   });
 
-  it("--context declares what the agent works on, in the literal list; a nested one is refused before any write", async () => {
+  it("--content declares what the agent works on, in the literal list; a nested one is refused before any write", async () => {
     const base = await realpath(await freshDir());
     const app = join(base, "app");
     await mkdir(app);
-    const out = await cliInit(["init", "reviewer", "--context", "app", "--no-install"], base);
+    const out = await cliInit(["init", "reviewer", "--content", "app", "--no-install"], base);
     expect(out).toMatch(/created .*reviewer/);
     expect(out).toContain(`works on app  ${app} (local, this machine only)`);
     const config = await readFile(join(base, "reviewer", "fastagent.config.ts"), "utf8");
-    expect(config).toContain(`  contexts: [\n    { local: ${JSON.stringify(app)} },\n  ],\n`);
+    expect(config).toContain(`  content: [\n    { local: ${JSON.stringify(app)} },\n  ],\n`);
     // There is no copy for a host: a directory stays on this machine.
-    expect(await cliInit(["init", "nothing", "--context", "app", "--copy", "--no-install"], base)).toMatch(
+    expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
       /unknown option '--copy'/,
     );
     expect(await exists(join(base, "nothing"))).toBe(false);
 
     // An agent inside what it works on: refused with the way out, and nothing created.
-    const nested = await cliInit(["init", join(app, "agent"), "--context", app, "--no-install"], base);
-    expect(nested).toMatch(/context "app" .* contains the agent directory .* move it out/);
+    const nested = await cliInit(["init", join(app, "agent"), "--content", app, "--no-install"], base);
+    expect(nested).toMatch(/content "app" .* contains the agent directory .* move it out/);
     expect(await exists(join(app, "agent"))).toBe(false);
     // A symlinked ancestor does not hide the nesting: refused before the scaffold, not after it.
     await symlink(base, join(base, "..", `${basename(base)}-link`));
     const viaLink = await cliInit(
-      ["init", join(`${base}-link`, "app", "agent2"), "--context", app, "--no-install"],
+      ["init", join(`${base}-link`, "app", "agent2"), "--content", app, "--no-install"],
       base,
     );
     expect(viaLink).toMatch(/contains the agent directory/);
     expect(await exists(join(app, "agent2"))).toBe(false);
     // Run in a project, init says how to have an agent work on it.
     await writeFile(join(app, "README.md"), "the project\n");
-    expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --context \./);
+    expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --content \./);
   });
 
   it("makes the agent a git repository with the scaffold as its first commit, and says when it does not", async () => {
