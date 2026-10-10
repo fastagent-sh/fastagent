@@ -139,7 +139,7 @@ content/        # <agent dir>/content
 A redeploy that replaces the agent wipes all three. Point each at durable storage (generated deployments do):
 
 ```bash
-ln -s /data/content content   # in the agent directory, once
+ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 

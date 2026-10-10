@@ -130,8 +130,9 @@ export async function addContent(agentDir: string, addition: ContentAddition): P
   // the file it locks.
   withAddition(dir, readContextFile(dir), addition);
   let linked = false;
+  let declared: DeclaredContent[];
   try {
-    const declared = await withLockedFile(
+    declared = await withLockedFile(
       path,
       async (src) => {
         const file = parseContextFile(src ?? "{}", path);
@@ -144,12 +145,12 @@ export async function addContent(agentDir: string, addition: ContentAddition): P
       },
       { mode: fileMode(path) },
     );
-    return { name: addition.name, content: resolveContent(dir, declared), notes: [] };
   } catch (error) {
     // The link goes with a declaration that was not written; otherwise it would stand for nothing.
     if (linked) unlinkSync(contentEntryPath(dir, addition.name));
     throw error;
   }
+  return { name: addition.name, content: resolveContent(dir, declared), notes: [] };
 }
 
 /**
@@ -168,8 +169,12 @@ export async function removeContent(agentDir: string, name: string): Promise<Con
       const file = parseContextFile(src ?? "{}", path);
       const removed = entryNamed(file, name);
       const entries = Object.fromEntries(Object.entries(file.content).filter(([key]) => key !== removed));
+      const declared = declareContent(entries);
+      // What is left is resolved before it is written, so an entry that cannot be refuses the edit rather than
+      // failing it once it is made. The removed one is not asked: removing a broken entry is how it is mended.
+      resolveContent(dir, declared);
       return {
-        result: { removed, declared: declareContent(entries) },
+        result: { removed, declared },
         next: contextFileText({ ...file, content: entries }),
       };
     },
@@ -188,8 +193,9 @@ export async function removeContent(agentDir: string, name: string): Promise<Con
 }
 
 /**
- * `file`'s entries with `addition` among them, checked as a whole: its name can name an entry and is not taken
- * (ignoring case), the entry is valid, nothing is at `content/<name>` here yet, and what it links to can be linked.
+ * `file`'s entries with `addition` among them, checked as a whole before anything is written: its name can name an
+ * entry and is not taken (ignoring case), the entry is valid, nothing is at `content/<name>` here yet, what it links to
+ * can be linked, and every other entry still resolves (one that does not refuses the edit, not fails it once made).
  */
 function withAddition(
   agentDir: string,
@@ -208,6 +214,7 @@ function withAddition(
     throw new Error(`content/${name} already exists in ${agentDir}: move it away first`);
   }
   if (addition.link !== undefined) checkLinkTarget(agentDir, entry, addition.link);
+  resolveContent(agentDir, declareContent(entries));
   return { entries, entry };
 }
 

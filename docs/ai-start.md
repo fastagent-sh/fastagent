@@ -407,8 +407,8 @@ Choose a host, cost budget, credentials, and public ingress with the owner. Gene
 host's artifacts from the **agent directory**, preserving the CLI's formats and existing user-owned files.
 A `github` content entry is cloned on the host (put `GITHUB_TOKEN` in `.secrets/.env` for a private repository or for
 pushes); a `local` entry stays on this machine, and the deployed agent works without it (`deploy` says so).
-Copy reference material the agent only reads into the agent directory, which every release ships; move data it works
-on to a repository.
+Copy reference material the agent only reads into the agent directory, outside `content/`, which every release
+ships; move data it works on to a repository.
 
 | Host | Generate only | Deploy after approval |
 |---|---|---|

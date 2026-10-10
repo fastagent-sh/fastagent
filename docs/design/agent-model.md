@@ -290,8 +290,8 @@ Attributes:
   error. So an author keeps it for local work and still deploys. The instance elsewhere is not told of it, and is
   never missing it silently: the deployment names it (a warning when the agent works on it, since the deployed
   agent lacks data it was meant to work on), with the two ways to change that, and the instance's start names it
-  again. What the agent only reads there can be copied into the agent directory, which every release carries; what
-  it works on moves to a repository declared as `github`.
+  again. What the agent only reads there can be copied into the agent directory (outside `content/`), which every
+  release carries; what it works on moves to a repository declared as `github`.
 - **A `github` entry needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.

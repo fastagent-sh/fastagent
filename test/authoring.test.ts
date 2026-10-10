@@ -5,7 +5,7 @@
  * its refusals are thrown, a name problem as its own class.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,6 +156,25 @@ describe("authoring API", () => {
     await expect(addContent(agentDir, directory(join(base, "app")))).rejects.toThrow(
       `content/app already exists in ${agentDir}: move it away first`,
     );
+  });
+
+  it("an entry that no longer resolves refuses an edit before it is made; removing that entry mends it", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-broken-")));
+    const agentDir = join(base, "agent");
+    for (const dir of ["moved", "b", "c"]) await mkdir(join(base, dir));
+    await createAgent(agentDir, { content: [directory(join(base, "moved")), directory(join(base, "c"))] });
+    await rm(join(base, "moved"), { recursive: true });
+    const before = await readFile(join(agentDir, "context.json"), "utf8");
+    // The refusal is the broken entry's, and nothing of the edit is left: not the entry, not its link.
+    await expect(addContent(agentDir, directory(join(base, "b")))).rejects.toThrow(
+      /content "moved": .* does not exist/,
+    );
+    await expect(lstat(join(agentDir, "content", "b"))).rejects.toThrow(/ENOENT/);
+    await expect(removeContent(agentDir, "c")).rejects.toThrow(/content "moved": .* does not exist/);
+    expect(await readFile(join(agentDir, "context.json"), "utf8")).toBe(before);
+    expect(await realpath(join(agentDir, "content", "c"))).toBe(join(base, "c"));
+    const mended = await removeContent(agentDir, "moved");
+    expect(mended.content.map((c) => c.name)).toEqual(["c"]);
   });
 
   it("a link goes with a declaration that could not be written", async () => {

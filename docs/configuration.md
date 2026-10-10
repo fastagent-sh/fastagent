@@ -227,8 +227,15 @@ directory, and what is there is that machine's:
 - **A link to a directory of this machine.** `fastagent content add <dir>` declares the entry and links
   `content/<name>` to the directory. For a `github` entry the directory is the root of a checkout of that
   repository, used as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say
-  so. A link to nothing, to a file, or to a checkout of another repository is refused at start, naming it. A
-  teammate, or another machine of yours, links its own: `ln -s ~/code/app content/app`.
+  so. A link to nothing, to a file, or to a checkout of another repository is refused at start, naming it.
+
+  A teammate, or another machine of yours, links its own for an entry the agent already declares (`content add`
+  would declare a second one). Move away a clone fastagent made there first, or `ln` creates the link inside it:
+
+  ```bash
+  mkdir -p content && printf '*\n' > content/.gitignore   # when content/ does not exist yet
+  ln -s ~/code/app content/app
+  ```
 - **A clone**, for a `github` entry with nothing linked: shallow, at `ref`, made in `content/<name>` the first time
   the agent starts (`dev`, `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by
   git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it
@@ -272,8 +279,8 @@ The locations are resolved when a process starts; editing `context.json` restart
 `content/` to its storage, so a `github` entry is a clone there, made and kept up to date the same way, and outlives
 each release ([deploy](deploy.md#before-you-deploy)). An entry without `github` is a directory of this machine,
 which a host does not have: the deployed agent works without it, and `deploy` and the host's startup say so by name.
-To give a host what the agent only reads there, copy it into the agent directory, which every release ships; to have
-the agent work on it from a host, move it to a repository and declare it as `github`.
+To give a host what the agent only reads there, copy it into the agent directory outside `content/`, which every
+release ships; to have the agent work on it from a host, move it to a repository and declare it as `github`.
 
 ## The system prompt
 
@@ -432,7 +439,7 @@ The root is `/data` on Docker, Fly and Railway and `/mnt/data` on AgentCore (res
 For a manually configured service:
 
 ```bash
-ln -s /data/content content   # in the agent directory, once
+ln -sfn /data/content content   # in the agent directory, before every start: a redeploy replaces the directory
 FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
