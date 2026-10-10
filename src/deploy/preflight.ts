@@ -40,6 +40,8 @@ import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
+import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE, readEnvironment } from "../environment/declare.ts";
+import { MISE_PACKAGE_NAMES } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -124,6 +126,31 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
           `agent works without it; to work on it from a host, move it to a GitHub repository and declare it as github`,
       );
     }
+  }
+}
+
+/**
+ * What the image needs to install the environment `mise.toml` declares: the agent's own mise for linux in its
+ * package.json, so the image's install brings it, and `mise.lock`, which `deploy` writes before this check.
+ */
+async function checkEnvironment(
+  agentDir: string,
+  environment: DeclaredEnvironment,
+  hasPackageJson: boolean,
+  pkg: { optionalDependencies?: Record<string, unknown> },
+  report: DeployReport,
+): Promise<void> {
+  const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
+  const missing = linux.filter((name) => !(name in (pkg.optionalDependencies ?? {})));
+  if (!hasPackageJson || missing.length > 0) {
+    report.issue(
+      `${MISE_FILE} declares an environment, and the image would have no mise to install it with: the agent's ` +
+        `package.json does not list ${missing.join(", ")}. Run \`fastagent env install\` in the agent directory.`,
+    );
+  }
+  // mise writes no lock for a file that declares no tools, and the image then has none to install.
+  if (environment.tools.length > 0 && !(await exists(join(agentDir, MISE_LOCK_FILE)))) {
+    report.issue(`${MISE_FILE} has no ${MISE_LOCK_FILE} beside it: the image installs only what the lock records.`);
   }
 }
 
@@ -397,10 +424,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(agentDir, authPath);
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
+  const environment = readEnvironment(agentDir);
+  if (environment) await checkEnvironment(agentDir, environment, hasPackageJson, pkg, report);
+
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
-  // host, which takes git too.
+  // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates.
   const needsGit = shipsGit || content.some((entry) => entry.kind === "github");
-  const apt = needsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
+  const apt = [...(needsGit ? ["git"] : []), ...(environment ? ["ca-certificates"] : [])];
   const container: ContainerInput = {
     releaseId: randomUUID(),
     agent: basename(agentDir),
@@ -411,6 +441,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     hasLockfile,
     version: await fastagentVersion(),
     apt,
+    environment,
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };
@@ -446,7 +477,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     ...allSecrets(resolvedTools.toolSecrets),
     ...allSecrets(inspected.secrets),
   ];
-  await checkKeptDockerfile(agentDir, config, model.envValue, valueFile, report);
+  await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
 
   return {
     channels,
@@ -555,7 +586,7 @@ async function checkGlobalCatalogModel(modelSpec: string, deployed: ModelRuntime
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops. `deploy.apt` is the obvious one; the resolved model is the one that
+ * What a KEPT hand-written Dockerfile drops. The environment (mise.toml) is the obvious one; the resolved model is the one that
  * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
  * FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
  * ONLY in the value file would be reported here and absent on the box.
@@ -566,7 +597,6 @@ async function checkGlobalCatalogModel(modelSpec: string, deployed: ModelRuntime
  */
 async function checkKeptDockerfile(
   agentDir: string,
-  config: FastagentConfig,
   /** The model the release manifest carries (set only when the value file named it). */
   modelFromValueFile: string | undefined,
   valueFile: string,
@@ -575,10 +605,10 @@ async function checkKeptDockerfile(
   const dockerfileHome = join(agentDir, "Dockerfile");
   const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
   if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
-  if (config.deploy?.apt?.length) {
+  if (readEnvironment(agentDir)) {
     report.warn(
-      `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-        `NOT applied; install those packages in your Dockerfile.`,
+      `kept your hand-written Dockerfile — it installs the environment ${MISE_FILE} declares only if it says so: ` +
+        `a generated Dockerfile shows the layers (system packages, then \`mise --locked install\`).`,
     );
   }
   // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without

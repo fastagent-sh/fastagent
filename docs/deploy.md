@@ -180,7 +180,8 @@ or reverse proxy.
   file; delete a file to hand it back.
 - `--tunnel` shapes only a newly generated Compose file. `--tunnel --run` against a kept file without a `tunnel`
   service stops before touching Docker.
-- `config.deploy.apt` applies only to the generated Dockerfile.
+- The environment (`mise.toml`) is installed by the generated Dockerfile; a hand-written one installs it only if it
+  says so, and `deploy` warns.
 - `--run` relies on the service named `agent` (and `tunnel`). Add other services, networks, volumes or ports freely.
 
 ## Fly.io
@@ -366,6 +367,12 @@ excludes. Each start publishes it onto persistent storage:
   dependency on the same version.
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
+**The environment**: with a [`mise.toml`](configuration.md#environment-misetoml), `deploy` first writes `mise.lock`
+from the versions this machine runs, for linux-x64 and linux-arm64; commit it beside `mise.toml`. The image installs
+the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
+the environment or the dependencies change. `--run` stops when `package.json` does not list mise (run
+`fastagent env install`). Chromium with CJK fonts adds about 1 GB to the image.
+
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
 `agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
@@ -378,7 +385,8 @@ rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.y
   `--run`; an unexcluded `.state` or `node_modules` warns.
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some
-host CLIs strip `.git` (`railway up` does). An agent that needs git without that sets `deploy: { apt: ["git"] }`.
+host CLIs strip `.git` (`railway up` does). An agent that needs git without that declares it:
+`fastagent env bootstrap packages use apt:git`.
 Add `.git` to `.dockerignore` for a smaller image.
 
 ## Other Docker hosts

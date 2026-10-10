@@ -44,7 +44,8 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 - **Connectors** are the systems that are not files the agent reaches: an API, a service, and their credentials. The
   code tools and pi extensions that reach them are part of the definition; the system each one reaches is the
   connector (agent service §3.3). MCP servers are not supported yet (#678).
-- **The environment** is the commands and runtimes the agent runs: today the machine lends it (below).
+- **The environment** is the commands and runtimes the agent runs, declared in its `mise.toml` and the same on every
+  instance ([agent service](agent-service.md) §4). An agent with none borrows the machine's (below).
 
 Relations:
 
@@ -62,10 +63,10 @@ is read as the user left it, and a difference from the declared version is repor
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
 templates, `.agents/skills` found above the agent directory, installed pi packages, harness settings, the programs
-on its `PATH`) comes from that machine wherever the agent runs, and is not compared between instances
-([core](core.md) §5). A skill an agent must have everywhere belongs in its definition or in its content. A machine
-never lends a system prompt: its `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are not read, because a prompt
-from someone's machine would make the agent theirs.
+on its `PATH` that the agent's `mise.toml` does not declare) comes from that machine wherever the agent runs, and is
+not compared between instances ([core](core.md) §5). A skill an agent must have everywhere belongs in its definition
+or in its content. A machine never lends a system prompt: its `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are not
+read, because a prompt from someone's machine would make the agent theirs.
 
 Keeping the data itself the same across instances afterwards is not this layer's job. It belongs to
 collaboration and synchronization (§8): git for a repository, a content service for what is not one.

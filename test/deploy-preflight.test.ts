@@ -6,6 +6,7 @@ import { preflightDeploy } from "../src/deploy/preflight.ts";
 import type { FastagentConfig } from "../src/harnesses/pi/config.ts";
 import { globalCatalogPath } from "../src/harnesses/pi/models.ts";
 import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
+import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 
 /** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
  *  directory's, and the temp prefix would not pass the release-name rule. */
@@ -161,24 +162,24 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     });
     await mkdir(join(agentDir, ".git")); // the agent is a git repo — the image gets the git binary
 
-    const ok = await call(agentDir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { run: true });
+    const ok = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.container.hasPackageJson).toBe(true);
-      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (it ships .git), deploy.apt kept, deduped
+      expect(ok.container.apt).toEqual(["git"]); // git baked: it ships .git
       expect(JSON.stringify(ok.messages)).toMatch(/baked as the definition/); // the WYSIWYG note is stated
     }
   });
 
   it("git is baked iff the agent directory ships a .git — a non-git dir gets no silent git layer", async () => {
-    // No .git: only the author's declared packages reach the image (history without a binary is a
-    // dead loop; a binary without history is dead weight — deploy.apt is the explicit escape hatch).
+    // No .git: no git layer (history without a binary is a dead loop; a binary without history is dead weight —
+    // mise.toml's apt:git is the explicit way in).
     const noGit = await agent();
-    const pre = await call(noGit, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } });
+    const pre = await call(noGit, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       expect(pre.container.shipsGit).toBe(false);
-      expect(pre.container.apt).toEqual(["ripgrep"]);
+      expect(pre.container.apt).toEqual([]);
     }
 
     // .git present: git rides in.
@@ -564,19 +565,58 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(call(dir, { model: "openai/gpt-4o-mini" })).rejects.toThrow(/cannot inspect.*import exploded/);
   });
 
-  it("warns a KEPT hand-written Dockerfile that deploy.apt won't reach, --force included", async () => {
+  it("warns a KEPT hand-written Dockerfile that the environment won't reach, --force included", async () => {
     // `--force` does not rescue it: writeArtifacts refuses a file it did not generate whatever the flag says, so the
-    // packages are dropped either way. Suppressing the warning under `--force` only hid that.
-    const dir = await agent({ Dockerfile: "FROM python:3.12\n" }); // no generated marker → hand-written
-    const config: FastagentConfig = { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };
-
+    // environment is dropped either way. Suppressing the warning under `--force` only hid that.
+    const dir = await agent({ Dockerfile: "FROM python:3.12\n", "mise.toml": `[tools]\njq = "1.8.1"\n` });
     for (const force of [false, true]) {
-      const pre = await call(dir, config, { force });
+      const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { force });
       expect(pre.ok).toBe(true);
       if (pre.ok) {
-        expect(pre.messages).toContainEqual({ level: "warn", text: expect.stringMatching(/deploy\.apt.*NOT applied/) });
+        expect(pre.messages).toContainEqual({
+          level: "warn",
+          text: expect.stringMatching(/kept your hand-written Dockerfile — it installs the environment mise\.toml/),
+        });
       }
     }
+  });
+
+  it("an environment needs the agent's linux mise in its package.json and a mise.lock, or --run stops", async () => {
+    const dir = await agent({
+      "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
+      "mise.toml": `[tools]\njq = "1.8.1"\n`,
+    });
+    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(gated).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        /does not list @jdxcode\/mise-linux-arm64, @jdxcode\/mise-linux-x64\. Run `fastagent env install`/,
+      ),
+    });
+    const optional = Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"]));
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        type: "module",
+        dependencies: { "@fastagent-sh/fastagent": "^1" },
+        optionalDependencies: optional,
+      }),
+    );
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
+      ok: false,
+      gate: "mise.toml has no mise.lock beside it: the image installs only what the lock records.",
+    });
+    await writeFile(join(dir, "mise.lock"), "lockfile_version = 3\n");
+    const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.container.environment).toMatchObject({ tools: ["jq"], packages: [] });
+      expect(ok.container.apt).toEqual(["ca-certificates"]); // mise downloads over TLS; the slim image has no CAs
+    }
+    // mise writes no lock for a file without tools: system packages alone need none.
+    await rm(join(dir, "mise.lock"));
+    await writeFile(join(dir, "mise.toml"), `[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
+    expect((await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });
 
   it("a declared schedule keeps a machine up; the agent's own wake-ups do not", async () => {

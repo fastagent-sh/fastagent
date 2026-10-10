@@ -42,6 +42,7 @@ export async function readPackageJson(dir: string): Promise<{
   packageManager?: unknown;
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
+  optionalDependencies?: Record<string, unknown>;
 }> {
   const path = join(dir, "package.json");
   const raw = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {

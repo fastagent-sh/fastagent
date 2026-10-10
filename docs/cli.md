@@ -21,6 +21,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
+| `env <mise args>` | Run the agent's own mise on its `mise.toml`: the commands the agent needs. |
 | `models [search]` | List model specs. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally with watch/reload. |
@@ -86,8 +87,8 @@ fastagent info [agent] [--json] [--model provider/modelId]
 
 Prints, without serving:
 
-- the agent directory, its content (`works on` / `knows`, each with its location), config path, model and its
-  source,
+- the agent directory, its content (`works on` / `knows`, each with its location), its environment (the tools and
+  system packages `mise.toml` declares), config path, model and its source,
 - the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
 - skills (each content entry's named `<content>/<skill>`) and their diagnostics,
 - coding tools, authored tools and collisions,
@@ -96,8 +97,9 @@ Prints, without serving:
 - declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
-Content that cannot be resolved (its directory is missing, say) is reported, not fatal. `--json` carries
-`content`, `contentError` and `contextFiles` (the agent directory's `AGENTS.md`, then each content entry's).
+Content that cannot be resolved (its directory is missing, say), and a `mise.toml` FastAgent refuses, are reported,
+not fatal; `info` installs nothing. `--json` carries `content`, `contentError`, `environment`, `environmentError` and
+`contextFiles` (the agent directory's `AGENTS.md`, then each content entry's).
 Read-only.
 
 ## `fastagent content`
@@ -121,7 +123,28 @@ Edits are made under a lock on `context.json`, so two at once apply one after th
 file and `content/` as they were. `list --json` prints each entry as every command resolves it, with its `notices`:
 a checkout off its `ref`, a clone not made yet.
 
-## `fastagent models`
+## `fastagent env`
+
+```bash
+fastagent env <mise args>
+```
+
+Runs the agent's own [mise](https://mise.jdx.dev) in the agent directory, the current one, on its `mise.toml` alone
+([environment](configuration.md#environment-misetoml)). Everything after `env` goes to mise unchanged, `--help`
+included; `fastagent help env` is this command's own help. It exits with mise's code.
+
+```bash
+fastagent env use gh@2                               # a CLI
+fastagent env use npm:prettier@3                     # a CLI from npm
+fastagent env bootstrap packages use apt:chromium    # a system package the image installs
+fastagent env install                                # install what mise.toml declares
+fastagent env ls
+```
+
+The first run adds mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and
+says so. After mise exits, the file is read again, so a change FastAgent would refuse at startup (`fastagent env set`
+writes `[env]`) is reported at once.
+
 
 ```bash
 fastagent models [search] [--refresh] [-g|--global]

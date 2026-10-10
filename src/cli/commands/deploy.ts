@@ -25,6 +25,7 @@ import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
 import { type DeployOptions, type HostDeploy, applyArtifactPlan, planArtifacts } from "./deploy/shared.ts";
+import { lockEnvironment } from "../../environment/mise.ts";
 
 export { applyArtifactPlan, planArtifacts };
 
@@ -91,6 +92,8 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   selectAgentEnvironment("production");
   const { agentDir } = await enterAgentDirectory(dirArg, opts);
   const { config } = await loadConfig(agentDir).catch(failStartup);
+  // The lock is an artifact like the Dockerfile: written from the versions this machine runs, for the image's platforms.
+  await lockEnvironment(agentDir).catch(failStartup);
   // Never `dev`, whatever spawned this; and what decides a channel's shape is read here as the box will read it.
   unmarkDevServe();
   const shaped = divergentSettingsGate(

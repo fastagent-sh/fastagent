@@ -113,8 +113,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     input.shipsGit
       ? `# Railway uploads may strip .git, so the deployed definition may have no history.`
       : input.apt?.includes("git")
-        ? `# Git is installed (github content is cloned here, or deploy.apt names it).`
-        : `# To give the agent git, add deploy: { apt: ["git"] }.`,
+        ? `# Git is installed (github content is cloned here).`
+        : `# To give the agent git, declare it: fastagent env bootstrap packages use apt:git`,
   );
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev).

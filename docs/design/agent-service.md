@@ -204,10 +204,9 @@ acme-github/                  a context: a directory, a git repository or an npm
 
 ## 4. The environment is declared, for every platform
 
-Today an agent inherits the machine it runs on, the way `bash` inherits the `PATH`, and `deploy.apt` adds Debian
-packages to the generated image: a declaration for one platform, at versions that differ from the author's laptop.
-Instead, the environment is declared once, in mise's own files: `mise.toml`, with `mise.lock` beside it. mise is a
-tool manager for macOS, Linux and Windows.
+An agent without a declaration inherits the machine it runs on, the way `bash` inherits the `PATH`. Its environment is
+declared once, in mise's own files: `mise.toml`, with `mise.lock` beside it. mise is a tool manager for macOS, Linux
+and Windows. FastAgent reads mise's format and sets its own rules for it.
 
 ```toml
 [tools]
@@ -218,35 +217,54 @@ uv = "latest"
 "conda:ffmpeg" = "latest"      # native tools with their libraries, from conda-forge
 "npm:prettier" = "3"           # CLIs published as npm or PyPI packages
 "pypi:markitdown" = "latest"
+
+[bootstrap.packages]
+"apt:chromium" = { os = "linux" }        # system packages, for what has no cross-platform build
+"apt:fonts-noto-cjk" = { os = "linux" }
 ```
 
-- `mise.lock` records each tool's download URL and checksum per platform (`mise lock --platform
-  linux-arm64,linux-x64,macos-arm64`), so the laptop and the image install the same versions. AgentCore builds
-  `linux/arm64`, so the lock needs that platform.
-- `deploy` installs the lock (`mise install --locked`) in a layer before the definition is copied in, so the layer
-  stays cached while the definition changes, and it pins the mise it installs: mise releases often and removes old
-  backends.
-- Locally, `dev`, `start`, `chat` and `invoke` install what the lock records and put the tools on the `PATH` of the
-  processes they start. Without mise on the machine they refuse to start and print how to install it. An agent with
-  no `mise.toml` still borrows the machine's commands, as today.
+- **Two parts are supported.** `[tools]` install from per-platform builds and are locked. `[bootstrap.packages]` are
+  system packages: the image installs them with its package manager (`apt` on its Debian), and a start on a machine
+  that lacks one says which. Everything else mise reads in that file (`[env]`, `[tasks]`, `[hooks]`, `[settings]`,
+  `[plugins]`, the other `[bootstrap]` parts), plugin backends (`asdf:`, `vfox:`) and a tool's `postinstall` are
+  refused at startup, by name: each would run differently, or not at all, where the agent is deployed. `[env]` waits
+  for §6.2.
+- **The agent carries its own mise.** Its `package.json` lists mise's npm packages as optional dependencies, one per
+  platform, of which npm and bun install only the machine's. The lockfile pins the version, and the author may pin it
+  in `package.json`. A machine needs nothing installed first, the image's `npm ci` installs the same mise, and a mise
+  on the `PATH` is never used.
+- **Only the agent's `mise.toml` is read**: never the machine's mise configuration, a parent directory's, a
+  `.tool-versions` or a `mise.local.toml`. What is installed locally is what the image installs.
+- **`fastagent env <args>` runs the agent's mise** in its directory (`fastagent env use gh@2`); its first run adds mise
+  to `package.json`. It is the only command that changes the environment. `dev`, `start`, `chat`, `invoke` and `tool`
+  install what `mise.toml` declares and put the tools, and mise itself, on the `PATH` of the processes they start;
+  they refuse a `mise.toml` the agent has no mise for.
+- **`deploy` writes `mise.lock`** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine runs,
+  with each tool's download URL and checksum; a tool not installed here is locked at the newest version its
+  declaration allows. The image installs the system packages, then the lock (`mise --locked install`), in a layer
+  before the definition is copied in, so the layer stays cached while the definition changes. AgentCore builds
+  `linux/arm64`. Locally the lock is not enforced: `mise install` keeps what is installed.
 - An agent's environment is its own `mise.toml` and those of the contexts it uses, together (§3.6).
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
   runs with `uv run`, so a skill carries its own dependencies wherever its context goes.
-- `deploy.apt` goes, and the config has no `environment`: one declaration covers every platform.
+- `deploy.apt` is gone, and the config has no `environment`.
 
 Measured on Linux arm64, the AgentCore build, and on macOS arm64: sixteen common tools installed the same versions on
 both, in about 75 seconds. They were gh, ripgrep, jq, yq, duckdb, stripe, awscli, python, uv, ffmpeg, pandoc,
-poppler, tesseract, ImageMagick, and an npm and a PyPI CLI. A PEP 723 script ran on both. Three limits come with it:
+poppler, tesseract, ImageMagick, and an npm and a PyPI CLI. A PEP 723 script ran on both. The limits:
 
-- What has no cross-platform build, such as a browser, fonts or LibreOffice, cannot be installed this way. mermaid-cli
-  installs but cannot render, because the browser its package downloads is never fetched. An author who needs one
-  writes their own `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing
-  the lock included.
+- A browser and fonts come from the distribution. `apt:chromium` ran headless in the generated image (`--dump-dom`,
+  a screenshot, CJK text with `apt:fonts-noto-cjk`); the Chromium layer is about 700 MB and the CJK fonts about
+  300 MB. mise asks apt for recommended packages, so the image turns those off, which saved about 340 MB. Pointing a
+  tool at the browser (`PUPPETEER_EXECUTABLE_PATH` for mermaid-cli) needs an environment variable, in `.secrets/.env`
+  until §6.2. A package outside the distribution's repositories, or another base image, needs the author's own
+  `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing the lock included.
+- The agent's mise adds about 135 MB to the image's `node_modules` (linux-arm64).
 - mise gives each conda tool a prefix of its own, so shared libraries are copied per tool: the sixteen tools added
   about 1.65 GB (compressed) to the image, and fourteen of them in one pixi environment about 0.8 GB. A larger image
   starts slower on AgentCore, so declare only the native tools the agent uses.
-- Windows is covered by mise's documentation, and the lock resolves for it except awscli, which AWS ships as an
-  installer there; it has not been tried.
+- mise publishes no npm package for Windows, so an agent with a `mise.toml` does not run there yet. The lock resolves
+  for Windows except awscli, which AWS ships as an installer there.
 
 The alternatives each miss one requirement:
 
@@ -803,8 +821,8 @@ export default {
 | Stage | Today | Proposed |
 |---|---|---|
 | Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` links `content/<name>/` to that directory, and another machine links its own or clones |
-| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. Each command that runs the agent installs the environment's lock first, and refuses to start without mise (§4) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image and installs the environment's lock |
+| Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. Each command that runs the agent installs its environment first (§4, done) |
+| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image; it already locks the environment and installs the lock there (§4) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 Channels, schedules and wake-ups
@@ -1057,11 +1075,11 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `deploy.apt` in the config, Debian only; locally the machine's own | `mise.toml` and `mise.lock`: the same tools at the same versions on every platform, installed by `deploy` and by every command that runs the agent (§4) |
+| Environment | `mise.toml` (`[tools]`, `[bootstrap.packages]`) and the `mise.lock` `deploy` writes, run by the agent's own mise (step 3, §4) | The same, with those of the contexts the agent uses (§3.6), and `[env]` (§6.2) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
 | Content and contexts | Content in `context.json`, at `content/<name>/`: a clone or a link to the author's checkout (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
-| Code tools | One per file directly in `tools/`, default-exported; helpers kept outside | Every `defineTool` value exported from any module below `tools/`; helpers beside them (§8.1) |
+| Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
 | The contract | The Agent Handler SPEC v0.1: `invoke(scope, prompt)` and a stream that ends with the caller | The serving protocol (§7): sessions, runs that outlive their callers, entries and events, idempotency keys |
@@ -1084,7 +1102,6 @@ is the whole. What still differs:
 |---|---|
 | A content entry's skills named `<content>/<skill>` | Kept, and a shared context's skills are named `<context>/<skill>` (§3.6) |
 | No shared contexts | A context is the unit of sharing (§3.6) |
-| The machine lends the environment | `mise.toml` declares it; the machine still lends pi's own skills, prompt templates and settings (§4) |
 
 ## 12. Order of work
 
@@ -1138,10 +1155,12 @@ The product and the model:
   tools that go with them. An agent is shared as its definition, and what it works with a context at a time. A
   context is referenced as a pi package is (git with a ref, npm with a version, a local path), pinned, and moved only
   by `fastagent context update`; a name two contexts declare refuses the start; contexts do not nest (§3.6).
-- The environment is declared in mise's `mise.toml` and `mise.lock` alone, for every platform: `deploy` installs the
-  lock in the image, every command that runs the agent installs it locally and refuses to start without mise, and
-  the config has no `environment`. What has no cross-platform build needs the author's own `Dockerfile`. A skill
-  script declares its Python libraries inline (PEP 723) and runs with `uv run` (§4).
+- The environment is declared in mise's `mise.toml` alone, for every platform, and run by the agent's own mise, an
+  optional npm dependency per platform: FastAgent supports its `[tools]` and `[bootstrap.packages]` and refuses the
+  rest. `deploy` writes `mise.lock` for the image's platforms and installs it there; every command that runs the
+  agent installs the tools locally; only `fastagent env` changes the environment. The config has no `environment`.
+  A system package outside the distribution needs the author's own `Dockerfile`. A skill script declares its Python
+  libraries inline (PEP 723) and runs with `uv run` (§4).
 - Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The
   shell keeps inheriting the process environment; isolation waits for a sandboxed environment (§6.4).
 - A declaration that has a standard format, or that the agent or a tool writes, is a file of its own (contexts and

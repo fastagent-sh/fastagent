@@ -28,6 +28,28 @@ describe("cli: info", () => {
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
+  it("info reports the declared environment without installing it, and a refused mise.toml without failing", async () => {
+    // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
+    const dir = await agentWorkspace("fa-info-env-", {
+      "fastagent.config.ts": "export default {};\n",
+      "mise.toml": `[tools]\njq = "1.8.1"\n[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`,
+    });
+    const ok = await run(["info", dir, "--json"]);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({
+      environment: { tools: ["jq"], packages: ["apt:chromium"] },
+      environmentError: null,
+    });
+    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq; system packages: apt:chromium$/m);
+    await writeFile(join(dir, "mise.toml"), `[tasks.build]\nrun = "x"\n`);
+    const refused = await run(["info", dir, "--json"]);
+    expect(refused.code).toBe(0);
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      environment: null,
+      environmentError: expect.stringMatching(/"tasks" is not supported/),
+    });
+  });
+
   it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {
     // The docs point at `info` to confirm what an agent resolved, so it must not merely echo the spec:
     // a custom endpoint changes which specs exist, and reporting a healthy-looking one that `dev`/`start`

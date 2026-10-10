@@ -41,6 +41,11 @@ export interface CommandSpec {
   /** A group command (e.g. `schedule`) declares subcommands instead of `run`. */
   subcommands?: CommandSpec[];
   /**
+   * A command that hands everything after its name to another program (`fastagent env` → mise), options and `--help`
+   * included, instead of parsing it. Declared instead of `args`, `flags` and `run`.
+   */
+  passThrough?: (args: string[]) => Promise<void> | void;
+  /**
    * The implementation: positional args in declaration order (an optional arg without a default is `undefined`), then
    * the parsed flags.
    */
@@ -99,6 +104,9 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   if (options.examples || options.notes) {
     specOf.set(program, { name: "fastagent", summary: "", examples: options.examples, notes: options.notes });
   }
+  // An option after a command name is that command's: what lets a pass-through command receive `--help` and the
+  // other program's own flags.
+  program.enablePositionalOptions();
   // Subcommands inherit exitOverride/output/suggestion settings at .command() time — register last.
   for (const spec of specs) register(program, spec);
   return program;
@@ -128,6 +136,17 @@ function register(parent: Command, spec: CommandSpec): void {
     cmd.addOption(option);
   }
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
+  const passThrough = spec.passThrough;
+  if (passThrough) {
+    cmd
+      .argument("[args...]", "passed on unchanged")
+      .allowUnknownOption()
+      .passThroughOptions()
+      .helpOption(false)
+      .action(async (args: string[] | undefined) => {
+        await passThrough(args ?? []);
+      });
+  }
   const run = spec.run;
   if (run) {
     cmd.action(async (...invocation: unknown[]) => {
