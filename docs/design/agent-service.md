@@ -238,9 +238,13 @@ uv = "latest"
 - **`fastagent env <args>` runs the agent's mise** in its directory (`fastagent env use gh@2`); its first run adds mise
   to `package.json`. It is the only command that changes the environment. `dev`, `start`, `chat`, `invoke` and `tool`
   install what `mise.toml` declares and put the tools on the `PATH` of the processes they start; they refuse a
-  `mise.toml` the agent has no mise for. The agent is not given mise: what it changed there would be checked by
-  nothing, and lost on a host at the next release. The isolation is FastAgent's runs alone, and the file is trusted,
-  not the directory, under which a cloned content repository may carry a `mise.toml` of its own.
+  `mise.toml` the agent has no mise for. The isolation is FastAgent's runs alone, and the file is trusted, not the
+  directory, under which a cloned content repository may carry a `mise.toml` of its own.
+- **The agent changes its environment as the author does**, with `fastagent env` from its own `node_modules`: a
+  change FastAgent refuses is undone before the command exits, so it cannot stop the next start, and
+  `fastagent env exec -- <command>` runs a tool it added before the restart that puts it on the `PATH`. Like any
+  change to its definition (agent model §6), it lasts on a host until the next release. A tool the agent installs
+  with the machine's own means (`apt-get`, `npm install -g`) is the machine's and lasts as long as the container.
 - **`deploy` writes `mise.lock`** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine runs,
   with each tool's download URL and checksum, when the agent's mise is installed here (otherwise `--run` stops); a
   tool not installed here is locked at the newest version its declaration allows. The image installs the system

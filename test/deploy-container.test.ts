@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
@@ -143,6 +146,19 @@ describe("deploy/container: shared Docker context", () => {
       // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(note()).not.toContain("wake tool");
       expect(note([{ name: "wake" } as MountedTool])).toContain("use the wake tool.");
+      // What the agent installs itself is the machine's; how it changes its declared tools, only when it has some.
+      expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
+      expect(note()).not.toContain("fastagent env use");
+      const withEnvironment = (agentDir: string) =>
+        fastagentPromptSections({ tools: [], builtinExtensions: [], workingSet: { agentDir, content: [] } })
+          .self_change;
+      const agentDir = mkdtempSync(join(tmpdir(), "fa-prompt-env-"));
+      expect(withEnvironment(agentDir)).not.toContain("fastagent env use");
+      writeFileSync(join(agentDir, "mise.toml"), `[tools]\njq = "1.8.1"\n`);
+      expect(withEnvironment(agentDir)).toContain(
+        "`./node_modules/.bin/fastagent env use <tool>@<version>` adds one, installs it and checks the change",
+      );
+      expect(withEnvironment(agentDir)).toContain("`./node_modules/.bin/fastagent env exec -- <command>`");
       // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
       process.env.FASTAGENT_AGENTCORE = "1";
       expect(note()).not.toContain("Each deployment replaces your directory");

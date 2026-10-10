@@ -297,7 +297,8 @@ The commands the agent runs are the machine's too, unless its `mise.toml` declar
 that runs the agent installs the `[tools]` and puts them on `process.env.PATH` before anything is spawned; the `dev`
 supervisor does not, its worker does, and an edit to `mise.toml` restarts it. Only the tools reach that `PATH`: the
 isolation variables go to FastAgent's own mise runs, and mise itself is not put there. `fastagent env` is a
-pass-through to that mise and the only command that changes the environment.
+pass-through to that mise and the only command that changes the environment, the agent's own changes included; it
+undoes what mise wrote when the result is refused.
 
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a

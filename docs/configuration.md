@@ -373,9 +373,16 @@ Change the file with `fastagent env`, which runs the agent's own mise in its dir
 this machine's, and the lockfile pins it. The commands that run the agent never add it: they refuse a `mise.toml`
 without it. mise publishes no package for Windows, so an agent with a `mise.toml` does not run there.
 
+The agent changes its environment the same way, from its own directory: `./node_modules/.bin/fastagent env use jq@1.8`.
+A change FastAgent refuses is undone before the command exits. The tool is on the agent's `PATH` from the next start
+(`dev` restarts on the edit); until then `./node_modules/.bin/fastagent env exec -- jq` runs it. On a host, the
+deployed prompt tells an agent with a `mise.toml` how, and the change lasts until the next release replaces the
+definition, as any change the agent makes to itself does. A tool the agent installs with the machine's own means
+(`apt-get`, `npm install -g`) belongs to the machine: on a host it is gone when the container is replaced.
+
 The agent's mise reads only the agent's `mise.toml`: never `~/.config/mise`, a parent directory's configuration,
-`.tool-versions` or `mise.local.toml`. That isolation is FastAgent's runs alone: the agent itself is not given mise,
-and a mise it runs (the machine's, in a content repository with its own `mise.toml`) works as it does in your shell.
+`.tool-versions` or `mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the
+machine's, in a content repository with its own `mise.toml`) works as it does in your shell.
 FastAgent supports `[tools]` and `[bootstrap.packages]`; the rest of the file (`[env]`, `[tasks]`, `[hooks]`,
 `[settings]`, `[plugins]`, the other `[bootstrap]` parts) is refused at startup, because it would run differently or
 not at all where the agent is deployed, and so are plugin backends (`asdf:`, `vfox:`) and a tool's `postinstall`.

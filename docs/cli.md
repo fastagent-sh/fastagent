@@ -142,8 +142,9 @@ fastagent env ls
 ```
 
 The first run adds mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and
-says so. After mise exits, the file is read again, so a change FastAgent would refuse at startup (`fastagent env set`
-writes `[env]`) is reported at once. It refuses an agent whose `package.json` does not list `@fastagent-sh/fastagent`,
+says so. After mise exits, the file is read again: a change FastAgent would refuse at startup (`fastagent env set`
+writes `[env]`) is reported at once and undone, `mise.toml` and `mise.lock` put back as they were before the command,
+so it never reaches the next start. It refuses an agent whose `package.json` does not list `@fastagent-sh/fastagent`,
 or that has none: mise would make it an agent with dependencies, whose image runs the FastAgent they list.
 
 ## `fastagent models`

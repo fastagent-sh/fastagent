@@ -52,7 +52,7 @@ echo "$*|$MISE_TRUSTED_CONFIG_PATHS|$MISE_CEILING_PATHS|$MISE_OVERRIDE_CONFIG_FI
 case "$1" in
   env) printf '{"PATH":"/fake/tools%s%s","FAKE_TOOL_HOME":"/fake/home"}' "${delimiter}" "$PATH" ;;
   bootstrap) if [ -n "$FAKE_MISSING" ]; then echo "apt  chromium  missing"; exit 1; fi ;;
-  set) printf '[env]\\nA = "1"\\n' >> mise.toml ;;
+  set) printf '[env]\\nA = "1"\\n' >> mise.toml; echo "relocked" > mise.lock ;;
   fail) exit 3 ;;
 esac
 `,
@@ -219,14 +219,39 @@ describe("environment: `fastagent env`", () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-  it("hands everything to the agent's mise, exits as it does, and says at once what FastAgent will refuse", async () => {
+  it("hands everything to the agent's mise and exits as it does", async () => {
     const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
     const { calls } = await fakeMise(dir);
     const ls = await cli(["env", "--locked", "ls", "--json"], dir);
     expect(ls.code, ls.stderr).toBe(0);
     expect((await calls()).at(-1)).toMatch(/^--locked ls --json\|/);
     expect((await cli(["env", "fail"], dir)).code).toBe(3);
+  });
+
+  it("undoes what mise wrote that FastAgent refuses, so the next start is not the one to find it", async () => {
+    const declared = `[tools]\njq = "1.8.1"\n`;
+    const dir = await agentDir(declared);
+    await writeFile(join(dir, "mise.lock"), "locked\n");
+    await fakeMise(dir);
     const set = await cli(["env", "set", "A=1"], dir);
-    expect([set.code, set.stderr]).toEqual([1, expect.stringMatching(/\[env\] is not supported yet/)]);
+    expect(set.code).toBe(1);
+    expect(set.stderr).toMatch(
+      /\[env\] is not supported yet .* — this command's change to mise\.toml and mise\.lock is undone/,
+    );
+    expect(await readFile(join(dir, "mise.toml"), "utf8")).toBe(declared);
+    expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("locked\n");
+    // Files the command created are removed.
+    const fresh = await agentDir();
+    await fakeMise(fresh);
+    expect((await cli(["env", "set", "A=1"], fresh)).code).toBe(1);
+    for (const file of ["mise.toml", "mise.lock"]) {
+      await expect(readFile(join(fresh, file), "utf8")).rejects.toThrow(/ENOENT/);
+    }
+    // A file refused before the command is reported, not called restored: the command changed nothing.
+    await writeFile(join(dir, "mise.toml"), `[env]\nA = "1"\n`);
+    const ls = await cli(["env", "ls"], dir);
+    expect(ls.code).toBe(1);
+    expect(ls.stderr).toMatch(/\[env\] is not supported yet/);
+    expect(ls.stderr).not.toMatch(/is undone/);
   });
 });
