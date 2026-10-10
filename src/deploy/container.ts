@@ -106,6 +106,11 @@ export interface ContainerInput {
   shipsGit?: boolean;
 }
 
+/** Whether the image has git: FastAgent installs it for its own needs, or the agent declares it in mise.toml. */
+export function imageHasGit(input: Pick<ContainerInput, "apt" | "environment">): boolean {
+  return input.apt?.includes("git") === true || input.environment?.packages.includes("apt:git") === true;
+}
+
 /** The apt layer (cached right after FROM). */
 function aptLayer(packages?: string[]): string {
   return packages && packages.length > 0

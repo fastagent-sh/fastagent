@@ -1,7 +1,7 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -112,8 +112,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
     input.shipsGit
       ? `# Railway uploads may strip .git, so the deployed definition may have no history.`
-      : input.apt?.includes("git")
-        ? `# Git is installed (github content is cloned here).`
+      : imageHasGit(input)
+        ? `# Git is installed (github content is cloned here, or mise.toml declares it).`
         : `# To give the agent git, declare it: fastagent env bootstrap packages use apt:git`,
   );
 

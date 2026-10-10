@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
@@ -581,7 +581,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("an environment needs the agent's linux mise in its package.json and a mise.lock, or --run stops", async () => {
+  it("an environment needs the agent's linux mise in its package.json, and mise installed here to lock it", async () => {
     const dir = await agent({
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
       "mise.toml": `[tools]\njq = "1.8.1"\n`,
@@ -602,19 +602,30 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         optionalDependencies: optional,
       }),
     );
-    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
-      ok: false,
-      gate: "mise.toml has no mise.lock beside it: the image installs only what the lock records.",
-    });
-    await writeFile(join(dir, "mise.lock"), "lockfile_version = 3\n");
+    // Listed but not installed on this machine (it never installed the agent's dependencies): the lock cannot be
+    // written, which stops --run and only warns a deploy that writes the artifacts.
+    const notHere =
+      `the agent's mise is not installed here, so mise.lock cannot be written from the versions this machine runs, ` +
+      `and the image installs only what the lock records. Run \`fastagent env install\` in ${dir}, then deploy again.`;
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({ ok: false, gate: notHere });
+    const artifactsOnly = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(artifactsOnly.ok && artifactsOnly.messages).toContainEqual({ level: "warn", text: notHere });
+    // Installed: the deploy writes the lock, with the agent's mise, for the image's platforms.
+    const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
+    await mkdir(join(pkg, "bin"), { recursive: true });
+    await writeFile(join(pkg, "package.json"), "{}\n");
+    await writeFile(join(pkg, "bin", "mise"), `#!/bin/sh\necho "$*" > mise.lock\n`);
+    await chmod(join(pkg, "bin", "mise"), 0o755);
     const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.container.environment).toMatchObject({ tools: ["jq"], packages: [] });
       expect(ok.container.apt).toEqual(["ca-certificates"]); // mise downloads over TLS; the slim image has no CAs
     }
+    expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("lock --platform linux-x64,linux-arm64\n");
     // mise writes no lock for a file without tools: system packages alone need none.
     await rm(join(dir, "mise.lock"));
+    await rm(join(dir, "node_modules"), { recursive: true });
     await writeFile(join(dir, "mise.toml"), `[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
     expect((await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
   });

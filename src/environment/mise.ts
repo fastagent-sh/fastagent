@@ -8,9 +8,9 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { log } from "../log.ts";
-import { detectRuntime, readPackageJson } from "../runtime.ts";
+import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { MISE_FILE, readEnvironment } from "./declare.ts";
 
 /** mise's npm package for each platform it publishes one for, by Node's `${platform}-${arch}`. */
@@ -57,7 +57,9 @@ export function miseBinary(agentDir: string): string | undefined {
 /**
  * What every mise run for the agent in `agentDir` is given: only its own `mise.toml` is read (not `.mise.toml`,
  * `mise.local.toml`, `.tool-versions`, a parent directory's or the machine's configuration), and it is trusted, as
- * running the agent already trusts its code. The same values go into the image the agent is deployed in.
+ * running the agent already trusts its code. The same values go into the image the agent is deployed in. They are
+ * given to these runs alone, never exported to the agent's processes: a mise the agent runs is the machine's, on the
+ * machine's configuration and a content repository's own.
  */
 function miseIsolation(agentDir: string): Record<string, string> {
   return isolationAt(realpathSync(agentDir));
@@ -66,7 +68,9 @@ function miseIsolation(agentDir: string): Record<string, string> {
 /** {@link miseIsolation} for an agent directory at `realDir`, a path no link leads through. */
 export function isolationAt(realDir: string): Record<string, string> {
   return {
-    MISE_TRUSTED_CONFIG_PATHS: realDir,
+    // The file, not the directory: mise trusts by prefix, and a clone under content/ carries its own mise.toml, which
+    // would then run unasked.
+    MISE_TRUSTED_CONFIG_PATHS: join(realDir, MISE_FILE),
     MISE_CEILING_PATHS: dirname(realDir),
     MISE_GLOBAL_CONFIG_FILE: NO_FILE,
     MISE_SYSTEM_CONFIG_FILE: NO_FILE,
@@ -134,11 +138,19 @@ async function addMiseCommand(agentDir: string): Promise<[string, string[]]> {
 
 /**
  * The agent's mise, added to its `package.json` first when it has none: for the commands an author runs to change the
- * environment (`fastagent env`), never for one that runs the agent.
+ * environment (`fastagent env`), never for one that runs the agent. A manifest that does not list FastAgent is
+ * refused: the mise would make it a code agent, whose image runs the FastAgent its `package.json` lists.
  */
 export async function ensureMise(agentDir: string): Promise<string> {
   const found = miseBinary(agentDir);
   if (found) return found;
+  if (!listsFastagent(await readPackageJson(agentDir))) {
+    throw new Error(
+      `${join(agentDir, "package.json")} does not list @fastagent-sh/fastagent — the agent's mise is one of its ` +
+        `dependencies, and an agent with dependencies runs the FastAgent they list. Add it first: ` +
+        `\`npm install @fastagent-sh/fastagent\` in ${agentDir}`,
+    );
+  }
   const [command, args] = await addMiseCommand(agentDir);
   log.info(`[fastagent] installing the agent's mise: ${command} ${args.join(" ")}`);
   await new Promise<void>((done, fail) => {
@@ -161,9 +173,9 @@ function missingMise(agentDir: string): Error {
 
 /**
  * Enter the agent's environment, for a process that runs it: install what `mise.toml` declares, and put it on this
- * process's PATH (with mise itself, so the agent can add a tool), which every command the agent runs inherits. An
- * agent with no `mise.toml` borrows the machine's commands. System packages are the image's to install; one missing
- * here is said, with how to install it.
+ * process's PATH, which every command the agent runs inherits. mise itself is not put there: `fastagent env` is how
+ * the environment changes, and checks what it writes. An agent with no `mise.toml` borrows the machine's commands.
+ * System packages are the image's to install; one missing here is said, with how to install it.
  */
 export async function enterEnvironment(agentDir: string): Promise<void> {
   const declared = readEnvironment(agentDir);
@@ -187,17 +199,13 @@ export async function enterEnvironment(agentDir: string): Promise<void> {
     string,
     string
   >;
-  Object.assign(process.env, miseIsolation(agentDir), env);
-  process.env.PATH = `${dirname(bin)}${delimiter}${process.env.PATH ?? ""}`;
+  Object.assign(process.env, env);
 }
 
 /**
- * Write `mise.lock` for the platforms an image is built for, from the versions this machine resolves, so the image
- * installs what the author runs. `deploy` calls it; an agent with no `mise.toml` has nothing to lock.
+ * Write `mise.lock` for the platforms an image is built for, from the versions this machine resolves with the agent's
+ * mise at `bin`, so the image installs what the author runs.
  */
-export async function lockEnvironment(agentDir: string): Promise<void> {
-  if (!readEnvironment(agentDir)) return;
-  const bin = miseBinary(agentDir);
-  if (!bin) throw missingMise(agentDir);
+export async function lockEnvironment(agentDir: string, bin: string): Promise<void> {
   await runMise(agentDir, bin, ["lock", "--platform", IMAGE_PLATFORMS.join(",")]);
 }

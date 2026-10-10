@@ -370,8 +370,9 @@ excludes. Each start publishes it onto persistent storage:
 **The environment**: with a [`mise.toml`](configuration.md#environment-misetoml), `deploy` first writes `mise.lock`
 from the versions this machine runs, for linux-x64 and linux-arm64; commit it beside `mise.toml`. The image installs
 the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
-the environment or the dependencies change. `--run` stops when `package.json` does not list mise (run
-`fastagent env install`). Chromium with CJK fonts adds about 1 GB to the image.
+the environment or the dependencies change. `--run` stops when `package.json` does not list mise, or when mise is not
+installed here to write the lock (run `fastagent env install`); without `--run`, both are warnings. Chromium with CJK
+fonts adds about 1 GB to the image.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

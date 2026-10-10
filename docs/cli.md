@@ -143,8 +143,10 @@ fastagent env ls
 
 The first run adds mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and
 says so. After mise exits, the file is read again, so a change FastAgent would refuse at startup (`fastagent env set`
-writes `[env]`) is reported at once.
+writes `[env]`) is reported at once. It refuses an agent whose `package.json` does not list `@fastagent-sh/fastagent`,
+or that has none: mise would make it an agent with dependencies, whose image runs the FastAgent they list.
 
+## `fastagent models`
 
 ```bash
 fastagent models [search] [--refresh] [-g|--global]
@@ -327,8 +329,8 @@ content:  <agent dir>/content/<name>
 
 ## Global options
 
-Flags come after the command: `fastagent info --json`. Global: `-h`/`--help` (also per command, and
-`fastagent help <command>`) and `-v`/`--version`.
+Flags come after the command: `fastagent info --json`. `-h`/`--help` works on every command (also
+`fastagent help <command>`); `-v`/`--version` comes before any command: `fastagent --version`.
 
 | Option | Commands | Meaning |
 |---|---|---|

@@ -237,13 +237,16 @@ uv = "latest"
   `.tool-versions` or a `mise.local.toml`. What is installed locally is what the image installs.
 - **`fastagent env <args>` runs the agent's mise** in its directory (`fastagent env use gh@2`); its first run adds mise
   to `package.json`. It is the only command that changes the environment. `dev`, `start`, `chat`, `invoke` and `tool`
-  install what `mise.toml` declares and put the tools, and mise itself, on the `PATH` of the processes they start;
-  they refuse a `mise.toml` the agent has no mise for.
+  install what `mise.toml` declares and put the tools on the `PATH` of the processes they start; they refuse a
+  `mise.toml` the agent has no mise for. The agent is not given mise: what it changed there would be checked by
+  nothing, and lost on a host at the next release. The isolation is FastAgent's runs alone, and the file is trusted,
+  not the directory, under which a cloned content repository may carry a `mise.toml` of its own.
 - **`deploy` writes `mise.lock`** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine runs,
-  with each tool's download URL and checksum; a tool not installed here is locked at the newest version its
-  declaration allows. The image installs the system packages, then the lock (`mise --locked install`), in a layer
-  before the definition is copied in, so the layer stays cached while the definition changes. AgentCore builds
-  `linux/arm64`. Locally the lock is not enforced: `mise install` keeps what is installed.
+  with each tool's download URL and checksum, when the agent's mise is installed here (otherwise `--run` stops); a
+  tool not installed here is locked at the newest version its declaration allows. The image installs the system
+  packages, then the lock (`mise --locked install`), in a layer before the definition is copied in, so the layer stays
+  cached while the definition changes. AgentCore builds `linux/arm64`. Locally the lock is not enforced:
+  `mise install` keeps what is installed.
 - An agent's environment is its own `mise.toml` and those of the contexts it uses, together (§3.6).
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
   runs with `uv run`, so a skill carries its own dependencies wherever its context goes.

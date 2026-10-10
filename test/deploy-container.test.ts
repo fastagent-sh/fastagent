@@ -1,6 +1,6 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
-import { containerArtifacts } from "../src/deploy/container.ts";
+import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
 import { fastagentPromptSections } from "../src/harnesses/pi/create.ts";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 
@@ -62,7 +62,7 @@ describe("deploy/container: shared Docker context", () => {
       expect(text).toContain("ENV MISE_DATA_DIR=/opt/mise");
       // The same isolation every run here has, for the directory the image holds the agent in.
       expect(text).toContain(
-        "MISE_TRUSTED_CONFIG_PATHS=/app/definition MISE_CEILING_PATHS=/app MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
+        "MISE_TRUSTED_CONFIG_PATHS=/app/definition/mise.toml MISE_CEILING_PATHS=/app MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
       );
       // System packages first, without apt's recommends (mise does not pass --no-install-recommends), then the lock.
       expect(text).toMatch(
@@ -81,6 +81,14 @@ describe("deploy/container: shared Docker context", () => {
     expect(toolsOnly).toContain('"$MISE" --locked install');
     expect(toolsOnly).not.toMatch(/bootstrap|APT::/);
     expect(dockerfile({ ...input, environment: { tools: [], packages: [] } })).not.toMatch(/mise/);
+  });
+
+  it("has git when FastAgent installs it or the agent declares it in mise.toml", () => {
+    expect(imageHasGit({ apt: ["git", "ca-certificates"] })).toBe(true);
+    expect(imageHasGit({ apt: ["ca-certificates"], environment: { tools: [], packages: ["apt:git"] } })).toBe(true);
+    expect(imageHasGit({ apt: ["ca-certificates"], environment: { tools: ["gh"], packages: ["apt:chromium"] } })).toBe(
+      false,
+    );
   });
 
   it("records a value-file model in the release manifest, and nothing when the config named it", () => {

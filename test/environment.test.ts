@@ -4,7 +4,7 @@
  * tested is FastAgent's side (which file, which isolation, which arguments, what reaches the process), not mise.
  */
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,10 +25,12 @@ afterEach(() => {
   Object.assign(process.env, savedEnv);
 });
 
+const FASTAGENT = { "@fastagent-sh/fastagent": "^0.24.4" };
+
 async function agentDir(miseToml?: string): Promise<string> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "fa-env-")));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-  await writeFile(join(dir, "package.json"), `{"name":"a","private":true}\n`);
+  await writeFile(join(dir, "package.json"), JSON.stringify({ name: "a", private: true, dependencies: FASTAGENT }));
   if (miseToml !== undefined) await writeFile(join(dir, "mise.toml"), miseToml);
   return dir;
 }
@@ -105,9 +107,9 @@ describe("environment: what mise.toml may declare", () => {
 });
 
 describe("environment: the agent's own mise", () => {
-  it("is entered by a process that runs the agent: installed, then on PATH with mise itself, on mise.toml alone", async () => {
+  it("is entered by a process that runs the agent: installed, then its tools on PATH, on mise.toml alone", async () => {
     const dir = await agentDir(`[tools]\njq = "1.8.1"\n[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
-    const { bin, calls } = await fakeMise(dir);
+    const { calls } = await fakeMise(dir);
     process.env.FAKE_MISSING = "1";
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
@@ -118,17 +120,21 @@ describe("environment: the agent's own mise", () => {
     } finally {
       warn.mockRestore();
     }
-    const isolation = `${dir}|${join(dir, "..")}|mise.toml|none|/dev/null/none.toml|${dir}`;
+    // Trusted: the agent's mise.toml, not its directory, under which content/ clones carry their own.
+    const isolation = `${join(dir, "mise.toml")}|${join(dir, "..")}|mise.toml|none|/dev/null/none.toml|${dir}`;
     expect(await calls()).toEqual([
       `install|${isolation}`,
       `bootstrap packages status --missing|${isolation}`,
       `env --json|${isolation}`,
     ]);
-    const path = (process.env.PATH ?? "").split(delimiter);
-    expect(path.slice(0, 2)).toEqual([join(bin, ".."), "/fake/tools"]);
+    expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
     expect(process.env.FAKE_TOOL_HOME).toBe("/fake/home");
-    // The agent's own `mise use` runs as isolated as FastAgent's.
-    expect(process.env.MISE_OVERRIDE_CONFIG_FILENAMES).toBe("mise.toml");
+    // The isolation is these runs' alone: a mise the agent runs (the machine's shims, a content repository's
+    // mise.toml) reads its own configuration, and the agent's mise is not on its PATH.
+    for (const name of ["MISE_TRUSTED_CONFIG_PATHS", "MISE_GLOBAL_CONFIG_FILE", "MISE_OVERRIDE_CONFIG_FILENAMES"]) {
+      expect(process.env[name], name).toBe(savedEnv[name]);
+    }
+    expect(process.env.PATH).not.toContain(join(dir, "node_modules"));
   });
 
   it("an agent without mise.toml borrows the machine's commands; one with it and no mise is refused", async () => {
@@ -139,17 +145,14 @@ describe("environment: the agent's own mise", () => {
     await expect(enterEnvironment(dir)).rejects.toThrow(
       `${join(dir, "mise.toml")} declares an environment, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
     );
-    await expect(lockEnvironment(dir)).rejects.toThrow(/run `fastagent env install`/);
+    expect(miseBinary(dir)).toBeUndefined();
   });
 
-  it("locks for the platforms an image is built for; nothing without mise.toml", async () => {
+  it("locks for the platforms an image is built for", async () => {
     const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
-    const { calls } = await fakeMise(dir);
-    await lockEnvironment(dir);
+    const { bin, calls } = await fakeMise(dir);
+    await lockEnvironment(dir, bin);
     expect((await calls()).map((call) => call.split("|")[0])).toEqual(["lock --platform linux-x64,linux-arm64"]);
-    const none = await agentDir();
-    await lockEnvironment(none);
-    expect(miseBinary(none)).toBeUndefined();
   });
 
   it("is added to the agent's package.json, every platform pinned, by the command that changes the environment", async () => {
@@ -172,7 +175,10 @@ describe("environment: the agent's own mise", () => {
   it("a clone that lists mise and has not installed its dependencies keeps the version it pins", async () => {
     const dir = await agentDir();
     const optionalDependencies = Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"]));
-    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "a", private: true, optionalDependencies }));
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "a", private: true, dependencies: FASTAGENT, optionalDependencies }),
+    );
     const fakeBin = await fakeNpm(dir);
     process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
     vi.spyOn(log, "info").mockImplementation(() => {});
@@ -182,6 +188,22 @@ describe("environment: the agent's own mise", () => {
       vi.restoreAllMocks();
     }
     expect((await readFile(join(dir, "npm-args"), "utf8")).trim()).toBe("install --no-audit --no-fund");
+  });
+
+  it("is not added to an agent whose package.json does not list FastAgent: its image could not start", async () => {
+    const dir = await agentDir();
+    const fakeBin = await fakeNpm(dir);
+    process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
+    for (const manifest of [undefined, `{"name":"a"}`]) {
+      await rm(join(dir, "package.json"), { force: true });
+      if (manifest) await writeFile(join(dir, "package.json"), manifest);
+      await expect(ensureMise(dir)).rejects.toThrow(
+        `${join(dir, "package.json")} does not list @fastagent-sh/fastagent — the agent's mise is one of its ` +
+          "dependencies, and an agent with dependencies runs the FastAgent they list. Add it first: " +
+          `\`npm install @fastagent-sh/fastagent\` in ${dir}`,
+      );
+    }
+    await expect(readFile(join(dir, "npm-args"), "utf8")).rejects.toThrow(/ENOENT/);
   });
 });
 

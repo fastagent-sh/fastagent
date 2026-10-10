@@ -32,7 +32,7 @@ import {
   loginProviders,
 } from "../harnesses/pi/models.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
-import { detectRuntime, readPackageJson } from "../runtime.ts";
+import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
@@ -41,7 +41,7 @@ import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
 import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE, readEnvironment } from "../environment/declare.ts";
-import { MISE_PACKAGE_NAMES } from "../environment/mise.ts";
+import { lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -131,7 +131,9 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
 
 /**
  * What the image needs to install the environment `mise.toml` declares: the agent's own mise for linux in its
- * package.json, so the image's install brings it, and `mise.lock`, which `deploy` writes before this check.
+ * package.json, so the image's install brings it, and, for tools, `mise.lock`. The lock is an artifact like the
+ * Dockerfile, written here from the versions this machine runs; a machine without the agent's mise installed cannot
+ * write it, which is an issue (a warning without `--run`), as a code input that cannot load is.
  */
 async function checkEnvironment(
   agentDir: string,
@@ -147,11 +149,20 @@ async function checkEnvironment(
       `${MISE_FILE} declares an environment, and the image would have no mise to install it with: the agent's ` +
         `package.json does not list ${missing.join(", ")}. Run \`fastagent env install\` in the agent directory.`,
     );
+    return;
   }
   // mise writes no lock for a file that declares no tools, and the image then has none to install.
-  if (environment.tools.length > 0 && !(await exists(join(agentDir, MISE_LOCK_FILE)))) {
-    report.issue(`${MISE_FILE} has no ${MISE_LOCK_FILE} beside it: the image installs only what the lock records.`);
+  if (environment.tools.length === 0) return;
+  const bin = miseBinary(agentDir);
+  if (!bin) {
+    report.issue(
+      `the agent's mise is not installed here, so ${MISE_LOCK_FILE} cannot be written from the versions this ` +
+        `machine runs, and the image installs only what the lock records. Run \`fastagent env install\` in ` +
+        `${agentDir}, then deploy again.`,
+    );
+    return;
   }
+  await lockEnvironment(agentDir, bin);
 }
 
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
@@ -415,7 +426,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
   // The code-path Dockerfile runs `${runner}`.
-  if (hasPackageJson && !("@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
+  if (hasPackageJson && !listsFastagent(pkg)) {
     report.warn(
       `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,

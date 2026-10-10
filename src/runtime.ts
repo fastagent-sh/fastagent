@@ -35,6 +35,17 @@ export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): A
 }
 
 /**
+ * Whether a manifest lists FastAgent, which the image of an agent with a `package.json` runs from its own
+ * `node_modules`: without it, the container cannot start.
+ */
+export function listsFastagent(pkg: {
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+}): boolean {
+  return "@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies };
+}
+
+/**
  * Parse `<dir>/package.json`, or `{}` when there is none (a markdown-only agent). A file that does not parse throws,
  * naming itself: read as `{}` it became "does not list @fastagent-sh/fastagent" and an npm-based image, both wrong.
  */

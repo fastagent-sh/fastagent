@@ -295,8 +295,9 @@ The commands the agent runs are the machine's too, unless its `mise.toml` declar
 [agent service](agent-service.md) §4). `declare.ts` reads the file and refuses what FastAgent does not support;
 `mise.ts` runs the agent's own mise, an optional npm dependency per platform, isolated to that one file. Every command
 that runs the agent installs the `[tools]` and puts them on `process.env.PATH` before anything is spawned; the `dev`
-supervisor does not, its worker does, and an edit to `mise.toml` restarts it. `fastagent env` is a pass-through to
-that mise and the only command that changes the environment.
+supervisor does not, its worker does, and an edit to `mise.toml` restarts it. Only the tools reach that `PATH`: the
+isolation variables go to FastAgent's own mise runs, and mise itself is not put there. `fastagent env` is a
+pass-through to that mise and the only command that changes the environment.
 
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
@@ -780,8 +781,9 @@ reads (the agent directory) or work on it from a host (a repository). Git histor
 packer permits it, and the image installs Git when the agent directory contains `.git` or a content entry is `github`.
 With a `mise.toml`, `deploy` first writes `mise.lock` for linux-x64 and linux-arm64, and the generated Dockerfile
 installs the declared system packages and then the lock with the agent's own mise, between the dependency install and
-`COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. Preflight gates `--run`
-when `package.json` does not list the linux mise packages or the lock is missing, and warns a kept hand-written
+`COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. Preflight writes the lock
+when tools are declared (`deploy/preflight.ts` `checkEnvironment`), and gates `--run` when `package.json` does not
+list the linux mise packages or the agent's mise is not installed here to lock with; it warns a kept hand-written
 Dockerfile that it installs the environment only if it says so.
 
 `deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
