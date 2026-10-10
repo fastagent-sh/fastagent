@@ -220,15 +220,17 @@ describe("init: scaffoldAgent", () => {
     }
   });
 
-  it("--content declares what the agent works on, in the literal list; a nested one is refused before any write", async () => {
+  it("--content declares what the agent works on in context.json and links it; a nested one is refused before any write", async () => {
     const base = await realpath(await freshDir());
     const app = join(base, "app");
     await mkdir(app);
     const out = await cliInit(["init", "reviewer", "--content", "app", "--no-install"], base);
     expect(out).toMatch(/created .*reviewer/);
     expect(out).toContain(`works on app  ${app} (local, this machine only)`);
-    const config = await readFile(join(base, "reviewer", "fastagent.config.ts"), "utf8");
-    expect(config).toContain(`  content: [\n    { local: ${JSON.stringify(app)} },\n  ],\n`);
+    expect(JSON.parse(await readFile(join(base, "reviewer", "context.json"), "utf8"))).toEqual({
+      content: { app: {} },
+    });
+    expect(await realpath(join(base, "reviewer", "content", "app"))).toBe(app);
     // There is no copy for a host: a directory stays on this machine.
     expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
       /unknown option '--copy'/,

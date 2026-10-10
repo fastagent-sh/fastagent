@@ -237,67 +237,74 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be th
 
 ```ts
 // From `@fastagent-sh/fastagent/node`.
-function resolveContent(agentDir: string, declarations: ContentDeclaration[] | undefined): ResolvedContent[];
+function loadContent(agentDir: string): DeclaredContent[]; // the agent's context.json, read and checked
+function resolveContent(agentDir: string, declared: readonly DeclaredContent[]): ResolvedContent[];
 function cloneContent(
   entry: ResolvedContent & { kind: "github" },
 ): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
-type ContentDeclaration =
-  | { local: string; readonly?: boolean; name?: string }
-  | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
+type ContentEntry = { github?: string; ref?: string; readonly?: boolean; description?: string }; // as context.json holds it
 
 type ResolvedContent = {
   name: string;                         // unique ignoring case, one path segment
   readonly: boolean;                    // the agent knows it and does not write it
-  location: string;                     // its absolute directory on this instance
+  description?: string;                 // what the declaration tells the agent about it
+  location: string;                     // content/<name> in the agent directory, absolute
+  linkedTo?: string;                    // the directory of this machine `location` links to, when it is a link
   notices: string[];                    // what to tell the user: a checkout off its ref, a clone not made yet
 } & (
   | { kind: "local" }
-  | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: no checkout of it here
+  | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: nothing is linked here
 );
 ```
 
-The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fastagent content list`. It refuses,
-naming the entry, a declaration that is malformed, a directory that does not exist, and one that contains the agent
-directory or sits inside it ([Configuration](configuration.md#content)). It reads the disk and git, never the
-network, and writes nothing: a `github` entry with no checkout here resolves to its clone's location, which
-`cloneContent` makes, or brings up to date in place by git's rules, which never overwrite the agent's work: what git
-refuses, a fetch that fails, or a clone on another branch than declared keeps it as it is (`kept`, with the
-`reason`). `createPiAgentFromDir` clones before it resolves; a caller that
-resolves for `createPiAgentFromDefinition` calls `cloneContent` for each entry with `clone: true`, then resolves
-again.
+The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fastagent content list`.
+`loadContent` refuses a `context.json` that is malformed, naming the file and the entry; `resolveContent` refuses,
+naming the entry, a link to nothing, to a file, to a directory that contains the agent directory or sits inside it,
+or, for a `github` entry, to anything but a checkout of its repository
+([Configuration](configuration.md#content)). It reads the disk and git, never the network, and writes nothing. An
+entry without `github` that nothing is linked for is left out; `contentAbsentHere(agentDir, declared)` lists those.
+A `github` entry with nothing linked resolves to its clone at `content/<name>`, which `cloneContent` makes, or brings
+up to date in place by git's rules, which never overwrite the agent's work: what git refuses, a fetch that fails, or
+a clone on another branch than declared keeps it as it is (`kept`, with the `reason`). `createPiAgentFromDir`
+clones before it resolves; a caller that resolves for `createPiAgentFromDefinition` calls `cloneContent` for each
+entry with `clone: true`, then resolves again.
 
-`declarationFor(source, cwd, options?)` (also `/node`) reads a directory or `github:owner/repo` the way
-`init --content` and `fastagent content add` do: the root of a checkout whose `origin` is on GitHub becomes that
-repository with the checkout as its `local`, any other directory `{ local }`. It returns the declaration and `notes`
-for the user.
+`readContentSource(source, cwd, options?)` (also `/node`) reads a directory or `github:owner/repo` the way
+`init --content` and `fastagent content add` do. It returns the `ContentAddition` (`{ name, entry, link? }`): the
+root of a checkout whose `origin` is on GitHub becomes that repository linked to the checkout, any other directory an
+entry without `github` linked to it, and `github:owner/repo` a repository with no link. It also returns `notes` for
+the user.
 
 ```ts
 // From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent content` run.
 function createAgent(
   dir: string,
-  options?: { content?: ContentDeclaration[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
+  options?: { content?: ContentAddition[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
 ): Promise<{ dir: string; created: string[]; content: ResolvedContent[]; repository: string }>;
 function listContent(agentDir: string): Promise<ResolvedContent[]>;
-function addContent(agentDir: string, declaration: ContentDeclaration): Promise<{ name: string; content: ResolvedContent[] }>;
-function removeContent(agentDir: string, name: string): Promise<{ name: string; content: ResolvedContent[] }>;
+function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
+function removeContent(agentDir: string, name: string): Promise<ContentEdit>;
+type ContentEdit = { name: string; content: ResolvedContent[]; notes: string[] };
 class ContentNameError extends Error {}
 ```
 
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
 every refusal is thrown with the message the CLI shows. `createAgent` checks every entry before it writes, and
-removes the scaffold again when writing the content declaration fails. The agent runs without `npm install`. `webAccess` adds
-what `init` adds: `extensions/web-access.ts` and `@fastagent-sh/pi-web-access` in `package.json`, whose web tools load only once
-it is installed (until then they are left out with a warning); `install`, when given, runs after
-the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
-failed content write. The agent is then a git repository whose first commit is the
+removes the scaffold, `context.json` and the links again when writing the content fails. The agent runs without
+`npm install`. `webAccess` adds what `init` adds: `extensions/web-access.ts` and `@fastagent-sh/pi-web-access` in
+`package.json`, whose web tools load only once it is installed (until then they are left out with a warning);
+`install`, when given, runs after the scaffold so the lockfile is in the first commit, and a rejection from it removes
+the scaffold and is thrown, like a failed content write. The agent is then a git repository whose first commit is the
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
-no commit identity), as a sentence to show. `addContent` names the entry
-after its repository or directory unless the declaration names it; `removeContent` matches the name ignoring case.
-Both rewrite only the literal `content` list, under the config file's lock, so concurrent edits apply one after the
-other; each returns the name it acted on with the content after the edit. A name that cannot name an entry, is
-taken (ignoring case, including by another entry `createAgent` was given), or is not the agent's is a
-`ContentNameError`, which the CLI reports with exit code 2.
+no commit identity), as a sentence to show.
+
+`addContent` writes the entry into `context.json` and links `content/<name>` when the addition has a `link`; when
+either fails, neither is left. `removeContent` matches the name ignoring case, drops the entry and its link, and
+leaves a clone at `content/<name>` as it is, saying so in `notes`. Both edit `context.json` under its lock, so
+concurrent edits apply one after the other; each returns the name it acted on with the content after the edit. A name
+that cannot name an entry, is taken (ignoring case, including by another entry `createAgent` was given), or is not
+the agent's is a `ContentNameError`, which the CLI reports with exit code 2.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,

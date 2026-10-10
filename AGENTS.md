@@ -68,13 +68,14 @@ src/
 ├── runtime.ts              # agent runtime/package-manager detection (node vs bun) + readPackageJson
 ├── loader.ts               # neutral ESM discovery/loading + failure reporting for tools/ channels/ config
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
-│                           # shared path predicates and the machinery paths that follow (.secrets/.state/.contexts)
+│                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
-│   ├── declare.ts          # the `content` declaration read and refused in ONE place (names, nesting)
-│   ├── resolve.ts          # where each entry is for THIS instance: the one answer every reader uses
+│   ├── declare.ts          # a content entry read and refused in ONE place (names, keys, nesting)
+│   ├── file.ts             # `context.json` read whole (every refusal names the file) and its written shape
+│   ├── mount.ts            # the writes into content/: the dir with its own .gitignore, and the links
+│   ├── resolve.ts          # where each entry is for THIS instance (content/<name>): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
-│   ├── source.ts           # what a command's <source> declares (github:owner/repo, a checkout, a directory)
-│   └── config-text.ts      # the literal `content: [...]` block `fastagent content` rewrites
+│   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared

@@ -15,7 +15,8 @@ import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
-import { type DeclaredContent, declareContent } from "../content/declare.ts";
+import type { DeclaredContent } from "../content/declare.ts";
+import { loadContent } from "../content/file.ts";
 import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -113,13 +114,14 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
       report.note(`${role} ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
     } else if (entry.readonly) {
       report.note(
-        `${role} ${entry.name}: local ${entry.path}, stays on this machine, and the deployed agent works without ` +
-          `it; to ship what the agent reads there, copy it into the agent directory, which every release carries`,
+        `${role} ${entry.name}: a directory of this machine (content/${entry.name}), stays here, and the deployed ` +
+          `agent works without it; to ship what the agent reads there, copy it into the agent directory, which ` +
+          `every release carries`,
       );
     } else {
       report.warn(
-        `${role} ${entry.name}: local ${entry.path}, stays on this machine, and the deployed agent works without ` +
-          `it; to work on it from a host, move it to a GitHub repository and declare it as github`,
+        `${role} ${entry.name}: a directory of this machine (content/${entry.name}), stays here, and the deployed ` +
+          `agent works without it; to work on it from a host, move it to a GitHub repository and declare it as github`,
       );
     }
   }
@@ -190,7 +192,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  const content = declareContent(config.content, agentDir);
+  const content = loadContent(agentDir);
   checkContent(content, storageResets, report);
 
   // The definition the box will load on every start, loaded here first: a refusal in it (a leftover persona.md, a

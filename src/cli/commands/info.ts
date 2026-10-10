@@ -24,6 +24,7 @@ import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
+import { loadContent } from "../../content/file.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -39,7 +40,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   let content: ResolvedContent[] = [];
   let contentError: string | undefined;
   try {
-    content = resolveContent(agentDir, config.content);
+    content = resolveContent(agentDir, loadContent(agentDir));
   } catch (error) {
     contentError = (error as Error).message;
   }

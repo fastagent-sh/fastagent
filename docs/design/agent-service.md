@@ -802,7 +802,7 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content; how a local checkout is linked at `content/<name>/` is settled with that file's shape (§13) |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` links `content/<name>/` to that directory, and another machine links its own or clones |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. Each command that runs the agent installs the environment's lock first, and refuses to start without mise (§4) |
 | Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image and installs the environment's lock |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
@@ -1059,7 +1059,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 |---|---|---|
 | Environment | `deploy.apt` in the config, Debian only; locally the machine's own | `mise.toml` and `mise.lock`: the same tools at the same versions on every platform, installed by `deploy` and by every command that runs the agent (§4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | `content` in the config: repositories, cloned into `.contexts/` | Content in `context.json`, at `content/<name>/`: a clone, a link to the author's checkout, a mount. A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
+| Content and contexts | Content in `context.json`, at `content/<name>/`: a clone or a link to the author's checkout (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | One per file directly in `tools/`, default-exported; helpers kept outside | Every `defineTool` value exported from any module below `tools/`; helpers beside them (§8.1) |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1077,12 +1077,11 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 ### 11.1 What changes in the agent model
 
 The [agent model](agent-model.md) describes what is implemented. It took this design's vocabulary in step 3 (§12):
-the data an agent works on is its content, and *context* is the whole. What still differs:
+the data an agent works on is its content, declared in `context.json` and reached at `content/<name>/`, and *context*
+is the whole. What still differs:
 
 | Agent model (implemented) | This design |
 |---|---|
-| Content in the config (`content`), of type `local` or `github` | Content in `context.json`, of the same types (§8.1) |
-| Cloned into `.contexts/<name>/` | Materialized at `content/<name>/`; `.contexts/<name>/` holds the fetched contexts (§8.1) |
 | A content entry's skills named `<content>/<skill>` | Kept, and a shared context's skills are named `<context>/<skill>` (§3.6) |
 | No shared contexts | A context is the unit of sharing (§3.6) |
 | The machine lends the environment | `mise.toml` declares it; the machine still lends pi's own skills, prompt templates and settings (§4) |
@@ -1104,8 +1103,9 @@ the data an agent works on is its content, and *context* is the whole. What stil
 
 Each is settled when the step that needs it is built (§12).
 
-1. The shape of `context.json` (naming content's credential); how the environments of an agent and its contexts are
-   locked as one; where an MCP server's OAuth tokens live for a deployed agent.
+1. How `context.json` names a content entry's credential (its shape for content is settled: entries by name, with
+   `github`, `ref`, `readonly` and `description`, and no machine's path); how the environments of an agent and its
+   contexts are locked as one; where an MCP server's OAuth tokens live for a deployed agent.
 2. The final error codes, the cap on runs in flight, and the page limits of `read`.
 3. Scaling out on AgentCore: routing each message to its conversation's runtime session, an invoke by its body; a
    fork, which reads one session and creates another; a lease that holds across processes; how state is split by
@@ -1149,7 +1149,7 @@ The product and the model:
   describes: the model, serving and deploy options, and `tools` (§8.1).
 - `context.json` (JSON, with a JSON Schema) lists the contexts an agent uses and its own content, each content entry
   with a description for the agent; each is materialized at `content/<name>/`: a clone, a link to the author's
-  checkout, or a mount, never committed (§8.1).
+  checkout, or a mount, never committed (§8.1). Content: implemented, without a published JSON Schema yet.
 - A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
   service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
   connector file type, and `fastagent info` lists every connector (§5).

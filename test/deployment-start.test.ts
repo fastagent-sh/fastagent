@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
@@ -137,7 +137,8 @@ try {
   const events = [];
   for await (const event of service.agent.invoke({ session: "deployed-conversation" }, { text: "Read my context" })) events.push(event);
   // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
-  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, clones: process.env.FASTAGENT_CONTEXTS_DIR }));
+  const { realpathSync } = await import("node:fs");
+  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, content: realpathSync("content") }));
 } finally {
   await service.close();
 }
@@ -155,12 +156,12 @@ try {
     const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
       events: { type: string; content?: unknown }[];
       state: string;
-      clones: string;
+      content: string;
     };
     const { events } = reported;
     // Every machinery dir lands on the storage, never in `definition/`, which each release replaces: a clone there
-    // would take the agent's unpushed work with it.
-    expect(reported).toMatchObject({ state: join(root, ".state"), clones: join(root, ".contexts") });
+    // would take the agent's unpushed work with it. content/ is the storage's, through the link the release carries.
+    expect(reported).toMatchObject({ state: join(root, ".state"), content: join(await realpath(root), "content") });
     expect(events.at(-1)).toEqual({ type: "completed" });
     const result = events.find((event) => event.type === "tool_ended");
     expect(JSON.stringify(result)).toContain("deployed-conversation");

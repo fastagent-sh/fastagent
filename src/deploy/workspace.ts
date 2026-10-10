@@ -1,9 +1,9 @@
 /**
  * Deployment-owned initialization of a host's storage: the lease, the release journal, and the definition each
- * release replaces. The instance's state and credentials (`.state/`, `.secrets/`) sit beside the definition and
- * outlive every release.
+ * release replaces. The instance's state, credentials and content (`.state/`, `.secrets/`, `content/`) sit beside the
+ * definition and outlive every release; each release links its `content/` to the storage's.
  */
-import { cp, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, rename, rm, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
@@ -11,7 +11,7 @@ import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
-import { exists } from "../paths.ts";
+import { CONTENT_DIRNAME, exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 
 export const RELEASE_FILE = "fastagent.release.json";
@@ -121,6 +121,7 @@ export async function applyDeploymentRelease(
     staged = join(meta, "staged"),
     pendingPath = join(meta, "pending.json");
   await mkdir(meta, { recursive: true });
+  await mkdir(join(root, CONTENT_DIRNAME), { recursive: true });
   // A storage an earlier FastAgent laid out holds the agent's whole workspace there, which this one would leave
   // behind unread: said, never silently abandoned.
   const formerWorkspace = join(root, "base");
@@ -155,6 +156,11 @@ export async function applyDeploymentRelease(
   log.info(`[fastagent] publishing release ${release.id} as ${DEPLOYED_DEFINITION_DIR}/`);
   await rm(staged, { recursive: true, force: true });
   await cp(source, staged, { recursive: true, verbatimSymlinks: true });
+  // Where the agent reaches each content entry, on every instance: here, the storage's, which no release replaces.
+  await symlink(join("..", CONTENT_DIRNAME), join(staged, CONTENT_DIRNAME)).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    throw new Error(`the release holds ${CONTENT_DIRNAME}/, which a deploy keeps out of the image — rebuild it`);
+  });
   writeFileAtomic(pendingPath, JSON.stringify(release));
   await finishRelease(root, release);
   return definition;

@@ -58,19 +58,19 @@ a home directory kept in git with `*` ignored, does not count), git is not insta
 a `user.name`/`user.email` (the repository is kept; commit yourself). A deploy then ships the agent's `.git` with
 it and installs `git` in the image ([what deploy bakes](deploy.md#what-deploy-bakes)).
 
-Each `--content <source>` declares something the agent works on in the config's `content` list (see
+Each `--content <source>` declares something the agent works on in `context.json` (see
 [content](configuration.md#content)), read the way `content add` reads it:
 
-| `<source>` | Declared |
-|---|---|
-| `github:owner/repo` | `{ github: "owner/repo" }`, cloned when the agent starts and brought up to date in place at each start |
-| The root of a checkout whose `origin` is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
-| Any other directory, a subdirectory of such a checkout included | `{ local: "<absolute path>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
+| `<source>` | Declared | `content/<name>` here |
+|---|---|---|
+| `github:owner/repo` | `{ "github": "owner/repo" }` | A clone, made when the agent starts and brought up to date in place at each start |
+| The root of a checkout whose `origin` is on GitHub | `{ "github": "owner/repo" }` | A link to the checkout |
+| Any other directory, a subdirectory of such a checkout included | `{}` | A link to the directory; for a subdirectory, a note names the `github:` form, which is the whole repository |
 
-A directory stays on this machine: a deployed instance works without it, and `deploy` says so. A repository is cloned
-on a host. Every entry is checked before anything is written: a directory must exist,
-and no declared location may contain the agent directory or sit inside it. Without `--content` the agent has none
-and works only in its own directory.
+The entry is named after the repository or the directory. A directory stays on this machine: a deployed instance works
+without it, and `deploy` says so. A repository is cloned on a host. Every entry is checked before anything is
+written: a directory must exist, and none may contain the agent directory or sit inside it. Without `--content` the
+agent has none and works only in its own directory.
 
 `init` refuses a directory that is not empty, inside a project as anywhere else, and names the command that creates
 the agent elsewhere and attaches the project: `fastagent init <new directory> --content <project>`. It also refuses a
@@ -104,22 +104,22 @@ Read-only.
 
 ```bash
 fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--readonly] [--ref <ref>] [--local <dir>] [--name <name>]
+fastagent content add <source> [agent] [--readonly] [--ref <ref>] [--name <name>] [--description <text>]
 fastagent content remove <name> [agent]
 ```
 
-Edits the literal `content` list in `fastagent.config.ts`. `add` reads `<source>` the way `init --content` does: a
-directory, the root of a GitHub checkout (declared as that repository, with the checkout as its `local`), or
-`github:owner/repo`. Paths are written absolute. `--readonly` makes it content the agent knows rather than works
-on; `--ref` names a repository's branch, tag or commit; `--local` names the checkout of a
-`github:owner/repo` on this machine. An entry's name defaults to its directory's or repository's; `add` asks for
-`--name` when that name is taken (ignoring case) or is not one segment of letters, digits, `-` and `_`. `remove`
-drops the declaration; the directory or checkout itself is untouched.
+Edits `context.json` and the links in `content/`. `add` reads `<source>` the way `init --content` does: a
+directory, the root of a GitHub checkout (declared as that repository, and linked to the checkout), or
+`github:owner/repo` (cloned at the next start). A link is written absolute. `--readonly` makes it content the agent
+knows rather than works on; `--ref` names a repository's branch, tag or commit; `--description` gives the agent one
+sentence about it. An entry's name defaults to its directory's or repository's; `add` asks for `--name` when that
+name is taken (ignoring case) or is not one segment of letters, digits, `-` and `_`, and refuses when something is
+already at `content/<name>`. `remove` drops the entry and its link; the directory a link pointed to is untouched, and
+so is a clone, which may hold the agent's work: `remove` says it is left, for you to delete.
 
-Both write a candidate file beside the config, import it, and replace the config only when it declares exactly the
-intended list, so a refusal leaves the config as it was. A list that is computed (a variable, a spread) is refused:
-edit it by hand. `list --json` prints each entry as every command resolves it, with its `notices`: a checkout off
-its `ref`, a clone not made yet.
+Edits are made under a lock on `context.json`, so two at once apply one after the other, and a refusal leaves the
+file and `content/` as they were. `list --json` prints each entry as every command resolves it, with its `notices`:
+a checkout off its `ref`, a clone not made yet.
 
 ## `fastagent models`
 
@@ -299,7 +299,7 @@ bind:     --bind > all interfaces
 /invoke:  --no-invoke > fastagent.config.ts http.invoke > served
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production
-clones:   FASTAGENT_CONTEXTS_DIR > <agent dir>/.contexts
+content:  <agent dir>/content/<name>
 ```
 
 ## Global options

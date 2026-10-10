@@ -1,5 +1,5 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTEXTS_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { CONTENT_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 
 export interface Artifact {
@@ -172,16 +172,10 @@ CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
 const dockerignore = (input: ContainerInput): string =>
   DOCKERIGNORE_BASE +
   (input.machineryPaths ?? [])
-    // Skip what the name-based rules above already cover: the default `.secrets` / `.state` / `.contexts` and anything
-    // inside them.
-    .filter((p) =>
-      [SECRETS_DIRNAME, STATE_DIRNAME, CONTEXTS_DIRNAME].every(
-        (covered) => p !== covered && !p.startsWith(`${covered}/`),
-      ),
-    )
+    // Skip what the name-based rules above already cover: the default `.secrets` / `.state` and anything inside them.
+    .filter((p) => [SECRETS_DIRNAME, STATE_DIRNAME].every((covered) => p !== covered && !p.startsWith(`${covered}/`)))
     .map(
-      (p) =>
-        `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR / FASTAGENT_CONTEXTS_DIR)\n/${p}\n`,
+      (p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR)\n/${p}\n`,
     )
     .join("");
 
@@ -189,7 +183,7 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/node_modules
 **/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
-**/${CONTEXTS_DIRNAME}
+/${CONTENT_DIRNAME}
 **/.cache
 **/.env
 **/.env.*

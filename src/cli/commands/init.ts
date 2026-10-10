@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
 import { createAgent } from "../../harnesses/pi/authoring.ts";
-import { declarationFor } from "../../content/source.ts";
+import { readContentSource } from "../../content/source.ts";
 import { failEdit } from "./content.ts";
 import { contentLines } from "../content-view.ts";
 import { failStartup } from "../fail.ts";
@@ -19,12 +19,12 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const dir = resolve(dirArg);
   // Every source is read, and every entry checked (by createAgent), BEFORE anything is created.
   const read = await Promise.resolve()
-    .then(() => opts.content.map((source) => declarationFor(source, process.cwd())))
+    .then(() => opts.content.map((source) => readContentSource(source, process.cwd())))
     .catch(failStartup);
   // The CLI scaffold carries web access, which needs the `npm install` createAgent runs before the first commit.
   let installFailed = false;
   const { created, content, repository } = await createAgent(dir, {
-    content: read.map((source) => source.declaration),
+    content: read.map((source) => source.addition),
     webAccess: true,
     ...(opts.install
       ? {

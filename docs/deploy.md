@@ -33,7 +33,7 @@ Only `--run` touches a host. Durable ingress, reverse proxies, DNS and TLS are y
 | **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is recorded in `fastagent.release.json`. `deploy` prints the effective model and gates `--run` when none resolves. A hand-written Dockerfile must set `ENV FASTAGENT_RELEASE_FILE` for that manifest to be read; `deploy` gates the combination otherwise. |
 | **`.secrets/production/.env` holds the deployed environment** | `--run` carries every variable in it, except `PORT` and the `FASTAGENT_*` names the deployment sets itself. A variable exported in your shell does not travel. Names declared by code (`defineTool`/`defineChannel`) and the model's env key must have a value there, or `--run` stops before its first side effect. In CI, write the file before running the command. |
 | **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). A key the definition references (`"$NAME"` in `models.json`) or the provider's key variable in `.secrets/production/.env` travels, and so does a literal or `!command` key in `models.json`. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
-| **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `.contexts/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
+| **Durable storage** | Docker, Fly and Railway keep `definition/`, `.state/`, `.secrets/` and `content/` on a volume at `/data`. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` from `.secrets/production/.env` (it travels like every value there), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A `local` entry stays on your machine: the deployed agent works without it, and preflight names each one (a warning for one the agent works on). Copy what the agent only reads into the agent directory, which every release ships; move what it works on and must keep to a repository. |
 
 ## Chat channels
@@ -350,14 +350,14 @@ excludes. Each start publishes it onto persistent storage:
 ├── definition/           # the deployed definition: the agent's working directory on the host
 ├── .state/               # sessions, channels, scheduled work
 ├── .secrets/             # credentials, including refreshed auth.json
-├── .contexts/            # the clones of the agent's github content
+├── content/              # the agent's content: clones of its github entries; each release links its own here
 └── .deployment/          # release and recovery metadata
 ```
 
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json` (rewritten every time; do not
   edit it). Restarting the same release keeps what the agent wrote in `definition/`; a new release replaces
   `definition/` whole, so a change the agent made to itself, or a file it left there, lasts until the next release.
-  `.state/`, `.secrets/` and `.contexts/` stay.
+  `.state/`, `.secrets/` and `content/` stay.
 - Updates are staged and an interrupted one completes before the agent opens. A file lock at
   `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
 - Storage an earlier FastAgent laid out holds the agent's workspace in `base/`; a start refuses it rather than leave
@@ -369,13 +369,13 @@ excludes. Each start publishes it onto persistent storage:
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
 `agentcore.template.yaml` (Railway has none of its own). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `**/.contexts`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
+`**/.state`, `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
 
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
-- A kept ignore file that drops `fastagent.config.ts` or does not exclude `.secrets/auth.json` gates `--run`; an
-  unexcluded `.state`, `.contexts` or `node_modules` warns.
+- A kept ignore file that drops `fastagent.config.ts`, or does not exclude `.secrets/auth.json` or `content`, gates
+  `--run`; an unexcluded `.state` or `node_modules` warns.
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some
 host CLIs strip `.git` (`railway up` does). An agent that needs git without that sets `deploy: { apt: ["git"] }`.

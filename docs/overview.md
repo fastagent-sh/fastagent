@@ -14,7 +14,8 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 
 ```txt
 reviewer/                   # the agent, its working directory, and a git repository
-├── fastagent.config.ts     # the marker, its content, plus deployment choices
+├── fastagent.config.ts     # the marker, plus deployment choices
+├── context.json            # its content: what it works on and knows
 ├── APPEND_SYSTEM.md        # optional standing instructions (SYSTEM.md replaces pi's default prompt)
 ├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
 ├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
@@ -23,16 +24,17 @@ reviewer/                   # the agent, its working directory, and a git reposi
 ├── schedules/              # optional prompts run on a cron (<name>.md)
 ├── extensions/             # optional pi extension modules (see configuration.md)
 ├── reference.md            # optional reference material the agent reads (any file layout)
-└── .state/ .secrets/ .contexts/   # this machine's instance: sessions, credentials, clones (kept out of git, except .secrets/.env.example)
+├── content/app -> ~/code/app   # where this machine reaches each entry: a link, or a clone
+└── .state/ .secrets/       # this machine's instance: sessions, credentials (kept out of git, except .secrets/.env.example)
 
-app/                        # content it works on, declared in fastagent.config.ts
+app/                        # content it works on, declared in context.json
 ├── AGENTS.md               # optional project context, loaded with the agent
 └── .agents/skills/         # optional skills the project provides, named app/<skill>
 ```
 
-Each content entry is a directory on this machine (`{ local }`) or a GitHub repository (`{ github }`). A repository
-reaches every place the agent runs: here, your checkout when `local` names one, otherwise a clone; on a host, always a clone. A local
-directory stays on this machine, and a deployment says so.
+Each content entry is a directory of this machine (`{}`) or a GitHub repository (`{ "github": "acme/app" }`). A
+repository reaches every place the agent runs: here, your checkout when `content/<name>` links one, otherwise a
+clone; on a host, always a clone. A local directory stays on this machine, and a deployment says so.
 
 ## What FastAgent provides
 

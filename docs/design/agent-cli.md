@@ -44,7 +44,7 @@ are processes serving the same instance. Its state is kept beside the definition
 ├── APPEND_SYSTEM.md  skills/  …     the definition
 ├── .secrets/                        the instance's credentials
 ├── .state/                          the instance's sessions, channel and schedule state
-└── .contexts/                       the clones the instance made, under each entry's name
+└── content/                         where the instance reaches each content entry: a link, or its clone
 ```
 
 Runtime state is not part of the definition ([agent model](agent-model.md) §5). That says what it belongs to, not
@@ -73,14 +73,15 @@ fastagent init <dir> [--content <source>]...
 `--content`. Without `--content` the agent has none and only talks. Content it only knows is added afterwards
 with `fastagent content add --readonly`.
 
-| `<source>` | Declared |
-|---|---|
-| The root of a checkout whose remote is on GitHub | `{ github: "owner/repo", local: "<checkout root>" }` |
-| Any other directory, a subdirectory of such a checkout included | `{ local: "<directory>" }`; for a subdirectory, a note names the `github:` form, which is the whole repository |
-| `github:owner/repo` | `{ github: "owner/repo" }` |
+| `<source>` | Declared in `context.json` | `content/<name>` |
+|---|---|---|
+| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | A link to the checkout |
+| Any other directory, a subdirectory of such a checkout included | `{}`; for a subdirectory, a note names the `github:` form, which is the whole repository | A link to the directory |
+| `github:owner/repo` | `{ "github": "owner/repo" }` | A clone, made when the agent starts |
 
-- **Paths are written absolute.** They describe this machine, and an absolute path keeps meaning the same
-  directory when the agent directory moves.
+- **No path is declared; a link is written absolute.** The declaration is shared with the definition and a path
+  describes one machine, so the path lives only in the link, and an absolute link keeps meaning the same directory
+  when the agent directory moves.
 - **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
   agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
 - **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
@@ -106,24 +107,27 @@ works on app  ~/code/app (github acme/app); a host clones it
 
 ## 4. Editing content: `fastagent content`
 
-People edit `fastagent.config.ts` by hand. A client such as duang cannot safely rewrite a TypeScript module, and
-content belongs in the definition, not in the client, or a deployment from that directory would lose them. Both
-use one implementation: the command, or the API under it (`createAgent`, `addContent`, `removeContent`,
-`listContent` in `/pi`; [API reference](../api-reference.md#content)). The command:
+People edit `context.json` by hand, and so can a client such as duang: it is JSON. Content belongs in the
+definition, not in the client, or a deployment from that directory would lose it. The links are this machine's, and
+`content add` makes the one an entry needs here. Both use one implementation: the command, or the API under it
+(`createAgent`, `addContent`, `removeContent`, `listContent` in `/pi`; [API reference](../api-reference.md#content)).
+The command:
 
 ```bash
 fastagent content list [agent] [--json]
-fastagent content add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--local <dir>]
+fastagent content add <source> [agent] [--readonly] [--name <n>] [--ref <r>] [--description <text>]
 fastagent content remove <name> [agent]
 ```
 
 - `<source>` is read as in `init`: a directory, or `github:owner/repo`. `--readonly` makes it content the agent
   knows rather than works on.
-- `add` refuses content that contains the agent directory or sits inside it, and asks for `--name` when the
+- `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
+- `remove` drops the entry and its link. A clone at `content/<name>` is left, and said to be: it may hold the
+  agent's work.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
-- The command edits only the literal `content` array `init` writes. When an author has replaced it with a
-  computed value, the command refuses and says why, rather than guessing.
+- On another machine, an entry is linked by hand (`ln -s <dir> content/<name>`); a `github` entry with nothing
+  linked is cloned.
 
 ## 5. Running: `dev`, `start`, `chat`, `invoke`
 
@@ -132,7 +136,7 @@ Startup says what the agent works on and what it knows:
 ```text
 agent     ~/agents/reviewer  (model openai-codex/gpt-5.5)
 works on  app       ~/code/app (github acme/app, this checkout)
-knows     handbook  ~/agents/reviewer/.contexts/handbook (github acme/handbook@main, a clone brought up to date at each start)
+knows     handbook  ~/agents/reviewer/content/handbook (github acme/handbook@main, a clone brought up to date at each start)
 instance  ~/agents/reviewer/.state
 ```
 
@@ -140,11 +144,12 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` entry has no checkout here | `cloned github acme/app into .contexts/app`, or `github acme/app is up to date in the clone in …`; a warning when the clone has the agent's changes or GitHub cannot be reached; when its `local` path is missing or is not a checkout of that repository, the reason too |
-| A `local` entry's path does not exist | Refused, naming the path and the declaration |
-| An entry contains the agent directory or sits inside it | Refused, naming both and the way out |
+| A `github` entry has nothing linked here | `github acme/app: cloned in …/content/app`, or `already up to date`; a warning when the clone has the agent's changes or GitHub cannot be reached |
+| A link points to nothing, to a file, or (for a `github` entry) to anything but a checkout of that repository | Refused, naming the link and what it points to |
+| A `local` entry has nothing linked here | Said; the agent is not told of it |
+| A linked directory contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two entries' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
-| A `local` checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
+| A linked checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |
 | The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
 | A `github` entry cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
@@ -161,9 +166,9 @@ The definition is shipped to the host. Preflight lists what the host gets for ea
 ```text
 works on  app       github acme/app@main          cloned; brought up to date where git can without touching the agent's work
 knows     handbook  github acme/handbook@main     cloned; kept up to date
-works on  draft     local ~/draft                 stays on this machine; the deployed agent works without it
+works on  draft     a directory of this machine   stays here; the deployed agent works without it
           → to work on it from a host, move it to a GitHub repository (warning)
-knows     papers    local ~/papers                stays on this machine; the deployed agent works without it
+knows     papers    a directory of this machine   stays here; the deployed agent works without it
           → to ship what the agent reads there, copy it into the agent directory (note)
 ```
 

@@ -128,18 +128,19 @@ Use `--no-watch` to serve once without the supervisor.
 
 By default, machine state (sessions, channel state, schedule state) lives under the agent's
 `.state/`, the credentials (`auth.json`, rotated by each OAuth refresh) under its `.secrets/`, and the clones of its
-github content under its `.contexts/`:
+github content under its `content/`:
 
 ```txt
 <state root>    # default <agent dir>/.state
 <secrets dir>   # default <agent dir>/.secrets
-<clones dir>    # default <agent dir>/.contexts
+content/        # <agent dir>/content
 ```
 
 A redeploy that replaces the agent wipes all three. Point each at durable storage (generated deployments do):
 
 ```bash
-FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets FASTAGENT_CONTEXTS_DIR=/data/.contexts fastagent start
+ln -s /data/content content   # in the agent directory, once
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 Sessions live under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent

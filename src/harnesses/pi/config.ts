@@ -3,8 +3,6 @@
  * resolveModelSpec).
  */
 import { existsSync, statSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -16,11 +14,7 @@ import { readSecretDeclaration } from "../../declared-secrets.ts";
 import { assertCorsOrigins } from "../../channels/serve.ts";
 import type { HttpSurface } from "../../service.ts";
 import { moduleLoadHint } from "../../loader.ts";
-import { AGENT_CONFIG_FILE } from "../../paths.ts";
-import { type ContentDeclaration, declareContent } from "../../content/declare.ts";
-import { canonicalDeclaration, rewriteContent } from "../../content/config-text.ts";
-import { resolveContent } from "../../content/resolve.ts";
-import { withLockedFile } from "./locked-file.ts";
+import { AGENT_CONFIG_FILE, CONTEXT_FILE } from "../../paths.ts";
 
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the exhaustiveness
 // anchor against pi's union).
@@ -30,11 +24,6 @@ export interface FastagentConfig {
   model?: string;
   /** Reasoning effort for the model, pi's scale ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"). */
   thinkingLevel?: ThinkingLevel;
-  /**
-   * What the agent works on, or only knows (`readonly`): directories and repositories of their own, never the agent's
-   * directory or one around it. `fastagent content` edits this literal list (docs/configuration.md "Content").
-   */
-  content?: ContentDeclaration[];
   /** Extra custom tools, appended after the pi coding tools — never replaces them. */
   tools?: FastagentTool[];
   /** What the serve publishes on its port, and to which browsers (each key is documented on {@link HttpSurface}). */
@@ -101,19 +90,14 @@ function refuseUnknownKeys(level: object, valid: readonly string[], prefix: stri
   }
 }
 
-/** Load `<dir>/fastagent.config.ts`. */
+/** Load and validate `<dir>/fastagent.config.ts`. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const path = join(dir, AGENT_CONFIG_FILE);
   if (!existsSync(path)) return { config: {} };
-  return { config: await loadConfigFile(path, dir), path };
+  return { config: await loadConfigFile(path), path };
 }
 
-/**
- * Load and validate the config module at `path` for the agent in `dir`. Not only `loadConfig`'s: `fastagent content`
- * imports a candidate file through it before replacing the real one, so a candidate is held to every rule the real
- * file is.
- */
-async function loadConfigFile(path: string, dir: string): Promise<FastagentConfig> {
+async function loadConfigFile(path: string): Promise<FastagentConfig> {
   let mod: { default?: unknown };
   try {
     // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process (the first-run
@@ -135,12 +119,10 @@ async function loadConfigFile(path: string, dir: string): Promise<FastagentConfi
   // Unknown keys throw. This is NOT redundant with `defineConfig`'s types: Node strips types without checking them,
   // so `modle:` reaches here whatever the editor said, and silently degrading to defaults is the failure it would
   // otherwise cause.
-  refuseUnknownKeys(c, ["model", "thinkingLevel", "content", "tools", "http", "deploy", "sessionControl"], "", path);
-  try {
-    declareContent(c.content, dir);
-  } catch (error) {
-    throw new Error(`${path}: ${(error as Error).message}`);
+  for (const key of ["content", "contexts"]) {
+    if (key in c) throw new Error(`${path}: "${key}" is not a config key — content is declared in ${CONTEXT_FILE}`);
   }
+  refuseUnknownKeys(c, ["model", "thinkingLevel", "tools", "http", "deploy", "sessionControl"], "", path);
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
   }
@@ -258,63 +240,6 @@ export function resolveModelSpec(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? (env.FASTAGENT_MODEL || config.model);
-}
-
-/**
- * Where a candidate config is imported before it replaces the real one: beside it, and not a code input `dev` watches.
- * Unique per edit, because `import()` caches by URL and two edits must never read each other's candidate.
- */
-const candidateConfigFile = (): string => `.fastagent.config.next.${randomUUID()}.ts`;
-
-/**
- * Edit the agent's `content`, the literal list in fastagent.config.ts: `edit` gets the declarations as written and
- * returns the new list. Reading, rewriting and replacing happen under the config file's lock, so concurrent edits (the
- * CLI and a client, or two calls of one client) apply one after the other instead of one losing to the other. Every
- * entry is resolved first (it exists, it is not nested with the agent); then the candidate file is written beside
- * the config, imported, and compared with what it meant to declare. Only a match replaces the config, so a refusal
- * leaves it, and any process watching it, untouched.
- */
-export async function editContent<T>(
-  agentDir: string,
-  edit: (declared: ContentDeclaration[]) => { content: ContentDeclaration[]; result: T },
-): Promise<T> {
-  const path = join(agentDir, AGENT_CONFIG_FILE);
-  // Throws when there is no config: the lock would otherwise create the file it locks.
-  const mode = statSync(path).mode & 0o777;
-  return withLockedFile(
-    path,
-    async (src) => {
-      // Undefined only when the file vanished between the stat above and the lock.
-      if (src === undefined) throw new Error(`${path} disappeared while it was being edited`);
-      const { content: declarations, result } = edit((await loadConfigFile(path, agentDir)).content ?? []);
-      resolveContent(agentDir, declarations);
-      let next: string;
-      try {
-        next = rewriteContent(src, declarations);
-      } catch (error) {
-        throw new Error(`cannot edit ${path}: ${(error as Error).message}`);
-      }
-      const candidate = join(agentDir, candidateConfigFile());
-      await writeFile(candidate, next);
-      try {
-        const written = (await loadConfigFile(candidate, agentDir)).content ?? [];
-        const meant = JSON.stringify(declarations.map(canonicalDeclaration));
-        const got = JSON.stringify(written.map(canonicalDeclaration));
-        if (got !== meant) {
-          throw new Error(`cannot edit ${path}: the edited file would declare ${got}, not ${meant} — edit it by hand`);
-        }
-      } finally {
-        await rm(candidate, { force: true });
-      }
-      return { result, next };
-    },
-    { mode },
-  );
-}
-
-/** Replace the agent's `content` with `declarations` ({@link editContent}). */
-export function writeContent(agentDir: string, declarations: readonly ContentDeclaration[]): Promise<void> {
-  return editContent(agentDir, () => ({ content: [...declarations], result: undefined }));
 }
 
 /**
