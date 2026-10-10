@@ -41,8 +41,9 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 
 - **Content** is data the agent reads and writes as files: a project, a folder, a repository. Most of this note is
   about content.
-- **Connectors** reach systems that are not files: the code tools the definition declares (`tools/`,
-  `config.tools`) and pi extensions. MCP servers are not supported yet (#678).
+- **Connectors** are the systems that are not files the agent reaches: an API, a service, and their credentials. The
+  code tools and pi extensions that reach them are part of the definition; the system each one reaches is the
+  connector (agent service §3.3). MCP servers are not supported yet (#678).
 - **The environment** is the commands and runtimes the agent runs: today the machine lends it (below).
 
 Relations:

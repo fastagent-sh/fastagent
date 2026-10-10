@@ -41,7 +41,7 @@ directory stays on this machine, and a deployment says so.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each content entry's `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Clients** — HTTP routes a served agent can add for session control (`/control/*`: state, history, live events, steer and stop; opt-in with [`sessionControl`](configuration.md#config-file), and unauthenticated, so bind loopback or put a gateway in front), and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their contexts under the same rules as the CLI.
+6. **Clients** — HTTP routes a served agent can add for session control (`/control/*`: state, history, live events, steer and stop; opt-in with [`sessionControl`](configuration.md#config-file), and unauthenticated, so bind loopback or put a gateway in front), and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
 7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
