@@ -58,8 +58,14 @@ describe("cli kernel: spec conformance", () => {
       }
     };
     collect(specs, []);
+    const passThrough = new Set(
+      walk(specs)
+        .filter(({ spec }) => spec.passThrough)
+        .map(({ path }) => path),
+    );
     for (const p of paths) {
-      const r = await parse([...p, "--help"]);
+      // A pass-through command hands `--help` on (`fastagent env --help` is mise's); its own is `fastagent help env`.
+      const r = await parse(passThrough.has(p.join(" ")) ? ["help", ...p] : [...p, "--help"]);
       expect(r.code, p.join(" ") || "(top)").toBe(0);
       for (const line of r.out.split("\n")) {
         expect(line.length, `${p.join(" ") || "(top)"}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(80);
@@ -104,7 +110,7 @@ describe("cli kernel: spec conformance", () => {
     for (const { path, spec } of walk(specs)) {
       expect(spec.summary, path).toBeTruthy();
       expect(spec.summary, path).not.toContain("\n");
-      if (spec.run)
+      if (spec.run || spec.passThrough)
         expect(spec.examples?.length ?? 0, `${path} needs an example (clig: lead with examples)`).toBeGreaterThan(0);
       else expect(spec.subcommands?.length ?? 0, `${path} is a group — needs subcommands`).toBeGreaterThan(0);
     }

@@ -24,11 +24,6 @@ export default {
   http: { port: 8787 },
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
   // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
-  // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile
-  // or hand-set host variables). Uncomment as needed:
-  // deploy: {
-  //   secrets: ["GH_TOKEN"], // extra secret env vars your tools use — deploy reads their values from .secrets/.env
-  //   apt: ["git"],          // extra apt packages baked into the image (git, ripgrep, …; default repos only)
-  //   agentcore: { idleTimeoutSeconds: 180 }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
-  // },
+  // The commands the agent needs (CLIs, runtimes, system packages) live in mise.toml: `fastagent env use gh`.
+  // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
 } satisfies FastagentConfig;

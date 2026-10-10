@@ -76,6 +76,9 @@ src/
 │   ├── resolve.ts          # where each entry is for THIS instance (content/<name>): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
+├── environment/            # the commands an agent runs, declared in its mise.toml — harness-neutral
+│   ├── declare.ts          # mise.toml's supported part ([tools], [bootstrap.packages]), read and refused in ONE place
+│   └── mise.ts             # the agent's OWN mise (an npm dep per platform), isolated to mise.toml: enter, lock, add
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared

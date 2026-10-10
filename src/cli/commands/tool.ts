@@ -9,6 +9,7 @@ import { turnContext } from "../../harnesses/pi/tool-context.ts";
 import { resolveContent } from "../../content/resolve.ts";
 import { loadContent } from "../../content/file.ts";
 import { agentDirOrExit, failStartup, failUsage, gateSecretsOrExit } from "../fail.ts";
+import { enterMiseEnvironment } from "../../environment/mise.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
   // Argument shape first: malformed JSON is a USAGE error (exit 2), independent of whether the directory is an agent
@@ -16,6 +17,8 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   const args = parseToolArgs(argsJson);
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // a tool may read a key from .env — and fetch through the proxy it declares
+  // This command runs no assembly, so it enters the environment the assembly would.
+  await enterMiseEnvironment(agentDir).catch(failStartup);
   const { config } = await loadConfig(agentDir).catch(failStartup);
   // The same resolution a serve makes, so a tool run here sees the content it would see in a turn.
   const content = await Promise.resolve()

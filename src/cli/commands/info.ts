@@ -25,6 +25,7 @@ import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { loadContent } from "../../content/file.ts";
+import { type DeclaredEnvironment, readEnvironment } from "../../environment/declare.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -45,6 +46,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     contentError = (error as Error).message;
   }
   const definition = await loadAgentDefinition(agentDir, { content }).catch(failStartup);
+  // Reported like content: `info` is how an author finds out mise.toml says what the agent does not support.
+  let environment: DeclaredEnvironment | undefined;
+  let environmentError: string | undefined;
+  try {
+    environment = readEnvironment(agentDir);
+  } catch (error) {
+    environmentError = (error as Error).message;
+  }
   // What this agent HAS: the definition's skills and prompt templates plus the ones its machine lends (machine.ts).
   const machineResources = await readMachine(agentDir);
   const skills = withMachine(definition.skills, machineResources.skills);
@@ -123,6 +132,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           agentDir,
           content,
           contentError: contentError ?? null,
+          environment: environment ? { tools: environment.tools, packages: environment.packages } : null,
+          environmentError: environmentError ?? null,
           contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
@@ -170,6 +181,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("agent", agentDir);
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
+  line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
+  if (environmentError) cont(`⚠ ${environmentError}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
@@ -205,4 +218,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportModuleLoadFailures(inspected.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
   reportFindingsIfChanged(definition.dir, definition);
+}
+
+/** The tools and system packages an environment declares, as one line. */
+function describeEnvironment(environment: DeclaredEnvironment): string {
+  const tools = environment.tools.join(", ") || "(none)";
+  return environment.packages.length > 0 ? `${tools}; system packages: ${environment.packages.join(", ")}` : tools;
 }

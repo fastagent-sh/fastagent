@@ -434,6 +434,29 @@ const deploy: CommandSpec = {
     }),
 };
 
+const env: CommandSpec = {
+  name: "env",
+  summary: "run the agent's own mise on its environment (mise.toml): add tools and system packages",
+  description:
+    "The agent's environment is the [tools] and [bootstrap.packages] of its mise.toml. `fastagent env` runs the " +
+    "agent's own mise, in the agent directory (the current one), on that file alone: never the machine's mise " +
+    "configuration or a parent directory's. Everything after `env` goes to mise unchanged, `--help` included. The " +
+    "first time, it adds mise to the agent's package.json (one optional package per platform; npm installs this " +
+    "machine's), so nothing has to be installed first.",
+  examples: [
+    { cmd: "fastagent env use gh@2", note: "a CLI" },
+    { cmd: "fastagent env use npm:prettier@3", note: "a CLI from npm" },
+    { cmd: "fastagent env bootstrap packages use apt:chromium", note: "image only" },
+    { cmd: "fastagent env install", note: "install mise.toml" },
+    { cmd: "fastagent env ls" },
+  ],
+  notes:
+    "`dev`, `start`, `chat`, `invoke` and `tool` install the [tools] and put them on the PATH of what the agent " +
+    "runs; system packages are installed in the image, and a start here says which are missing. `deploy` writes " +
+    "mise.lock for linux-x64 and linux-arm64 from the versions this machine uses.",
+  passThrough: async (args) => (await import("./commands/env.ts")).runEnv(args),
+};
+
 const content: CommandSpec = {
   name: "content",
   summary: "list, add or remove what the agent works on and knows",
@@ -633,6 +656,7 @@ export const specs: readonly CommandSpec[] = [
   models,
   info,
   content,
+  env,
   tool,
   invoke,
   schedules,

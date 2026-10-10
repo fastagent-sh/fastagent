@@ -291,6 +291,16 @@ discovery, installed pi packages included (fastagent never installs one) — and
 come from the box too. A name in the definition wins a collision; `fastagent add skill` vendors one in.
 The machine is read once per process, like any environment; the definition stays live.
 
+The commands the agent runs are the machine's too, unless its `mise.toml` declares them (`src/environment/`,
+[agent service](agent-service.md) §4). `declare.ts` reads the file and refuses what FastAgent does not support;
+`mise.ts` runs the agent's own mise, an optional npm dependency per platform, isolated to that one file. The assembly
+(`resolveAgentAssembly`) installs the `[tools]` and puts them on `process.env.PATH` before anything is spawned, so
+every process that opens the agent does, an embedder's `createAgentService` included; `fastagent tool`, which opens
+none, does it itself, and the `dev` supervisor does not. An edit to `mise.toml` restarts the `dev` worker. Only the
+tools reach that `PATH`: the isolation variables go to FastAgent's own mise runs, and mise itself is not put there.
+`fastagent env` is a pass-through to that mise and the only command that changes the environment, the agent's own
+changes included; it undoes what mise wrote when the result is refused.
+
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
 machine too, and whatever its builder put in it is that environment's answer
@@ -771,6 +781,15 @@ says what each content entry becomes on the host: a `github` one is cloned there
 AgentCore, whose storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only
 reads (the agent directory) or work on it from a host (a repository). Git history ships when the host
 packer permits it, and the image installs Git when the agent directory contains `.git` or a content entry is `github`.
+With a `mise.toml`, `deploy` first writes `mise.lock` for linux-x64 and linux-arm64, and the generated Dockerfile
+installs the declared system packages and then the lock with the agent's own mise, between the dependency install and
+`COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. The tools go to mise's
+system directory (`--system`); a deployed start points `MISE_DATA_DIR` at `.state/mise/` on the storage
+(`prepareStartWorkspace`), where a tool the agent adds outlives the container. Preflight writes the lock
+when tools are declared (`deploy/preflight.ts` `checkEnvironment`), and gates `--run` when `package.json` does not
+list the linux mise packages, the agent's mise is not installed here to lock with, or a backend's toolchain is not
+declared (`missingToolchains`, which `fastagent env` reports too); it warns a kept hand-written
+Dockerfile that it installs the environment only if it says so.
 
 `deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
 `.secrets/` and `.deployment/`; the release manifest names the agent the storage belongs to. A process-lifetime

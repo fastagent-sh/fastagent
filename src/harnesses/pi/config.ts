@@ -36,13 +36,8 @@ export interface FastagentConfig {
    * session properties and lifecycle) for remote consumers.
    */
   sessionControl?: boolean;
-  /**
-   * Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a Dockerfile /
-   * hand-set variables.
-   */
+  /** How the agent is deployed, where a host needs to be told. */
   deploy?: {
-    /** Extra apt packages baked into the generated image (Debian default repos: git, ripgrep, jq…). */
-    apt?: string[];
     /** `deploy agentcore` only. */
     agentcore?: {
       /**
@@ -68,17 +63,6 @@ export interface LoadedConfig {
 
 export function isValidPort(n: number): boolean {
   return Number.isInteger(n) && n >= 0 && n <= 65535;
-}
-
-/** Validate an optional `string[]` config field where each entry must match `shape`. */
-function validateStringList(value: unknown, key: string, shape: RegExp, desc: string, path: string): void {
-  if (value === undefined) return;
-  if (!Array.isArray(value)) throw new Error(`${path}: "${key}" must be an array of strings`);
-  for (const [i, v] of value.entries()) {
-    if (typeof v !== "string" || !shape.test(v)) {
-      throw new Error(`${path}: "${key}[${i}]" must be ${desc}`);
-    }
-  }
 }
 
 /** Refuse a key `level` does not have, naming the keys it does (the ONE list both the check and the message read). */
@@ -166,7 +150,13 @@ async function loadConfigFile(path: string): Promise<FastagentConfig> {
   if (c.deploy !== undefined && (typeof c.deploy !== "object" || c.deploy === null)) {
     throw new Error(`${path}: "deploy" must be an object`);
   }
-  refuseUnknownKeys(c.deploy ?? {}, ["apt", "agentcore"], "deploy.", path);
+  if (c.deploy && "apt" in c.deploy) {
+    throw new Error(
+      `${path}: "deploy.apt" is not a config key — system packages are declared in mise.toml [bootstrap.packages] ` +
+        `(\`fastagent env bootstrap packages use apt:<name>\`), for every platform at once`,
+    );
+  }
+  refuseUnknownKeys(c.deploy ?? {}, ["agentcore"], "deploy.", path);
   if (c.deploy?.agentcore !== undefined && (typeof c.deploy.agentcore !== "object" || c.deploy.agentcore === null)) {
     throw new Error(`${path}: "deploy.agentcore" must be an object`);
   }
@@ -177,8 +167,6 @@ async function loadConfigFile(path: string): Promise<FastagentConfig> {
   if (idle !== undefined && (!Number.isInteger(idle) || idle < 60 || idle > 1209600)) {
     throw new Error(`${path}: "deploy.agentcore.idleTimeoutSeconds" must be an integer 60-1209600 (seconds)`);
   }
-  // apt entries are Debian package names.
-  validateStringList(c.deploy?.apt, "deploy.apt", /^[a-z0-9][a-z0-9.+-]*$/, "a Debian package name", path);
   return c;
 }
 

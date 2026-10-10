@@ -1,6 +1,9 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
-import { containerArtifacts } from "../src/deploy/container.ts";
+import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
 import { fastagentPromptSections } from "../src/harnesses/pi/create.ts";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 
@@ -47,6 +50,58 @@ describe("deploy/container: shared Docker context", () => {
     expect(tracked.filter((path) => !ships(path))).toEqual([]);
     expect(sensitive.filter(ships)).toEqual([]);
     expect(ships(".git/HEAD")).toBe(true);
+  });
+
+  it("installs the environment after the dependencies and before the definition, with the agent's own mise", () => {
+    const dockerfile = (i: Parameters<typeof containerArtifacts>[0]) =>
+      containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
+    expect(dockerfile(input)).not.toMatch(/mise/);
+    for (const runtime of ["node", "bun"] as const) {
+      const text = dockerfile({ ...input, runtime, environment: { tools: ["jq"], packages: ["apt:chromium"] } });
+      const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
+      // Cached while the definition changes: the layers sit between the install and `COPY . .`.
+      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY mise.toml mise.lock ./"));
+      expect(text.indexOf("COPY mise.toml mise.lock ./")).toBeLessThan(text.indexOf("COPY . ."));
+      // The declared tools in mise's system directory; its data directory is the storage's at run time.
+      expect(text).not.toContain("ENV MISE_DATA_DIR");
+      expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
+      expect(text).toMatch(/&& rm -rf \/tmp\/mise\n/);
+      // The same isolation every run here has, for the directory the image holds the agent in.
+      expect(text).toContain(
+        "MISE_TRUSTED_CONFIG_PATHS=/app/definition/mise.toml MISE_CEILING_PATHS=/app MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
+      );
+      // System packages first, without apt's recommends (mise does not pass --no-install-recommends), then the lock.
+      expect(text).toMatch(
+        /APT::Install-Recommends "false";[\s\S]*"\$MISE" bootstrap packages apply --yes[\s\S]*"\$MISE" --locked install --system/,
+      );
+      expect(text).toContain(
+        'MISE="node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
+      );
+    }
+    // Each step only for what is declared: mise writes no lock without tools, so there is none to copy or install.
+    const packagesOnly = dockerfile({ ...input, environment: { tools: [], packages: ["apt:chromium"] } });
+    expect(packagesOnly).toContain("COPY mise.toml ./\n");
+    expect(packagesOnly).toContain("bootstrap packages apply");
+    expect(packagesOnly).not.toMatch(/mise\.lock|--locked install/);
+    // An npm tool's lock has sidecars the locked install reads; a COPY of a directory that is not there fails the build.
+    const withSidecars = dockerfile({
+      ...input,
+      environment: { tools: ["npm:cowsay"], packages: [], lockSidecars: true },
+    });
+    expect(withSidecars).toContain("COPY mise.toml mise.lock ./\nCOPY .mise/locks ./.mise/locks\nRUN ");
+    const toolsOnly = dockerfile({ ...input, environment: { tools: ["jq"], packages: [] } });
+    expect(toolsOnly).not.toContain(".mise/locks");
+    expect(toolsOnly).toContain('"$MISE" --locked install --system');
+    expect(toolsOnly).not.toMatch(/bootstrap|APT::/);
+    expect(dockerfile({ ...input, environment: { tools: [], packages: [] } })).not.toMatch(/mise/);
+  });
+
+  it("has git when FastAgent installs it or the agent declares it in mise.toml", () => {
+    expect(imageHasGit({ apt: ["git", "ca-certificates"] })).toBe(true);
+    expect(imageHasGit({ apt: ["ca-certificates"], environment: { tools: [], packages: ["apt:git"] } })).toBe(true);
+    expect(imageHasGit({ apt: ["ca-certificates"], environment: { tools: ["gh"], packages: ["apt:chromium"] } })).toBe(
+      false,
+    );
   });
 
   it("records a value-file model in the release manifest, and nothing when the config named it", () => {
@@ -101,6 +156,19 @@ describe("deploy/container: shared Docker context", () => {
       // `wake` is named only when it is mounted (a serve) — a tool the model lacks is one it would call.
       expect(note()).not.toContain("wake tool");
       expect(note([{ name: "wake" } as MountedTool])).toContain("use the wake tool.");
+      // What the agent installs itself is the machine's; how it changes its declared tools, only when it has some.
+      expect(note()).toContain("A tool you install yourself (apt-get, npm install -g) belongs to this machine");
+      expect(note()).not.toContain("fastagent env use");
+      const withEnvironment = (agentDir: string) =>
+        fastagentPromptSections({ tools: [], builtinExtensions: [], workingSet: { agentDir, content: [] } })
+          .self_change;
+      const agentDir = mkdtempSync(join(tmpdir(), "fa-prompt-env-"));
+      expect(withEnvironment(agentDir)).not.toContain("fastagent env use");
+      writeFileSync(join(agentDir, "mise.toml"), `[tools]\njq = "1.8.1"\n`);
+      expect(withEnvironment(agentDir)).toContain(
+        "`./node_modules/.bin/fastagent env use <tool>@<version>` adds one, installs it and checks the change",
+      );
+      expect(withEnvironment(agentDir)).toContain("`./node_modules/.bin/fastagent env exec -- <command>`");
       // The host whose storage a deploy RESETS says so, rather than the release replacing only the directory.
       process.env.FASTAGENT_AGENTCORE = "1";
       expect(note()).not.toContain("Each deployment replaces your directory");

@@ -81,6 +81,10 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { codingTools: false };`)).rejects.toThrow(/unknown key "codingTools"/);
     // Channels are files under channels/, never a config entry.
     await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
+    // System packages are the environment's (mise.toml), declared for every platform at once.
+    await expect(load(`export default { deploy: { apt: ["git"] } };`)).rejects.toThrow(
+      /"deploy\.apt" is not a config key — system packages are declared in mise\.toml \[bootstrap\.packages\]/,
+    );
     // Content moved to its own file; the refusal says where.
     for (const key of ["content", "contexts"]) {
       await expect(load(`export default { ${key}: [] };`)).rejects.toThrow(
@@ -267,18 +271,13 @@ describe("config: loadConfig", () => {
     await expect(load(`export default { thinkingLevel: 3 };`)).rejects.toThrow(/"thinkingLevel" must be one of/);
   });
 
-  it("validates deploy.apt shape (package-name), rejects unknown deploy keys", async () => {
+  it("rejects unknown deploy keys", async () => {
     // A fresh dir per case: ESM caches a module by URL, so re-writing one file wouldn't re-import.
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
       await writeFile(join(dir, "fastagent.config.ts"), body);
       return loadConfig(dir);
     };
-    const { config } = await load(`export default { deploy: { apt: ["git", "ripgrep"] } };`);
-    expect(config.deploy).toEqual({ apt: ["git", "ripgrep"] }); // valid
-    await expect(load(`export default { deploy: { apt: ["git; rm -rf /"] } };`)).rejects.toThrow(
-      /"deploy\.apt\[0\]" must be a Debian package name/,
-    ); // shell-injection shaped
     await expect(load(`export default { deploy: { image: "python" } };`)).rejects.toThrow(
       /unknown key "deploy\.image"/,
     ); // unknown deploy key
