@@ -349,7 +349,7 @@ it("a definition's prompt template expands in a served turn, wins the machine's 
   ]);
 });
 
-it("a machine skill named with a slash is left out and said: the slash names a context's skills", async () => {
+it("a machine skill named with a slash is left out and said: the slash names a content entry's skills", async () => {
   const agent = await machine({ skills: { metar: "Read aviation weather." } });
   await mkdir(join(agent, "skills", "slashed"), { recursive: true });
   await writeFile(

@@ -1,44 +1,44 @@
 /**
- * The literal `contexts: [ … ]` block of fastagent.config.ts, as text: found, checked to be a literal, and written back
- * from a list. Pure — `fastagent context` imports the result and compares it before anything replaces the real file
+ * The literal `content: [ … ]` block of fastagent.config.ts, as text: found, checked to be a literal, and written back
+ * from a list. Pure — `fastagent content` imports the result and compares it before anything replaces the real file
  * (docs/design/core.md §2), which is what makes editing a TypeScript module this way safe.
  */
-import { CONTEXT_KEYS, type ContextDeclaration } from "./declare.ts";
+import { CONTENT_KEYS, type ContentDeclaration } from "./declare.ts";
 
-/** One declaration with its keys in {@link CONTEXT_KEYS} order: the form written and the form compared. */
-export function canonicalDeclaration(declaration: ContextDeclaration): ContextDeclaration {
+/** One declaration with its keys in {@link CONTENT_KEYS} order: the form written and the form compared. */
+export function canonicalDeclaration(declaration: ContentDeclaration): ContentDeclaration {
   const record = declaration as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const key of CONTEXT_KEYS) if (record[key] !== undefined) out[key] = record[key];
-  return out as ContextDeclaration;
+  for (const key of CONTENT_KEYS) if (record[key] !== undefined) out[key] = record[key];
+  return out as ContentDeclaration;
 }
 
-function entryText(declaration: ContextDeclaration): string {
+function entryText(declaration: ContentDeclaration): string {
   const parts = Object.entries(canonicalDeclaration(declaration)).map(
     ([key, value]) => `${key}: ${typeof value === "string" ? JSON.stringify(value) : String(value)}`,
   );
   return `{ ${parts.join(", ")} }`;
 }
 
-function blockText(declarations: readonly ContextDeclaration[], indent: string): string {
-  if (declarations.length === 0) return "contexts: []";
+function blockText(declarations: readonly ContentDeclaration[], indent: string): string {
+  if (declarations.length === 0) return "content: []";
   const inner = `${indent}  `;
-  return `contexts: [\n${declarations.map((d) => `${inner}${entryText(d)},`).join("\n")}\n${indent}]`;
+  return `content: [\n${declarations.map((d) => `${inner}${entryText(d)},`).join("\n")}\n${indent}]`;
 }
 
 /**
- * `src` with its `contexts` replaced by `declarations`. A missing key is added as the first line of
+ * `src` with its `content` replaced by `declarations`. A missing key is added as the first line of
  * `export default {`; a value that is not a literal array (a variable, a spread, a call) is refused with the reason
  * rather than overwritten by its current value.
  */
-export function rewriteContexts(src: string, declarations: readonly ContextDeclaration[]): string {
-  const keys = [...src.matchAll(/^([ \t]*)contexts[ \t]*:/gm)];
-  if (keys.length > 1) throw new Error(`it declares "contexts" more than once; leave one and run this again`);
+export function rewriteContent(src: string, declarations: readonly ContentDeclaration[]): string {
+  const keys = [...src.matchAll(/^([ \t]*)content[ \t]*:/gm)];
+  if (keys.length > 1) throw new Error(`it declares "content" more than once; leave one and run this again`);
   const [key] = keys;
   if (!key) {
     const opener = /^export default[ \t]*\{[ \t]*$/m.exec(src);
     if (!opener) {
-      throw new Error(`it has no \`export default {\` line to add "contexts" to; add \`contexts: []\` to it by hand`);
+      throw new Error(`it has no \`export default {\` line to add "content" to; add \`content: []\` to it by hand`);
     }
     const at = opener.index + opener[0].length;
     return `${src.slice(0, at)}\n  ${blockText(declarations, "  ")},${src.slice(at)}`;
@@ -54,7 +54,7 @@ export function rewriteContexts(src: string, declarations: readonly ContextDecla
  */
 function literalArrayEnd(src: string, from: number): number {
   const computed = (): never => {
-    throw new Error(`its "contexts" is computed, not a literal list — edit it by hand`);
+    throw new Error(`its "content" is computed, not a literal list — edit it by hand`);
   };
   let i = skipSpace(src, from);
   if (src[i] !== "[") computed();
@@ -111,5 +111,5 @@ function stringEnd(src: string, from: number): number {
     else if (src[i] === quote) return i + 1;
     else if (src[i] === "\n") break;
   }
-  throw new Error("it has an unterminated string in contexts");
+  throw new Error("it has an unterminated string in content");
 }

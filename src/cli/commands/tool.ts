@@ -6,7 +6,7 @@ import { loadConfig } from "../../harnesses/pi/config.ts";
 import { resolveAgentTools } from "../../harnesses/pi/create.ts";
 import { reportModuleLoadFailures } from "../../loader.ts";
 import { turnContext } from "../../harnesses/pi/tool-context.ts";
-import { resolveContexts } from "../../contexts/resolve.ts";
+import { resolveContent } from "../../content/resolve.ts";
 import { agentDirOrExit, failStartup, failUsage, gateSecretsOrExit } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
@@ -16,9 +16,9 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterAgentEnv(agentDir); // a tool may read a key from .env — and fetch through the proxy it declares
   const { config } = await loadConfig(agentDir).catch(failStartup);
-  // The same resolution a serve makes, so a tool run here sees the contexts it would see in a turn.
-  const contexts = await Promise.resolve()
-    .then(() => resolveContexts(agentDir, config.contexts))
+  // The same resolution a serve makes, so a tool run here sees the content it would see in a turn.
+  const content = await Promise.resolve()
+    .then(() => resolveContent(agentDir, config.content))
     .catch(failStartup);
   // The same tool set dev/start mount (all coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served.
@@ -47,7 +47,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   gateSecretsOrExit({ declared: toolSecrets, failures: toolFailures, owner: name });
   // Authored tools read cwd from turnContext; coding tools are already rooted at the agent directory.
   const result = await turnContext
-    .run({ cwd: agentDir, contexts }, () => tool.execute(`cli-${name}`, args))
+    .run({ cwd: agentDir, content }, () => tool.execute(`cli-${name}`, args))
     .catch(failStartup);
   // What the MODEL receives, which is not what is printed below: the printed form is `details` (readable, indented),
   // the model's is the content text (compact JSON). Piping stdout through `wc -c` therefore answers the wrong

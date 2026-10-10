@@ -108,7 +108,7 @@ async function read(agentDir: string, piDir: string): Promise<Machine> {
     additionalSkillPaths: fromPackages(packages.skills),
     additionalPromptTemplatePaths: fromPackages(packages.prompts),
     // The machine's extensions are its owner's setup, not this agent's (agent-session-factory.ts loads only the
-    // definition's own); context files come from the agent's contexts.
+    // definition's own); context files come from the agent's content.
     noExtensions: true,
     noContextFiles: true,
   });
@@ -134,14 +134,14 @@ async function read(agentDir: string, piDir: string): Promise<Machine> {
       );
     }
   }
-  // A `/` in a skill's name names the context it comes from (definition.ts), and pi only warns about one. The
-  // machine's own skill spelled that way is left out rather than let collide with a context's.
+  // A `/` in a skill's name names the content entry it comes from (definition.ts), and pi only warns about one. The
+  // machine's own skill spelled that way is left out rather than let collide with an entry's.
   const lent = skills.filter((skill) => {
     if (definitionOwns("skills", skill.filePath)) return false;
     if (!skill.name.includes("/")) return true;
     log.warn(
       `[fastagent] machine skill "${skill.name}" (${skill.filePath}) is not loaded: a skill's name may not contain "/", ` +
-        `which names the context a skill comes from`,
+        `which names the content entry a skill comes from`,
     );
     return false;
   });

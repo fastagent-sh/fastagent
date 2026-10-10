@@ -1,5 +1,5 @@
 /**
- * The git a GitHub context needs on this machine: which repository a checkout is of, whether it is at the declared
+ * The git GitHub content needs on this machine: which repository a checkout is of, whether it is at the declared
  * `ref`, and a clone, made or brought up to date in place. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
  * a private repository is reached the way the user's own `git clone` reaches it.
  */
@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } fro
 import { basename, dirname, join } from "node:path";
 import { gitFor } from "../git.ts";
 
-const { answer: gitAnswer, run: runGit } = gitFor("a github context needs it on this machine");
+const { answer: gitAnswer, run: runGit } = gitFor("github content needs it on this machine");
 
 /** The `owner/repo` a GitHub remote URL names, in any of its spellings (https, ssh, scp-like), or undefined. */
 export function githubRepoOf(url: string): string | undefined {
@@ -108,7 +108,7 @@ export type CloneOutcome = { outcome: "cloned" | "updated" | "current" } | { out
  * git's reason; so it is when the fetch fails, or when the clone is on another branch than declared. Nothing is
  * deleted: the agent's branches, stashes and the changes an update does not touch stay where they are.
  * - None yet: cloned beside it and renamed into place. A first clone that fails stops the start.
- * - A clone of another repository there (the context was renamed or redeclared): refused, naming it.
+ * - A clone of another repository there (the entry was renamed or redeclared): refused, naming it.
  */
 export async function refreshClone(repo: string, ref: string | undefined, dir: string): Promise<CloneOutcome> {
   // A library caller can hand this anything; git reads a leading "-" as an option, and no repository or ref has one

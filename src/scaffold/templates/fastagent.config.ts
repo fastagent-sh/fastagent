@@ -15,8 +15,8 @@ import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
   // What the agent works on, and what it only knows ({ ..., readonly: true }): directories of their own, never
-  // this one or one around it. `fastagent context add <dir>` / `remove <name>` edit this list.
-  contexts: [],
+  // this one or one around it. `fastagent content add <dir>` / `remove <name>` edit this list.
+  content: [],
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   // add `host: "127.0.0.1"` here to pin the bind address; default: `start` all interfaces (what containers

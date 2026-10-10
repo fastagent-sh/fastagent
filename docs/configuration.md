@@ -7,8 +7,8 @@ status: current
 # Configuration
 
 - Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`,
-  `tools/`, and what its contexts provide: each one's `AGENTS.md` and skills.
-- What it works on and knows is declared in `fastagent.config.ts` as `contexts`.
+  `tools/`, and what its content provides: each entry's `AGENTS.md` and skills.
+- What it works on and knows, its content, is declared in `fastagent.config.ts` as `content`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
 
@@ -21,7 +21,7 @@ An agent is identified by one filename, `fastagent.config.ts`. (Your own `tools/
 import type { FastagentConfig } from "@fastagent-sh/fastagent";
 
 export default {
-  contexts: [{ github: "acme/app", local: "/Users/me/code/app" }],
+  content: [{ github: "acme/app", local: "/Users/me/code/app" }],
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
 } satisfies FastagentConfig;
@@ -34,7 +34,7 @@ Every key is optional. Unknown keys fail at startup.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `contexts` | `[]` | What the agent works on and knows. See [Contexts](#contexts). |
+| `content` | `[]` | What the agent works on and knows. See [Content](#content). |
 | `model` | none | Default model spec, `provider/modelId`. With none set, the first-run picker asks and writes the choice here. |
 | `thinkingLevel` | `"medium"` | Reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Levels a model does not support are clamped. |
 | `tools` | `[]` | Extra programmatic tools appended after the coding tools. Prefer `tools/` files. |
@@ -197,14 +197,15 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
   takes over again.
 - A refresh takes effect in a running agent from its next turn, whichever process ran it, without a restart.
 
-## Contexts
+## Content
 
 An agent's directory is its own: its definition, its working directory, and its local instance's `.state/`,
-`.secrets/` and `.contexts/`. What it works on is declared, never inferred from where the directory sits:
+`.secrets/` and `.contexts/`. What it works on and knows, its content, is declared, never inferred from where the
+directory sits:
 
 ```ts
 export default {
-  contexts: [
+  content: [
     { local: "/Users/me/notes" },                         // works on, on this machine only
     { local: "/Users/me/handbook", readonly: true },      // knows, on this machine only
     { github: "acme/app", local: "/Users/me/code/app" },  // works on: this checkout here, a clone on a host
@@ -221,7 +222,7 @@ export default {
 | `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
 | `name` | Its name, one segment of letters, digits, `-` and `_`, unique ignoring case. Defaults to the directory's or the repository's name |
 
-A `github` context is one of two things on this machine:
+A `github` entry is one of two things on this machine:
 
 - **Its checkout, when `local` names one**: the root of a git checkout whose `origin` is that repository. It is used
   as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say so.
@@ -233,8 +234,8 @@ A `github` context is one of two things on this machine:
   branch than declared, or when it holds commits no branch or tag does, it is kept as it is and startup warns with
   the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does not touch stay.
 
-  `info`, `context list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
-  with git's reason. A clone of another repository under the context's name (it was renamed or redeclared) stops
+  `info`, `content list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
+  with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
   the start and is named, never removed: move it away yourself.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
@@ -243,24 +244,24 @@ own, it uses `GITHUB_TOKEN` from the environment, read each time git asks (the c
 reads it, never the token itself), and so does the agent's own `git push` in the clone. git never prompts: a
 missing credential fails the start instead of waiting.
 
-`fastagent init <dir> --context <source>` and `fastagent context add/remove` edit this list
-([CLI](cli.md#fastagent-context)); it can be edited by hand too. Their order means nothing. A context may not
+`fastagent init <dir> --content <source>` and `fastagent content add/remove` edit this list
+([CLI](cli.md#fastagent-content)); it can be edited by hand too. Their order means nothing. An entry may not
 contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in one. Every
 command refuses such a declaration at load, and one whose directory does not exist.
 
-What each context gives the agent, re-read every turn:
+What each entry gives the agent, re-read every turn:
 
-- **Its `AGENTS.md`**, at the context's root, as project context, after the agent directory's own `AGENTS.md`
+- **Its `AGENTS.md`**, at the entry's root, as project context, after the agent directory's own `AGENTS.md`
   (how the agent is built and changed, loaded first).
-- **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<context>/<skill>`: the `deploy` skill of the
-  context `app` is `app/deploy`, so it never collides with the agent's own or another context's.
+- **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<content>/<skill>`: the `deploy` skill of the
+  entry `app` is `app/deploy`, so it never collides with the agent's own or another entry's.
 - **A place in the prompt**: its name, its location, and whether the agent works on it or only knows it. The agent
   runs a command in it with `cd <location> && …`.
-- **Its location for tools**: an authored tool reads `ctx.contexts` ([API reference](api-reference.md#tool-authoring)).
+- **Its location for tools**: an authored tool reads `ctx.content` ([API reference](api-reference.md#tool-authoring)).
 
-The locations are resolved when a process starts; editing `contexts` restarts `dev`. On a deployed host a `github`
-context is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)). A
-`local` context is a directory of this machine, which a host does not have: the deployed agent works without it,
+The locations are resolved when a process starts; editing `content` restarts `dev`. On a deployed host a `github`
+entry is always a clone, made and kept up to date the same way ([deploy](deploy.md#before-you-deploy)). A
+`local` entry is a directory of this machine, which a host does not have: the deployed agent works without it,
 and `deploy` and the host's startup say so by name. To give a host what the agent only reads there, copy it into the
 agent directory, which every release ships; to have the agent work on it from a host, move it to a repository and
 declare it as `github`.
@@ -268,8 +269,8 @@ declare it as `github`.
 ## The system prompt
 
 pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from the agent directory's `AGENTS.md` and then each context's, the skills, and the working
-directory. Two more files in the agent directory change it, both re-read every turn like the `AGENTS.md` files:
+is), the project context from the agent directory's `AGENTS.md` and then each content entry's, the skills, and the
+working directory. Two more files in the agent directory change it, both re-read every turn like the `AGENTS.md` files:
 
 | File | Effect |
 |---|---|
@@ -282,7 +283,7 @@ in one of the two. A blank `SYSTEM.md` or `APPEND_SYSTEM.md` is reported and not
 prompt as none. `deploy` loads the definition too, so any of these refusals stops it before an image is built.
 
 FastAgent adds its own sections after these, whichever wrote the prompt: where the agent is and what it works on and
-knows ([contexts](#contexts)), a note about tools that are registered but not loaded yet, and on a deployed host how
+knows ([content](#content)), a note about tools that are registered but not loaded yet, and on a deployed host how
 long its storage lasts and how the agent changes itself.
 
 The machine's `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are never read: a system prompt from someone's machine
@@ -304,8 +305,8 @@ below it. A name found twice in the definition takes the first and is reported, 
 | Prompt templates | `prompts/`, `.pi/prompts/`, then the machine's (below) |
 | Extensions | `extensions/` only; a `.pi/extensions/` is reported as not loaded |
 
-A skill's name may not contain `/`, which names the context a skill comes from: it is refused in the definition and
-left out, with a warning, from the machine's and a context's.
+A skill's name may not contain `/`, which names the content entry a skill comes from: it is refused in the definition
+and left out, with a warning, from the machine's and a content entry's.
 
 ## What the machine lends the agent
 
@@ -331,7 +332,7 @@ machine's `prompts/` for `chat`, or put a template that belongs to the agent in 
 Compaction, retries, prompt-cache warming and transport timeouts are pi settings. `dev`, `start` and `chat` read
 the machine's `~/.pi/agent/settings.json` and the agent directory's `.pi/settings.json` (deep-merged, the agent's
 wins) once at startup. The agent's file is part of its definition, so it ships with a deploy. Nothing of pi's
-project scope is read from a context.
+project scope is read from content.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -349,7 +350,7 @@ project scope is read from a context.
 ### The prompt lives in the session record
 
 pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or an
-`AGENTS.md` (the agent's own or a context's) is appended
+`AGENTS.md` (the agent's own or a content entry's) is appended
 as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
 others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
 
@@ -409,7 +410,7 @@ Browsers get the `http.cors` policy (default `*`). Unauthenticated routes refuse
 - `<agent dir>/.secrets/` — the agent's `.env`, `auth.json`, and login `settings.json` (stable OAuth device ID). The scaffolded `.secrets/.gitignore` keeps them
   out of git, and `deploy` keeps them out of the image. A deployed box receives the values through the host's
   secret store; its `auth.json` is its own login (`fastagent login --deployment`) and lives on the volume.
-- `<agent dir>/.contexts/` — the clones of the agent's `github` contexts, one per context name. They are data the
+- `<agent dir>/.contexts/` — the clones of the agent's `github` content, one per entry name. They are data the
   agent works on, so they are not inside `.state/`; like it, they are never part of the definition, and `init`'s
   `.gitignore` and `deploy` keep them out.
 
@@ -535,11 +536,11 @@ things in `session_start` and stop them in `session_shutdown`.
 ### More than one agent
 
 Each agent is a directory of its own, with its own config, prompt, skills, tools, channels, schedules, `.state/` and
-`.secrets/`. Several agents can work on one project: each declares it as a context.
+`.secrets/`. Several agents can work on one project: each declares it as content.
 
 ```bash
-fastagent init ~/agents/reviewer --context ~/code/app
-fastagent init ~/agents/releaser --context ~/code/app
+fastagent init ~/agents/reviewer --content ~/code/app
+fastagent init ~/agents/releaser --content ~/code/app
 fastagent dev ~/agents/reviewer
 ```
 

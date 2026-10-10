@@ -229,7 +229,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a missing required argument is a usage error: exit 2", async () => {
-    const r = await parse(["context", "remove"]);
+    const r = await parse(["content", "remove"]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/missing required argument 'name'/);
   });
@@ -242,7 +242,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
-    const r = await parse(["context", "remvoe", "app"]);
+    const r = await parse(["content", "remvoe", "app"]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/unknown command 'remvoe'/);
     expect(r.err).toMatch(/remove/); // did-you-mean
@@ -251,9 +251,9 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
     const cases = [
       ["invoke", ""],
-      ["context", "add", ""],
+      ["content", "add", ""],
       ["tool", ""],
-      ["context", "remove", ""],
+      ["content", "remove", ""],
     ];
     for (const argv of cases) {
       const r = await parse(argv);

@@ -91,7 +91,7 @@ export async function buildAgentSessionRuntime(
       excludedToolNames: assembly.excludedToolNames,
       // A tool must see one spelling of the agent directory, including when opened through a symlink.
       cwd: rootCwd,
-      contexts: assembly.contexts,
+      content: assembly.content,
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };

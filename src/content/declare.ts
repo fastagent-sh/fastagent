@@ -1,32 +1,32 @@
 /**
- * WHAT AN AUTHOR DECLARES an agent works on or knows (`contexts` in fastagent.config.ts), read and refused in ONE
- * place: the config loader, `fastagent context` and the resolver all go through it. Pure: whether a location exists is
+ * WHAT AN AUTHOR DECLARES an agent works on or knows (`content` in fastagent.config.ts), read and refused in ONE
+ * place: the config loader, `fastagent content` and the resolver all go through it. Pure: whether a location exists is
  * resolve.ts's question. docs/design/agent-model.md §3 is the rule.
  */
 import { basename, isAbsolute, resolve } from "node:path";
 import { isUnderDir } from "../paths.ts";
 
-/** One entry of `contexts`, as an author writes it. */
-export type ContextDeclaration =
+/** One entry of `content`, as an author writes it. */
+export type ContentDeclaration =
   | { local: string; readonly?: boolean; name?: string }
   | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
 /** A declaration read: its name settled and its paths absolute. */
-export type DeclaredContext = { name: string; readonly: boolean } & (
+export type DeclaredContent = { name: string; readonly: boolean } & (
   | { kind: "local"; path: string }
   | { kind: "github"; repo: string; ref?: string; checkout?: string }
 );
 
-/** A context's name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
+/** An entry's name becomes a directory name, so it is one path segment (the spelling a release's agent name has). */
 const NAME = /^[A-Za-z0-9_-]+$/;
 
-/** Whether `name` can name a context. */
-export function isContextName(name: string): boolean {
+/** Whether `name` can name a content entry. */
+export function isContentName(name: string): boolean {
   return NAME.test(name);
 }
 
-/** The name a context gets when it is not given one: its repository's, or its directory's. */
-export function defaultContextName(declaration: ContextDeclaration): string {
+/** The name an entry gets when it is not given one: its repository's, or its directory's. */
+export function defaultContentName(declaration: ContentDeclaration): string {
   return "github" in declaration
     ? declaration.github.slice(declaration.github.indexOf("/") + 1)
     : basename(declaration.local);
@@ -43,36 +43,36 @@ export function isGithubRepo(repo: string): boolean {
  * The keys a declaration carries, in the order a command writes them (config-text.ts): where it comes from first,
  * then how it is treated. One list, so a key the reader accepts is one the writer keeps.
  */
-export const CONTEXT_KEYS = ["github", "local", "ref", "readonly", "name"] as const;
+export const CONTENT_KEYS = ["github", "local", "ref", "readonly", "name"] as const;
 
 /**
- * Read `contexts` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
+ * Read `content` (undefined is none). Every refusal names the entry; nothing is defaulted silently. Paths are
  * absolute or relative to the agent directory, and resolved here, so every reader sees the same location.
  */
-export function declareContexts(raw: unknown, agentDir: string): DeclaredContext[] {
+export function declareContent(raw: unknown, agentDir: string): DeclaredContent[] {
   if (raw === undefined) return [];
-  if (!Array.isArray(raw)) throw new Error(`"contexts" must be an array`);
-  const declared = raw.map((entry, i) => declareOne(entry, `contexts[${i}]`, agentDir));
+  if (!Array.isArray(raw)) throw new Error(`"content" must be an array`);
+  const declared = raw.map((entry, i) => declareOne(entry, `content[${i}]`, agentDir));
   const seen = new Map<string, string>();
-  for (const context of declared) {
-    const key = context.name.toLowerCase();
+  for (const entry of declared) {
+    const key = entry.name.toLowerCase();
     const taken = seen.get(key);
     // Equal ignoring case is the same name: it becomes a directory, and some filesystems do not tell them apart.
     if (taken !== undefined) {
-      throw new Error(`two contexts are named "${taken}" and "${context.name}" — names must differ ignoring case`);
+      throw new Error(`two content entries are named "${taken}" and "${entry.name}" — names must differ ignoring case`);
     }
-    seen.set(key, context.name);
+    seen.set(key, entry.name);
   }
   return declared;
 }
 
-function declareOne(entry: unknown, at: string, agentDir: string): DeclaredContext {
+function declareOne(entry: unknown, at: string, agentDir: string): DeclaredContent {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${at} must be an object`);
   const e = entry as Record<string, unknown>;
   if (e.path !== undefined) throw new Error(`${at}: "path" (a subdirectory of a repository) is not supported yet`);
   for (const key of Object.keys(e)) {
-    if (!(CONTEXT_KEYS as readonly string[]).includes(key)) {
-      throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTEXT_KEYS.join(", ")})`);
+    if (!(CONTENT_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${at}: unknown key "${key}" (valid keys: ${CONTENT_KEYS.join(", ")})`);
     }
   }
   for (const key of ["local", "github", "name", "ref"] as const) {
@@ -85,7 +85,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
   }
   const readonly = e.readonly === true;
   const local = e.local === undefined ? undefined : resolve(agentDir, e.local as string);
-  let declared: DeclaredContext;
+  let declared: DeclaredContent;
   let defaultName: string;
   if (e.github !== undefined) {
     const repo = e.github as string;
@@ -102,11 +102,11 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
       ...(e.ref !== undefined ? { ref: e.ref as string } : {}),
       ...(local !== undefined ? { checkout: local } : {}),
     };
-    defaultName = defaultContextName({ github: repo });
+    defaultName = defaultContentName({ github: repo });
   } else if (local !== undefined) {
-    if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to a github context`);
+    if (e.ref !== undefined) throw new Error(`${at}: "ref" applies to github content`);
     declared = { name: "", readonly, kind: "local", path: local };
-    defaultName = defaultContextName({ local });
+    defaultName = defaultContentName({ local });
   } else {
     throw new Error(`${at}: declare where it comes from — "local" (a directory) or "github" ("owner/repo")`);
   }
@@ -126,7 +126,7 @@ function declareOne(entry: unknown, at: string, agentDir: string): DeclaredConte
 }
 
 /**
- * A context and the agent directory are kept apart (agent-model.md §2): a definition is released, a writable context
+ * Content and the agent directory are kept apart (agent-model.md §2): a definition is released, writable content
  * is kept, and one directory cannot be both. The ONE statement of the rule; resolve.ts asks it again of the real
  * paths.
  */
@@ -134,14 +134,14 @@ export function nestingError(agentDir: string, location: string, name: string): 
   if (!isAbsolute(location)) throw new Error(`nestingError: "${location}" is not absolute`);
   if (isUnderDir(agentDir, location)) {
     return (
-      `context "${name}" (${location}) contains the agent directory ${agentDir} — an agent lives in a directory of ` +
-      `its own: move it out of ${location}, or declare another context`
+      `content "${name}" (${location}) contains the agent directory ${agentDir} — an agent lives in a directory of ` +
+      `its own: move it out of ${location}, or declare other content`
     );
   }
   if (isUnderDir(location, agentDir)) {
     return (
-      `context "${name}" (${location}) is inside the agent directory ${agentDir} — a context is a directory of its ` +
-      `own: move it out, or declare another`
+      `content "${name}" (${location}) is inside the agent directory ${agentDir} — content is a directory of its ` +
+      `own: move it out, or declare other content`
     );
   }
   return undefined;

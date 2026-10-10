@@ -37,7 +37,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 
 ## Features
 
-- **Vibe first — an agent is a directory of its own.** Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite. The projects it works on are declared beside it, and their `AGENTS.md` is its context.
+- **Vibe first — an agent is a directory of its own.** Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite. The projects it works on are declared beside it as its content, and their `AGENTS.md` is project context.
 - **Channels.** Serve the same agent as a Telegram bot, a Slack app, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` at any depth (named by `defineTool`, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler, or call `invoke` like any function from your own code — your auth, your database, your infra. FastAgent composes with your app, never owns it.

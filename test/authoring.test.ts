@@ -1,5 +1,5 @@
 /**
- * Creating an agent and editing its contexts as an API (what `init` and `context` wrap). The rules themselves (names,
+ * Creating an agent and editing its content as an API (what `init` and `content` wrap). The rules themselves (names,
  * nesting, the literal-list rewrite) are tested where they live and through the CLI; this file owns what only the API
  * promises: an agent it creates runs as created, and its refusals are thrown, a name problem as its own class.
  */
@@ -11,11 +11,11 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import {
-  ContextNameError,
-  addContext,
+  ContentNameError,
+  addContent,
   createAgent,
-  listContexts,
-  removeContext,
+  listContent,
+  removeContent,
 } from "../src/harnesses/pi/authoring.ts";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -72,7 +72,7 @@ describe("authoring API", () => {
     const tracked = execFileSync("git", ["ls-files"], { cwd: installed, env: withGitIdentity, encoding: "utf8" });
     expect(tracked.split("\n")).toContain("package-lock.json");
 
-    // A rejection is a failed create, like a context write that fails: nothing is left, and a retry starts clean.
+    // A rejection is a failed create, like a content write that fails: nothing is left, and a retry starts clean.
     const failed = join(base, "failed");
     await expect(
       createAgent(failed, {
@@ -85,59 +85,59 @@ describe("authoring API", () => {
     await expect(createAgent(failed)).resolves.toMatchObject({ dir: failed });
   });
 
-  it("creates with contexts, edits them, and throws a name refusal as ContextNameError", async () => {
+  it("creates with content, edits it, and throws a name refusal as ContentNameError", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-")));
     const [app, docs, other] = [join(base, "app"), join(base, "docs"), join(base, "elsewhere", "app")];
     for (const dir of [app, docs, other]) await mkdir(dir, { recursive: true });
     const agentDir = join(base, "agent");
 
-    const created = await createAgent(agentDir, { contexts: [{ local: app }] });
+    const created = await createAgent(agentDir, { content: [{ local: app }] });
     expect(created.created).not.toContain(join("extensions", "web-access.ts"));
     // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
     expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
     await access(join(agentDir, ".git"));
-    expect(created.contexts.map((c) => c.name)).toEqual(["app"]);
+    expect(created.content.map((c) => c.name)).toEqual(["app"]);
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toContain(
       `{ local: ${JSON.stringify(app)} }`,
     );
 
-    const added = await addContext(agentDir, { local: docs, readonly: true });
+    const added = await addContent(agentDir, { local: docs, readonly: true });
     expect(added.name).toBe("docs");
-    expect(added.contexts.map((c) => [c.name, c.readonly])).toEqual([
+    expect(added.content.map((c) => [c.name, c.readonly])).toEqual([
       ["app", false],
       ["docs", true],
     ]);
-    await expect(addContext(agentDir, { local: other })).rejects.toThrow(ContextNameError);
-    await expect(addContext(agentDir, { local: other, name: "a b" })).rejects.toThrow(ContextNameError);
-    await expect(removeContext(agentDir, "nope")).rejects.toThrow(ContextNameError);
+    await expect(addContent(agentDir, { local: other })).rejects.toThrow(ContentNameError);
+    await expect(addContent(agentDir, { local: other, name: "a b" })).rejects.toThrow(ContentNameError);
+    await expect(removeContent(agentDir, "nope")).rejects.toThrow(ContentNameError);
     // Not a name problem: a plain Error, as the CLI reports it.
-    const around: unknown = await addContext(agentDir, { local: base, name: "around" }).catch((e: unknown) => e);
-    expect(around).not.toBeInstanceOf(ContextNameError);
+    const around: unknown = await addContent(agentDir, { local: base, name: "around" }).catch((e: unknown) => e);
+    expect(around).not.toBeInstanceOf(ContentNameError);
     expect((around as Error).message).toMatch(/contains the agent directory/);
 
     // Concurrent edits apply one after the other: neither is lost, neither is refused.
     const [x, y] = [join(base, "x"), join(base, "y")];
     for (const dir of [x, y]) await mkdir(dir);
-    await Promise.all([addContext(agentDir, { local: x }), addContext(agentDir, { local: y })]);
-    expect((await listContexts(agentDir)).map((c) => c.name).sort()).toEqual(["app", "docs", "x", "y"]);
-    await Promise.all([removeContext(agentDir, "x"), removeContext(agentDir, "y")]);
+    await Promise.all([addContent(agentDir, { local: x }), addContent(agentDir, { local: y })]);
+    expect((await listContent(agentDir)).map((c) => c.name).sort()).toEqual(["app", "docs", "x", "y"]);
+    await Promise.all([removeContent(agentDir, "x"), removeContent(agentDir, "y")]);
 
-    const removed = await removeContext(agentDir, "APP");
-    expect(removed).toEqual({ name: "app", contexts: await listContexts(agentDir) });
-    expect(removed.contexts.map((c) => c.name)).toEqual(["docs"]);
+    const removed = await removeContent(agentDir, "APP");
+    expect(removed).toEqual({ name: "app", content: await listContent(agentDir) });
+    expect(removed.content.map((c) => c.name)).toEqual(["docs"]);
   });
 
-  it("createAgent refuses a name problem as ContextNameError, before it writes anything", async () => {
+  it("createAgent refuses a name problem as ContentNameError, before it writes anything", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-")));
     const [one, two, spaced] = [join(base, "a", "app"), join(base, "b", "App"), join(base, "my app")];
     for (const dir of [one, two, spaced]) await mkdir(dir, { recursive: true });
     const agentDir = join(base, "agent");
-    const taken: unknown = await createAgent(agentDir, { contexts: [{ local: one }, { local: two }] }).catch((e) => e);
-    expect(taken).toBeInstanceOf(ContextNameError);
-    expect((taken as Error).message).toBe('this agent already has a context named "app"');
-    await expect(createAgent(agentDir, { contexts: [{ local: spaced }] })).rejects.toBeInstanceOf(ContextNameError);
+    const taken: unknown = await createAgent(agentDir, { content: [{ local: one }, { local: two }] }).catch((e) => e);
+    expect(taken).toBeInstanceOf(ContentNameError);
+    expect((taken as Error).message).toBe('this agent already has content named "app"');
+    await expect(createAgent(agentDir, { content: [{ local: spaced }] })).rejects.toBeInstanceOf(ContentNameError);
     await expect(access(agentDir)).rejects.toThrow(/ENOENT/);
     // Named apart, the same directories are fine.
-    await createAgent(agentDir, { contexts: [{ local: one }, { local: two, name: "app2" }] });
+    await createAgent(agentDir, { content: [{ local: one }, { local: two, name: "app2" }] });
   });
 });

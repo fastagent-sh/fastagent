@@ -30,7 +30,7 @@ my-agent/
 ├── APPEND_SYSTEM.md               # standing instructions — how to improve yourself
 ├── skills/writing-great-skills/   # the example skill: how to author skills well
 ├── extensions/web-access.ts       # web search and page fetching (@fastagent-sh/pi-web-access)
-├── fastagent.config.ts            # model, contexts, http
+├── fastagent.config.ts            # model, content, http
 ├── package.json
 ├── .secrets/.env.example          # secrets live here, never committed
 └── .gitignore
@@ -53,10 +53,10 @@ too, but stays on that machine. The file loads the package's tools only: its ter
 `/curator`, `/google-account`, `/search`) open a browser on the serving machine or rewrite its config, so they are not
 offered to callers. To go without it, delete the file and `npm uninstall @fastagent-sh/pi-web-access`.
 
-**To have it work on a project**, declare the project as a context: `fastagent init my-agent --context ~/code/app`,
-or later `fastagent context add ~/code/app`. The agent stays in its own directory and is told where the project is;
-the project's `AGENTS.md` and its skills load with the agent. A context it should only read is added with
-`--readonly`. See [contexts](configuration.md#contexts).
+**To have it work on a project**, declare the project as its content: `fastagent init my-agent --content ~/code/app`,
+or later `fastagent content add ~/code/app`. The agent stays in its own directory and is told where the project is;
+the project's `AGENTS.md` and its skills load with the agent. A directory it should only read is added with
+`--readonly`. See [content](configuration.md#content).
 
 ## 2. Inspect it
 
@@ -64,7 +64,7 @@ the project's `AGENTS.md` and its skills load with the agent. A context it shoul
 fastagent info
 ```
 
-`info` is read-only. It prints the contexts, model, prompt, skills, discovered tools, channels, diagnostics, and
+`info` is read-only. It prints the content, model, prompt, skills, discovered tools, channels, diagnostics, and
 session path without starting a server.
 
 A fresh agent presets no model. The first `fastagent dev` (or `start` / `invoke`) in a terminal shows the model
@@ -85,7 +85,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a context's `AGENTS.md` and `skills/` apply on the next turn; code
+`dev` serves the agent on `:8787`. Edits to `SYSTEM.md`, `APPEND_SYSTEM.md`, the agent's own or a content entry's `AGENTS.md` and `skills/` apply on the next turn; code
 edits (`tools/`, `channels/`, config) restart the worker. Turns run through `POST /invoke`.
 
 Send one turn:

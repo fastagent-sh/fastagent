@@ -37,7 +37,7 @@ import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
-import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts } from "../../contexts/resolve.ts";
+import { type ResolvedContent, cloneContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
@@ -54,13 +54,13 @@ import { type ResolvedContext, cloneContext, contextsAbsentHere, resolveContexts
  */
 export async function agentCommands(
   agentDir: string,
-  contexts: readonly ResolvedContext[],
+  content: readonly ResolvedContent[],
   served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
   // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
   // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
   // one set from both readers instead of warning again after every menu request.
-  const own = await loadAgentDefinition(agentDir, { contexts });
+  const own = await loadAgentDefinition(agentDir, { content });
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(agentDir);
   const prompts = withMachine(own.prompts, machine.prompts);
@@ -138,7 +138,7 @@ export interface AgentAssembly {
   /** Absolute agent dir — definition, config and machinery live here, and it is the agent's working directory. */
   agentDir: string;
   /** What the agent works on and knows, resolved for this instance — the one answer every reader uses. */
-  contexts: ResolvedContext[];
+  content: ResolvedContent[];
   /** Absolute state root (FASTAGENT_STATE_DIR > <agentDir>/.state). */
   stateRoot: string;
   /** The credential store and model registry every turn and every report reads ({@link agentModels}). */
@@ -163,23 +163,21 @@ export async function resolveAgentAssembly(
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
   // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.
-  for (const context of resolveContexts(agentDir, config.contexts)) {
-    if (context.kind !== "github" || !context.clone) continue;
-    const at = `github ${context.repo}${context.ref ? ` at ${context.ref}` : ""}`;
-    const done = await cloneContext(context);
+  for (const entry of resolveContent(agentDir, config.content)) {
+    if (entry.kind !== "github" || !entry.clone) continue;
+    const at = `github ${entry.repo}${entry.ref ? ` at ${entry.ref}` : ""}`;
+    const done = await cloneContent(entry);
     if (done.outcome === "kept") {
-      log.warn(
-        `[fastagent] context "${context.name}": the clone in ${context.location} is kept as it is, ${done.reason}`,
-      );
+      log.warn(`[fastagent] content "${entry.name}": the clone in ${entry.location} is kept as it is, ${done.reason}`);
     } else {
       const said = { cloned: "cloned", updated: "brought up to date", current: "already up to date" }[done.outcome];
-      log.info(`[fastagent] ${at}: ${said} in ${context.location}`);
+      log.info(`[fastagent] ${at}: ${said} in ${entry.location}`);
     }
   }
-  const contexts = resolveContexts(agentDir, config.contexts);
-  for (const absent of contextsAbsentHere(agentDir, config.contexts)) {
+  const content = resolveContent(agentDir, config.content);
+  for (const absent of contentAbsentHere(agentDir, config.content)) {
     log.info(
-      `[fastagent] context "${absent.name}" is a directory of the author's machine (${absent.path}): not on this ` +
+      `[fastagent] content "${absent.name}" is a directory of the author's machine (${absent.path}): not on this ` +
         `host, and the agent is not told of it`,
     );
   }
@@ -207,7 +205,7 @@ export async function resolveAgentAssembly(
     configPath,
     ...(modelSpec ? { modelSpec } : {}),
     agentDir,
-    contexts,
+    content,
     stateRoot,
     // Project-level by default (under `<agentDir>/.secrets`), with the global file behind it per provider.
     models: agentModels(agentDir, options, modelSpec ? { keepsModel: modelSpec } : {}),
@@ -233,7 +231,7 @@ export function assembleFront(
     ...(front.modelSpec ? { model: front.modelSpec } : {}),
     thinkingLevel: front.config.thinkingLevel,
     tools: extra.tools ?? front.tools,
-    contexts: front.contexts,
+    content: front.content,
     models: front.models,
     ...(extra.sessions ? { sessions: extra.sessions } : {}),
   });
@@ -345,7 +343,7 @@ export async function createPiAgentFromDir(
   /** Absolute agent dir in use — channels/tools/prompt come from here, and it is the agent's working directory. */
   agentDir: string;
   /** What the agent works on and knows, resolved for this instance. */
-  contexts: ResolvedContext[];
+  content: ResolvedContent[];
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <agentDir>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
@@ -374,7 +372,7 @@ export async function createPiAgentFromDir(
     configPath,
     modelSpec,
     agentDir,
-    contexts,
+    content,
     stateRoot,
     models,
     tools,
@@ -425,7 +423,7 @@ export async function createPiAgentFromDir(
       // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
       // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
       commands: () =>
-        agentCommands(agentDir, contexts, {
+        agentCommands(agentDir, content, {
           extensionPaths: assembly.extensionPaths,
           modelRuntime: assembly.createModelRuntime,
         }),
@@ -451,7 +449,7 @@ export async function createPiAgentFromDir(
     publishControl: publish,
     http: config.http,
     agentDir,
-    contexts,
+    content,
     config,
     configPath,
     ...(modelSpec ? { modelSpec } : {}),

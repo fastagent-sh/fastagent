@@ -10,9 +10,9 @@ export {
   type MountAgentServiceOptions,
 } from "./service.ts";
 
-// What an agent works on and knows: the declaration, where each context is for this instance, and the clone that makes
+// What an agent works on and knows: the declaration, where each content entry is for this instance, and the clone that makes
 // a repository with no checkout here real.
-export type { ContextDeclaration } from "./contexts/declare.ts";
-export { cloneContext, resolveContexts, type ResolvedContext } from "./contexts/resolve.ts";
-// A directory or `github:owner/repo` read as a declaration, the way `init --context` and `context add` read it.
-export { declarationFor, type SourceOptions } from "./contexts/source.ts";
+export type { ContentDeclaration } from "./content/declare.ts";
+export { cloneContent, resolveContent, type ResolvedContent } from "./content/resolve.ts";
+// A directory or `github:owner/repo` read as a declaration, the way `init --content` and `content add` read it.
+export { declarationFor, type SourceOptions } from "./content/source.ts";

@@ -170,13 +170,13 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, its own and each context's `AGENTS.md` as project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). `dir` is the working directory: the coding tools operate there and session records are keyed to it. Its own `AGENTS.md` is loaded first, before each context's.
+Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, its own and each content entry's `AGENTS.md` as project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). `dir` is the working directory: the coding tools operate there and session records are keyed to it. Its own `AGENTS.md` is loaded first, before each content entry's.
 
-`contexts` (`ResolvedContext[]`, default none) is what the agent works on and knows: each one is named in the prompt, its `AGENTS.md` and skills (`<context>/<skill>`) load with the definition, and tools see it as `ctx.contexts`. Build it from a declaration with `resolveContexts(dir, declarations)` ([Contexts](#contexts)); `createPiAgentFromDir` passes the config's.
+`content` (`ResolvedContent[]`, default none) is what the agent works on and knows: each entry is named in the prompt, its `AGENTS.md` and skills (`<content>/<skill>`) load with the definition, and tools see it as `ctx.content`. Build it from a declaration with `resolveContent(dir, declarations)` ([Content](#content)); `createPiAgentFromDir` passes the config's.
 
 `base` replaces pi's default prompt, as `SYSTEM.md` does, and outranks it; a blank `base` is refused. A `tools` list without `read`, `bash`, `edit` and `write` needs `base` or a `SYSTEM.md`: pi's default claims those tools, so the call is refused without one.
 
-`LoadedDefinition` carries `contextFiles` (the agent directory's `AGENTS.md`, then each context's, `DefinitionFile[]`), `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
+`LoadedDefinition` carries `contextFiles` (the agent directory's `AGENTS.md`, then each content entry's, `DefinitionFile[]`), `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
 
 ### `createAgentService`
 
@@ -221,7 +221,7 @@ function createPiAgentFromDir(
   configPath?: string;
   modelSpec?: string; // the default model; absent when none is set (see below)
   agentDir: string; // the agent directory: where it lives, and its working directory
-  contexts: ResolvedContext[]; // what it works on and knows, resolved for this instance
+  content: ResolvedContent[]; // what it works on and knows, resolved for this instance
   stateRoot: string;
   sessionsDir: string;
   auth: { path: string; fallback?: string }; // credentials file, then the user-global one when none was named
@@ -231,22 +231,22 @@ function createPiAgentFromDir(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its contexts, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` and `authPath` are read like every path override: a leading `~` is the home directory and a relative path is relative to the process's working directory. `sessionsDir` defaults to `<state root>/sessions`, and the result reports the one in use as an absolute path.
+The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its content, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` and `authPath` are read like every path override: a leading `~` is the home directory and a relative path is relative to the process's working directory. `sessionsDir` defaults to `<state root>/sessions`, and the result reports the one in use as an absolute path.
 
-### Contexts
+### Content
 
 ```ts
 // From `@fastagent-sh/fastagent/node`.
-function resolveContexts(agentDir: string, declarations: ContextDeclaration[] | undefined): ResolvedContext[];
-function cloneContext(
-  context: ResolvedContext & { kind: "github" },
+function resolveContent(agentDir: string, declarations: ContentDeclaration[] | undefined): ResolvedContent[];
+function cloneContent(
+  entry: ResolvedContent & { kind: "github" },
 ): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
-type ContextDeclaration =
+type ContentDeclaration =
   | { local: string; readonly?: boolean; name?: string }
   | { github: string; ref?: string; local?: string; readonly?: boolean; name?: string };
 
-type ResolvedContext = {
+type ResolvedContent = {
   name: string;                         // unique ignoring case, one path segment
   readonly: boolean;                    // the agent knows it and does not write it
   location: string;                     // its absolute directory on this instance
@@ -257,47 +257,47 @@ type ResolvedContext = {
 );
 ```
 
-The one resolution every reader uses: the prompt, `ctx.contexts`, `info` and `fastagent context list`. It refuses,
-naming the context, a declaration that is malformed, a directory that does not exist, and one that contains the agent
-directory or sits inside it ([Configuration](configuration.md#contexts)). It reads the disk and git, never the
-network, and writes nothing: a `github` context with no checkout here resolves to its clone's location, which
-`cloneContext` makes, or brings up to date in place by git's rules, which never overwrite the agent's work: what git
+The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fastagent content list`. It refuses,
+naming the entry, a declaration that is malformed, a directory that does not exist, and one that contains the agent
+directory or sits inside it ([Configuration](configuration.md#content)). It reads the disk and git, never the
+network, and writes nothing: a `github` entry with no checkout here resolves to its clone's location, which
+`cloneContent` makes, or brings up to date in place by git's rules, which never overwrite the agent's work: what git
 refuses, a fetch that fails, or a clone on another branch than declared keeps it as it is (`kept`, with the
 `reason`). `createPiAgentFromDir` clones before it resolves; a caller that
-resolves for `createPiAgentFromDefinition` calls `cloneContext` for each context with `clone: true`, then resolves
+resolves for `createPiAgentFromDefinition` calls `cloneContent` for each entry with `clone: true`, then resolves
 again.
 
 `declarationFor(source, cwd, options?)` (also `/node`) reads a directory or `github:owner/repo` the way
-`init --context` and `fastagent context add` do: the root of a checkout whose `origin` is on GitHub becomes that
+`init --content` and `fastagent content add` do: the root of a checkout whose `origin` is on GitHub becomes that
 repository with the checkout as its `local`, any other directory `{ local }`. It returns the declaration and `notes`
 for the user.
 
 ```ts
-// From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent context` run.
+// From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent content` run.
 function createAgent(
   dir: string,
-  options?: { contexts?: ContextDeclaration[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
-): Promise<{ dir: string; created: string[]; contexts: ResolvedContext[]; repository: string }>;
-function listContexts(agentDir: string): Promise<ResolvedContext[]>;
-function addContext(agentDir: string, declaration: ContextDeclaration): Promise<{ name: string; contexts: ResolvedContext[] }>;
-function removeContext(agentDir: string, name: string): Promise<{ name: string; contexts: ResolvedContext[] }>;
-class ContextNameError extends Error {}
+  options?: { content?: ContentDeclaration[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
+): Promise<{ dir: string; created: string[]; content: ResolvedContent[]; repository: string }>;
+function listContent(agentDir: string): Promise<ResolvedContent[]>;
+function addContent(agentDir: string, declaration: ContentDeclaration): Promise<{ name: string; content: ResolvedContent[] }>;
+function removeContent(agentDir: string, name: string): Promise<{ name: string; content: ResolvedContent[] }>;
+class ContentNameError extends Error {}
 ```
 
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:
-every refusal is thrown with the message the CLI shows. `createAgent` checks every context before it writes, and
-removes the scaffold again when writing the contexts fails. The agent runs without `npm install`. `webAccess` adds
+every refusal is thrown with the message the CLI shows. `createAgent` checks every entry before it writes, and
+removes the scaffold again when writing the content declaration fails. The agent runs without `npm install`. `webAccess` adds
 what `init` adds: `extensions/web-access.ts` and `@fastagent-sh/pi-web-access` in `package.json`, whose web tools load only once
 it is installed (until then they are left out with a warning); `install`, when given, runs after
 the scaffold so the lockfile is in the first commit, and a rejection from it removes the scaffold and is thrown, like a
-failed context write. The agent is then a git repository whose first commit is the
+failed content write. The agent is then a git repository whose first commit is the
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
-no commit identity), as a sentence to show. `addContext` names the context
-after its repository or directory unless the declaration names it; `removeContext` matches the name ignoring case.
-Both rewrite only the literal `contexts` list, under the config file's lock, so concurrent edits apply one after the
-other; each returns the name it acted on with the contexts after the edit. A name that cannot name a context, is
-taken (ignoring case, including by another context `createAgent` was given), or is not the agent's is a
-`ContextNameError`, which the CLI reports with exit code 2.
+no commit identity), as a sentence to show. `addContent` names the entry
+after its repository or directory unless the declaration names it; `removeContent` matches the name ignoring case.
+Both rewrite only the literal `content` list, under the config file's lock, so concurrent edits apply one after the
+other; each returns the name it acted on with the content after the edit. A name that cannot name an entry, is
+taken (ignoring case, including by another entry `createAgent` was given), or is not the agent's is a
+`ContentNameError`, which the CLI reports with exit code 2.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
@@ -396,7 +396,7 @@ The second `execute` argument is a `ToolContext`:
 ```ts
 interface ToolContext {
   cwd: string; // the agent directory
-  contexts: readonly ResolvedContext[]; // what the agent works on and knows, each with its `location`
+  content: readonly ResolvedContent[]; // what the agent works on and knows, each with its `location`
   signal?: AbortSignal;
   sessionManager?: ReadonlySessionManager;
   tools?: ToolActivation;
@@ -419,8 +419,8 @@ interface ReadonlySessionManager {
 }
 ```
 
-`cwd` is the agent's own directory. A tool that works on a project reads its location from `contexts`
-(`ctx.contexts.find((c) => c.name === "app")?.location`), never from `cwd`.
+`cwd` is the agent's own directory. A tool that works on a project reads its location from `content`
+(`ctx.content.find((c) => c.name === "app")?.location`), never from `cwd`.
 
 During serving and `fastagent chat`, `sessionManager` is a read-only view of the current conversation; it is
 undefined in a sessionless call such as `fastagent tool`, and so are `executeTool` and `onUpdate`. `getSessionId()`

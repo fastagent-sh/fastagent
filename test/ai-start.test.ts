@@ -63,7 +63,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const info = JSON.parse((await cli(["info", "--json"])).stdout);
     expect(info).toMatchObject({
       agentDir,
-      contexts: [],
+      content: [],
       appendSystemPrompt: join(agentDir, "APPEND_SYSTEM.md"),
       tools: expect.arrayContaining(["plan-batches"]),
       skills: expect.arrayContaining([expect.objectContaining({ name: "review-batches" })]),

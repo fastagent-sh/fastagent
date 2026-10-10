@@ -113,7 +113,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     input.shipsGit
       ? `# Railway uploads may strip .git, so the deployed definition may have no history.`
       : input.apt?.includes("git")
-        ? `# Git is installed (a github context is cloned here, or deploy.apt names it).`
+        ? `# Git is installed (github content is cloned here, or deploy.apt names it).`
         : `# To give the agent git, add deploy: { apt: ["git"] }.`,
   );
 

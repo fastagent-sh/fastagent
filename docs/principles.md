@@ -20,7 +20,7 @@ The design choices are deliberate:
 
 | Principle | What it means in FastAgent |
 |---|---|
-| **An agent beside your project** | `fastagent init <dir> --context <project>` creates the agent in a directory of its own and declares the project as what it works on; add `APPEND_SYSTEM.md`, `skills/`, `tools/`, and `channels/` there as needed. The project gets no writes, and its `AGENTS.md` remains project context. |
+| **An agent beside your project** | `fastagent init <dir> --content <project>` creates the agent in a directory of its own and declares the project as what it works on; add `APPEND_SYSTEM.md`, `skills/`, `tools/`, and `channels/` there as needed. The project gets no writes, and its `AGENTS.md` remains project context. |
 | **Concepts before features** | Define the few primitives authors need to understand — definition, invoke, event, tool, skill, channel, session — before adding knobs. |
 | **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
@@ -37,7 +37,7 @@ A feature is not real product surface until users can name it and reason about i
 
 | Concept | Meaning |
 |---|---|
-| **Agent Definition** | The directory that describes the agent: optional `SYSTEM.md` / `APPEND_SYSTEM.md`, `skills/`, `prompts/`, authored context, tools/channels, and config, including the contexts it declares; each context's `AGENTS.md` contributes project context. |
+| **Agent Definition** | The directory that describes the agent: optional `SYSTEM.md` / `APPEND_SYSTEM.md`, `skills/`, `prompts/`, authored context, tools/channels, and config, including the content it declares; each content entry's `AGENTS.md` contributes project context. |
 | **Agent Handler** | The callable contract: `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. |
 | **Event** | The streamed output shape every channel can consume: text, thinking, tool lifecycle, completion, or failure. |
 | **Tool** | A typed action the model can call, validated before execution. |

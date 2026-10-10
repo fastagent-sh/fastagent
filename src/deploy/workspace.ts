@@ -35,7 +35,7 @@ export interface DeploymentRelease {
   model?: string;
 }
 
-/** The manifest names the agent the storage belongs to, and that name is also a context's name rule (one path
+/** The manifest names the agent the storage belongs to, and that name is also a content entry's name rule (one path
  *  segment). `deploy` asks BEFORE generating artifacts — a name `init` accepts but this rejects is the author's
  *  directory name, not a corrupt manifest. */
 export function isReleaseAgentName(name: string): boolean {

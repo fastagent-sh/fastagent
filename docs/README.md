@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `APPEND_SYSTEM.md` holds its standing instructions and `SYSTEM.md` an identity of its own (its own `AGENTS.md` says how it is built and changed, and a context's `AGENTS.md` is project context the agent reads), but the directory is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, Slack or Feishu, handling webhook events, exposed as an API endpoint, or running behind your own channel. `APPEND_SYSTEM.md` holds its standing instructions and `SYSTEM.md` an identity of its own (its own `AGENTS.md` says how it is built and changed, and a content entry's `AGENTS.md` is project context the agent reads), but the directory is the unit.
 
 ## Recommended path
 
@@ -52,7 +52,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 
 ## Core concepts
 
-- **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, and markdown context. What it works on is declared as contexts, whose `AGENTS.md` is project context.
+- **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, and markdown context. What it works on is declared as its content, whose `AGENTS.md` is project context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
