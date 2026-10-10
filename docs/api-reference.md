@@ -304,7 +304,10 @@ either fails, neither is left. `removeContent` matches the name ignoring case, d
 leaves a clone at `content/<name>` as it is, saying so in `notes`. Both edit `context.json` under its lock, so
 concurrent edits apply one after the other; each returns the name it acted on with the content after the edit. A name
 that cannot name an entry, is taken (ignoring case, including by another entry `createAgent` was given), or is not
-the agent's is a `ContentNameError`, which the CLI reports with exit code 2.
+the agent's is a `ContentNameError`, which the CLI reports with exit code 2. The content an edit would leave is
+resolved before anything is written: when another entry no longer resolves (its link points to a directory that
+moved), the edit is refused with that entry's error, a plain `Error` naming it (`content "<name>": …`). Removing that
+entry is always possible, and is how it is mended.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
 `createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,

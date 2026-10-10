@@ -125,9 +125,13 @@ fastagent content remove <name> [agent]
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `remove` drops the entry and its link. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
+- An edit is checked against the content it would leave before anything is written: while another entry does not
+  resolve (its link points to a directory that moved), `add` and `remove` are refused with that entry's error.
+  Removing the broken entry itself always works.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
-- On another machine, an entry is linked by hand (`ln -s <dir> content/<name>`); a `github` entry with nothing
-  linked is cloned.
+- On another machine, an entry the agent already declares is linked by hand (`ln -s <dir> content/<name>`, after
+  `mkdir -p content` and with any clone there moved away; [configuration](../configuration.md#content)); a `github`
+  entry with nothing linked is cloned.
 
 ## 5. Running: `dev`, `start`, `chat`, `invoke`
 
@@ -169,7 +173,7 @@ knows     handbook  github acme/handbook@main     cloned; kept up to date
 works on  draft     a directory of this machine   stays here; the deployed agent works without it
           → to work on it from a host, move it to a GitHub repository (warning)
 knows     papers    a directory of this machine   stays here; the deployed agent works without it
-          → to ship what the agent reads there, copy it into the agent directory (note)
+          → to ship what the agent reads there, copy it into the agent directory outside content/ (note)
 ```
 
 - **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on

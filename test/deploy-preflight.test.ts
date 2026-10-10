@@ -409,7 +409,8 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       level: "note",
       text:
         "knows docs: a directory of this machine (content/docs), stays here, and the deployed agent works " +
-        "without it; to ship what the agent reads there, copy it into the agent directory, which every release carries",
+        "without it; to ship what the agent reads there, copy it into the agent directory outside content/, which " +
+        "every release carries",
     });
   });
 

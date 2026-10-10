@@ -115,8 +115,8 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
     } else if (entry.readonly) {
       report.note(
         `${role} ${entry.name}: a directory of this machine (content/${entry.name}), stays here, and the deployed ` +
-          `agent works without it; to ship what the agent reads there, copy it into the agent directory, which ` +
-          `every release carries`,
+          `agent works without it; to ship what the agent reads there, copy it into the agent directory outside ` +
+          `content/, which every release carries`,
       );
     } else {
       report.warn(
