@@ -125,6 +125,9 @@ fastagent content remove <name> [agent]
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
 - `remove` drops the entry and its link. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
+- An edit is checked against the content it would leave before anything is written: while another entry does not
+  resolve (its link points to a directory that moved), `add` and `remove` are refused with that entry's error.
+  Removing the broken entry itself always works.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
 - On another machine, an entry the agent already declares is linked by hand (`ln -s <dir> content/<name>`, after
   `mkdir -p content` and with any clone there moved away; [configuration](../configuration.md#content)); a `github`
