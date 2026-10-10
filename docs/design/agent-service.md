@@ -226,9 +226,8 @@ uv = "latest"
 - **Two parts are supported.** `[tools]` install from per-platform builds and are locked. `[bootstrap.packages]` are
   system packages: the image installs them with its package manager (`apt` on its Debian), and a start on a machine
   that lacks one says which. Everything else mise reads in that file (`[env]`, `[tasks]`, `[hooks]`, `[settings]`,
-  `[plugins]`, the other `[bootstrap]` parts), plugin backends (`asdf:`, `vfox:`) and a tool's `postinstall` are
-  refused at startup, by name: each would run differently, or not at all, where the agent is deployed. `[env]` waits
-  for §6.2.
+  `[plugins]`, the other `[bootstrap]` parts) and a tool's `postinstall` are refused at startup, by name: each would
+  run differently, or not at all, where the agent is deployed. `[env]` waits for §6.2.
 - **The agent carries its own mise.** Its `package.json` lists mise's npm packages as optional dependencies, one per
   platform, of which npm and bun install only the machine's. The lockfile pins the version, and the author may pin it
   in `package.json`. A machine needs nothing installed first, the image's `npm ci` installs the same mise, and a mise
@@ -236,10 +235,11 @@ uv = "latest"
 - **Only the agent's `mise.toml` is read**: never the machine's mise configuration, a parent directory's, a
   `.tool-versions` or a `mise.local.toml`. What is installed locally is what the image installs.
 - **`fastagent env <args>` runs the agent's mise** in its directory (`fastagent env use gh@2`); its first run adds mise
-  to `package.json`. It is the only command that changes the environment. `dev`, `start`, `chat`, `invoke` and `tool`
-  install what `mise.toml` declares and put the tools on the `PATH` of the processes they start; they refuse a
-  `mise.toml` the agent has no mise for. The isolation is FastAgent's runs alone, and the file is trusted, not the
-  directory, under which a cloned content repository may carry a `mise.toml` of its own.
+  to `package.json`. It is the only command that changes the environment. Every process that opens the agent (`dev`,
+  `start`, `chat`, `invoke`, an embedder's `createAgentService`) and `tool` install what `mise.toml` declares and put
+  the tools on the `PATH` of the processes they start; they refuse a `mise.toml` the agent has no mise for. The
+  isolation is FastAgent's runs alone, and the file is trusted, not the directory, under which a cloned content
+  repository may carry a `mise.toml` of its own.
 - **The agent changes its environment as the author does**, with `fastagent env` from its own `node_modules`: a
   change FastAgent refuses is undone before the command exits, so it cannot stop the next start, and
   `fastagent env exec -- <command>` runs a tool it added before the restart that puts it on the `PATH`. Like any
@@ -248,7 +248,8 @@ uv = "latest"
   A tool the agent installs with the machine's own means (`apt-get`, `npm install -g`) is the machine's and lasts as
   long as the container.
 - **`deploy` writes `mise.lock`** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine runs,
-  with each tool's download URL and checksum, when the agent's mise is installed here (otherwise `--run` stops); a
+  with each tool's download URL and checksum (and, for an `npm:` tool, a dependency lock under `.mise/locks/` that
+  the lock names by digest and the image copies), when the agent's mise is installed here (otherwise `--run` stops); a
   tool not installed here is locked at the newest version its declaration allows. The image installs the system
   packages, then the lock (`mise --locked install --system`), in a layer before the definition is copied in, so the
   layer stays cached while the definition changes. The tools go to mise's system directory, which every mise reads

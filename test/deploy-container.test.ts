@@ -83,7 +83,14 @@ describe("deploy/container: shared Docker context", () => {
     expect(packagesOnly).toContain("COPY mise.toml ./\n");
     expect(packagesOnly).toContain("bootstrap packages apply");
     expect(packagesOnly).not.toMatch(/mise\.lock|--locked install/);
+    // An npm tool's lock has sidecars the locked install reads; a COPY of a directory that is not there fails the build.
+    const withSidecars = dockerfile({
+      ...input,
+      environment: { tools: ["npm:cowsay"], packages: [], lockSidecars: true },
+    });
+    expect(withSidecars).toContain("COPY mise.toml mise.lock ./\nCOPY .mise/locks ./.mise/locks\nRUN ");
     const toolsOnly = dockerfile({ ...input, environment: { tools: ["jq"], packages: [] } });
+    expect(toolsOnly).not.toContain(".mise/locks");
     expect(toolsOnly).toContain('"$MISE" --locked install --system');
     expect(toolsOnly).not.toMatch(/bootstrap|APT::/);
     expect(dockerfile({ ...input, environment: { tools: [], packages: [] } })).not.toMatch(/mise/);

@@ -368,7 +368,8 @@ excludes. Each start publishes it onto persistent storage:
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
 **The environment**: with a [`mise.toml`](configuration.md#environment-misetoml), `deploy` first writes `mise.lock`
-from the versions this machine runs, for linux-x64 and linux-arm64; commit it beside `mise.toml`. The image installs
+from the versions this machine runs, for linux-x64 and linux-arm64, with `.mise/locks/` for an `npm:` tool; commit
+both beside `mise.toml`, and the image copies them. The image installs
 the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
 the environment or the dependencies change. The tools go to mise's system directory (`/usr/local/share/mise`); a tool
 the agent adds on the host goes to `.state/mise/` on the storage, so a restart does not download it again. `--run`

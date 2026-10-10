@@ -44,13 +44,8 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
       listenForRestart(() => process.kill(process.pid, "SIGTERM")),
     );
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
-  const runsAgent = isWorker || opts.watch === false;
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, {
-    ...opts,
-    input: isWorker ? false : opts.input,
-    environment: runsAgent,
-  });
-  if (runsAgent) {
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
+  if (isWorker || opts.watch === false) {
     await serveOnce(agentDir, modelSpec, opts);
     return;
   }

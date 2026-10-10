@@ -360,8 +360,9 @@ jq = "1.8"
 ```
 
 - **`[tools]`** are CLIs and runtimes, from mise's registry (`gh`, `python`, `uv`), npm (`npm:`), PyPI (`pypi:`),
-  GitHub releases (`github:`) and mise's other backends. `dev`, `start`, `chat`, `invoke` and `tool` install what is
-  missing, then start the agent with the tools first on its `PATH`. An edit to `mise.toml` restarts `dev`.
+  GitHub releases (`github:`) and mise's other backends. `dev`, `start`, `chat`, `invoke`, `tool` and an embedder's
+  [`createAgentService`](embedding.md) install what is missing, then run the agent with the tools first on its
+  `PATH`. An edit to `mise.toml` restarts `dev`.
 - **`[bootstrap.packages]`** are system packages, for what has no cross-platform build, like a browser or fonts. The
   image installs them (`apt:` on its Debian). A start on a machine that lacks one says which;
   `fastagent env bootstrap packages apply` installs them there. On macOS, `{ os = "linux" }` keeps an `apt:` package
@@ -386,12 +387,14 @@ The agent's mise reads only the agent's `mise.toml`: never `~/.config/mise`, a p
 machine's, in a content repository with its own `mise.toml`) works as it does in your shell.
 FastAgent supports `[tools]` and `[bootstrap.packages]`; the rest of the file (`[env]`, `[tasks]`, `[hooks]`,
 `[settings]`, `[plugins]`, the other `[bootstrap]` parts) is refused at startup, because it would run differently or
-not at all where the agent is deployed, and so are plugin backends (`asdf:`, `vfox:`) and a tool's `postinstall`.
+not at all where the agent is deployed, and so is a tool's `postinstall`.
 Environment variables stay in `.secrets/.env` for now. Tools install into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share. `fastagent info` lists what is declared.
 
-`deploy` writes `mise.lock` ([what deploy bakes](deploy.md#what-deploy-bakes)). The lock is not enforced locally: a
-start installs what `mise.toml` allows and keeps what is already installed.
+`deploy` writes `mise.lock` ([what deploy bakes](deploy.md#what-deploy-bakes)), and for a tool from a package
+registry (`npm:`) a sidecar under `.mise/locks/` that the lock names by digest: commit both with `mise.toml`, since
+an install that reads the lock needs the sidecar too. The lock is not enforced locally: a start installs what
+`mise.toml` allows and keeps what is already installed.
 
 ## Harness settings: `~/.pi/agent/settings.json`
 

@@ -15,6 +15,12 @@ export const MISE_FILE = "mise.toml";
 /** What `deploy` writes beside it: each tool's download URL and checksum, per platform the image is built for. */
 export const MISE_LOCK_FILE = "mise.lock";
 
+/**
+ * What `mise lock` writes beside the lock for a tool installed from a package registry (an npm tool's dependency
+ * lock), and the lock names by path and digest: part of the lock, committed and shipped with it.
+ */
+export const MISE_LOCK_SIDECARS = ".mise/locks";
+
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {
   /** The `mise.toml` it was read from. */
@@ -24,9 +30,6 @@ export interface DeclaredEnvironment {
   /** The `[bootstrap.packages]` keys: `manager:package`. */
   packages: string[];
 }
-
-/** Backends that install by running a plugin's code, and whose installs mise cannot lock. */
-const PLUGIN_BACKEND = /^(asdf|vfox):/;
 
 /** The agent's environment, or undefined when it has no `mise.toml` (it borrows the machine's commands). */
 export function readEnvironment(agentDir: string): DeclaredEnvironment | undefined {
@@ -57,11 +60,6 @@ export function readEnvironment(agentDir: string): DeclaredEnvironment | undefin
   }
   const tools = table(raw.tools, "[tools]", path);
   for (const [name, value] of Object.entries(tools)) {
-    if (PLUGIN_BACKEND.test(name)) {
-      throw new Error(
-        `${path}: tool "${name}" installs through a plugin, which mise cannot lock — use another backend`,
-      );
-    }
     if (value && typeof value === "object" && !Array.isArray(value) && "postinstall" in value) {
       throw new Error(`${path}: tool "${name}" has a postinstall command — an install must not run code`);
     }

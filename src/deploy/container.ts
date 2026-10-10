@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
-import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE } from "../environment/declare.ts";
+import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE, MISE_LOCK_SIDECARS } from "../environment/declare.ts";
 import { isolationAt } from "../environment/mise.ts";
 
 export interface Artifact {
@@ -90,7 +90,7 @@ export interface ContainerInput {
   /** The Debian packages FastAgent itself needs in the image: git for content and a shipped `.git`, CA certificates for mise. */
   apt?: string[];
   /** The environment the agent declares (mise.toml), which the image installs with the agent's own mise. */
-  environment?: Pick<DeclaredEnvironment, "tools" | "packages">;
+  environment?: ImageEnvironment;
   /**
    * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
    * VALUE FILE named it (a `config.model` needs nothing: the config ships too). The manifest is the carrier because
@@ -131,7 +131,13 @@ const BUILD_MISE_DIR = "/tmp/mise";
  * to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside its own data
  * directory: a deployed start points that one at the storage, where the tools the agent adds outlive the container.
  */
-function environmentLayers(dir: string, environment: Pick<DeclaredEnvironment, "tools" | "packages">): string {
+/** What the image needs to know of the agent's environment. */
+type ImageEnvironment = Pick<DeclaredEnvironment, "tools" | "packages"> & {
+  /** Whether {@link MISE_LOCK_SIDECARS} exists beside the lock: a COPY of a missing directory fails the build. */
+  lockSidecars?: boolean;
+};
+
+function environmentLayers(dir: string, environment: ImageEnvironment): string {
   const packages = environment.packages.length > 0;
   // mise writes no lock for a file without tools.
   const tools = environment.tools.length > 0;
@@ -152,8 +158,9 @@ function environmentLayers(dir: string, environment: Pick<DeclaredEnvironment, "
     ...(tools ? [`"$MISE" --locked install --system`] : []),
     `rm -rf ${BUILD_MISE_DIR}`,
   ];
+  const sidecars = tools && environment.lockSidecars ? `COPY ${MISE_LOCK_SIDECARS} ./${MISE_LOCK_SIDECARS}\n` : "";
   return `COPY ${MISE_FILE}${tools ? ` ${MISE_LOCK_FILE}` : ""} ./
-RUN ${steps.join(" \\\n && ")}
+${sidecars}RUN ${steps.join(" \\\n && ")}
 `;
 }
 

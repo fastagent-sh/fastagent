@@ -39,7 +39,6 @@ import { dotEnvPath, enterAgentEnv } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
-import { enterEnvironment } from "../environment/mise.ts";
 
 /** An agent directory a command entered, and the default model that then resolves, if any. */
 export interface EnteredAgent {
@@ -64,19 +63,16 @@ export async function enterAgentDirectory(
 
 /**
  * How every command that RUNS the agent on this machine enters it (dev, start, invoke, chat):
- * {@link enterAgentDirectory}, plus a default model, plus its environment (mise.toml) on this process's PATH. The agent
- * opens without a model, but a process here would then fail every new conversation, so it stops at startup with
- * {@link missingDefaultModel} instead. `environment: false` is for a process that runs no agent itself: `dev`'s
- * supervisor, whose workers enter the environment each time they start, after an edit to mise.toml included.
+ * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
+ * every new conversation, so it stops at startup with {@link missingDefaultModel} instead.
  */
 export async function enterAgentCommand(
   dirArg: string,
-  opts: { model?: string; input?: boolean; environment?: boolean },
+  opts: { model?: string; input?: boolean },
 ): Promise<Required<EnteredAgent>> {
   const entered = await enterAgentDirectory(dirArg, opts);
   const { modelSpec } = entered;
   if (!modelSpec) failStartup(missingDefaultModel());
-  if (opts.environment !== false) await enterEnvironment(entered.agentDir).catch(failStartup);
   return { ...entered, modelSpec };
 }
 

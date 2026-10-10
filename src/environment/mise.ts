@@ -177,7 +177,7 @@ function missingMise(agentDir: string): Error {
  * the environment changes, and checks what it writes. An agent with no `mise.toml` borrows the machine's commands.
  * System packages are the image's to install; one missing here is said, with how to install it.
  */
-export async function enterEnvironment(agentDir: string): Promise<void> {
+export async function enterMiseEnvironment(agentDir: string): Promise<void> {
   const declared = readEnvironment(agentDir);
   if (!declared) return;
   const bin = miseBinary(agentDir);

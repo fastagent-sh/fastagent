@@ -40,7 +40,13 @@ import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
-import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE, readEnvironment } from "../environment/declare.ts";
+import {
+  type DeclaredEnvironment,
+  MISE_FILE,
+  MISE_LOCK_FILE,
+  MISE_LOCK_SIDECARS,
+  readEnvironment,
+} from "../environment/declare.ts";
 import { lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
@@ -437,6 +443,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const environment = readEnvironment(agentDir);
   if (environment) await checkEnvironment(agentDir, environment, hasPackageJson, pkg, report);
+  // Read after the lock is written: it writes them.
+  const lockSidecars = environment !== undefined && (await exists(join(agentDir, MISE_LOCK_SIDECARS)));
 
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
   // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates.
@@ -452,7 +460,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     hasLockfile,
     version: await fastagentVersion(),
     apt,
-    environment,
+    ...(environment ? { environment: { ...environment, lockSidecars } } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };

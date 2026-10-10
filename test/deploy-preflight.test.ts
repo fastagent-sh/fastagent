@@ -614,20 +614,26 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
     await mkdir(join(pkg, "bin"), { recursive: true });
     await writeFile(join(pkg, "package.json"), "{}\n");
-    await writeFile(join(pkg, "bin", "mise"), `#!/bin/sh\necho "$*" > mise.lock\n`);
+    // Like mise for an npm tool, the lock writes a sidecar beside it.
+    await writeFile(
+      join(pkg, "bin", "mise"),
+      `#!/bin/sh\necho "$*" > mise.lock\nmkdir -p .mise/locks/npm-cowsay/1.6.0\n`,
+    );
     await chmod(join(pkg, "bin", "mise"), 0o755);
     const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.container.environment).toMatchObject({ tools: ["jq"], packages: [] });
+      expect(ok.container.environment).toMatchObject({ tools: ["jq"], packages: [], lockSidecars: true });
       expect(ok.container.apt).toEqual(["ca-certificates"]); // mise downloads over TLS; the slim image has no CAs
     }
     expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("lock --platform linux-x64,linux-arm64\n");
     // mise writes no lock for a file without tools: system packages alone need none.
     await rm(join(dir, "mise.lock"));
+    await rm(join(dir, ".mise"), { recursive: true });
     await rm(join(dir, "node_modules"), { recursive: true });
     await writeFile(join(dir, "mise.toml"), `[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
-    expect((await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).ok).toBe(true);
+    const packagesOnly = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(packagesOnly.ok && packagesOnly.container.environment).toMatchObject({ lockSidecars: false });
   });
 
   it("a declared schedule keeps a machine up; the agent's own wake-ups do not", async () => {

@@ -4,19 +4,20 @@
  * tested is FastAgent's side (which file, which isolation, which arguments, what reaches the process), not mise.
  */
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readEnvironment } from "../src/environment/declare.ts";
 import {
-  enterEnvironment,
+  enterMiseEnvironment,
   ensureMise,
   lockEnvironment,
   MISE_PACKAGE_NAMES,
   miseBinary,
 } from "../src/environment/mise.ts";
+import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
 import { log } from "../src/log.ts";
 
 const savedEnv = { ...process.env };
@@ -52,7 +53,9 @@ echo "$*|$MISE_TRUSTED_CONFIG_PATHS|$MISE_CEILING_PATHS|$MISE_OVERRIDE_CONFIG_FI
 case "$1" in
   env) printf '{"PATH":"/fake/tools%s%s","FAKE_TOOL_HOME":"/fake/home"}' "${delimiter}" "$PATH" ;;
   bootstrap) if [ -n "$FAKE_MISSING" ]; then echo "apt  chromium  missing"; exit 1; fi ;;
-  set) printf '[env]\\nA = "1"\\n' >> mise.toml; echo "relocked" > mise.lock ;;
+  set) printf '[env]\\nA = "1"\\n' >> mise.toml; echo "relocked" > mise.lock
+    mkdir -p .mise/locks/npm-new/1 && echo new > .mise/locks/npm-new/1/package.json
+    if [ -d .mise/locks/npm-old ]; then echo changed > .mise/locks/npm-old/1/package.json; fi ;;
   fail) exit 3 ;;
 esac
 `,
@@ -96,7 +99,6 @@ describe("environment: what mise.toml may declare", () => {
       /"tasks" is not supported — an agent's mise\.toml declares \[tools\] and/,
     ],
     ["[settings]", `[settings]\nlocked = false\n`, /"settings" is not supported/],
-    ["a plugin backend", `[tools]\n"asdf:foo" = "1"\n`, /tool "asdf:foo" installs through a plugin/],
     ["a postinstall", `[tools]\njq = { version = "1", postinstall = "x" }\n`, /tool "jq" has a postinstall command/],
     ["other machine setup", `[bootstrap.repos]\n"~/x" = "y"\n`, /\[bootstrap\.repos\] is not supported/],
     ["[tools] not a table", `tools = "gh"\n`, /\[tools\] must be a table/],
@@ -113,7 +115,7 @@ describe("environment: the agent's own mise", () => {
     process.env.FAKE_MISSING = "1";
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
-      await enterEnvironment(dir);
+      await enterMiseEnvironment(dir);
       expect(warn.mock.calls.flat().join("\n")).toMatch(
         /system packages mise\.toml declares are missing here \(the image installs them\):\napt {2}chromium {2}missing\n/,
       );
@@ -139,13 +141,23 @@ describe("environment: the agent's own mise", () => {
 
   it("an agent without mise.toml borrows the machine's commands; one with it and no mise is refused", async () => {
     const before = process.env.PATH;
-    await enterEnvironment(await agentDir());
+    await enterMiseEnvironment(await agentDir());
     expect(process.env.PATH).toBe(before);
     const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
-    await expect(enterEnvironment(dir)).rejects.toThrow(
+    await expect(enterMiseEnvironment(dir)).rejects.toThrow(
       `${join(dir, "mise.toml")} declares an environment, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
     );
     expect(miseBinary(dir)).toBeUndefined();
+  });
+
+  it("is entered by the assembly, so every process that opens the agent has it: createAgentService and chat too", async () => {
+    await expect(resolveAgentAssembly(await agentDir(`[env]\nA = "1"\n`))).rejects.toThrow(
+      /\[env\] is not supported yet/,
+    );
+    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
+    await fakeMise(dir);
+    await resolveAgentAssembly(dir);
+    expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
   });
 
   it("locks for the platforms an image is built for", async () => {
@@ -232,6 +244,9 @@ describe("environment: `fastagent env`", () => {
     const declared = `[tools]\njq = "1.8.1"\n`;
     const dir = await agentDir(declared);
     await writeFile(join(dir, "mise.lock"), "locked\n");
+    // A lock sidecar (an npm tool's dependency lock), which the lock names by digest: it goes back with the lock.
+    await mkdir(join(dir, ".mise", "locks", "npm-old", "1"), { recursive: true });
+    await writeFile(join(dir, ".mise", "locks", "npm-old", "1", "package.json"), "old\n");
     await fakeMise(dir);
     const set = await cli(["env", "set", "A=1"], dir);
     expect(set.code).toBe(1);
@@ -240,12 +255,14 @@ describe("environment: `fastagent env`", () => {
     );
     expect(await readFile(join(dir, "mise.toml"), "utf8")).toBe(declared);
     expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("locked\n");
+    expect(await readFile(join(dir, ".mise", "locks", "npm-old", "1", "package.json"), "utf8")).toBe("old\n");
+    await expect(readdir(join(dir, ".mise", "locks"))).resolves.toEqual(["npm-old"]);
     // Files the command created are removed.
     const fresh = await agentDir();
     await fakeMise(fresh);
     expect((await cli(["env", "set", "A=1"], fresh)).code).toBe(1);
-    for (const file of ["mise.toml", "mise.lock"]) {
-      await expect(readFile(join(fresh, file), "utf8")).rejects.toThrow(/ENOENT/);
+    for (const file of ["mise.toml", "mise.lock", ".mise/locks"]) {
+      await expect(stat(join(fresh, file))).rejects.toThrow(/ENOENT/);
     }
     // A file refused before the command is reported, not called restored: the command changed nothing.
     await writeFile(join(dir, "mise.toml"), `[env]\nA = "1"\n`);
