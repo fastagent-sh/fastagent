@@ -125,6 +125,9 @@ export async function prepareStartWorkspace(dirArg: string): Promise<PreparedWor
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
+  // mise's data directory, where the tools the agent adds to its environment here are installed: on the storage, so a
+  // new container still has them. The image's own tools are in mise's system directory, which mise reads as well.
+  process.env.MISE_DATA_DIR ||= join(process.env.FASTAGENT_STATE_DIR, "mise");
   // The release's own declarations, projected into the environment it was resolved FOR. This must stay BEFORE
   // `enterAgentEnv` reads the agent's `.env`, which is what makes either source outrank a value edited on the
   // box (applyReleaseEnv's own tests pin the precedence).

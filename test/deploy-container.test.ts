@@ -62,14 +62,17 @@ describe("deploy/container: shared Docker context", () => {
       // Cached while the definition changes: the layers sit between the install and `COPY . .`.
       expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY mise.toml mise.lock ./"));
       expect(text.indexOf("COPY mise.toml mise.lock ./")).toBeLessThan(text.indexOf("COPY . ."));
-      expect(text).toContain("ENV MISE_DATA_DIR=/opt/mise");
+      // The declared tools in mise's system directory; its data directory is the storage's at run time.
+      expect(text).not.toContain("ENV MISE_DATA_DIR");
+      expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
+      expect(text).toMatch(/&& rm -rf \/tmp\/mise\n/);
       // The same isolation every run here has, for the directory the image holds the agent in.
       expect(text).toContain(
         "MISE_TRUSTED_CONFIG_PATHS=/app/definition/mise.toml MISE_CEILING_PATHS=/app MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
       );
       // System packages first, without apt's recommends (mise does not pass --no-install-recommends), then the lock.
       expect(text).toMatch(
-        /APT::Install-Recommends "false";[\s\S]*"\$MISE" bootstrap packages apply --yes[\s\S]*"\$MISE" --locked install/,
+        /APT::Install-Recommends "false";[\s\S]*"\$MISE" bootstrap packages apply --yes[\s\S]*"\$MISE" --locked install --system/,
       );
       expect(text).toContain(
         'MISE="node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
@@ -81,7 +84,7 @@ describe("deploy/container: shared Docker context", () => {
     expect(packagesOnly).toContain("bootstrap packages apply");
     expect(packagesOnly).not.toMatch(/mise\.lock|--locked install/);
     const toolsOnly = dockerfile({ ...input, environment: { tools: ["jq"], packages: [] } });
-    expect(toolsOnly).toContain('"$MISE" --locked install');
+    expect(toolsOnly).toContain('"$MISE" --locked install --system');
     expect(toolsOnly).not.toMatch(/bootstrap|APT::/);
     expect(dockerfile({ ...input, environment: { tools: [], packages: [] } })).not.toMatch(/mise/);
   });

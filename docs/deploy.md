@@ -349,7 +349,7 @@ excludes. Each start publishes it onto persistent storage:
 ```text
 <persistent-root>/
 ├── definition/           # the deployed definition: the agent's working directory on the host
-├── .state/               # sessions, channels, scheduled work
+├── .state/               # sessions, channels, scheduled work, the tools the agent adds to its environment (mise/)
 ├── .secrets/             # credentials, including refreshed auth.json
 ├── content/              # the agent's content: clones of its github entries; each release links its own here
 └── .deployment/          # release and recovery metadata
@@ -370,9 +370,10 @@ excludes. Each start publishes it onto persistent storage:
 **The environment**: with a [`mise.toml`](configuration.md#environment-misetoml), `deploy` first writes `mise.lock`
 from the versions this machine runs, for linux-x64 and linux-arm64; commit it beside `mise.toml`. The image installs
 the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
-the environment or the dependencies change. `--run` stops when `package.json` does not list mise, or when mise is not
-installed here to write the lock (run `fastagent env install`); without `--run`, both are warnings. Chromium with CJK
-fonts adds about 1 GB to the image.
+the environment or the dependencies change. The tools go to mise's system directory (`/usr/local/share/mise`); a tool
+the agent adds on the host goes to `.state/mise/` on the storage, so a restart does not download it again. `--run`
+stops when `package.json` does not list mise, or when mise is not installed here to write the lock (run
+`fastagent env install`); without `--run`, both are warnings. Chromium with CJK fonts adds about 1 GB to the image.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

@@ -243,14 +243,17 @@ uv = "latest"
 - **The agent changes its environment as the author does**, with `fastagent env` from its own `node_modules`: a
   change FastAgent refuses is undone before the command exits, so it cannot stop the next start, and
   `fastagent env exec -- <command>` runs a tool it added before the restart that puts it on the `PATH`. Like any
-  change to its definition (agent model §6), it lasts on a host until the next release. A tool the agent installs
-  with the machine's own means (`apt-get`, `npm install -g`) is the machine's and lasts as long as the container.
+  change to its definition (agent model §6), the declaration lasts on a host until the next release; the tool is
+  installed on the storage (mise's data directory, `.state/mise/`), so a new container does not download it again.
+  A tool the agent installs with the machine's own means (`apt-get`, `npm install -g`) is the machine's and lasts as
+  long as the container.
 - **`deploy` writes `mise.lock`** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine runs,
   with each tool's download URL and checksum, when the agent's mise is installed here (otherwise `--run` stops); a
   tool not installed here is locked at the newest version its declaration allows. The image installs the system
-  packages, then the lock (`mise --locked install`), in a layer before the definition is copied in, so the layer stays
-  cached while the definition changes. AgentCore builds `linux/arm64`. Locally the lock is not enforced:
-  `mise install` keeps what is installed.
+  packages, then the lock (`mise --locked install --system`), in a layer before the definition is copied in, so the
+  layer stays cached while the definition changes. The tools go to mise's system directory, which every mise reads
+  beside its own data directory: the layout mise documents for an image with a base set of tools that users add to.
+  AgentCore builds `linux/arm64`. Locally the lock is not enforced: `mise install` keeps what is installed.
 - An agent's environment is its own `mise.toml` and those of the contexts it uses, together (§3.6).
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
   runs with `uv run`, so a skill carries its own dependencies wherever its context goes.

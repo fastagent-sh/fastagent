@@ -121,13 +121,15 @@ function aptLayer(packages?: string[]): string {
     : "";
 }
 
-/** Where the image keeps the tools mise installs: off the storage, built once per image. */
-const IMAGE_MISE_DATA_DIR = "/opt/mise";
+/** mise's own directories for the build, thrown away with the layer: nothing of them is read at run time. */
+const BUILD_MISE_DIR = "/tmp/mise";
 
 /**
  * The layers that install the agent's environment, after its dependencies (the agent's own mise among them) and before
  * the definition, so they stay cached while the definition changes. System packages first: a tool may link against
- * one. mise runs `apt-get install` without `--no-install-recommends`, so apt is told to skip them instead.
+ * one. mise runs `apt-get install` without `--no-install-recommends`, so apt is told to skip them instead. The tools go
+ * to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside its own data
+ * directory: a deployed start points that one at the storage, where the tools the agent adds outlive the container.
  */
 function environmentLayers(dir: string, environment: Pick<DeclaredEnvironment, "tools" | "packages">): string {
   const packages = environment.packages.length > 0;
@@ -145,13 +147,12 @@ function environmentLayers(dir: string, environment: Pick<DeclaredEnvironment, "
           `printf 'APT::Install-Recommends "false";\\nAPT::Install-Suggests "false";\\n' > /etc/apt/apt.conf.d/99-fastagent-environment`,
         ]
       : []),
-    `export ${isolation} MISE_CACHE_DIR=/tmp/mise-cache MISE="${mise}"`,
+    `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
     ...(packages ? [`"$MISE" bootstrap packages apply --yes`, "rm -rf /var/lib/apt/lists/*"] : []),
-    ...(tools ? [`"$MISE" --locked install`] : []),
-    "rm -rf /tmp/mise-cache",
+    ...(tools ? [`"$MISE" --locked install --system`] : []),
+    `rm -rf ${BUILD_MISE_DIR}`,
   ];
-  return `ENV MISE_DATA_DIR=${IMAGE_MISE_DATA_DIR}
-COPY ${MISE_FILE}${tools ? ` ${MISE_LOCK_FILE}` : ""} ./
+  return `COPY ${MISE_FILE}${tools ? ` ${MISE_LOCK_FILE}` : ""} ./
 RUN ${steps.join(" \\\n && ")}
 `;
 }

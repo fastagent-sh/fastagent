@@ -782,7 +782,9 @@ reads (the agent directory) or work on it from a host (a repository). Git histor
 packer permits it, and the image installs Git when the agent directory contains `.git` or a content entry is `github`.
 With a `mise.toml`, `deploy` first writes `mise.lock` for linux-x64 and linux-arm64, and the generated Dockerfile
 installs the declared system packages and then the lock with the agent's own mise, between the dependency install and
-`COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. Preflight writes the lock
+`COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. The tools go to mise's
+system directory (`--system`); a deployed start points `MISE_DATA_DIR` at `.state/mise/` on the storage
+(`prepareStartWorkspace`), where a tool the agent adds outlives the container. Preflight writes the lock
 when tools are declared (`deploy/preflight.ts` `checkEnvironment`), and gates `--run` when `package.json` does not
 list the linux mise packages or the agent's mise is not installed here to lock with; it warns a kept hand-written
 Dockerfile that it installs the environment only if it says so.
