@@ -373,8 +373,10 @@ both beside `mise.toml`, and the image copies them. The image installs
 the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
 the environment or the dependencies change. The tools go to mise's system directory (`/usr/local/share/mise`); a tool
 the agent adds on the host goes to `.state/mise/` on the storage, so a restart does not download it again. `--run`
-stops when `package.json` does not list mise, or when mise is not installed here to write the lock (run
-`fastagent env install`); without `--run`, both are warnings. Chromium with CJK fonts adds about 1 GB to the image.
+stops when `package.json` does not list mise, when mise is not installed here to write the lock (run
+`fastagent env install`), or when a tool's toolchain is not declared (`pypi:` needs `python` and `uv`; see
+[environment](configuration.md#environment-misetoml)); without `--run`, these are warnings. Chromium with CJK fonts
+adds about 1 GB to the image.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

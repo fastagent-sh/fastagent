@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readEnvironment } from "../src/environment/declare.ts";
+import { missingToolchains, readEnvironment, toolchainAdvice } from "../src/environment/declare.ts";
 import {
   enterMiseEnvironment,
   ensureMise,
@@ -105,6 +105,36 @@ describe("environment: what mise.toml may declare", () => {
   ])("refuses %s, naming the file", async (_what, toml, message) => {
     const dir = await agentDir(toml);
     expect(() => readEnvironment(dir)).toThrow(message);
+  });
+});
+
+describe("environment: the toolchains a backend installs with", () => {
+  it("names the tools whose toolchain mise.toml leaves to the machine, grouped by what is missing", () => {
+    const tools = [
+      "pypi:markitdown",
+      "pypi:black",
+      "cargo:ripgrep",
+      "go:github.com/x/y",
+      "gem:rake",
+      "npm:cowsay",
+      "jq",
+    ];
+    expect(missingToolchains({ tools })).toEqual([
+      { tools: ["pypi:markitdown", "pypi:black"], missing: ["python", "uv"] },
+      { tools: ["cargo:ripgrep"], missing: ["rust"] },
+      { tools: ["go:github.com/x/y"], missing: ["go"] },
+      { tools: ["gem:rake"], missing: ["ruby"] },
+    ]);
+    // Declared under any backend or owner: `aqua:astral-sh/uv` is uv.
+    const declared = ["python", "aqua:astral-sh/uv", "core:rust", "go", "ruby"];
+    expect(missingToolchains({ tools: [...tools, ...declared] })).toEqual([]);
+    expect(missingToolchains({ tools: ["python", "pypi:markitdown"] })).toEqual([
+      { tools: ["pypi:markitdown"], missing: ["uv"] },
+    ]);
+    expect(toolchainAdvice({ tools: ["pypi:markitdown"], missing: ["python", "uv"] })).toBe(
+      "pypi:markitdown installs with python and uv, which mise.toml does not declare: mise then uses the machine's, " +
+        "and the image has none — run `fastagent env use python uv`",
+    );
   });
 });
 
@@ -238,6 +268,14 @@ describe("environment: `fastagent env`", () => {
     expect(ls.code, ls.stderr).toBe(0);
     expect((await calls()).at(-1)).toMatch(/^--locked ls --json\|/);
     expect((await cli(["env", "fail"], dir)).code).toBe(3);
+  });
+
+  it("says, when it exits, which tools need a toolchain mise.toml does not declare", async () => {
+    const dir = await agentDir(`[tools]\n"cargo:ripgrep" = "14"\n`);
+    await fakeMise(dir);
+    const ls = await cli(["env", "ls"], dir);
+    expect(ls.code, ls.stderr).toBe(0);
+    expect(ls.stderr).toContain("cargo:ripgrep installs with rust, which mise.toml does not declare");
   });
 
   it("undoes what mise wrote that FastAgent refuses, so the next start is not the one to find it", async () => {

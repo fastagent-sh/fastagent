@@ -82,3 +82,65 @@ function table(value: unknown, what: string, path: string): Record<string, unkno
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path}: ${what} must be a table`);
   return value as Record<string, unknown>;
 }
+
+/**
+ * What each backend installs with. mise takes these from the machine when `mise.toml` does not declare them, and does
+ * not add them itself, so such a tool installs on an author's machine that has them and fails in the image. uv is
+ * also what locks a Python tool's dependencies, and a locked Python install needs an installed interpreter.
+ */
+const TOOLCHAINS: Readonly<Record<string, readonly string[]>> = {
+  pypi: ["python", "uv"],
+  pipx: ["python", "uv"],
+  cargo: ["rust"],
+  go: ["go"],
+  gem: ["ruby"],
+};
+
+/** Declared tools that need toolchains `mise.toml` does not declare, grouped by what is missing. */
+export interface MissingToolchain {
+  /** The tools, as declared. */
+  tools: string[];
+  /** The toolchains to declare. */
+  missing: string[];
+}
+
+/**
+ * The declared tools whose backend needs a toolchain `mise.toml` does not declare. Read from how a tool is written
+ * (`pypi:markitdown`): a registry name mise resolves to one of these backends is not seen here, and fails the image
+ * build instead.
+ */
+export function missingToolchains(environment: Pick<DeclaredEnvironment, "tools">): MissingToolchain[] {
+  const groups = new Map<string, MissingToolchain>();
+  for (const tool of environment.tools) {
+    const backend = tool.includes(":") ? tool.slice(0, tool.indexOf(":")) : "";
+    const missing = (TOOLCHAINS[backend] ?? []).filter((name) => !declaresTool(environment, name));
+    if (missing.length === 0) continue;
+    const group = groups.get(missing.join(" ")) ?? { tools: [], missing };
+    group.tools.push(tool);
+    groups.set(missing.join(" "), group);
+  }
+  return [...groups.values()];
+}
+
+/** What to tell whoever declared them, with the command that declares the rest. */
+export function toolchainAdvice({ tools, missing }: MissingToolchain): string {
+  const one = tools.length === 1;
+  return (
+    `${tools.join(", ")} ${one ? "installs" : "install"} with ${missing.join(" and ")}, which ${MISE_FILE} does not ` +
+    `declare: mise then uses the machine's, and the image has none — run \`fastagent env use ${missing.join(" ")}\``
+  );
+}
+
+/** Whether `mise.toml` declares `name` under any backend or owner: `aqua:astral-sh/uv` is `uv`. */
+export function declaresTool(environment: Pick<DeclaredEnvironment, "tools">, name: string): boolean {
+  return environment.tools.some((key) => toolName(key) === name);
+}
+
+function toolName(key: string): string {
+  return (
+    key
+      .slice(key.indexOf(":") + 1)
+      .split("/")
+      .at(-1) ?? key
+  );
+}

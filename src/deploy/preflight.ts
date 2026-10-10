@@ -45,7 +45,10 @@ import {
   MISE_FILE,
   MISE_LOCK_FILE,
   MISE_LOCK_SIDECARS,
+  declaresTool,
+  missingToolchains,
   readEnvironment,
+  toolchainAdvice,
 } from "../environment/declare.ts";
 import { lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
 
@@ -148,6 +151,8 @@ async function checkEnvironment(
   pkg: { optionalDependencies?: Record<string, unknown> },
   report: DeployReport,
 ): Promise<void> {
+  const toolchains = missingToolchains(environment);
+  for (const group of toolchains) report.issue(toolchainAdvice(group));
   const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
   const missing = linux.filter((name) => !(name in (pkg.optionalDependencies ?? {})));
   if (!hasPackageJson || missing.length > 0) {
@@ -157,8 +162,9 @@ async function checkEnvironment(
     );
     return;
   }
-  // mise writes no lock for a file that declares no tools, and the image then has none to install.
-  if (environment.tools.length === 0) return;
+  // mise writes no lock for a file that declares no tools, and the image then has none to install. A missing toolchain
+  // is already an issue, and a lock without it fails (uv locks a Python tool) or locks what the image cannot install.
+  if (environment.tools.length === 0 || toolchains.length > 0) return;
   const bin = miseBinary(agentDir);
   if (!bin) {
     report.issue(
@@ -447,9 +453,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const lockSidecars = environment !== undefined && (await exists(join(agentDir, MISE_LOCK_SIDECARS)));
 
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
-  // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates.
+  // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates; rustup, which
+  // mise installs rust with, downloads with curl.
   const needsGit = shipsGit || content.some((entry) => entry.kind === "github");
-  const apt = [...(needsGit ? ["git"] : []), ...(environment ? ["ca-certificates"] : [])];
+  const apt = [
+    ...(needsGit ? ["git"] : []),
+    ...(environment ? ["ca-certificates"] : []),
+    ...(environment && declaresTool(environment, "rust") ? ["curl"] : []),
+  ];
   const container: ContainerInput = {
     releaseId: randomUUID(),
     agent: basename(agentDir),

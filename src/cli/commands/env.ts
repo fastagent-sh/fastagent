@@ -3,7 +3,16 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { MISE_FILE, MISE_LOCK_FILE, MISE_LOCK_SIDECARS, readEnvironment } from "../../environment/declare.ts";
+import {
+  type DeclaredEnvironment,
+  MISE_FILE,
+  MISE_LOCK_FILE,
+  MISE_LOCK_SIDECARS,
+  missingToolchains,
+  readEnvironment,
+  toolchainAdvice,
+} from "../../environment/declare.ts";
+import { log } from "../../log.ts";
 import { ensureMise, execMise } from "../../environment/mise.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 
@@ -20,13 +29,17 @@ export async function runEnv(args: string[]): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
   const bin = await ensureMise(agentDir).catch(failStartup);
   const before = takeSnapshot(agentDir);
-  const { code, refusal } = await execMise(agentDir, bin, args)
-    .then((code) => ({ code, refusal: undoIfRefused(agentDir, before) }))
+  const { code, environment, refusal } = await execMise(agentDir, bin, args)
+    .then((code) => ({ code, ...undoIfRefused(agentDir, before) }))
     .finally(() => {
       if (before.sidecars) rmSync(before.sidecars, { recursive: true, force: true });
     })
     .catch(failStartup);
   if (refusal) failStartup(refusal);
+  // Said by the command that declared them, before an image build is the first to fail on it.
+  for (const group of environment ? missingToolchains(environment) : []) {
+    log.warn(`[fastagent] ${toolchainAdvice(group)}`);
+  }
   if (code !== 0) process.exit(code);
 }
 
@@ -35,15 +48,15 @@ export async function runEnv(args: string[]): Promise<void> {
  * refused file left in place stops the next start, which on a host only a new release repairs. The agent runs this
  * command on itself. A file refused before the command is reported as it is.
  */
-function undoIfRefused(agentDir: string, before: Snapshot): Error | undefined {
+function undoIfRefused(agentDir: string, before: Snapshot): { environment?: DeclaredEnvironment; refusal?: Error } {
   try {
-    readEnvironment(agentDir);
-    return undefined;
+    return { environment: readEnvironment(agentDir) };
   } catch (error) {
     const changed = WRITTEN.filter((name, i) => readIfPresent(join(agentDir, name)) !== before.files[i]);
-    if (changed.length === 0) return error as Error;
+    if (changed.length === 0) return { refusal: error as Error };
     restoreSnapshot(agentDir, before);
-    return new Error(`${(error as Error).message} — this command's change to ${changed.join(" and ")} is undone`);
+    const message = `${(error as Error).message} — this command's change to ${changed.join(" and ")} is undone`;
+    return { refusal: new Error(message) };
   }
 }
 

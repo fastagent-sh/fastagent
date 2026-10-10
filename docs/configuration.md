@@ -368,6 +368,23 @@ jq = "1.8"
   `fastagent env bootstrap packages apply` installs them there. On macOS, `{ os = "linux" }` keeps an `apt:` package
   out of the status.
 
+Some backends install with a toolchain. mise uses the one `mise.toml` declares, otherwise the machine's, and does not
+add it: such a tool installs on your machine and fails in the image, which has none. Declare them together, as mise's
+own documentation does: `fastagent env use python uv pypi:markitdown`. `fastagent env` names what is missing when it
+exits, and `deploy --run` stops on it.
+
+| Backend | Declare with it | Notes |
+|---|---|---|
+| `pypi:` | `python` and `uv` | uv also locks the tool's dependencies, so `deploy` needs it installed here |
+| `cargo:` | `rust` | Building a crate needs a C linker: `apt:build-essential` in `[bootstrap.packages]`. With `cargo-binstall` declared, a crate that publishes a prebuilt binary is downloaded instead. The image gets curl for rustup. With a Rust toolchain the image is about 3 GB |
+| `go:` | `go` | A package that uses cgo needs `apt:build-essential` |
+| `gem:` | `ruby` | A gem with native extensions needs a compiler; not tried in an image |
+| `npm:` | nothing | The image has Node; Bun's image runs npm tools through its own `node` |
+
+The check reads how a tool is written, so a registry name that mise resolves to one of these backends is not seen; the
+image build fails on it instead. A tool's own prebuilt release needs no toolchain and keeps the image small: `ripgrep`
+from mise's registry downloads ripgrep's GitHub release, where `cargo:ripgrep` compiles it.
+
 Change the file with `fastagent env`, which runs the agent's own mise in its directory
 ([CLI](cli.md#fastagent-env)): `fastagent env use gh@2`. The first `fastagent env` adds mise to the agent's
 `package.json`, as one optional dependency per platform at the newest version; the package manager installs only

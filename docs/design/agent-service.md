@@ -228,6 +228,12 @@ uv = "latest"
   that lacks one says which. Everything else mise reads in that file (`[env]`, `[tasks]`, `[hooks]`, `[settings]`,
   `[plugins]`, the other `[bootstrap]` parts) and a tool's `postinstall` are refused at startup, by name: each would
   run differently, or not at all, where the agent is deployed. `[env]` waits for §6.2.
+- **A backend's toolchain is declared with it.** mise installs `pypi:`, `cargo:`, `go:` and `gem:` tools with
+  `python` and `uv`, `rust`, `go` and `ruby`, takes them from the machine when `mise.toml` leaves them out, and never
+  adds them, so such a tool installs on the author's machine and fails in the image. `fastagent env` names the missing
+  ones when it exits and `deploy --run` stops on them, both read from how a tool is written; a registry name that
+  resolves to one of these backends fails the image build instead. The image adds curl for rust (rustup downloads
+  with it); a C toolchain for a crate or a cgo package is the author's to declare (`apt:build-essential`).
 - **The agent carries its own mise.** Its `package.json` lists mise's npm packages as optional dependencies, one per
   platform, of which npm and bun install only the machine's. The lockfile pins the version, and the author may pin it
   in `package.json`. A machine needs nothing installed first, the image's `npm ci` installs the same mise, and a mise

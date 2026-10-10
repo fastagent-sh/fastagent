@@ -787,7 +787,8 @@ installs the declared system packages and then the lock with the agent's own mis
 system directory (`--system`); a deployed start points `MISE_DATA_DIR` at `.state/mise/` on the storage
 (`prepareStartWorkspace`), where a tool the agent adds outlives the container. Preflight writes the lock
 when tools are declared (`deploy/preflight.ts` `checkEnvironment`), and gates `--run` when `package.json` does not
-list the linux mise packages or the agent's mise is not installed here to lock with; it warns a kept hand-written
+list the linux mise packages, the agent's mise is not installed here to lock with, or a backend's toolchain is not
+declared (`missingToolchains`, which `fastagent env` reports too); it warns a kept hand-written
 Dockerfile that it installs the environment only if it says so.
 
 `deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,

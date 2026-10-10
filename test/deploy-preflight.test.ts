@@ -636,6 +636,41 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(packagesOnly.ok && packagesOnly.container.environment).toMatchObject({ lockSidecars: false });
   });
 
+  it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {
+    const dir = await agent({ "mise.toml": `[tools]\n"core:rust" = "1"\n` });
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok && pre.container.apt).toEqual(["ca-certificates", "curl"]);
+  });
+
+  it("a tool whose toolchain mise.toml leaves to the machine stops --run, before the lock it would fail", async () => {
+    const optional = Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"]));
+    const dir = await agent({
+      "package.json": JSON.stringify({
+        dependencies: { "@fastagent-sh/fastagent": "^1" },
+        optionalDependencies: optional,
+      }),
+      "mise.toml": `[tools]\n"pypi:markitdown" = "0.1"\n`,
+    });
+    const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
+    await mkdir(join(pkg, "bin"), { recursive: true });
+    await writeFile(join(pkg, "package.json"), "{}\n");
+    await writeFile(join(pkg, "bin", "mise"), `#!/bin/sh\necho "$*" > mise.lock\n`);
+    await chmod(join(pkg, "bin", "mise"), 0o755);
+    const advice = /^pypi:markitdown installs with python and uv, .* `fastagent env use python uv`$/;
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(advice),
+    });
+    // Writing only the artifacts, it warns, and does not lock: without uv, mise's own lock failure would stop the
+    // deploy and say less.
+    const artifactsOnly = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(artifactsOnly.ok && artifactsOnly.messages).toContainEqual({
+      level: "warn",
+      text: expect.stringMatching(advice),
+    });
+    await expect(readFile(join(dir, "mise.lock"), "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
   it("a declared schedule keeps a machine up; the agent's own wake-ups do not", async () => {
     // Nothing → false, no note. Every serve mounts `wake`, so a wake-up is NOT a reason to stay up: a box that slept
     // fires what is due when a request next wakes it.
