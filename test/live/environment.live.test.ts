@@ -37,28 +37,20 @@ const fastagent = (args: string[]): Promise<{ code: number | null; stdout: strin
 const lock = () => readFile(join(agentDir, "environment", "mise.lock"), "utf8");
 
 /**
- * Leave `environment/` as an add made when `version` was the newest `jq` its declaration allowed: the agent's own mise
- * locks that version, and the request it records is put back to the declared one, as that add would have recorded it.
+ * Leave `environment/` as an add made before `date` would have: the agent's own mise locks `jq` again, to the newest
+ * version its declaration allows among those released before then, recording the same request.
  */
-async function lockJqAsOf(version: string, declared: string): Promise<void> {
+async function lockJqAsOf(date: string): Promise<void> {
   const environment = await realpath(join(agentDir, "environment"));
   await promisify(execFile)(
     miseBinary(agentDir) as string,
-    ["lock", `jq@${version}`, "--platform", "linux-x64,linux-arm64"],
-    {
-      cwd: environment,
-      env: { ...process.env, ...isolationAt(environment) },
-    },
+    ["lock", "--bump", "jq", "--minimum-release-age", date, "--platform", "linux-x64,linux-arm64"],
+    { cwd: environment, env: { ...process.env, ...isolationAt(environment) } },
   );
-  const locked = await lock();
-  const v = version.replaceAll(".", "\\.");
-  const pinned = locked.replace(
-    new RegExp(`(\\[\\[tools\\.jq\\]\\]\\nversion = "${v}"\\n(?:[^\\n]+\\n)*?specifiers = )\\["${v}"\\]`),
-    `$1["${declared}"]`,
-  );
-  expect(pinned, "jq's lock records the request it answered").not.toBe(locked);
-  await writeFile(join(environment, "mise.lock"), pinned);
 }
+
+/** The version `environment/mise.lock` records for `jq`. */
+const lockedJq = async () => (await lock()).match(/\[\[tools\.jq\]\]\nversion = "([^"]+)"/)?.[1];
 
 beforeAll(async () => {
   agentDir = await mkdtemp(join(tmpdir(), "fa-live-env-"));
@@ -104,15 +96,17 @@ describe("fastagent env on the real mise", () => {
     // Declared "1": a lock made today records the newest 1.x, which is what a run would get without the lock.
     const add = await fastagent(["env", "add", "jq@1"]);
     expect(add.code, add.stderr).toBe(0);
-    expect((await lock()).match(/\[\[tools\.jq\]\]\nversion = "([^"]+)"/)?.[1]).not.toBe("1.7");
-    await lockJqAsOf("1.7", "1");
+    expect(await lockedJq()).not.toBe("1.7.1");
+    // jq 1.7.1 was the newest 1.x at the start of 2024.
+    await lockJqAsOf("2024-01-01");
+    expect(await lockedJq()).toBe("1.7.1");
     const before = await lock();
     const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
     context.environment.packages.yq = "4";
     await writeFile(join(agentDir, "context.json"), JSON.stringify(context));
     const exec = await fastagent(["env", "exec", "--", "sh", "-c", "jq --version && yq --version"]);
     expect(exec.code, exec.stderr).toBe(0);
-    expect(exec.stdout).toMatch(/^jq-1\.7\n.*yq.* version v4\./s);
+    expect(exec.stdout).toMatch(/^jq-1\.7\.1\n.*yq.* version v4\./s);
     expect(await lock()).toBe(before);
   });
 
