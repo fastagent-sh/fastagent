@@ -61,7 +61,7 @@ init → dev (locally, on the team's channels) → deploy → the team uses it
 ```
 
 - Git holds every change to the definition. That is what makes a change reviewable and revertible, and what a deploy
-  builds from. A rollback deploys an earlier commit.
+  builds from. A rollback deploys an earlier commit, its environment's locked versions included (§4).
 - The deployed definition stays writable, and what the agent writes to its live inputs takes effect where it runs.
   How such a change returns to git and comes into service is designed later, in
   [#605](https://github.com/fastagent-sh/fastagent/issues/605); until then a deploy replaces it.
@@ -227,42 +227,57 @@ platform. The author never writes mise's files.
   name follows Railpack's `packages`; `tools` would collide with the agent's code tools.
 - **A package is what its publisher released, installed as is.** It is a name from mise's registry (`gh`, `ripgrep`,
   `python`), or one written with `aqua:`, `github:`, `gitlab:`, `http:`, `conda:` or `vfox:` for a release, `npm:` for
-  an npm package, or `pypi:` for a Python one. Of the registry's 1,084 names, all but 9 install that way: 919 download
-  a release binary, 19 a conda-forge build, 14 are runtimes, 42 come from a vfox plugin, and 61 are npm or PyPI
-  packages. Backends that build from source (`go:`, `cargo:`, `gem:`, `spm:`, `dotnet:`, `asdf:`) are not part of
-  the format, and `fastagent env add` and `deploy` ask mise which backend a registry name resolves to and refuse the
-  9 that build, naming the alternative: a `github:` release, or the author's own `Dockerfile`.
+  an npm package, or `pypi:` for a Python one. Of the registry's 1,064 names, 1,055 install one of these ways: 919
+  download a release binary, 19 a conda-forge build, 14 are runtimes, 42 come from a vfox plugin, and 61 are npm or
+  PyPI packages. The other backends are left out, each for its own reason, which the refusal gives with the
+  alternative (the project's release with `github:`, the tool's registry name, or the author's own `Dockerfile`):
+  `go:`, `cargo:` and `spm:` build from source, which puts a whole toolchain in the image for one binary; `gem:`
+  needs Ruby in the image and compiles native extensions; `dotnet:` installs a NuGet tool with the .NET SDK, which the
+  image does not carry; `asdf:` runs its plugin's shell scripts at install and does not run on Windows. The 9
+  registry names whose default backend is one of these (4 `go`, 3 `gem`, 1 `spm`, 1 `cargo`) are refused the same way.
 - **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build: a browser, fonts.
   A machine that runs the agent locally supplies its own: a start on Debian or Ubuntu names the missing ones with the
-  `apt-get` command that installs them.
-- **Every value the format can hold works.** The declaration is checked for its shape: a package in the vocabulary
-  above, a non-empty version, a Debian package name, no unknown key. What mise then cannot install fails
-  `fastagent env add`, which installs before it writes, or `deploy`'s lock and the image build, with mise's own error.
-  Nothing of mise is listed as unsupported: the format names what it takes, and has no place for the rest.
-- **A Python package declares its runtime with it.** A `pypi:` package runs on `python` and installs and locks with
-  `uv`; mise takes both from the machine when they are not declared, and never adds them, so it would install on the
-  author's machine and fail in the image. `fastagent env add` and `fastagent env list` name what is missing with the
-  command that adds it (`fastagent env add python uv`), and `deploy --run` stops on it. An `npm:` package runs on the
+  `apt-get` command that installs them. `fastagent env add apt:chromium` writes the package without installing
+  anything, since the image installs it; on Debian or Ubuntu it then says whether this machine has it, with that
+  command, and never runs apt itself. A name apt does not know fails the image build.
+- **The declaration is checked twice.** First its shape: a package in the vocabulary above, a non-empty version, a
+  Debian package name, no unknown key. Then, wherever mise runs (`fastagent env add`, `fastagent env list`,
+  `deploy`), the backend each registry name resolves to: a left-out backend is refused, and a PyPI package is checked
+  for its runtime, below. What mise then cannot install fails `fastagent env add`, which installs a package before it
+  writes it, or the image build, with mise's own error. What the format leaves out is the one list above, with its
+  reasons, rather than the features of a familiar file that happen not to work.
+- **A Python package declares its runtime with it.** A PyPI package, written `pypi:` or a registry name that resolves
+  to one (`ansible`), runs on `python` and installs and locks with `uv`; mise takes both from the machine when they
+  are not declared, and never adds them, so it would install on the author's machine and fail in the image. The same
+  resolution decides it: `fastagent env add` and `fastagent env list` name what is missing with the command that adds
+  it (`fastagent env add python uv`), and `deploy --run` stops on it. An `npm:` package runs on the
   image's Node. A runtime the agent works with itself (`go` or `rust` for a repository it builds) is a package like
   any other; for `rust`, the image adds curl, which rustup downloads with.
 - **mise is the engine, not the interface.** The agent carries its own mise: its `package.json` lists mise's npm
   packages as optional dependencies, one per platform, of which npm and bun install only the machine's, so a machine
   needs nothing installed first and the image's `npm ci` installs the same mise. FastAgent writes mise's
-  configuration from the declaration into `environment/`, a directory beside `content/` with its own `.gitignore`,
-  and runs mise on that file alone: never the machine's mise configuration, a `mise.toml` the author keeps for their
-  own work, or a cloned content repository's.
-- **The commands.** `fastagent env add gh@2 npm:prettier@3 apt:chromium` installs, then writes the declaration under
-  the lock content edits take; `remove`, `list`, `install` (for a fresh clone, adding mise to `package.json` when it
-  is missing) and `exec -- <command>` complete it. Every process that opens the agent (`dev`, `start`, `chat`,
-  `invoke`, an embedder's `createAgentService`) and `tool` install what is declared and put it first on the `PATH`
-  their commands inherit; an edit to `context.json` restarts `dev`. Locally the lock is not enforced.
-- **`deploy` locks the environment** (`mise lock --platform linux-x64,linux-arm64`) from the versions this machine
-  runs, into `environment/`, with the dependency lock an npm or PyPI package keeps beside it. The lock is a deploy
-  artifact, rewritten by every deploy like `fastagent.release.json`, and is not committed. The image installs
-  `aptPackages` in its apt layer, with what FastAgent needs there (git, CA certificates, curl for rust), then copies
-  `environment/` and runs `mise --locked install --system` in a layer that changes only with the environment: the
-  tools go to mise's system directory, which every mise reads beside its own data directory. On a host, mise's data
-  directory is on the storage (`.state/mise/`). AgentCore builds `linux/arm64`.
+  configuration from the declaration into `environment/`, with its lock, and runs mise on that file alone: never the
+  machine's mise configuration, a `mise.toml` the author keeps for their own work, or a cloned content repository's.
+- **`environment/` is committed**, as `package-lock.json` is. Its lock (`mise lock --platform linux-x64,linux-arm64`)
+  records every package's version, with the download and checksum for each image platform and the dependency lock an
+  npm or PyPI package keeps beside it. Every machine installs those versions, every image built from the commit
+  installs them, two people deploying one commit get the same tools, and a rollback restores the environment with the
+  rest of the definition (§2). Railway uploads what git does not ignore, so the image's build context has it there
+  too.
+- **The commands.** `fastagent env add gh@2 npm:prettier@3` installs the packages, then writes the declaration and
+  `environment/`, under the lock content edits take; `remove` and `list` complete it, `install` brings this machine
+  to the lock (for a fresh clone, adding mise to `package.json` when it is missing), and `exec -- <command>` runs a
+  command in the environment. These and `deploy` are the only writers of `environment/`. Every process that opens the
+  agent (`dev`, `start`, `chat`, `invoke`, an embedder's `createAgentService`) and `tool` install the versions the lock
+  records and put them first on the `PATH` their commands inherit; an edit to `context.json` restarts `dev`. A start
+  whose `context.json` declares an environment `environment/` no longer matches (an edit by hand) is refused, naming
+  `fastagent env install`, because a runtime command never writes a committed file.
+- **`deploy` builds from the committed lock.** It rewrites `environment/` only when the declaration changed without
+  it, and says so, for the author to commit. The image installs `aptPackages` in its apt layer, with what FastAgent
+  needs there (git, CA certificates, curl for rust), then copies `environment/` and runs
+  `mise --locked install --system` in a layer that changes only with the environment: the tools go to mise's system
+  directory, which every mise reads beside its own data directory. On a host, mise's data directory is on the storage
+  (`.state/mise/`). AgentCore builds `linux/arm64`.
 - An agent's environment is its own and those of the contexts it uses, together (§3.6): the packages and the apt
   packages are joined, and one package at two versions refuses the start.
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
@@ -357,7 +372,8 @@ A credential is proof of authority over another system. Three questions decide h
 ### 6.1 Declared by what uses it
 
 A credential that code or configuration uses is declared next to it, the way `defineTool` and `defineChannel` declare
-`secrets` today. The commands the agent runs are the exception: they read the process environment.
+`secrets` today. The commands the agent runs read the process environment; what they read is declared in the agent's
+environment, with `required` (§4).
 
 | Used by | Declared as | Today |
 |---|---|---|
@@ -368,7 +384,8 @@ A credential that code or configuration uses is declared next to it, the way `de
 | An MCP server | `${VAR}` in its `env` or `headers` in `mcp.json`, or an OAuth sign-in (`mcp login`) | MCP is not served yet |
 | A command the agent runs (`gh`, `aws`) | The variables it reads, in `environment.variables` in `context.json` (§4) | Not declared: it reads the process environment, which holds every value |
 
-A declaration does what it does for tools and channels today:
+A declaration does what it does for tools and channels today (a plain value in `environment.variables` is a default
+every stage shares, not a credential, and none of this applies to it):
 
 - it makes the value required: a serving path refuses to start without it and names the file that declared it, and
   `deploy` refuses before its first side effect. Content's credential is the exception: git's own helpers come first
@@ -792,8 +809,8 @@ my-agent/
   mcp.json                                    connectors that speak MCP
   fastagent.config.ts                         what only the author sets: the model, serving, deploy
   content/<name>/                             where each content entry is: a clone, a link, a mount; never in git
-  environment/                                mise's configuration written from the declaration, and the lock
-                                              deploy writes; never in git
+  environment/                                mise's configuration written from the declaration, and its lock;
+                                              committed, like package-lock.json
   .contexts/<name>/                           the contexts it uses, fetched at their pinned versions; never in git
   .secrets/                                   values and grants, never in git
   .state/                                     the service's state, never in git; where it lives is the deployment's
@@ -827,10 +844,10 @@ code tools defined in code beside `tools/`. Code stays code (`tools/`, `channels
   which list every tool with its file.
 
 `context.json` is JSON, like `mcp.json`, `models.json` and `package.json`, with a JSON Schema for editors. It holds
-two maps by name: the contexts the agent uses, by source (§3.6), and its own content. A content entry is a few fields
-and one sentence for the agent, the size the ecosystem keeps in a manifest (`.gitmodules`, west's `west.yml`,
-`mcp.json`); and JSON reads `ref: 1.10` as the string it is, where YAML reads the number 1.1. A context's own
-`context.json` holds its content and a description.
+the contexts the agent uses, by source (§3.6), its own content, by name, and its environment (§4). A content entry is
+a few fields and one sentence for the agent, the size the ecosystem keeps in a manifest (`.gitmodules`, west's
+`west.yml`, `mcp.json`); and JSON reads `ref: 1.10` as the string it is, where YAML reads the number 1.1. A context's
+own `context.json` holds its content, its environment and a description.
 
 ```json
 {
@@ -842,6 +859,10 @@ and one sentence for the agent, the size the ecosystem keeps in a manifest (`.gi
   "content": {
     "app": { "github": "acme/app", "ref": "main", "description": "The product's repository. Open pull requests against main." },
     "handbook": { "github": "acme/handbook", "readonly": true }
+  },
+  "environment": {
+    "packages": { "gh": "2", "jq": "latest" },
+    "aptPackages": ["chromium"]
   }
 }
 ```
@@ -1202,21 +1223,22 @@ The product and the model:
   by `fastagent context update`; a name two contexts declare refuses the start; contexts do not nest (§3.6).
 - The environment is declared in FastAgent's own format, under `environment` in `context.json`: `packages` by mise's
   names and `aptPackages` for the image, then `variables`. mise, the agent's own (an optional npm dependency per
-  platform), installs it from a configuration FastAgent writes into `environment/`; the author never writes mise's
-  files, so no part of a familiar format is silently unsupported. `deploy` locks it for the image's platforms and
-  installs it there; every process that opens the agent installs it locally. A package is what its publisher released
-  (a registry name, a release, an npm or PyPI package), never built from source; a `pypi:` package's `python` and `uv`
-  are declared with it, and a missing one is named. The config has no `environment`. A system package outside the
-  distribution needs the author's own `Dockerfile`. A skill script declares its Python libraries inline (PEP 723) and
-  runs with `uv run` (§4).
+  platform), installs it from a configuration FastAgent writes into `environment/`, committed with its lock, so every
+  machine and every image built from a commit gets the same versions and a rollback restores them; the author never
+  writes mise's files, so no part of a familiar format is silently unsupported. A package is what its publisher
+  released (a registry name, a release, an npm or PyPI package), never built from source; a PyPI package's `python`
+  and `uv` are declared with it, and a missing one is named. The config has no `environment`. A system package
+  outside the distribution needs the author's own `Dockerfile`. A skill script declares its Python libraries inline
+  (PEP 723) and runs with `uv run` (§4).
 - Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The
   shell keeps inheriting the process environment; isolation waits for a sandboxed environment (§6.4).
 - A declaration that has a standard format, or that the agent or a tool writes, is a file of its own (contexts and
   content, MCP servers, the environment, schedules); the config keeps what only the author sets and nothing standard
   describes: the model, serving and deploy options, and `tools` (§8.1).
-- `context.json` (JSON, with a JSON Schema) lists the contexts an agent uses and its own content, each content entry
-  with a description for the agent; each is materialized at `content/<name>/`: a clone, a link to the author's
-  checkout, or a mount, never committed (§8.1). Content: implemented, without a published JSON Schema yet.
+- `context.json` (JSON, with a JSON Schema) lists the contexts an agent uses, its own content and its environment
+  (§4), each content entry with a description for the agent; each is materialized at `content/<name>/`: a clone, a
+  link to the author's checkout, or a mount, never committed (§8.1). Content: implemented, without a published JSON
+  Schema yet.
 - A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
   service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
   connector file type, and `fastagent info` lists every connector (§5).
