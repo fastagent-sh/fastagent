@@ -1,125 +1,190 @@
-/** `fastagent env <mise args…>`: the agent's own mise, run in the agent directory on its `mise.toml` alone. */
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { writeFileAtomic } from "../../atomic-write.ts";
+/**
+ * `fastagent env add|remove|update|list|install|exec`: the agent's environment, declared under `environment` in
+ * context.json and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
+ */
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+import { loadEnvironment, readContextFile } from "../../content/file.ts";
+import { aptAdvice, missingAptPackages } from "../../environment/apt.ts";
 import {
   type DeclaredEnvironment,
-  MISE_FILE,
-  MISE_LOCK_FILE,
-  MISE_LOCK_SIDECARS,
-  missingToolchains,
-  readEnvironment,
-  toolchainAdvice,
+  ENVIRONMENT_DIR,
+  declareEnvironment,
+  parsePackageArgument,
+  runtimeAdvice,
+  samePackages,
 } from "../../environment/declare.ts";
+import {
+  checkPackages,
+  ensureMise,
+  enterEnvironment,
+  lockEnvironment,
+  lockedVersions,
+  miseBinary,
+  withEnvironmentLock,
+} from "../../environment/mise.ts";
+import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
-import lockfile from "proper-lockfile";
-import { ensureMise, execMise } from "../../environment/mise.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 
-/** The files mise writes for the agent. */
-const WRITTEN = [MISE_FILE, MISE_LOCK_FILE] as const;
+const NONE: DeclaredEnvironment = { packages: {}, aptPackages: [] };
 
-/** What the agent's environment was before a command: the files, and a copy of the lock's sidecars, if any. */
-interface Snapshot {
-  files: (string | undefined)[];
-  sidecars?: string;
-}
-
-export async function runEnv(args: string[]): Promise<void> {
+export async function runEnvAdd(args: string[]): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
-  const { code, environment, refusal } = await oneAtATime(agentDir, async () => {
-    const bin = await ensureMise(agentDir);
-    const before = takeSnapshot(agentDir);
-    try {
-      return { code: await execMise(agentDir, bin, args), ...undoIfRefused(agentDir, before) };
-    } finally {
-      if (before.sidecars) rmSync(before.sidecars, { recursive: true, force: true });
+  const apt: string[] = [];
+  await edit(agentDir, (current) => {
+    const packages = { ...current.packages };
+    const aptPackages = [...current.aptPackages];
+    for (const arg of args) {
+      const parsed = parsePackageArgument(arg);
+      if ("apt" in parsed) {
+        apt.push(parsed.apt);
+        if (!aptPackages.includes(parsed.apt)) aptPackages.push(parsed.apt);
+      } else {
+        packages[parsed.name] = parsed.version;
+      }
     }
+    return { packages, aptPackages };
   }).catch(failStartup);
-  if (refusal) failStartup(refusal);
-  // Said by the command that declared them, before an image build is the first to fail on it.
-  for (const group of environment ? missingToolchains(environment) : []) {
-    log.warn(`[fastagent] ${toolchainAdvice(group)}`);
+  const missing = missingAptPackages(apt);
+  if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
+}
+
+export async function runEnvRemove(args: string[]): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  await edit(agentDir, (current) => {
+    const packages = { ...current.packages };
+    let aptPackages = [...current.aptPackages];
+    for (const arg of args) {
+      const apt = arg.startsWith("apt:") ? arg.slice("apt:".length) : undefined;
+      const declared = apt !== undefined ? aptPackages.includes(apt) : Object.hasOwn(packages, arg);
+      if (!declared) throw noPackage(current, arg);
+      if (apt !== undefined) aptPackages = aptPackages.filter((name) => name !== apt);
+      else delete packages[arg];
+    }
+    return { packages, aptPackages };
+  }).catch(failStartup);
+}
+
+export async function runEnvUpdate(names: string[]): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  const changes = await withEnvironmentLock(agentDir, async () => {
+    const declared = loadEnvironment(agentDir) ?? NONE;
+    for (const name of names) {
+      if (name.startsWith("apt:")) {
+        throw new Error(`${name} is not locked: the image installs the version its Debian release has`);
+      }
+      if (!Object.hasOwn(declared.packages, name)) throw noPackage(declared, name);
+    }
+    if (Object.keys(declared.packages).length === 0) throw new Error("the environment declares no packages to update");
+    const before = lockedVersions(agentDir);
+    await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages), names);
+    const after = lockedVersions(agentDir);
+    return (names.length > 0 ? names : Object.keys(declared.packages)).map(
+      (name) => [name, before.get(name), after.get(name)] as const,
+    );
+  }).catch(failStartup);
+  const width = Math.max(...changes.map(([name]) => name.length));
+  for (const [name, before, after] of changes) {
+    console.log(
+      `${name.padEnd(width)}  ${before === after ? `${after} (the newest it allows)` : `${before ?? "(not locked)"} → ${after}`}`,
+    );
   }
-  if (code !== 0) process.exit(code);
+  if (changes.some(([, before, after]) => before !== after)) {
+    log.info(`[fastagent] commit ${ENVIRONMENT_DIR}/; a running \`fastagent dev\` restarts on it`);
+  }
+}
+
+export async function runEnvList(): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  const declared = await Promise.resolve()
+    .then(() => loadEnvironment(agentDir) ?? NONE)
+    .catch(failStartup);
+  const locked = lockedVersions(agentDir);
+  const names = [...Object.keys(declared.packages), ...declared.aptPackages.map((name) => `apt:${name}`)];
+  if (names.length === 0) console.log("(none: the agent runs this machine's commands)");
+  const width = Math.max(0, ...names.map((name) => name.length));
+  for (const [name, version] of Object.entries(declared.packages)) {
+    console.log(`${name.padEnd(width)}  ${version.padEnd(8)}  ${locked.get(name) ?? "(not locked)"}`);
+  }
+  for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
+  if (Object.keys(declared.packages).length > 0) {
+    const bin = miseBinary(agentDir);
+    if (!bin) {
+      log.warn(
+        `[fastagent] the packages are not checked: the agent's mise is not installed here — run ` +
+          `\`fastagent env install\``,
+      );
+    } else {
+      const { refusals, runtime } = await checkPackages(agentDir, bin, declared.packages).catch(failStartup);
+      for (const refusal of refusals) log.warn(`[fastagent] ${refusal}`);
+      if (runtime) log.warn(`[fastagent] ${runtimeAdvice(runtime)}`);
+    }
+  }
+  const missing = missingAptPackages(declared.aptPackages);
+  if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
+}
+
+export async function runEnvInstall(): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  await withEnvironmentLock(agentDir, async () => {
+    const declared = loadEnvironment(agentDir) ?? NONE;
+    if (await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages))) {
+      log.info(
+        Object.keys(declared.packages).length > 0
+          ? `[fastagent] ${ENVIRONMENT_DIR}/ is locked again from context.json — commit it`
+          : `[fastagent] removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`,
+      );
+    }
+    await enterEnvironment(agentDir);
+  }).catch(failStartup);
+}
+
+export async function runEnvExec(command: string[]): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  await enterEnvironment(agentDir).catch(failStartup);
+  const [program, ...args] = command as [string, ...string[]];
+  const code = await new Promise<number>((done, fail) => {
+    const child = spawn(program, args, { stdio: "inherit" });
+    child.on("error", fail);
+    child.on("close", (exit, signal) => done(exit ?? (signal ? 1 : 0)));
+  }).catch((error: NodeJS.ErrnoException) =>
+    failStartup(error.code === "ENOENT" ? new Error(`${program}: command not found in the environment`) : error),
+  );
+  process.exit(code);
 }
 
 /**
- * One `fastagent env` at a time per agent, whose sessions each run their own: a refused command puts back what it
- * found, which would take another command's change made meanwhile with it. The lock is the directory proper-lockfile
- * keeps beside `mise.toml` (`mise.toml.lock`), refreshed while it is held, so a command waits out another's install.
+ * Change the declaration with `change`, checked as a whole. When its packages change, they are checked, installed here
+ * and locked into `environment/` first; the declaration is written last.
  */
-async function oneAtATime<T>(agentDir: string, run: () => Promise<T>): Promise<T> {
-  const path = join(agentDir, MISE_FILE);
-  let compromised: Error | undefined;
-  // `realpath: false`: mise.toml may not exist yet.
-  const options = { realpath: false, stale: 30_000, onCompromised: (error: Error) => (compromised = error) };
-  const release = await lockfile.lock(path, options).catch(async (error: NodeJS.ErrnoException) => {
-    if (error.code !== "ELOCKED") throw error;
-    log.info("[fastagent] waiting for another `fastagent env` on this agent to finish");
-    return lockfile.lock(path, { ...options, retries: { forever: true, minTimeout: 200, maxTimeout: 2_000 } });
+async function edit(
+  agentDir: string,
+  change: (current: DeclaredEnvironment) => DeclaredEnvironment,
+): Promise<DeclaredEnvironment> {
+  return withEnvironmentLock(agentDir, async () => {
+    // Read whole, as the write that follows is: a refused content entry stops the edit before anything is locked.
+    const current = readContextFile(agentDir).environment ?? NONE;
+    const next = declareEnvironment(change(current)) ?? NONE;
+    if (!samePackages(current.packages, next.packages)) {
+      await lockEnvironment(agentDir, next.packages, () => checkedMise(agentDir, next.packages));
+    }
+    await writeEnvironment(agentDir, next);
+    return next;
   });
-  let result: T;
-  try {
-    result = await run();
-  } catch (error) {
-    // The primary failure is the one to report; a lock that cannot be released cleanly then is secondary.
-    await release().catch(() => {});
-    throw error;
-  }
-  // A compromised lock cannot be released cleanly; that, not the release, is what to report.
-  await release().catch((error: unknown) => {
-    if (!compromised) throw error;
-  });
-  if (compromised) throw compromised;
-  return result;
 }
 
-/**
- * Checked by the command that wrote it, and undone: mise writes what FastAgent refuses too (`set` writes [env]), and a
- * refused file left in place stops the next start, which on a host only a new release repairs. The agent runs this
- * command on itself. A file refused before the command is reported as it is.
- */
-function undoIfRefused(agentDir: string, before: Snapshot): { environment?: DeclaredEnvironment; refusal?: Error } {
-  try {
-    return { environment: readEnvironment(agentDir) };
-  } catch (error) {
-    const changed = WRITTEN.filter((name, i) => readIfPresent(join(agentDir, name)) !== before.files[i]);
-    if (changed.length === 0) return { refusal: error as Error };
-    restoreSnapshot(agentDir, before);
-    const message = `${(error as Error).message} — this command's change to ${changed.join(" and ")} is undone`;
-    return { refusal: new Error(message) };
-  }
+/** The refusal for a package `environment` does not declare, with what it does. */
+function noPackage(environment: DeclaredEnvironment, name: string): Error {
+  const has = [...Object.keys(environment.packages), ...environment.aptPackages.map((apt) => `apt:${apt}`)];
+  return new Error(`the environment has no package "${name}" (it has: ${has.join(", ") || "none"})`);
 }
 
-function takeSnapshot(agentDir: string): Snapshot {
-  const files = WRITTEN.map((name) => readIfPresent(join(agentDir, name)));
-  const sidecars = join(agentDir, MISE_LOCK_SIDECARS);
-  if (!existsSync(sidecars)) return { files };
-  const copy = mkdtempSync(join(tmpdir(), "fastagent-env-"));
-  cpSync(sidecars, copy, { recursive: true });
-  return { files, sidecars: copy };
-}
-
-/** The sidecars go back with the lock: it names them by digest. */
-function restoreSnapshot(agentDir: string, before: Snapshot): void {
-  for (const [i, name] of WRITTEN.entries()) {
-    const path = join(agentDir, name);
-    const content = before.files[i];
-    if (content === undefined) rmSync(path, { force: true });
-    else writeFileAtomic(path, content);
-  }
-  const sidecars = join(agentDir, MISE_LOCK_SIDECARS);
-  rmSync(sidecars, { recursive: true, force: true });
-  if (before.sidecars) cpSync(before.sidecars, sidecars, { recursive: true });
-}
-
-function readIfPresent(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+/** The agent's mise (added when it has none), once `packages` pass: a refused one stops the command. */
+async function checkedMise(agentDir: string, packages: Record<string, string>): Promise<string> {
+  const bin = await ensureMise(agentDir);
+  const { refusals, runtime } = await checkPackages(agentDir, bin, packages);
+  if (refusals.length > 0) throw new Error(refusals.join("\n"));
+  if (runtime) log.warn(`[fastagent] ${runtimeAdvice(runtime)}`);
+  return bin;
 }

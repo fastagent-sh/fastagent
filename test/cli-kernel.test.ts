@@ -58,14 +58,8 @@ describe("cli kernel: spec conformance", () => {
       }
     };
     collect(specs, []);
-    const passThrough = new Set(
-      walk(specs)
-        .filter(({ spec }) => spec.passThrough)
-        .map(({ path }) => path),
-    );
     for (const p of paths) {
-      // A pass-through command hands `--help` on (`fastagent env --help` is mise's); its own is `fastagent help env`.
-      const r = await parse(passThrough.has(p.join(" ")) ? ["help", ...p] : [...p, "--help"]);
+      const r = await parse([...p, "--help"]);
       expect(r.code, p.join(" ") || "(top)").toBe(0);
       for (const line of r.out.split("\n")) {
         expect(line.length, `${p.join(" ") || "(top)"}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(80);
@@ -110,7 +104,7 @@ describe("cli kernel: spec conformance", () => {
     for (const { path, spec } of walk(specs)) {
       expect(spec.summary, path).toBeTruthy();
       expect(spec.summary, path).not.toContain("\n");
-      if (spec.run || spec.passThrough)
+      if (spec.run)
         expect(spec.examples?.length ?? 0, `${path} needs an example (clig: lead with examples)`).toBeGreaterThan(0);
       else expect(spec.subcommands?.length ?? 0, `${path} is a group — needs subcommands`).toBeGreaterThan(0);
     }
@@ -260,6 +254,8 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
       ["content", "add", ""],
       ["tool", ""],
       ["content", "remove", ""],
+      // Each value of a variadic argument.
+      ["env", "add", "gh", ""],
     ];
     for (const argv of cases) {
       const r = await parse(argv);

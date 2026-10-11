@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { CONTENT_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
-import { type DeclaredEnvironment, MISE_FILE, MISE_LOCK_FILE, MISE_LOCK_SIDECARS } from "../environment/declare.ts";
+import { ENVIRONMENT_DIR } from "../environment/declare.ts";
 import { isolationAt } from "../environment/mise.ts";
 
 export interface Artifact {
@@ -87,10 +87,13 @@ export interface ContainerInput {
   bunVersion?: string;
   /** This fastagent version, to PIN the global install on the markdown path (reproducible redeploys). */
   version: string;
-  /** The Debian packages FastAgent itself needs in the image: git for content and a shipped `.git`, CA certificates for mise. */
+  /**
+   * The Debian packages the image installs: what FastAgent needs (git for content and a shipped `.git`, CA certificates
+   * and curl for mise), then the agent's `aptPackages`.
+   */
   apt?: string[];
-  /** The environment the agent declares (mise.toml), which the image installs with the agent's own mise. */
-  environment?: ImageEnvironment;
+  /** Whether the agent declares packages: the image installs `environment/`, their lock, with the agent's own mise. */
+  environment?: boolean;
   /**
    * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
    * VALUE FILE named it (a `config.model` needs nothing: the config ships too). The manifest is the carrier because
@@ -106,9 +109,9 @@ export interface ContainerInput {
   shipsGit?: boolean;
 }
 
-/** Whether the image has git: FastAgent installs it for its own needs, or the agent declares it in mise.toml. */
-export function imageHasGit(input: Pick<ContainerInput, "apt" | "environment">): boolean {
-  return input.apt?.includes("git") === true || input.environment?.packages.includes("apt:git") === true;
+/** Whether the image has git: FastAgent installs it for its own needs, or the agent declares it in `aptPackages`. */
+export function imageHasGit(input: Pick<ContainerInput, "apt">): boolean {
+  return input.apt?.includes("git") === true;
 }
 
 /** The apt layer (cached right after FROM). */
@@ -124,43 +127,26 @@ function aptLayer(packages?: string[]): string {
 /** mise's own directories for the build, thrown away with the layer: nothing of them is read at run time. */
 const BUILD_MISE_DIR = "/tmp/mise";
 
-/** What the image needs to know of the agent's environment. */
-type ImageEnvironment = Pick<DeclaredEnvironment, "tools" | "packages"> & {
-  /** Whether {@link MISE_LOCK_SIDECARS} exists beside the lock: a COPY of a missing directory fails the build. */
-  lockSidecars?: boolean;
-};
-
 /**
- * The layers that install the agent's environment, after its dependencies (the agent's own mise among them) and before
- * the definition, so they stay cached while the definition changes. System packages first: a tool may link against
- * one. mise runs `apt-get install` without `--no-install-recommends`, so apt is told to skip them instead. The tools go
- * to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside its own data
- * directory: a deployed start points that one at the storage, where the tools the agent adds outlive the container.
+ * The layer that installs the agent's packages from `environment/`, its committed lock, after its dependencies (the
+ * agent's own mise among them) and before the definition, so it stays cached while the definition changes. The
+ * packages go to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside
+ * its own data directory, so a start installs nothing.
  */
-function environmentLayers(dir: string, environment: ImageEnvironment): string {
-  const packages = environment.packages.length > 0;
-  // mise writes no lock for a file without tools.
-  const tools = environment.tools.length > 0;
-  if (!packages && !tools) return "";
-  const isolation = Object.entries(isolationAt(dir))
+function environmentLayer(dir: string): string {
+  const isolation = Object.entries(isolationAt(`${dir}/${ENVIRONMENT_DIR}`))
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   // The agent's own mise, by its package: the bin link is not reliable (mise.ts `miseBinary`).
-  const mise = `node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise`;
+  const mise = `${dir}/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise`;
   const steps = [
-    ...(packages
-      ? [
-          `printf 'APT::Install-Recommends "false";\\nAPT::Install-Suggests "false";\\n' > /etc/apt/apt.conf.d/99-fastagent-environment`,
-        ]
-      : []),
+    `cd ${ENVIRONMENT_DIR}`,
     `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
-    ...(packages ? [`"$MISE" bootstrap packages apply --yes`, "rm -rf /var/lib/apt/lists/*"] : []),
-    ...(tools ? [`"$MISE" --locked install --system`] : []),
+    `"$MISE" --locked install --system`,
     `rm -rf ${BUILD_MISE_DIR}`,
   ];
-  const sidecars = tools && environment.lockSidecars ? `COPY ${MISE_LOCK_SIDECARS} ./${MISE_LOCK_SIDECARS}\n` : "";
-  return `COPY ${MISE_FILE}${tools ? ` ${MISE_LOCK_FILE}` : ""} ./
-${sidecars}RUN ${steps.join(" \\\n && ")}
+  return `COPY ${ENVIRONMENT_DIR}/ ./${ENVIRONMENT_DIR}/
+RUN ${steps.join(" \\\n && ")}
 `;
 }
 
@@ -185,7 +171,7 @@ COPY . .
 CMD ["fastagent", "start", "${dir}"]
 `;
   }
-  const environment = input.environment ? environmentLayers(dir, input.environment) : "";
+  const environment = input.environment ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
   const note = isBun
@@ -244,7 +230,7 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 !**/${SECRETS_DIRNAME}/.gitignore
 **/*.log
 # .git is deliberately shipped with the definition (the generated image installs the git binary
-# when this directory ships a .git; otherwise declare apt:git in mise.toml). For a smaller image with no
+# when this directory ships a .git; otherwise run "fastagent env add apt:git"). For a smaller image with no
 # git needs, add a ".git" line here.
 `;
 

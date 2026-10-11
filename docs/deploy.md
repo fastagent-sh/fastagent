@@ -180,8 +180,8 @@ or reverse proxy.
   file; delete a file to hand it back.
 - `--tunnel` shapes only a newly generated Compose file. `--tunnel --run` against a kept file without a `tunnel`
   service stops before touching Docker.
-- The environment (`mise.toml`) is installed by the generated Dockerfile; a hand-written one installs it only if it
-  says so, and `deploy` warns.
+- The environment (`context.json`'s `environment`, locked in `environment/`) is installed by the generated
+  Dockerfile; a hand-written one installs it only if it says so, and `deploy` warns.
 - `--run` relies on the service named `agent` (and `tunnel`). Add other services, networks, volumes or ports freely.
 
 ## Fly.io
@@ -349,7 +349,7 @@ excludes. Each start publishes it onto persistent storage:
 ```text
 <persistent-root>/
 ├── definition/           # the deployed definition: the agent's working directory on the host
-├── .state/               # sessions, channels, scheduled work, the tools the agent adds to its environment (mise/)
+├── .state/               # sessions, channels, scheduled work, mise's data directory (mise/)
 ├── .secrets/             # credentials, including refreshed auth.json
 ├── content/              # the agent's content: clones of its github entries; each release links its own here
 └── .deployment/          # release and recovery metadata
@@ -367,16 +367,15 @@ excludes. Each start publishes it onto persistent storage:
   dependency on the same version.
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
-**The environment**: with a [`mise.toml`](configuration.md#environment-misetoml), `deploy` first writes `mise.lock`
-from the versions this machine runs, for linux-x64 and linux-arm64, with `.mise/locks/` for an `npm:` tool; commit
-both beside `mise.toml`, and the image copies them. The image installs
-the declared system packages, then the locked tools, with the agent's own mise, in a layer that is rebuilt only when
-the environment or the dependencies change. The tools go to mise's system directory (`/usr/local/share/mise`); a tool
-the agent adds on the host goes to `.state/mise/` on the storage, so a restart does not download it again. `--run`
-stops when `package.json` does not list mise, when mise is not installed here to write the lock (run
-`fastagent env install`), or when a tool's toolchain is not declared (`pypi:` needs `python` and `uv`; see
-[environment](configuration.md#environment-misetoml)); without `--run`, these are warnings. Chromium with CJK fonts
-adds about 1 GB to the image.
+**The environment**: with [packages](configuration.md#environment) declared, the image copies `environment/`, the
+committed lock, and installs it with the agent's own mise in a layer that is rebuilt only when the environment or the
+dependencies change. The packages go to mise's system directory (`/usr/local/share/mise`), so a start on the host
+downloads nothing. The agent's `aptPackages` join the image's apt layer. `deploy` checks the packages as
+`fastagent env add` does and locks them again, which keeps every version already locked: when that changes
+`environment/` (`context.json` edited without it), it says so, for you to commit. `--run` stops when `package.json` does
+not list mise, when mise is not installed here to check the packages (run `fastagent env install`), on a package whose
+backend FastAgent refuses, or on a PyPI package without `python` and `uv` declared; without `--run`, these are warnings.
+Chromium with CJK fonts adds about 1 GB to the image.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /
@@ -391,7 +390,7 @@ rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.y
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some
 host CLIs strip `.git` (`railway up` does). An agent that needs git without that declares it:
-`fastagent env bootstrap packages use apt:git`.
+`fastagent env add apt:git`.
 Add `.git` to `.dockerignore` for a smaller image.
 
 ## Other Docker hosts

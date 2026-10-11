@@ -71,14 +71,15 @@ src/
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
 │   ├── declare.ts          # a content entry read and refused in ONE place (names, keys, nesting)
-│   ├── file.ts             # `context.json` read whole (every refusal names the file) and its written shape
+│   ├── file.ts             # `context.json` read (a reader its part, an edit the whole; refusals name it) and written
 │   ├── mount.ts            # the writes into content/: the dir with its own .gitignore, and the links
 │   ├── resolve.ts          # where each entry is for THIS instance (content/<name>): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
-├── environment/            # the commands an agent runs, declared in its mise.toml — harness-neutral
-│   ├── declare.ts          # mise.toml's supported part ([tools], [bootstrap.packages]), read and refused in ONE place
-│   └── mise.ts             # the agent's OWN mise (an npm dep per platform), isolated to mise.toml: enter, lock, add
+├── environment/            # the commands an agent runs, declared in context.json, the image's lock in environment/
+│   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist
+│   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), run in working copies: check, lock, enter
+│   └── apt.ts              # which declared apt packages THIS machine lacks (dpkg; Debian and Ubuntu only)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared

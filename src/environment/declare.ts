@@ -1,149 +1,196 @@
 /**
- * WHAT AN AGENT'S ENVIRONMENT IS: the part of its `mise.toml` FastAgent supports, read and refused in ONE place. mise's
- * format, FastAgent's contract: `[tools]` (CLIs and runtimes, locked, the same on every platform) and
- * `[bootstrap.packages]` (system packages for what has no cross-platform build, installed in the image). Everything
- * else mise reads there would run differently, or not at all, where the agent is deployed, so it is refused by name.
+ * WHAT AN AGENT'S ENVIRONMENT IS: the `environment` of `context.json`, read and refused in ONE place, and the backends a
+ * package may install from. FastAgent's own format, with mise underneath: `packages` (mise's tool names, each with a
+ * version) and `aptPackages` (Debian packages the image installs). Pure: installing it is mise.ts's.
  * docs/design/agent-service.md §4 is the rule.
  */
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { parse } from "smol-toml";
 
-/** The agent's environment declaration. */
-export const MISE_FILE = "mise.toml";
-
-/** What `deploy` writes beside it: each tool's download URL and checksum, per platform the image is built for. */
-export const MISE_LOCK_FILE = "mise.lock";
-
-/**
- * What `mise lock` writes beside the lock for a tool installed from a package registry (an npm tool's dependency
- * lock), and the lock names by path and digest: part of the lock, committed and shipped with it.
- */
-export const MISE_LOCK_SIDECARS = ".mise/locks";
+/** The image's lock of the packages, committed: mise's configuration rendered from the declaration, and its lock. */
+export const ENVIRONMENT_DIR = "environment";
 
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {
-  /** The `mise.toml` it was read from. */
-  path: string;
-  /** The `[tools]` keys: tool names, with their backend prefix when written (`npm:prettier`). */
-  tools: string[];
-  /** The `[bootstrap.packages]` keys: `manager:package`. */
-  packages: string[];
+  /** Package → version: `"latest"`, a prefix (`"2"`) or an exact version. */
+  packages: Record<string, string>;
+  /** Debian packages the image installs. */
+  aptPackages: string[];
 }
 
-/** The agent's environment, or undefined when it has no `mise.toml` (it borrows the machine's commands). */
-export function readEnvironment(agentDir: string): DeclaredEnvironment | undefined {
-  const path = join(resolve(agentDir), MISE_FILE);
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  let raw: Record<string, unknown>;
-  try {
-    raw = parse(text);
-  } catch (error) {
-    throw new Error(`${path} is not valid TOML: ${(error as Error).message}`);
-  }
-  for (const key of Object.keys(raw)) {
-    if (key === "tools" || key === "bootstrap") continue;
-    if (key === "env") {
-      throw new Error(`${path}: [env] is not supported yet — set environment variables in .secrets/.env`);
-    }
-    throw new Error(
-      `${path}: "${key}" is not supported — an agent's mise.toml declares [tools] and [bootstrap.packages] only, ` +
-        `because the rest of mise (tasks, hooks, settings, plugins…) would run differently, or not at all, where ` +
-        `the agent is deployed`,
-    );
-  }
-  const tools = table(raw.tools, "[tools]", path);
-  for (const [name, value] of Object.entries(tools)) {
-    // mise also takes a list of versions (`jq = [{ ... }]`, `[[tools.jq]]`), each with its own options.
-    for (const entry of Array.isArray(value) ? value : [value]) {
-      if (entry && typeof entry === "object" && "postinstall" in entry) {
-        throw new Error(`${path}: tool "${name}" has a postinstall command — an install must not run code`);
-      }
-    }
-  }
-  const bootstrap = table(raw.bootstrap, "[bootstrap]", path);
-  for (const key of Object.keys(bootstrap)) {
-    if (key !== "packages") {
-      throw new Error(
-        `${path}: [bootstrap.${key}] is not supported — only [bootstrap.packages], the system packages the image ` +
-          `installs, belongs to an agent's environment`,
-      );
+const ENVIRONMENT_KEYS = ["packages", "aptPackages"] as const;
+
+/** The backends a package may be written with: a release, a conda-forge build, an npm or a PyPI package. */
+const WRITTEN_BACKENDS = ["aqua", "github", "gitlab", "conda", "npm", "pypi"] as const;
+
+/** The backends a registry name may resolve to: the written ones, more release hosts, and mise's own runtimes. */
+const RESOLVED_BACKENDS: ReadonlySet<string> = new Set([...WRITTEN_BACKENDS, "forgejo", "http", "packslip", "core"]);
+
+/** The backends left out, each with its reason; any other is refused until it is classified. */
+const LEFT_OUT: Readonly<Record<string, string>> = {
+  go: "builds from source: a whole Go toolchain in the image for one binary",
+  cargo: "builds from source: a whole Rust toolchain in the image for one binary",
+  spm: "builds from source with Swift",
+  gem: "compiles native extensions against Ruby",
+  spinel: "compiles Ruby into a binary",
+  asdf: "runs a plugin's shell scripts at install, and has no Windows",
+  vfox: "runs a plugin's code at install and whenever the environment is entered, and the lock does not pin it",
+  dotnet: "needs the .NET SDK, which the environment does not declare yet",
+  ubi: "is deprecated in mise",
+};
+
+const ALTERNATIVE = "write the project's release with github:<owner>/<repo>, or install it in your own Dockerfile";
+
+/** A registry name: what `mise registry` lists. */
+const REGISTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** What follows a written backend: a package or `owner/repo`, an npm scope included, without mise's `[options]`. */
+const BACKEND_NAME = /^@?[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+/** A Debian package name (Debian Policy §5.6.1). */
+const APT_NAME = /^[a-z0-9][a-z0-9+.-]+$/;
+
+/** Read the `environment` of `context.json` (undefined is none). Every refusal names what it refuses. */
+export function declareEnvironment(raw: unknown): DeclaredEnvironment | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`"environment" must be an object`);
+  const environment = raw as Record<string, unknown>;
+  for (const key of Object.keys(environment)) {
+    if (!(ENVIRONMENT_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`environment: unknown key "${key}" (valid keys: ${ENVIRONMENT_KEYS.join(", ")})`);
     }
   }
-  const packages = table(bootstrap.packages, "[bootstrap.packages]", path);
-  return { path, tools: Object.keys(tools), packages: Object.keys(packages) };
+  return { packages: declarePackages(environment.packages), aptPackages: declareAptPackages(environment.aptPackages) };
 }
 
-function table(value: unknown, what: string, path: string): Record<string, unknown> {
-  if (value === undefined) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path}: ${what} must be a table`);
-  return value as Record<string, unknown>;
+function declarePackages(raw: unknown): Record<string, string> {
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`environment: "packages" must be an object of versions by package`);
+  }
+  for (const [name, version] of Object.entries(raw)) {
+    const refused = packageNameError(name);
+    if (refused) throw new Error(`environment: package "${name}" ${refused}`);
+    if (typeof version !== "string") throw new Error(`environment: package "${name}": the version must be a string`);
+    const badVersion = versionError(version);
+    if (badVersion) throw new Error(`environment: package "${name}": ${badVersion}`);
+  }
+  return { ...(raw as Record<string, string>) };
+}
+
+function declareAptPackages(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new Error(`environment: "aptPackages" must be an array of Debian package names`);
+  const seen = new Set<string>();
+  for (const name of raw) {
+    if (typeof name !== "string" || !APT_NAME.test(name)) {
+      throw new Error(`environment: apt package ${JSON.stringify(name)} is not a Debian package name`);
+    }
+    if (seen.has(name)) throw new Error(`environment: apt package "${name}" is listed twice`);
+    seen.add(name);
+  }
+  return [...raw];
+}
+
+/** Why `name` cannot name a package, as the rest of a sentence that starts with it; undefined when it can. */
+function packageNameError(name: string): string | undefined {
+  if (name.includes("[")) return "has mise's [options], which the format does not hold";
+  const colon = name.indexOf(":");
+  if (colon === -1) return REGISTRY_NAME.test(name) ? undefined : "is not a name from mise's registry";
+  const backend = name.slice(0, colon);
+  if (backend === "http") {
+    return "is written with http:, whose package needs a URL a version cannot hold — a registry name that installs from a URL carries its own";
+  }
+  if (!(WRITTEN_BACKENDS as readonly string[]).includes(backend)) {
+    return `installs with ${backend}:, which ${refusalReason(backend)}`;
+  }
+  return BACKEND_NAME.test(name.slice(colon + 1)) ? undefined : `does not name a package after "${backend}:"`;
+}
+
+/** Why `version` is not one, or undefined. */
+function versionError(version: string): string | undefined {
+  if (version === "" || /\s/.test(version)) return "the version must be non-empty, without spaces";
+  // ref:, path:, prefix:, sub-…: build from source, read this machine, or say what a version already says.
+  if (version.includes(":") || version === "system") {
+    return `version "${version}" — a version is "latest", a prefix ("2") or an exact version ("2.1.0")`;
+  }
+  return undefined;
+}
+
+/** Why FastAgent does not install from `backend`, as a clause after "which", with what to do instead. */
+function refusalReason(backend: string): string {
+  const reason =
+    LEFT_OUT[backend] ??
+    `FastAgent does not install from (a package is a registry name, or written with ` +
+      `${WRITTEN_BACKENDS.map((b) => `${b}:`).join(", ")})`;
+  return `${reason} — ${ALTERNATIVE}`;
+}
+
+/** The backend a package is written with (`npm:prettier` is npm), or undefined for a registry name, which mise resolves. */
+export function writtenBackend(name: string): string | undefined {
+  const colon = name.indexOf(":");
+  return colon === -1 ? undefined : name.slice(0, colon);
 }
 
 /**
- * What each backend installs with. mise takes these from the machine when `mise.toml` does not declare them, and does
- * not add them itself, so such a tool installs on an author's machine that has them and fails in the image. uv is
- * also what locks a Python tool's dependencies, and a locked Python install needs an installed interpreter.
+ * Why the registry name `name`, which mise resolves to `backend` (`cargo:tokei`), is refused; undefined when that
+ * backend is allowed.
  */
-const TOOLCHAINS: Readonly<Record<string, readonly string[]>> = {
-  pypi: ["python", "uv"],
-  pipx: ["python", "uv"],
-  cargo: ["rust"],
-  go: ["go"],
-  gem: ["ruby"],
-};
+export function resolvedBackendRefusal(name: string, backend: string): string | undefined {
+  const kind = backend.split(":")[0] ?? backend;
+  if (RESOLVED_BACKENDS.has(kind)) return undefined;
+  return `package "${name}" resolves to ${backend}, which ${refusalReason(kind)}`;
+}
 
-/** Declared tools that need toolchains `mise.toml` does not declare, grouped by what is missing. */
-export interface MissingToolchain {
-  /** The tools, as declared. */
-  tools: string[];
-  /** The toolchains to declare. */
+/** PyPI packages whose runtime the environment does not declare, and what to declare. */
+export interface MissingRuntime {
+  packages: string[];
   missing: string[];
 }
 
 /**
- * The declared tools whose backend needs a toolchain `mise.toml` does not declare. Read from how a tool is written
- * (`pypi:markitdown`): a registry name mise resolves to one of these backends is not seen here, and fails the image
- * build instead.
+ * The PyPI packages, written `pypi:` or resolved to it (`backends`, by package), when the environment does not declare
+ * both `python` and `uv`: mise takes them from the machine and never adds them, so such a package installs on an
+ * author's machine that has them and fails in the image.
  */
-export function missingToolchains(environment: Pick<DeclaredEnvironment, "tools">): MissingToolchain[] {
-  const groups = new Map<string, MissingToolchain>();
-  for (const tool of environment.tools) {
-    const backend = tool.includes(":") ? tool.slice(0, tool.indexOf(":")) : "";
-    const missing = (TOOLCHAINS[backend] ?? []).filter((name) => !declaresTool(environment, name));
-    if (missing.length === 0) continue;
-    const group = groups.get(missing.join(" ")) ?? { tools: [], missing };
-    group.tools.push(tool);
-    groups.set(missing.join(" "), group);
-  }
-  return [...groups.values()];
+export function missingPythonRuntime(
+  packages: Record<string, string>,
+  backends: ReadonlyMap<string, string>,
+): MissingRuntime | undefined {
+  const pypi = Object.keys(packages).filter((name) => backends.get(name) === "pypi");
+  const missing = ["python", "uv"].filter((tool) => !declaresTool(packages, tool));
+  return pypi.length > 0 && missing.length > 0 ? { packages: pypi, missing } : undefined;
 }
 
 /** What to tell whoever declared them, with the command that declares the rest. */
-export function toolchainAdvice({ tools, missing }: MissingToolchain): string {
-  const one = tools.length === 1;
+export function runtimeAdvice({ packages, missing }: MissingRuntime): string {
   return (
-    `${tools.join(", ")} ${one ? "installs" : "install"} with ${missing.join(" and ")}, which ${MISE_FILE} does not ` +
-    `declare: mise then uses the machine's, and the image has none — run \`fastagent env use ${missing.join(" ")}\``
+    `${packages.join(", ")} ${packages.length === 1 ? "installs" : "install"} with ${missing.join(" and ")}, which ` +
+    `the environment does not declare: mise then uses this machine's, and the image has none — run ` +
+    `\`fastagent env add ${missing.join(" ")}\``
   );
 }
 
-/** Whether `mise.toml` declares `name` under any backend or owner: `aqua:astral-sh/uv` is `uv`. */
-export function declaresTool(environment: Pick<DeclaredEnvironment, "tools">, name: string): boolean {
-  return environment.tools.some((key) => toolName(key) === name);
+/** Whether `packages` declares `tool` under any backend or owner: `aqua:astral-sh/uv` is `uv`. */
+export function declaresTool(packages: Record<string, string>, tool: string): boolean {
+  return Object.keys(packages).some(
+    (name) =>
+      name
+        .slice(name.indexOf(":") + 1)
+        .split("/")
+        .at(-1) === tool,
+  );
 }
 
-function toolName(key: string): string {
-  return (
-    key
-      .slice(key.indexOf(":") + 1)
-      .split("/")
-      .at(-1) ?? key
-  );
+/** Whether two declarations name the same packages at the same versions, in any order. */
+export function samePackages(a: Record<string, string>, b: Record<string, string>): boolean {
+  const names = Object.keys(a);
+  return names.length === Object.keys(b).length && names.every((name) => Object.hasOwn(b, name) && b[name] === a[name]);
+}
+
+/**
+ * One argument of `fastagent env add`: `gh`, `gh@2`, `npm:@scope/tool@1`, or `apt:chromium` for an apt package. The
+ * version is what follows the last `@` after the backend, `latest` without one.
+ */
+export function parsePackageArgument(arg: string): { apt: string } | { name: string; version: string } {
+  if (arg.startsWith("apt:")) return { apt: arg.slice("apt:".length) };
+  const at = arg.lastIndexOf("@");
+  if (at > arg.indexOf(":") + 1) return { name: arg.slice(0, at), version: arg.slice(at + 1) };
+  return { name: arg, version: "latest" };
 }

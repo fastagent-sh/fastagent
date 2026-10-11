@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
 
@@ -28,29 +28,45 @@ describe("cli: info", () => {
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
-  it("info reports the declared environment without installing it, and a refused mise.toml without failing", async () => {
+  it("info reports the declared environment without installing it, and a refused one without failing", async () => {
     // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
+    const environment = { packages: { jq: "1.8.1" }, aptPackages: ["chromium"] };
     const dir = await agentWorkspace("fa-info-env-", {
       "fastagent.config.ts": "export default {};\n",
-      "mise.toml": `[tools]\njq = "1.8.1"\n[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`,
+      "context.json": JSON.stringify({ environment }),
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(JSON.parse(ok.stdout)).toMatchObject({
-      environment: { tools: ["jq"], packages: ["apt:chromium"] },
+    expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null, environmentWarning: null });
+    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
+    // An environment/ of the author's own, where the packages' lock goes: what `env` and `deploy` would refuse.
+    await mkdir(join(dir, "environment"));
+    await writeFile(join(dir, "environment", "notes.md"), "mine\n");
+    const foreign = await run(["info", dir, "--json"]);
+    expect(JSON.parse(foreign.stdout)).toMatchObject({
+      environment,
       environmentError: null,
+      environmentWarning: expect.stringMatching(/environment was not written by FastAgent/),
     });
-    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq; system packages: apt:chromium$/m);
-    await writeFile(join(dir, "mise.toml"), `[tasks.build]\nrun = "x"\n`);
+    expect((await run(["info", dir])).stdout).toMatch(
+      /^environment: +jq 1\.8\.1, apt:chromium\n +⚠ .*environment was not written by FastAgent/m,
+    );
+    await writeFile(
+      join(dir, "context.json"),
+      JSON.stringify({ content: { notes: { github: "acme/notes" } }, environment: { packages: { "cargo:x": "1" } } }),
+    );
     const refused = await run(["info", dir, "--json"]);
     expect(refused.code).toBe(0);
+    // Reported where it is: the content is the content, and the refusal is the environment's alone.
     expect(JSON.parse(refused.stdout)).toMatchObject({
+      content: [expect.objectContaining({ name: "notes" })],
+      contentError: null,
       environment: null,
-      environmentError: expect.stringMatching(/"tasks" is not supported/),
+      environmentError: expect.stringMatching(/package "cargo:x" installs with cargo:/),
     });
     // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
     expect((await run(["info", dir])).stdout).toMatch(
-      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*"tasks" is not supported/m,
+      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*package "cargo:x" installs with cargo:/m,
     );
   });
 

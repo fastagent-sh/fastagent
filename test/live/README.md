@@ -45,6 +45,7 @@ removes must match what the fixture's branch actually creates.
 | `registry` | the published tarball |
 | `model` | a real provider's stream and its errors |
 | `docker` | a real container build + boot + state volume |
+| `environment` | mise, the agent's own at its newest version, doing what `environment/` relies on: an author's own `mise.toml` unread, a lock of the image's platforms alone that is byte-stable, a copy of it followed by a run, backends resolved as the allowlist expects, no runtime compiled, a PyPI package locked once its uv is installed |
 | `tunnel` | a real Quick Tunnel carrying a request home |
 | `schedule` | a cron on disk firing a real turn, settling its claim, and logging what it said |
 | `telegram`, `feishu` | Telegram VERIFYING a webhook URL it was handed; Feishu CALLING one with a challenge. Registration only — delivery needs a human to type |

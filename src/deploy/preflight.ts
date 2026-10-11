@@ -16,7 +16,7 @@ import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover
 import { resolveAgentTools } from "../harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
 import type { DeclaredContent } from "../content/declare.ts";
-import { loadContent } from "../content/file.ts";
+import { loadContent, loadEnvironment } from "../content/file.ts";
 import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -40,17 +40,15 @@ import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
+import { ENVIRONMENT_DIR, declaresTool, runtimeAdvice } from "../environment/declare.ts";
 import {
-  type DeclaredEnvironment,
-  MISE_FILE,
-  MISE_LOCK_FILE,
-  MISE_LOCK_SIDECARS,
-  declaresTool,
-  missingToolchains,
-  readEnvironment,
-  toolchainAdvice,
-} from "../environment/declare.ts";
-import { lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
+  checkPackages,
+  foreignEnvironment,
+  lockEnvironment,
+  MISE_PACKAGE_NAMES,
+  miseBinary,
+  removeEnvironment,
+} from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -139,42 +137,55 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
 }
 
 /**
- * What the image needs to install the environment `mise.toml` declares: the agent's own mise for linux in its
- * package.json, so the image's install brings it, and, for tools, `mise.lock`. The lock is an artifact like the
- * Dockerfile, written here from the versions this machine runs; a machine without the agent's mise installed cannot
- * write it, which is an issue (a warning without `--run`), as a code input that cannot load is.
+ * What the image needs to install the packages the agent declares: the agent's own mise for linux in its package.json,
+ * so the image's install brings it, packages FastAgent installs from, a PyPI package's runtime, and `environment/`, the
+ * lock the image installs. Every deploy locks it again: that keeps every version already locked, and a change (the
+ * declaration edited without it) is said, for the author to commit. A machine without the agent's mise cannot check
+ * or lock, which is an issue (a warning without `--run`), as a code input that cannot load is.
  */
 async function checkEnvironment(
   agentDir: string,
-  environment: DeclaredEnvironment,
+  packages: Record<string, string>,
   hasPackageJson: boolean,
   pkg: { optionalDependencies?: Record<string, unknown> },
   report: DeployReport,
 ): Promise<void> {
-  const toolchains = missingToolchains(environment);
-  for (const group of toolchains) report.issue(toolchainAdvice(group));
+  if (Object.keys(packages).length === 0) {
+    if (await removeEnvironment(agentDir)) {
+      report.warn(`removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`);
+    }
+    return;
+  }
+  const foreign = foreignEnvironment(agentDir);
+  if (foreign) {
+    report.issue(foreign);
+    return;
+  }
   const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
   const missing = linux.filter((name) => !(name in (pkg.optionalDependencies ?? {})));
   if (!hasPackageJson || missing.length > 0) {
     report.issue(
-      `${MISE_FILE} declares an environment, and the image would have no mise to install it with: the agent's ` +
+      `context.json declares packages, and the image would have no mise to install them with: the agent's ` +
         `package.json does not list ${missing.join(", ")}. Run \`fastagent env install\` in the agent directory.`,
     );
     return;
   }
-  // mise writes no lock for a file that declares no tools, and the image then has none to install. A missing toolchain
-  // is already an issue, and a lock without it fails (uv locks a Python tool) or locks what the image cannot install.
-  if (environment.tools.length === 0 || toolchains.length > 0) return;
   const bin = miseBinary(agentDir);
   if (!bin) {
     report.issue(
-      `the agent's mise is not installed here, so ${MISE_LOCK_FILE} cannot be written from the versions this ` +
-        `machine runs, and the image installs only what the lock records. Run \`fastagent env install\` in ` +
-        `${agentDir}, then deploy again.`,
+      `the agent's mise is not installed here, so the packages context.json declares cannot be checked or locked ` +
+        `into ${ENVIRONMENT_DIR}/. Run \`fastagent env install\` in ${agentDir}, then deploy again.`,
     );
     return;
   }
-  await lockEnvironment(agentDir, bin);
+  const { refusals, runtime } = await checkPackages(agentDir, bin, packages);
+  for (const refusal of refusals) report.issue(refusal);
+  if (runtime) report.issue(runtimeAdvice(runtime));
+  // A lock of what the image cannot install would only fail the build later.
+  if (refusals.length > 0 || runtime) return;
+  if (await lockEnvironment(agentDir, packages, async () => bin)) {
+    report.warn(`${ENVIRONMENT_DIR}/ is locked again from context.json, which changed without it — commit it`);
+  }
 }
 
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
@@ -447,19 +458,22 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(agentDir, authPath);
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
-  const environment = readEnvironment(agentDir);
-  if (environment) await checkEnvironment(agentDir, environment, hasPackageJson, pkg, report);
-  // Read after the lock is written: it writes them.
-  const lockSidecars = environment !== undefined && (await exists(join(agentDir, MISE_LOCK_SIDECARS)));
+  const environment = loadEnvironment(agentDir);
+  const packages = environment?.packages ?? {};
+  await checkEnvironment(agentDir, packages, hasPackageJson, pkg, report);
+  const installsPackages = Object.keys(packages).length > 0;
 
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
   // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates; rustup, which
-  // mise installs rust with, downloads with curl.
+  // mise installs rust with, downloads with curl. The agent's own apt packages join them, in one layer.
   const needsGit = shipsGit || content.some((entry) => entry.kind === "github");
   const apt = [
-    ...(needsGit ? ["git"] : []),
-    ...(environment ? ["ca-certificates"] : []),
-    ...(environment && declaresTool(environment, "rust") ? ["curl"] : []),
+    ...new Set([
+      ...(needsGit ? ["git"] : []),
+      ...(installsPackages ? ["ca-certificates"] : []),
+      ...(declaresTool(packages, "rust") ? ["curl"] : []),
+      ...(environment?.aptPackages ?? []),
+    ]),
   ];
   const container: ContainerInput = {
     releaseId: randomUUID(),
@@ -471,7 +485,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     hasLockfile,
     version: await fastagentVersion(),
     apt,
-    ...(environment ? { environment: { ...environment, lockSidecars } } : {}),
+    ...(installsPackages ? { environment: true } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };
@@ -616,7 +630,7 @@ async function checkGlobalCatalogModel(modelSpec: string, deployed: ModelRuntime
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops. The environment (mise.toml) is the obvious one; the resolved model is the one that
+ * What a KEPT hand-written Dockerfile drops. The environment (context.json's, locked in environment/) is the obvious one; the resolved model is the one that
  * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
  * FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
  * ONLY in the value file would be reported here and absent on the box.
@@ -635,10 +649,11 @@ async function checkKeptDockerfile(
   const dockerfileHome = join(agentDir, "Dockerfile");
   const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
   if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
-  if (readEnvironment(agentDir)) {
+  if (loadEnvironment(agentDir)) {
     report.warn(
-      `kept your hand-written Dockerfile — it installs the environment ${MISE_FILE} declares only if it says so: ` +
-        `a generated Dockerfile shows the layers (system packages, then \`mise --locked install\`).`,
+      `kept your hand-written Dockerfile — it installs the environment context.json declares only if it says so: ` +
+        `a generated Dockerfile shows the layers (the apt packages, then \`mise --locked install\` from ` +
+        `${ENVIRONMENT_DIR}/).`,
     );
   }
   // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without

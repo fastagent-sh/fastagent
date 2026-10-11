@@ -24,6 +24,6 @@ export default {
   http: { port: 8787 },
   // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
   // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
-  // The commands the agent needs (CLIs, runtimes, system packages) live in mise.toml: `fastagent env use gh`.
+  // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
   // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
 } satisfies FastagentConfig;

@@ -20,8 +20,9 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
-    expect(ignored(join(root, "context.json"))).toBe(false); // content is resolved once per process
-    expect(ignored(join(root, "mise.toml"))).toBe(false); // the environment is entered once per process
+    // Content is resolved, and the environment entered, once per process.
+    expect(ignored(join(root, "context.json"))).toBe(false);
+    expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
     // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
     // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
     for (const file of ["models.json", "models-store.json"]) {
@@ -29,6 +30,13 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
       expect(revivesOnly(root, join(root, file))).toBe(true);
     }
     expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
+    // A worker installs from the environment's lock once, and `fastagent env update` changes the lock alone: it restarts
+    // the worker. `fastagent env` replaces it whole, once complete, so nothing half-written is seen. The rest is not.
+    expect(ignored(join(root, "environment"))).toBe(false);
+    expect(ignored(join(root, "environment", "mise.lock"))).toBe(false);
+    expect(revivesOnly(root, join(root, "environment", "mise.lock"))).toBe(false);
+    expect(ignored(join(root, "environment", "mise.toml"))).toBe(true);
+    expect(ignored(join(root, "environment.lock"))).toBe(true);
     expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);
     expect(revivesOnly(root, join(root, "tools", "models.json"))).toBe(false);
   });

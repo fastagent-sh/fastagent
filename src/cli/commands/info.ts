@@ -24,8 +24,9 @@ import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
-import { loadContent } from "../../content/file.ts";
-import { type DeclaredEnvironment, readEnvironment } from "../../environment/declare.ts";
+import { loadContent, loadEnvironment } from "../../content/file.ts";
+import type { DeclaredEnvironment } from "../../environment/declare.ts";
+import { foreignEnvironment } from "../../environment/mise.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -46,11 +47,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     contentError = (error as Error).message;
   }
   const definition = await loadAgentDefinition(agentDir, { content }).catch(failStartup);
-  // Reported like content: `info` is how an author finds out mise.toml says what the agent does not support.
+  // Reported like content: `info` is how an author finds out context.json declares what the agent does not support.
   let environment: DeclaredEnvironment | undefined;
   let environmentError: string | undefined;
+  // What `fastagent env` and `deploy` refuse, and dev and start run past: an author's environment/ where the lock goes.
+  let environmentWarning: string | undefined;
   try {
-    environment = readEnvironment(agentDir);
+    environment = loadEnvironment(agentDir);
+    if (environment && Object.keys(environment.packages).length > 0) environmentWarning = foreignEnvironment(agentDir);
   } catch (error) {
     environmentError = (error as Error).message;
   }
@@ -132,8 +136,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           agentDir,
           content,
           contentError: contentError ?? null,
-          environment: environment ? { tools: environment.tools, packages: environment.packages } : null,
+          environment: environment ?? null,
           environmentError: environmentError ?? null,
+          environmentWarning: environmentWarning ?? null,
           contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
@@ -190,6 +195,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         : "(none: the machine's commands)",
   );
   if (environmentError) cont(`⚠ ${environmentError}`);
+  if (environmentWarning) cont(`⚠ ${environmentWarning}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
@@ -227,8 +233,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportFindingsIfChanged(definition.dir, definition);
 }
 
-/** The tools and system packages an environment declares, as one line. */
+/** The packages and apt packages an environment declares, as one line. */
 function describeEnvironment(environment: DeclaredEnvironment): string {
-  const tools = environment.tools.join(", ") || "(none)";
-  return environment.packages.length > 0 ? `${tools}; system packages: ${environment.packages.join(", ")}` : tools;
+  const packages = Object.entries(environment.packages).map(([name, version]) => `${name} ${version}`);
+  const apt = environment.aptPackages.map((name) => `apt:${name}`);
+  return [...packages, ...apt].join(", ") || "(none: the machine's commands)";
 }
