@@ -108,7 +108,7 @@ async function read(agentDir: string, piDir: string): Promise<Machine> {
     additionalSkillPaths: fromPackages(packages.skills),
     additionalPromptTemplatePaths: fromPackages(packages.prompts),
     // The machine's extensions are its owner's setup, not this agent's (agent-session-factory.ts loads only the
-    // definition's own); context files come from the agent's content.
+    // definition's own); the only context file is the definition's own AGENTS.md.
     noExtensions: true,
     noContextFiles: true,
   });

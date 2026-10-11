@@ -193,8 +193,7 @@ acme-github/                  a context: a directory, a git repository or an npm
   context's own author, and a deploy copies it into the image.
 - A context declares the names of the credentials it needs, as any code or configuration does (§6.1), never their
   values: each agent supplies its own.
-- A context's skills are named `<context>/<skill>`, so they never collide with the agent's own or another
-  context's. When two contexts declare a tool, an MCP server or a content entry under the same name, the start is
+- When two contexts declare a tool, an MCP server or a content entry under the same name, the start is
   refused, and the error names both. The same happens when they declare one package at different versions. Nothing
   is overridden silently.
 - A context does not use other contexts. Nesting would make an agent's world a dependency graph, which nothing needs

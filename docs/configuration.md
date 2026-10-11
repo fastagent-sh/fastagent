@@ -321,9 +321,6 @@ below it. A name found twice in the definition takes the first and is reported, 
 | Prompt templates | `prompts/`, `.pi/prompts/`, then the machine's (below) |
 | Extensions | `extensions/` only; a `.pi/extensions/` is reported as not loaded |
 
-A skill's name may not contain `/`, which names the content entry a skill comes from: it is refused in the definition
-and left out, with a warning, from the machine's and a content entry's.
-
 ## What the machine lends the agent
 
 **Skills** and **prompt templates** also load from this machine, through pi's

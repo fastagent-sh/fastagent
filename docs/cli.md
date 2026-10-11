@@ -101,8 +101,8 @@ Prints, without serving:
 Content that cannot be resolved (its directory is missing, say), an environment FastAgent refuses, and an
 `environment/` of your own where the packages' lock goes, are reported, not fatal; `info` installs nothing. `--json`
 carries `content`, `contentError`, `environment`, `environmentError` (what dev and start stop on),
-`environmentWarning` (what `fastagent env` and `deploy` refuse) and `contextFiles` (the agent directory's `AGENTS.md`,
-then each content entry's).
+`environmentWarning` (what `fastagent env` and `deploy` refuse) and `contextFiles` (the agent directory's `AGENTS.md`;
+nothing of its content).
 Read-only.
 
 ## `fastagent content`
