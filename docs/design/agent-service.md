@@ -223,23 +223,28 @@ platform. The author never writes mise's files.
 }
 ```
 
-- **`packages`** are CLIs and runtimes, by the names mise's registry gives them (`gh`, `python`), with a backend for a
-  package from a registry (`npm:`, `pypi:`, `cargo:`, `go:`, `gem:`, `github:`), each mapped to a version: `latest`,
-  a prefix (`2`) or an exact version. The name follows Railpack's `packages`; `tools` would collide with the agent's
-  code tools.
+- **`packages`** are CLIs and runtimes, each mapped to a version: `latest`, a prefix (`2`) or an exact version. The
+  name follows Railpack's `packages`; `tools` would collide with the agent's code tools.
+- **A package is what its publisher released, installed as is.** It is a name from mise's registry (`gh`, `ripgrep`,
+  `python`), or one written with `aqua:`, `github:`, `gitlab:`, `http:`, `conda:` or `vfox:` for a release, `npm:` for
+  an npm package, or `pypi:` for a Python one. Of the registry's 1,084 names, all but 9 install that way: 919 download
+  a release binary, 19 a conda-forge build, 14 are runtimes, 42 come from a vfox plugin, and 61 are npm or PyPI
+  packages. Backends that build from source (`go:`, `cargo:`, `gem:`, `spm:`, `dotnet:`, `asdf:`) are not part of
+  the format, and `fastagent env add` and `deploy` ask mise which backend a registry name resolves to and refuse the
+  9 that build, naming the alternative: a `github:` release, or the author's own `Dockerfile`.
 - **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build: a browser, fonts.
   A machine that runs the agent locally supplies its own: a start on Debian or Ubuntu names the missing ones with the
   `apt-get` command that installs them.
-- **Every value the format can hold works.** The declaration is checked for its shape only: a tool name, a non-empty
-  version, a Debian package name, no unknown key. What mise cannot install fails `fastagent env add`, which installs
-  before it writes, or `deploy`'s lock and the image build, with mise's own error. Nothing of mise is listed as
-  unsupported, because the format has no place for it.
-- **A backend's toolchain is declared with it.** mise installs a `pypi:`, `cargo:`, `go:` or `gem:` package with
-  `python` and `uv`, `rust`, `go` or `ruby`, takes those from the machine when they are not declared, and never adds
-  them, so such a package would install on the author's machine and fail in the image. `fastagent env add` and
-  `fastagent env list` name what is missing with the command that adds it, and `deploy --run` stops on it. Adding the
-  toolchain automatically waits for a need. A crate or a cgo package built from source also needs a C toolchain,
-  which the author declares (`build-essential`); the image adds curl itself, which rustup downloads with.
+- **Every value the format can hold works.** The declaration is checked for its shape: a package in the vocabulary
+  above, a non-empty version, a Debian package name, no unknown key. What mise then cannot install fails
+  `fastagent env add`, which installs before it writes, or `deploy`'s lock and the image build, with mise's own error.
+  Nothing of mise is listed as unsupported: the format names what it takes, and has no place for the rest.
+- **A Python package declares its runtime with it.** A `pypi:` package runs on `python` and installs and locks with
+  `uv`; mise takes both from the machine when they are not declared, and never adds them, so it would install on the
+  author's machine and fail in the image. `fastagent env add` and `fastagent env list` name what is missing with the
+  command that adds it (`fastagent env add python uv`), and `deploy --run` stops on it. An `npm:` package runs on the
+  image's Node. A runtime the agent works with itself (`go` or `rust` for a repository it builds) is a package like
+  any other; for `rust`, the image adds curl, which rustup downloads with.
 - **mise is the engine, not the interface.** The agent carries its own mise: its `package.json` lists mise's npm
   packages as optional dependencies, one per platform, of which npm and bun install only the machine's, so a machine
   needs nothing installed first and the image's `npm ci` installs the same mise. FastAgent writes mise's
@@ -281,8 +286,9 @@ built with colima on arm64 and x64 and with Bun's image as well:
   (`PUPPETEER_EXECUTABLE_PATH` for mermaid-cli) needs an environment variable, in `.secrets/.env` until variables are
   declared. A package outside the distribution's repositories, or another base image, needs the author's own
   `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing the lock included.
-- A `pypi:` package built only with `python` and `uv` declared, and a `cargo:` package only with `rust` and either
-  `cargo-binstall` (a prebuilt binary; a 3.17 GB image) or `build-essential` (compiled; 3.54 GB).
+- A `pypi:` package built only with `python` and `uv` declared. A `cargo:` package needed `rust`, curl for rustup, and
+  either `cargo-binstall` (a prebuilt binary; a 3.17 GB image) or `build-essential` (compiled; 3.54 GB): building from
+  source puts a whole toolchain in the image for one binary, which is why the format leaves it out.
 - The agent's mise adds about 135 MB to the image's `node_modules` (linux-arm64).
 - mise gives each conda tool a prefix of its own, so shared libraries are copied per tool: the sixteen tools added
   about 1.65 GB (compressed) to the image, and fourteen of them in one pixi environment about 0.8 GB. A larger image
@@ -1198,10 +1204,11 @@ The product and the model:
   names and `aptPackages` for the image, then `variables`. mise, the agent's own (an optional npm dependency per
   platform), installs it from a configuration FastAgent writes into `environment/`; the author never writes mise's
   files, so no part of a familiar format is silently unsupported. `deploy` locks it for the image's platforms and
-  installs it there; every process that opens the agent installs it locally. A backend's toolchain is declared with
-  it, and a missing one is named. The config has no `environment`. A system package outside the distribution needs
-  the author's own `Dockerfile`. A skill script declares its Python libraries inline (PEP 723) and runs with `uv run`
-  (§4).
+  installs it there; every process that opens the agent installs it locally. A package is what its publisher released
+  (a registry name, a release, an npm or PyPI package), never built from source; a `pypi:` package's `python` and `uv`
+  are declared with it, and a missing one is named. The config has no `environment`. A system package outside the
+  distribution needs the author's own `Dockerfile`. A skill script declares its Python libraries inline (PEP 723) and
+  runs with `uv run` (§4).
 - Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The
   shell keeps inheriting the process environment; isolation waits for a sandboxed environment (§6.4).
 - A declaration that has a standard format, or that the agent or a tool writes, is a file of its own (contexts and
