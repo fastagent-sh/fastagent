@@ -55,7 +55,7 @@ async function agentDir(environment?: unknown): Promise<string> {
 async function locked(dir: string, packages: Record<string, string>): Promise<void> {
   await mkdir(join(dir, "environment"), { recursive: true });
   await writeFile(join(dir, "environment", "mise.toml"), `${RENDERED_CONFIG_HEADER}[tools]\n`);
-  await writeFile(join(dir, "environment", "declaration.sha256"), `${packagesDigest(packages)}\n`);
+  await writeFile(join(dir, "environment", "packages.sha256"), `${packagesDigest(packages)}\n`);
 }
 
 /**
@@ -240,11 +240,12 @@ describe("environment: environment/, its lock", () => {
     const { bin, calls } = await fakeMise(dir);
     const order: string[] = [];
     await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, bin, async () => {
-      order.push((await readFile(join(dir, "environment", "declaration.sha256"), "utf8")).trim());
+      order.push((await readFile(join(dir, "environment", "packages.sha256"), "utf8")).trim());
     });
     expect(await readFile(join(dir, "environment", "mise.toml"), "utf8")).toBe(
       `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n` +
-        `[settings]\nall_compile = false\n\n[tools]\ngh = "2"\n"npm:prettier" = "3"\n`,
+        `[settings.python]\ncompile = false\n\n[settings.ruby]\ncompile = false\n\n[settings.node]\ncompile = false\n\n` +
+        `[settings.erlang]\ncompile = false\n\n[tools]\ngh = "2"\n"npm:prettier" = "3"\n`,
     );
     // The declaration is committed once the lock is in place, digest included.
     expect(order).toEqual([packagesDigest({ gh: "2", "npm:prettier": "3" })]);
@@ -276,7 +277,7 @@ describe("environment: environment/, its lock", () => {
     for (const _ of [0, 1]) {
       expect(await readFile(join(dir, "environment", "mise.toml"), "utf8")).toContain(`gh = "2"`);
       expect(await readFile(join(dir, "environment", "mise.lock"), "utf8")).toBe(before);
-      expect((await readFile(join(dir, "environment", "declaration.sha256"), "utf8")).trim()).toBe(
+      expect((await readFile(join(dir, "environment", "packages.sha256"), "utf8")).trim()).toBe(
         packagesDigest({ gh: "2" }),
       );
     }
@@ -344,7 +345,7 @@ describe("environment: entered by a process that runs the agent", () => {
       expect(process.env[name], name).toBe(savedEnv[name]);
     }
     expect(process.env.PATH).not.toContain(join(dir, "node_modules"));
-    expect(await readdir(join(dir, "environment"))).toEqual(["declaration.sha256", "mise.toml"]);
+    expect(await readdir(join(dir, "environment"))).toEqual(["mise.toml", "packages.sha256"]);
   });
 
   it("refuses an environment/ that is not the lock of what context.json declares, naming the fix", async () => {
@@ -457,7 +458,7 @@ describe("environment: `fastagent env`", () => {
     expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" } });
     // At lock time the declaration was not written yet.
     expect(await calls()).toContain(`context.json at lock: {"content":{}}`);
-    expect(await readdir(join(dir, "environment"))).toEqual([".mise", "declaration.sha256", "mise.lock", "mise.toml"]);
+    expect(await readdir(join(dir, "environment"))).toEqual([".mise", "mise.lock", "mise.toml", "packages.sha256"]);
     const before = (await calls()).length;
     const apt = await cli(["env", "add", "apt:chromium"], dir);
     expect(apt.code, apt.stderr).toBe(0);
@@ -584,6 +585,25 @@ describe("environment: `fastagent env`", () => {
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("no-such-command-here: command not found in the environment");
   });
+
+  it("puts environment/ back when interrupted mid-install, so the next start is not the one to find it", async () => {
+    const dir = await agentDir({ aptPackages: ["chromium"] });
+    const { calls } = await fakeMise(dir);
+    const child = spawn(process.execPath, [CLI, "env", "add", "gh@2"], {
+      cwd: dir,
+      env: { ...process.env, FAKE_SLOW: "1" },
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+    while (!(await calls()).some((call) => call.startsWith("install"))) await new Promise((r) => setTimeout(r, 50));
+    child.kill("SIGINT");
+    expect(await exited).toBe(1);
+    expect(stderr).toContain(`interrupted by SIGINT: ${join(dir, "environment")} is put back as it was`);
+    await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
+    expect(await declared(dir)).toEqual({ aptPackages: ["chromium"] });
+    await enterEnvironment(dir);
+  }, 30_000);
 
   it("runs one at a time, so a second change starts from the first", async () => {
     const dir = await agentDir();

@@ -35,8 +35,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "environment"))).toBe(false);
     // Its own creation and removal, mid-edit, restart nothing either: the context.json edit comes after.
     expect(revivesOnly(root, join(root, "environment"))).toBe(true);
-    expect(ignored(join(root, "environment", "declaration.sha256"))).toBe(false);
-    expect(revivesOnly(root, join(root, "environment", "declaration.sha256"))).toBe(true);
+    expect(ignored(join(root, "environment", "packages.sha256"))).toBe(false);
+    expect(revivesOnly(root, join(root, "environment", "packages.sha256"))).toBe(true);
     expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);
     expect(ignored(join(root, "environment.lock"))).toBe(true);
     expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);

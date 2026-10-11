@@ -37,7 +37,7 @@ describe("cli: info", () => {
       "fastagent.config.ts": "export default {};\n",
       "context.json": JSON.stringify({ environment }),
       "environment/mise.toml": `${RENDERED_CONFIG_HEADER}[tools]\n`,
-      "environment/declaration.sha256": `${packagesDigest(environment.packages)}\n`,
+      "environment/packages.sha256": `${packagesDigest(environment.packages)}\n`,
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);

@@ -110,13 +110,14 @@ function runMise(
   agentDir: string,
   bin: string,
   args: readonly string[],
-  options: { capture?: boolean; quiet?: boolean; cwd?: string } = {},
+  options: { capture?: boolean; quiet?: boolean; cwd?: string; signal?: AbortSignal } = {},
 ): Promise<string> {
   return new Promise((done, fail) => {
     const child = spawn(bin, args, {
       cwd: options.cwd ?? join(agentDir, ENVIRONMENT_DIR),
       env: { ...process.env, ...isolationAt(realpathSync(agentDir)) },
       stdio: ["inherit", options.capture ? "pipe" : process.stderr, options.quiet ? "pipe" : "inherit"],
+      ...(options.signal ? { signal: options.signal } : {}),
     });
     let stdout = "";
     let stderr = "";
@@ -223,10 +224,14 @@ const RENDERED_ENTRIES = [MISE_FILE, MISE_LOCK_FILE, ENVIRONMENT_DIGEST_FILE, ".
 
 /**
  * The configuration rendered from `packages`. Prebuilt runtimes only: one with no build for a platform fails there
- * rather than compiling.
+ * rather than compiling, which mise does for python by default (and `all_compile`, already false, does not stop).
  */
 function renderConfig(packages: Record<string, string>): string {
-  return RENDERED_CONFIG_HEADER + stringify({ settings: { all_compile: false }, tools: packages });
+  const prebuilt = { compile: false };
+  return (
+    RENDERED_CONFIG_HEADER +
+    stringify({ settings: { python: prebuilt, ruby: prebuilt, node: prebuilt, erlang: prebuilt }, tools: packages })
+  );
 }
 
 /** Whether `environment/` is there, and whether FastAgent wrote it (its configuration starts with the header). */
@@ -254,18 +259,26 @@ function foreignEnvironment(agentDir: string): string {
 
 /**
  * Run `change` on `environment/`, and put the directory back as it was when `change` fails: from a copy taken first,
- * or by removing what `change` created.
+ * or by removing what `change` created. SIGINT and SIGTERM (a Ctrl-C during a minutes-long install) are a failure too,
+ * not an exit that leaves the directory half-written: `change` is handed the signal they abort, which stops mise.
  */
-async function restoredOnFailure(dir: string, change: () => Promise<void>): Promise<void> {
+async function restoredOnFailure(dir: string, change: (interrupted: AbortSignal) => Promise<void>): Promise<void> {
   const saved = existsSync(dir) ? mkdtempSync(join(tmpdir(), "fastagent-environment-")) : undefined;
   if (saved) cpSync(dir, saved, { recursive: true });
+  const interrupt = new AbortController();
+  const onSignal = (signal: NodeJS.Signals): void =>
+    interrupt.abort(new Error(`interrupted by ${signal}: ${dir} is put back as it was`));
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   try {
-    await change();
+    await change(interrupt.signal);
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     if (saved) cpSync(saved, dir, { recursive: true });
-    throw error;
+    throw interrupt.signal.aborted ? interrupt.signal.reason : error;
   } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     if (saved) rmSync(saved, { recursive: true, force: true });
   }
 }
@@ -288,7 +301,7 @@ export async function lockEnvironment(
   const state = environmentDirState(agentDir);
   const declares = Object.keys(packages).length > 0;
   if (state === "foreign" && declares) throw new Error(foreignEnvironment(agentDir));
-  await restoredOnFailure(dir, async () => {
+  await restoredOnFailure(dir, async (signal) => {
     if (!declares) {
       if (state === "ours") removeRendered(dir);
     } else {
@@ -296,10 +309,12 @@ export async function lockEnvironment(
       mkdirSync(dir, { recursive: true });
       rmSync(join(dir, ENVIRONMENT_DIGEST_FILE), { force: true });
       writeFileAtomic(join(dir, MISE_FILE), renderConfig(packages));
-      await runMise(agentDir, bin, ["install"]);
-      await runMise(agentDir, bin, ["lock", "--platform", LOCK_PLATFORMS.join(",")]);
+      await runMise(agentDir, bin, ["install"], { signal });
+      await runMise(agentDir, bin, ["lock", "--platform", LOCK_PLATFORMS.join(",")], { signal });
       writeFileAtomic(join(dir, ENVIRONMENT_DIGEST_FILE), `${packagesDigest(packages)}\n`);
     }
+    // The last point a signal undoes the change: once the declaration is written, the two match.
+    signal.throwIfAborted();
     await commit?.();
   });
 }
@@ -316,11 +331,12 @@ function removeRendered(dir: string): void {
  * its digest do not change: a version is resolved once, when a package is added, and stays locked until this.
  */
 export async function updateEnvironment(agentDir: string, bin: string, names: readonly string[]): Promise<void> {
-  await restoredOnFailure(join(agentDir, ENVIRONMENT_DIR), async () => {
+  await restoredOnFailure(join(agentDir, ENVIRONMENT_DIR), async (signal) => {
     // What is locked now, first: a PyPI package's lock needs its uv installed.
-    await runMise(agentDir, bin, ["--locked", "install"]);
-    await runMise(agentDir, bin, ["lock", "--bump", ...names, "--platform", LOCK_PLATFORMS.join(",")]);
-    await runMise(agentDir, bin, ["--locked", "install"]);
+    await runMise(agentDir, bin, ["--locked", "install"], { signal });
+    await runMise(agentDir, bin, ["lock", "--bump", ...names, "--platform", LOCK_PLATFORMS.join(",")], { signal });
+    await runMise(agentDir, bin, ["--locked", "install"], { signal });
+    signal.throwIfAborted();
   });
 }
 

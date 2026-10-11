@@ -389,8 +389,8 @@ another name (`ripgrep` downloads ripgrep's GitHub release, `tokei` builds with 
 `fastagent env list` and `deploy` ask mise and refuse a package that builds from source (`go`, `cargo`, `spm`),
 compiles native extensions (`gem`), runs a plugin's code at install and on every start (`vfox`, `asdf`), or installs
 from a backend FastAgent has not classified; the refusal names the backend and the way around it, the project's
-release with `github:` or your own `Dockerfile`. The configuration asks mise for prebuilt runtimes: a runtime with no
-build for a platform fails there rather than compiling.
+release with `github:` or your own `Dockerfile`. The configuration asks mise for prebuilt runtimes (python, ruby, node,
+erlang): a runtime with no build for a platform fails there rather than compiling.
 
 A PyPI package (`pypi:markitdown`, or a registry name such as `ansible`) runs on `python` and installs and locks with
 `uv`. mise takes both from the machine when they are not declared, so such a package installs on your machine and

@@ -241,9 +241,10 @@ platform. The author never writes mise's files.
   its own. In the registry of mise 2026.10.7, 1,013 of the 1,064 names resolve to an allowed backend; most of the
   others (42 on `vfox`, such as `neovim`, `eza`, `poetry` and `yarn`) have a release or a package to name instead
   (`aqua:neovim/neovim`, `aqua:eza-community/eza`, `pypi:poetry`, `npm:yarn`).
-- **What the allowlist cannot see.** The rendered configuration sets mise's `all_compile = false`, so a runtime with
-  no prebuilt build for a platform (mise compiles `ruby` by default where it has none) fails there rather than
-  compiling. An npm or PyPI package whose native code has no prebuilt build for a platform still compiles there: it
+- **What the allowlist cannot see.** The rendered configuration sets mise's `compile = false` for python, ruby, node
+  and erlang, so a runtime with no prebuilt build for a platform fails there rather than compiling: mise compiles
+  python by default when it has none (python 3.6.15 on arm64 macOS), and `all_compile`, already false, does not
+  stop it. An npm or PyPI package whose native code has no prebuilt build for a platform still compiles there: it
   installs on a machine that has a compiler and fails in the image with the package manager's error, unless its build
   dependencies are in `aptPackages`. The format keeps out what builds from source where the backend says so, and
   promises no more than that.

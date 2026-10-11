@@ -1,5 +1,5 @@
 /**
- * `fastagent env add|remove|list|install|exec`: the agent's environment, declared under `environment` in context.json
+ * `fastagent env add|remove|update|list|install|exec`: the agent's environment, declared under `environment` in context.json
  * and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
  */
 import { spawn } from "node:child_process";

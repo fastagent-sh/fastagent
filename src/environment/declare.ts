@@ -9,8 +9,8 @@ import { createHash } from "node:crypto";
 /** The environment's lock, committed: mise's configuration rendered from the declaration, its lock, the digest. */
 export const ENVIRONMENT_DIR = "environment";
 
-/** In {@link ENVIRONMENT_DIR}: the digest of the packages it was rendered from, written last. */
-export const ENVIRONMENT_DIGEST_FILE = "declaration.sha256";
+/** In {@link ENVIRONMENT_DIR}: the digest of the packages it was rendered from (apt packages are not locked), written last. */
+export const ENVIRONMENT_DIGEST_FILE = "packages.sha256";
 
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {

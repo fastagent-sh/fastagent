@@ -21,7 +21,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
-| `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
+| `env add\|remove\|update\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List model specs. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally with watch/reload. |
@@ -162,13 +162,13 @@ fastagent env exec -- gh --version
   to `context.json` by hand, it locks the packages again first and says so: commit `environment/` with the change.
 - **`exec`** runs a command with the environment first on its `PATH`, and exits with its code.
 
-A change that fails (a package mise cannot install, a refused backend) leaves `context.json` and `environment/` as they
-were. An `environment/` FastAgent did not write (its `mise.toml` is not one FastAgent rendered) is the author's: ignored
-while no package is declared, refused when one is, and never changed or removed. Two at once on one agent run one after
-the other, under a lock beside `environment/`. The first change adds mise to the agent's `package.json`
-(`npm install --save-optional --save-exact`, or `bun add`) and says so; an agent whose `package.json` does not list
-`@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an agent with dependencies, whose image runs
-the FastAgent they list.
+A change that fails (a package mise cannot install, a refused backend) or is interrupted (Ctrl-C) leaves
+`context.json` and `environment/` as they were. An `environment/` FastAgent did not write (its `mise.toml` is not one
+FastAgent rendered) is the author's: ignored while no package is declared, refused when one is, and never changed or
+removed. Two at once on one agent run one after the other, under a lock beside `environment/`. The first change adds
+mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and says so; an agent
+whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an
+agent with dependencies, whose image runs the FastAgent they list.
 
 ## `fastagent models`
 
