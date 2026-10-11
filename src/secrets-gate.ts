@@ -23,7 +23,7 @@ import { type DeclaredSecret, allSecrets, describeSecrets, missingSecrets } from
 import { type ModuleLoadFailure, reportModuleLoadFailures } from "./loader.ts";
 
 export function gateSecrets(input: {
-  /** Owner (tool / schedule / channel name) → what it declared, as the loaders return it. */
+  /** Owner (tool / schedule / channel name, or `context.json` for its variables) → what it declared. */
   declared: ReadonlyMap<string, readonly DeclaredSecret[]>;
   /** What could not be loaded from the same directory — reported before any refusal (decision 2). */
   failures: readonly ModuleLoadFailure[];
@@ -37,7 +37,7 @@ export function gateSecrets(input: {
   reportModuleLoadFailures(input.failures);
   throw new Error(
     `missing required secrets: ${describeSecrets(missing)} — set them in .secrets/.env (or the ` +
-      `environment). Deployed, they travel as deploy secrets; a tool that should run WITHOUT the ` +
-      `value must not declare it.`,
+      `environment). Deployed, they travel as deploy secrets; what should run WITHOUT the value must ` +
+      `not declare it.`,
   );
 }

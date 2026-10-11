@@ -218,7 +218,10 @@ platform. The author never writes mise's files.
       "uv": "latest",
       "pypi:markitdown": "0.1"
     },
-    "aptPackages": ["chromium", "fonts-noto-cjk"]
+    "aptPackages": ["chromium", "fonts-noto-cjk"],
+    "variables": {
+      "GITHUB_TOKEN": { "description": "gh's token, with repo scope" }
+    }
   }
 }
 ```
@@ -318,13 +321,25 @@ platform. The author never writes mise's files.
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
   runs with `uv run`, so a skill carries its own dependencies wherever its context goes.
 - `deploy.apt` is gone, and the config has no `environment`.
-- **Environment variables come next** (step 3). The same `environment` will declare the variables the agent's commands
-  read, as Heroku's `app.json` does. A plain value is a default every stage shares, which the process environment
-  overrides; a stage is one of the two environments the [channel environments](channel-environments.md) define, dev
-  and production. A name with `required` and a description has its value from the stage's value file
-  (`.secrets/.env` for dev, `.secrets/production/.env` for production) or the host. That is how the commands an agent
-  runs declare what they read, which today nothing does (§6.1). Secret values, the stages and their isolation stay
-  as §6.2 and the channel environments describe.
+- **`variables` declares the environment variables the agent's commands read, by name; values come from the
+  environment.** A declaration is a name and a sentence saying what it is for
+  (`"GITHUB_TOKEN": { "description": "gh's token, with repo scope" }`), as `defineTool` declares the `secrets` its code
+  reads: convention over configuration. The sentence sits in an object, because a string beside a variable's name is
+  read as its value in every format an author knows (`.env`, Heroku's `app.json`, Compose), and a string is refused with
+  where its value goes. The value comes from the stage's value file (`.secrets/.env` for dev, `.secrets/production/.env`
+  for production, which `deploy` reads and carries) or, for a process started by hand, the variables it is started with,
+  the same way a tool's secret does; a stage is one of the two environments the [channel
+  environments](channel-environments.md) define. Nothing in `context.json` holds a value, so no value can be committed
+  with it, and nothing needs rules for which of two values wins.
+  - Every declared variable is required, as a tool's secret is: a serving path refuses to start without its value and
+    names `context.json`, `deploy` refuses before its first side effect and lists it with its sentence, and `info` and
+    `fastagent env list` say which are set. `fastagent tool` and `env exec` run one tool or one command, and are not
+    gated by the agent's declarations, as they are not by another tool's.
+  - A name the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) is refused: the value
+    file's copy never travels, so its declaration could never be satisfied.
+  - A shared default that is not a secret (an enterprise host) goes in each stage's value file too; `.env.example` is
+    the committed template for them. Defaults written in `context.json` were considered and left out: they make a
+    committed file the place a secret can land, and need an order for which value wins.
 - How an agent changes its own environment, on a laptop or on a host, is designed with how an agent is developed
   (§12, later): for an author and for the agent itself, it is the same work on the same files.
 
@@ -335,8 +350,7 @@ built with colima on arm64 and x64 and with Bun's image as well:
 
 - `chromium` ran headless (`--dump-dom`, a screenshot, CJK text with `fonts-noto-cjk`); the Chromium layer is about
   700 MB and the CJK fonts about 300 MB, installed without apt's recommended packages. Pointing a tool at the browser
-  (`PUPPETEER_EXECUTABLE_PATH` for mermaid-cli) needs an environment variable, in `.secrets/.env` until variables are
-  declared. A package outside the distribution's repositories, or another base image, needs the author's own
+  (`PUPPETEER_EXECUTABLE_PATH` for mermaid-cli) needs an environment variable, declared in `variables` with its value in the stage's value file. A package outside the distribution's repositories, or another base image, needs the author's own
   `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing the lock included.
 - A `pypi:` package built only with `python` and `uv` declared. A `cargo:` package needed `rust`, curl for rustup, and
   either `cargo-binstall` (a prebuilt binary; a 3.17 GB image) or `build-essential` (compiled; 3.54 GB): building from
@@ -409,8 +423,8 @@ A credential is proof of authority over another system. Three questions decide h
 ### 6.1 Declared by what uses it
 
 A credential that code or configuration uses is declared next to it, the way `defineTool` and `defineChannel` declare
-`secrets` today. The commands the agent runs read the process environment; what they read is declared in the agent's
-environment, with `required` (§4).
+`secrets` today. The commands the agent runs read the process environment; what they read is declared, by name, in
+the `variables` of the agent's environment (§4), every one of them required.
 
 | Used by | Declared as | Today |
 |---|---|---|
@@ -419,10 +433,9 @@ environment, with `required` (§4).
 | A channel | `defineChannel({ secrets })` | Exists |
 | Content | Its kind's credential: `github` content reads `GITHUB_TOKEN` after git's own helpers, and may name another variable | Read; `deploy` notes when it is missing; not declared |
 | An MCP server | `${VAR}` in its `env` or `headers` in `mcp.json`, or an OAuth sign-in (`mcp login`) | MCP is not served yet |
-| A command the agent runs (`gh`, `aws`) | The variables it reads, in `environment.variables` in `context.json` (§4) | Not declared: it reads the process environment, which holds every value |
+| A command the agent runs (`gh`, `aws`) | The variables it reads, by name, in `environment.variables` in `context.json` (§4) | Exists |
 
-A declaration does what it does for tools and channels today (a plain value in `environment.variables` is a default
-every stage shares, not a credential, and none of this applies to it):
+A declaration does what it does for tools and channels today:
 
 - it makes the value required: a serving path refuses to start without it and names the file that declared it, and
   `deploy` refuses before its first side effect. Content's credential is the exception: git's own helpers come first
@@ -1177,7 +1190,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `environment` in `context.json` (`packages`, `aptPackages`), locked in the committed `environment/` and installed by the agent's own mise (step 3) | `variables` too, joined with the contexts' (§3.6, §4) |
+| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), the packages locked in the committed `environment/` and installed by the agent's own mise (step 3) | Joined with the contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
 | Content and contexts | Content in `context.json`, at `content/<name>/`: a clone or a link to the author's checkout (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
@@ -1258,7 +1271,8 @@ The product and the model:
   context is referenced as a pi package is (git with a ref, npm with a version, a local path), pinned, and moved only
   by `fastagent context update`; a name two contexts declare refuses the start; contexts do not nest (§3.6).
 - The environment is declared in FastAgent's own format, under `environment` in `context.json`: `packages` by mise's
-  names and `aptPackages` for the image, then `variables`. mise, the agent's own (an optional npm dependency per
+  names, `aptPackages` for the image, and `variables`, the names of the variables its commands read, whose values
+  come from the environment as a tool's secrets do. mise, the agent's own (an optional npm dependency per
   platform), installs it, from `environment/` in the image: the image's lock, mise's configuration rendered from the
   declaration and its lock, committed, so every image built from a commit gets the same versions and a rollback
   restores them. A process that runs the agent follows the lock and never writes or refuses it; `fastagent env` and

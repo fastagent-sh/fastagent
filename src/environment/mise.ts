@@ -33,6 +33,7 @@ import { log } from "../log.ts";
 import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { aptAdvice, missingAptPackages } from "./apt.ts";
 import {
+  type DeclaredEnvironment,
   ENVIRONMENT_DIR,
   type MissingRuntime,
   missingPythonRuntime,
@@ -435,12 +436,12 @@ function missingMise(agentDir: string): Error {
  * declaration: `fastagent env` and `deploy` lock it. mise itself is not put on the PATH. An agent without packages
  * borrows the machine's commands. Apt packages are the image's to install; one missing here is said, with how.
  */
-export async function enterEnvironment(agentDir: string): Promise<void> {
+export async function enterEnvironment(agentDir: string): Promise<DeclaredEnvironment | undefined> {
   const declared = loadEnvironment(agentDir);
   const missingApt = missingAptPackages(declared?.aptPackages ?? []);
   if (missingApt && missingApt.length > 0) log.warn(`[fastagent] ${aptAdvice(missingApt)}`);
   const packages = declared?.packages ?? {};
-  if (Object.keys(packages).length === 0) return;
+  if (Object.keys(packages).length === 0) return declared;
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
   const env = await inWorkingCopy(agentDir, packages, async (work) => {
@@ -449,6 +450,7 @@ export async function enterEnvironment(agentDir: string): Promise<void> {
     return JSON.parse(await runMise(work, bin, ["env", "--json"], { capture: true })) as Record<string, string>;
   });
   Object.assign(process.env, env);
+  return declared;
 }
 
 /** The version `environment/mise.lock` records for each package, for `fastagent env list` and `update`. */

@@ -582,6 +582,17 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         });
       }
     }
+    // Variables travel with the value file, whatever the image does: no environment for the Dockerfile to install.
+    await writeFile(
+      join(dir, "context.json"),
+      JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host" } } } }),
+    );
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "GH_HOST=github.example.com\n");
+    const variablesOnly = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(variablesOnly.ok && variablesOnly.messages.map((m) => m.text).join("\n")).not.toMatch(
+      /kept your hand-written/,
+    );
   });
 
   /** The agent's mise, faked where its platform package puts it: it resolves every name to aqua and logs each lock. */
@@ -1077,6 +1088,11 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
       `export default { name: "x-post", description: "post", parameters: {},
          secrets: ["X_API_KEY", "X_API_SECRET"], execute: async () => ({ content: [] }) };\n`,
     );
+    // The variables context.json declares for the agent's commands are required the same way, with what they are for.
+    await writeFile(
+      join(dir, "context.json"),
+      JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host gh talks to" } } } }),
+    );
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(join(dir, ".secrets", ".env"), "GH_TOKEN=ghp\nX_API_KEY=x\n");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
@@ -1085,11 +1101,13 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     expect(pre.declaredSecrets).toEqual([
       { name: "X_API_KEY", source: "tools/x-post.mjs" },
       { name: "X_API_SECRET", source: "tools/x-post.mjs" },
+      { name: "GH_HOST", source: "context.json", description: "the GitHub host gh talks to" },
     ]);
     // The runbook names the file to open for a required one, and the value file for the rest.
     expect(pre.secrets).toEqual([
       { name: "X_API_KEY", hint: "required by tools/x-post.mjs" },
       { name: "X_API_SECRET", hint: "required by tools/x-post.mjs" },
+      { name: "GH_HOST", hint: "required by context.json: the GitHub host gh talks to" },
       { name: "GH_TOKEN", hint: "from .secrets/.env" },
     ]);
   });

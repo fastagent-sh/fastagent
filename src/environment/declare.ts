@@ -1,9 +1,13 @@
 /**
  * WHAT AN AGENT'S ENVIRONMENT IS: the `environment` of `context.json`, read and refused in ONE place, and the backends a
  * package may install from. FastAgent's own format, with mise underneath: `packages` (mise's tool names, each with a
- * version) and `aptPackages` (Debian packages the image installs). Pure: installing it is mise.ts's.
+ * version), `aptPackages` (Debian packages the image installs) and `variables` (the environment variables its commands
+ * read, by name: their values come from the environment, as a tool's secrets do). Pure: installing it is mise.ts's.
  * docs/design/agent-service.md §4 is the rule.
  */
+import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
+import { isDeployOwned } from "../deploy/secrets.ts";
+import { CONTEXT_FILE } from "../paths.ts";
 
 /** The image's lock of the packages, committed: mise's configuration rendered from the declaration, and its lock. */
 export const ENVIRONMENT_DIR = "environment";
@@ -14,9 +18,17 @@ export interface DeclaredEnvironment {
   packages: Record<string, string>;
   /** Debian packages the image installs. */
   aptPackages: string[];
+  /** Environment variable name → what it is for. Every one is required; its value comes from the environment. */
+  variables: Record<string, DeclaredVariable>;
 }
 
-const ENVIRONMENT_KEYS = ["packages", "aptPackages"] as const;
+/** One declared environment variable, as `context.json` holds it. */
+interface DeclaredVariable {
+  /** What it is for, said where the variable is reported: runbooks, `info`, `fastagent env list`. */
+  description: string;
+}
+
+const ENVIRONMENT_KEYS = ["packages", "aptPackages", "variables"] as const;
 
 /** The backends a package may be written with: a release, a conda-forge build, an npm or a PyPI package. */
 const WRITTEN_BACKENDS = ["aqua", "github", "gitlab", "conda", "npm", "pypi"] as const;
@@ -56,7 +68,57 @@ export function declareEnvironment(raw: unknown): DeclaredEnvironment | undefine
       throw new Error(`environment: unknown key "${key}" (valid keys: ${ENVIRONMENT_KEYS.join(", ")})`);
     }
   }
-  return { packages: declarePackages(environment.packages), aptPackages: declareAptPackages(environment.aptPackages) };
+  return {
+    packages: declarePackages(environment.packages),
+    aptPackages: declareAptPackages(environment.aptPackages),
+    variables: declareVariables(environment.variables),
+  };
+}
+
+function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`environment: "variables" must be an object of variables by name`);
+  }
+  for (const [name, variable] of Object.entries(raw)) {
+    const at = `environment: variable ${JSON.stringify(name)}`;
+    if (!isEnvName(name)) throw new Error(`${at} is not an environment variable name`);
+    if (isDeployOwned(name)) {
+      throw new Error(
+        `${at} is set by the deployment itself, so it cannot be declared: a value file's copy never travels`,
+      );
+    }
+    if (!variable || typeof variable !== "object" || Array.isArray(variable)) {
+      throw new Error(
+        `${at} must be { "description": "what it is for" }: its value goes in the stage's value file ` +
+          `(.secrets/.env, .secrets/production/.env) or the host, never in context.json`,
+      );
+    }
+    for (const key of Object.keys(variable)) {
+      if (key !== "description") throw new Error(`${at}: unknown key "${key}" (valid keys: description)`);
+    }
+    const description = (variable as { description?: unknown }).description;
+    if (typeof description !== "string" || description.trim() === "") {
+      throw new Error(`${at}: "description" must be a non-empty sentence saying what it is for`);
+    }
+    // Written verbatim into each host's runbook, as a comment: a line break would end the comment and start a command.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are what is refused
+    if (/[\u0000-\u001f\u007f]/.test(description)) {
+      throw new Error(`${at}: "description" must be one line of text, without control characters`);
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(raw as Record<string, DeclaredVariable>).map(([name, { description }]) => [name, { description }]),
+  );
+}
+
+/** The variables `environment` declares, as the declarations every serving path and `deploy` require. */
+export function declaredVariables(environment: DeclaredEnvironment | undefined): DeclaredSecret[] {
+  return Object.entries(environment?.variables ?? {}).map(([name, { description }]) => ({
+    name,
+    source: CONTEXT_FILE,
+    description,
+  }));
 }
 
 function declarePackages(raw: unknown): Record<string, string> {

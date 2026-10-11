@@ -10,6 +10,7 @@ import {
   type DeclaredEnvironment,
   ENVIRONMENT_DIR,
   declareEnvironment,
+  declaredVariables,
   parsePackageArgument,
   runtimeAdvice,
   samePackages,
@@ -26,11 +27,24 @@ import {
 import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
+import { dotEnvPath, enterAgentEnv } from "../../env.ts";
+import { missingSecrets } from "../../declared-secrets.ts";
 
-const NONE: DeclaredEnvironment = { packages: {}, aptPackages: [] };
+const NONE: DeclaredEnvironment = { packages: {}, aptPackages: [], variables: {} };
+
+/**
+ * The agent directory, the current one, entered as every command that runs in it is: its `.env` in `process.env`, and
+ * the proxy that `.env` may declare. mise's downloads go through that proxy, and `env exec` runs its command with the
+ * same values the agent's own commands get.
+ */
+function enterAgentHere(): string {
+  const agentDir = agentDirOrExit(resolve("."));
+  enterAgentEnv(agentDir);
+  return agentDir;
+}
 
 export async function runEnvAdd(args: string[]): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   const apt: string[] = [];
   await edit(agentDir, (current) => {
     const packages = { ...current.packages };
@@ -44,14 +58,14 @@ export async function runEnvAdd(args: string[]): Promise<void> {
         packages[parsed.name] = parsed.version;
       }
     }
-    return { packages, aptPackages };
+    return { ...current, packages, aptPackages };
   }).catch(failStartup);
   const missing = missingAptPackages(apt);
   if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
 }
 
 export async function runEnvRemove(args: string[]): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   await edit(agentDir, (current) => {
     const packages = { ...current.packages };
     let aptPackages = [...current.aptPackages];
@@ -62,12 +76,12 @@ export async function runEnvRemove(args: string[]): Promise<void> {
       if (apt !== undefined) aptPackages = aptPackages.filter((name) => name !== apt);
       else delete packages[arg];
     }
-    return { packages, aptPackages };
+    return { ...current, packages, aptPackages };
   }).catch(failStartup);
 }
 
 export async function runEnvUpdate(names: string[]): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   const changes = await withEnvironmentLock(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
     for (const name of names) {
@@ -96,18 +110,27 @@ export async function runEnvUpdate(names: string[]): Promise<void> {
 }
 
 export async function runEnvList(): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   const declared = await Promise.resolve()
     .then(() => loadEnvironment(agentDir) ?? NONE)
     .catch(failStartup);
   const locked = lockedVersions(agentDir);
-  const names = [...Object.keys(declared.packages), ...declared.aptPackages.map((name) => `apt:${name}`)];
+  const variables = declaredVariables(declared);
+  const names = [
+    ...Object.keys(declared.packages),
+    ...declared.aptPackages.map((name) => `apt:${name}`),
+    ...variables.map(({ name }) => name),
+  ];
   if (names.length === 0) console.log("(none: the agent runs this machine's commands)");
   const width = Math.max(0, ...names.map((name) => name.length));
   for (const [name, version] of Object.entries(declared.packages)) {
     console.log(`${name.padEnd(width)}  ${version.padEnd(8)}  ${locked.get(name) ?? "(not locked)"}`);
   }
   for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
+  // Whether each has a value here, never the value.
+  for (const { name, description } of variables) {
+    console.log(`${name.padEnd(width)}  ${(process.env[name] ? "set" : "not set").padEnd(8)}  ${description}`);
+  }
   if (Object.keys(declared.packages).length > 0) {
     const bin = miseBinary(agentDir);
     if (!bin) {
@@ -123,10 +146,17 @@ export async function runEnvList(): Promise<void> {
   }
   const missing = missingAptPackages(declared.aptPackages);
   if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
+  const unset = missingSecrets(variables).map(({ name }) => name);
+  if (unset.length > 0) {
+    log.warn(
+      `[fastagent] no value here for ${unset.join(", ")}: dev and start refuse to run until they have one — set ` +
+        `them in ${dotEnvPath(agentDir)}`,
+    );
+  }
 }
 
 export async function runEnvInstall(): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   await withEnvironmentLock(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
     if (await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages))) {
@@ -141,7 +171,7 @@ export async function runEnvInstall(): Promise<void> {
 }
 
 export async function runEnvExec(command: string[]): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
+  const agentDir = enterAgentHere();
   await enterEnvironment(agentDir).catch(failStartup);
   const [program, ...args] = command as [string, ...string[]];
   const code = await new Promise<number>((done, fail) => {

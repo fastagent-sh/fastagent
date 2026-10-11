@@ -30,14 +30,26 @@ describe("cli: info", () => {
 
   it("info reports the declared environment without installing it, and a refused one without failing", async () => {
     // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
-    const environment = { packages: { jq: "1.8.1" }, aptPackages: ["chromium"] };
+    const environment = {
+      packages: { jq: "1.8.1" },
+      aptPackages: ["chromium"],
+      variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } },
+    };
     const dir = await agentWorkspace("fa-info-env-", {
       "fastagent.config.ts": "export default {};\n",
       "context.json": JSON.stringify({ environment }),
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null, environmentWarning: null });
+    expect(JSON.parse(ok.stdout)).toMatchObject({
+      environment,
+      environmentError: null,
+      environmentWarning: null,
+      // Required like a tool's secret, attributed to the file that declares it.
+      declaredSecrets: [{ name: "FA_TEST_HOST", source: "context.json", description: "the GitHub host gh talks to" }],
+      unsetSecrets: [expect.objectContaining({ name: "FA_TEST_HOST" })],
+    });
+    expect((await run(["info", dir])).stdout).toMatch(/^secrets: +FA_TEST_HOST \(context\.json\)$/m);
     expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
     // An environment/ of the author's own, where the packages' lock goes: what `env` and `deploy` would refuse.
     await mkdir(join(dir, "environment"));

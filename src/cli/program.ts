@@ -441,8 +441,10 @@ const env: CommandSpec = {
   summary: "add, remove or list the commands the agent runs: its environment",
   description:
     "The agent's environment is the `environment` of its context.json: `packages`, each a name from mise's registry " +
-    "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version, and `aptPackages`, Debian " +
-    "packages the image installs. environment/ is the image's lock, committed with the agent: these commands and " +
+    "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version; `aptPackages`, Debian " +
+    "packages the image installs; and `variables`, the environment variables its commands read, each declared by " +
+    "name with a description (its value goes in .secrets/.env, never in context.json; every one is required). " +
+    "Variables are edited in context.json by hand. environment/ is the image's lock, committed with the agent: these commands and " +
     "`deploy` write it, and a run here installs the versions it records too. Run in the agent directory (the " +
     "current one). The first change adds mise to the agent's package.json (one optional package per platform; npm " +
     "installs this machine's), so nothing has to be installed first.",
@@ -479,7 +481,7 @@ const env: CommandSpec = {
     },
     {
       name: "list",
-      summary: "the declared packages with their locked versions, and what is wrong with them",
+      summary: "the declared packages with their locked versions, the variables and whether each has a value",
       examples: [{ cmd: "fastagent env list" }],
       run: async () => (await import("./commands/env.ts")).runEnvList(),
     },
@@ -497,7 +499,7 @@ const env: CommandSpec = {
     },
     {
       name: "exec",
-      summary: "run a command in the environment",
+      summary: "run a command in the environment, with the agent's .secrets/.env",
       args: [{ name: "<command...>", description: "the command and its arguments, after --", verbatim: true }],
       examples: [{ cmd: "fastagent env exec -- gh --version" }],
       run: async (args) => (await import("./commands/env.ts")).runEnvExec(args[0] as string[]),

@@ -25,7 +25,7 @@ import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
-import type { DeclaredEnvironment } from "../../environment/declare.ts";
+import { type DeclaredEnvironment, declaredVariables } from "../../environment/declare.ts";
 import { foreignEnvironment } from "../../environment/mise.ts";
 
 export interface InfoOptions {
@@ -93,7 +93,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // (never asserts) the list `start` refuses to boot without and `deploy` requires a value for: channels are
   // imported as `start` imports them, so a Feishu/Lark channel that `dev` connects by WebSocket shows the webhook
   // values a deployment needs, and the line says so.
-  const declaredSecrets: DeclaredSecret[] = [...tools.secrets, ...allSecrets(inspected.secrets)];
+  const declaredSecrets: DeclaredSecret[] = [
+    ...tools.secrets,
+    ...allSecrets(inspected.secrets),
+    ...declaredVariables(environment),
+  ];
   const unsetSecrets = missingSecrets(declaredSecrets);
   const schedules = sched.schedules.map((s) => ({
     name: s.name,

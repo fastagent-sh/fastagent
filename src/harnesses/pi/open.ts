@@ -8,6 +8,7 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import {
+  CONTEXT_FILE,
   AGENT_MODEL_CATALOG_FILE,
   resolveAgentDir,
   resolveOverridePath,
@@ -21,6 +22,7 @@ import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
+import { declaredVariables } from "../../environment/declare.ts";
 import { enterEnvironment } from "../../environment/mise.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
@@ -165,7 +167,7 @@ export async function resolveAgentAssembly(
   // The commands the agent runs, before anything is spawned: every process that opens the agent (a `dev` worker,
   // `start`, `invoke`, `chat`, an embedder's `createAgentService`) runs it on its declared packages, or refuses to (a
   // declaration FastAgent refuses, no mise to install them with).
-  await enterEnvironment(agentDir);
+  const environment = await enterEnvironment(agentDir);
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
   // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.
@@ -202,8 +204,9 @@ export async function resolveAgentAssembly(
   //
   // DEFERRED tools gate too, deliberately: native discovery can activate one mid-turn, so "registered"
   // means "may run in this process" — letting it start would put the empty-credential failure back
-  // inside a turn. An author who does not want that opts out per tool by not declaring.
-  gateSecrets({ declared: toolSecrets, failures: [] });
+  // inside a turn. An author who does not want that opts out per tool by not declaring. The variables context.json
+  // declares are one more owner: the commands the agent runs read them.
+  gateSecrets({ declared: new Map([...toolSecrets, [CONTEXT_FILE, declaredVariables(environment)]]), failures: [] });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);
