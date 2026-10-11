@@ -71,7 +71,7 @@ src/
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
 │   ├── declare.ts          # a content entry read and refused in ONE place (names, keys, nesting)
-│   ├── file.ts             # `context.json` read whole (every refusal names the file) and its written shape
+│   ├── file.ts             # `context.json` read (a reader its part, an edit the whole; refusals name it) and written
 │   ├── mount.ts            # the writes into content/: the dir with its own .gitignore, and the links
 │   ├── resolve.ts          # where each entry is for THIS instance (content/<name>): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone

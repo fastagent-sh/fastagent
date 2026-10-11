@@ -4,7 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { loadEnvironment } from "../../content/file.ts";
+import { loadEnvironment, readContextFile } from "../../content/file.ts";
 import { aptAdvice, missingAptPackages } from "../../environment/apt.ts";
 import {
   type DeclaredEnvironment,
@@ -163,7 +163,8 @@ async function edit(
   change: (current: DeclaredEnvironment) => DeclaredEnvironment,
 ): Promise<DeclaredEnvironment> {
   return withEnvironmentLock(agentDir, async () => {
-    const current = loadEnvironment(agentDir) ?? NONE;
+    // Read whole, as the write that follows is: a refused content entry stops the edit before anything is locked.
+    const current = readContextFile(agentDir).environment ?? NONE;
     const next = declareEnvironment(change(current)) ?? NONE;
     if (!samePackages(current.packages, next.packages)) {
       await lockEnvironment(agentDir, next.packages, () => checkedMise(agentDir, next.packages));

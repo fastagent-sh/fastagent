@@ -51,10 +51,16 @@ describe("cli: info", () => {
     expect((await run(["info", dir])).stdout).toMatch(
       /^environment: +jq 1\.8\.1, apt:chromium\n +⚠ .*environment was not written by FastAgent/m,
     );
-    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { "cargo:x": "1" } } }));
+    await writeFile(
+      join(dir, "context.json"),
+      JSON.stringify({ content: { notes: { github: "acme/notes" } }, environment: { packages: { "cargo:x": "1" } } }),
+    );
     const refused = await run(["info", dir, "--json"]);
     expect(refused.code).toBe(0);
+    // Reported where it is: the content is the content, and the refusal is the environment's alone.
     expect(JSON.parse(refused.stdout)).toMatchObject({
+      content: [expect.objectContaining({ name: "notes" })],
+      contentError: null,
       environment: null,
       environmentError: expect.stringMatching(/package "cargo:x" installs with cargo:/),
     });

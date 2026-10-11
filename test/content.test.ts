@@ -8,7 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type DeclaredContent, declareContent } from "../src/content/declare.ts";
-import { contextFileText, parseContextFile, readContextFile } from "../src/content/file.ts";
+import {
+  contextFileText,
+  loadContent,
+  loadEnvironment,
+  parseContextFile,
+  readContextFile,
+} from "../src/content/file.ts";
 import { readContentSource } from "../src/content/source.ts";
 import { checkLinkTarget, contentAbsentHere, resolveContent } from "../src/content/resolve.ts";
 
@@ -62,6 +68,22 @@ describe("content: context.json", () => {
       /^\/a\/context\.json: content "a": "ref" applies/,
     );
     expect(readContextFile(await mkdtemp(join(tmpdir(), "fa-context-file-")))).toEqual({ content: {}, declared: [] });
+  });
+
+  it("a reader declares the part it uses, so a refused part stops only what uses it; the file itself stops both", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-context-parts-"));
+    const path = join(dir, "context.json");
+    await writeFile(path, `{ "content": { "notes": {} }, "environment": { "packages": { "cargo:x": "1" } } }`);
+    expect(loadContent(dir)).toEqual([{ name: "notes", readonly: false, kind: "local" }]);
+    expect(() => loadEnvironment(dir)).toThrow(`${path}: environment: package "cargo:x" installs with cargo:`);
+    // An edit writes the whole, so it reads the whole.
+    expect(() => readContextFile(dir)).toThrow(`${path}: environment: package "cargo:x"`);
+    await writeFile(path, `{ "content": { "a": { "ref": "x" } }, "environment": { "packages": { "gh": "2" } } }`);
+    expect(loadEnvironment(dir)).toEqual({ packages: { gh: "2" }, aptPackages: [] });
+    expect(() => loadContent(dir)).toThrow(`${path}: content "a": "ref" applies`);
+    await writeFile(path, `{ "contexts": {} }`);
+    for (const read of [loadContent, loadEnvironment])
+      expect(() => read(dir)).toThrow(`${path}: unknown key "contexts"`);
   });
 });
 

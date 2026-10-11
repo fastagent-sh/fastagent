@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
-/** The packages of `names` this machine does not have, or undefined when it cannot tell (not Debian or Ubuntu). */
+/** The packages of `names` this machine does not have, or undefined when it cannot tell (not Debian, or no dpkg). */
 export function missingAptPackages(
   names: readonly string[],
   debian = existsSync("/etc/debian_version"),
@@ -16,6 +16,8 @@ export function missingAptPackages(
   // dpkg-query exits 1 when a name is unknown to it; the names it does know are still printed.
   // biome-ignore lint/suspicious/noTemplateCurlyInString: dpkg-query's own format, not a template
   const result = spawnSync("dpkg-query", ["-W", "-f=${Package} ${db:Status-Status}\n", ...names], { encoding: "utf8" });
+  // A Debian-based image without dpkg cannot tell, which is what undefined says; anything else is a failure.
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return undefined;
   if (result.error) throw new Error(`dpkg-query could not run: ${result.error.message}`);
   const installed = new Set(
     result.stdout

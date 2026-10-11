@@ -1,7 +1,9 @@
 /**
- * The agent's `context.json`, read and refused whole in ONE place, so the opener, `info`, `content list`, `env`, `tool`
- * and deploy read one declaration (its content, and its environment); and the one shape it is written in. JSON, like
- * `mcp.json` and `package.json`, so a command, a client or the agent itself can edit it without touching TypeScript.
+ * The agent's `context.json`, read in ONE place, so the opener, `info`, `content list`, `env`, `tool` and deploy read
+ * one declaration; and the one shape it is written in. A reader declares the part it uses (its content, or its
+ * environment), so a part that is refused stops what uses it and is reported where it is, not as the other's; an edit
+ * declares the whole, since it writes the whole. JSON, like `mcp.json` and `package.json`, so a command, a client or
+ * the agent itself can edit it without touching TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -19,8 +21,8 @@ export interface ContextFile {
 
 const FILE_KEYS = ["$schema", "content", "environment"] as const;
 
-/** Read `text`, the contents of `path`. Every refusal names the file. */
-export function parseContextFile(text: string, path: string): ContextFile {
+/** `text`, the contents of `path`, as the object `context.json` is: refused when the file itself is wrong. */
+function parseFile(text: string, path: string): Record<string, unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -37,14 +39,23 @@ export function parseContextFile(text: string, path: string): ContextFile {
   if (file.$schema !== undefined && typeof file.$schema !== "string") {
     throw new Error(`${path}: "$schema" must be a string`);
   }
-  let declared: DeclaredContent[];
-  let environment: DeclaredEnvironment | undefined;
+  return file;
+}
+
+/** One part of `context.json` at `path`, declared by `declare`; its refusal names the file. */
+function declarePart<T>(path: string, declare: () => T): T {
   try {
-    declared = declareContent(file.content);
-    environment = declareEnvironment(file.environment);
+    return declare();
   } catch (error) {
     throw new Error(`${path}: ${(error as Error).message}`);
   }
+}
+
+/** Read `text`, the contents of `path`, whole: what an edit, which writes the whole, reads. */
+export function parseContextFile(text: string, path: string): ContextFile {
+  const file = parseFile(text, path);
+  const declared = declarePart(path, () => declareContent(file.content));
+  const environment = declarePart(path, () => declareEnvironment(file.environment));
   return {
     ...(file.$schema !== undefined ? { $schema: file.$schema as string } : {}),
     content: (file.content ?? {}) as Record<string, ContentEntry>,
@@ -53,27 +64,37 @@ export function parseContextFile(text: string, path: string): ContextFile {
   };
 }
 
-/** The agent's `context.json`, read; an agent without one declares no content. */
-export function readContextFile(agentDir: string): ContextFile {
+/** The agent's `context.json` and its path, or undefined text when it has none (it declares nothing). */
+function contextFileAt(agentDir: string): { path: string; text?: string } {
   const path = join(resolve(agentDir), CONTEXT_FILE);
-  let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    return { path, text: readFileSync(path, "utf8") };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { content: {}, declared: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { path };
     throw error;
   }
-  return parseContextFile(text, path);
+}
+
+/** The agent's `context.json`, read whole. */
+export function readContextFile(agentDir: string): ContextFile {
+  const { path, text } = contextFileAt(agentDir);
+  return text === undefined ? { content: {}, declared: [] } : parseContextFile(text, path);
 }
 
 /** The content the agent in `agentDir` declares. */
 export function loadContent(agentDir: string): DeclaredContent[] {
-  return readContextFile(agentDir).declared;
+  const { path, text } = contextFileAt(agentDir);
+  if (text === undefined) return [];
+  const file = parseFile(text, path);
+  return declarePart(path, () => declareContent(file.content));
 }
 
 /** The environment the agent in `agentDir` declares, or undefined when it declares none. */
 export function loadEnvironment(agentDir: string): DeclaredEnvironment | undefined {
-  return readContextFile(agentDir).environment;
+  const { path, text } = contextFileAt(agentDir);
+  if (text === undefined) return undefined;
+  const file = parseFile(text, path);
+  return declarePart(path, () => declareEnvironment(file.environment));
 }
 
 /** The text `context.json` is written as. An environment that declares nothing is left out. */

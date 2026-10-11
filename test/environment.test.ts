@@ -271,6 +271,9 @@ describe("environment: apt packages on this machine", () => {
     await chmod(join(fakeBin, "dpkg-query"), 0o755);
     process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
     expect(missingAptPackages(["git", "fonts-noto", "chromium"], true)).toEqual(["fonts-noto", "chromium"]);
+    // A Debian-based image without dpkg cannot tell either: nothing is said, and nothing fails.
+    process.env.PATH = await realpath(await mkdtemp(join(tmpdir(), "fa-env-no-dpkg-")));
+    expect(missingAptPackages(["chromium"], true)).toBeUndefined();
     expect(aptAdvice(["chromium"])).toBe(
       "the image installs apt packages this machine does not have: chromium — `sudo apt-get install -y chromium`",
     );
@@ -544,6 +547,16 @@ describe("environment: `fastagent env`", () => {
     expect(apt.code, apt.stderr).toBe(0);
     expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" }, aptPackages: ["chromium"] });
     expect((await calls()).length).toBe(before);
+  });
+
+  it("refuses to edit a context.json whose content is refused, before anything is locked", async () => {
+    const dir = await agentDir();
+    await writeFile(join(dir, "context.json"), `{ "content": { "a": { "ref": "x" } } }`);
+    const { calls } = await fakeMise(dir);
+    const add = await cli(["env", "add", "gh@2"], dir);
+    expect(add.code).toBe(1);
+    expect(add.stderr).toContain(`content "a": "ref" applies`);
+    expect(await calls()).toEqual([]);
   });
 
   it("refuses a package FastAgent does not install from, and one mise cannot install, changing nothing", async () => {
