@@ -90,7 +90,7 @@ Prints, without serving:
 - the agent directory, its content (`works on` / `knows`, each with its location), its environment (the packages and
   apt packages `context.json` declares), config path, model and its source,
 - the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
-- skills (each content entry's named `<content>/<skill>`) and their diagnostics,
+- skills and their diagnostics,
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
 - schedules with their next fire instant (a file that is not a valid schedule is reported),
@@ -101,8 +101,8 @@ Prints, without serving:
 Content that cannot be resolved (its directory is missing, say), an environment FastAgent refuses, and an
 `environment/` of your own where the packages' lock goes, are reported, not fatal; `info` installs nothing. `--json`
 carries `content`, `contentError`, `environment`, `environmentError` (what dev and start stop on),
-`environmentWarning` (what `fastagent env` and `deploy` refuse) and `contextFiles` (the agent directory's `AGENTS.md`,
-then each content entry's).
+`environmentWarning` (what `fastagent env` and `deploy` refuse) and `contextFiles` (the agent directory's `AGENTS.md`;
+nothing of its content).
 Read-only.
 
 ## `fastagent content`
@@ -232,8 +232,8 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
 ```
 
-Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, its own and each content entry's `AGENTS.md`, skills and
-prompt templates are re-read every turn. A supervisor restarts the
+Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are re-read
+every turn. A supervisor restarts the
 worker on edits to `tools/`, `channels/`, `fastagent.config.ts`, `package.json` and `.secrets/.env`,
 once the turns running in it finish (at most 10 minutes, after which it restarts anyway and says it cut work off), so
 an agent that edits its own `tools/` does not cut off the turn that made the edit.
@@ -250,8 +250,8 @@ where it can; see [Local webhook development](channels.md#local-webhook-developm
 fastagent chat [agent] [--model provider/modelId]
 ```
 
-Opens the agent in pi's TUI with the definition's prompt files, its own and its content's `AGENTS.md`, skills, prompt
-templates, `tools/` and `extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
+Opens the agent in pi's TUI with the definition's prompt files, `AGENTS.md`, skills, prompt templates, `tools/` and
+`extensions/`, plus the machine's skills and prompt templates. Your pi extensions and `APPEND_SYSTEM.md` are not loaded.
 
 - Sessions are pi's per-directory records (`~/.pi/agent/sessions/<encoded agent directory>`), separate from served
   sessions.

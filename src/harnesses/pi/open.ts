@@ -58,13 +58,12 @@ import { loadContent } from "../../content/file.ts";
  */
 export async function agentCommands(
   agentDir: string,
-  content: readonly ResolvedContent[],
   served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
 ): Promise<AgentCommand[]> {
   // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
   // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
   // one set from both readers instead of warning again after every menu request.
-  const own = await loadAgentDefinition(agentDir, { content });
+  const own = await loadAgentDefinition(agentDir);
   reportFindingsIfChanged(own.dir, own);
   const machine = await readMachine(agentDir);
   const prompts = withMachine(own.prompts, machine.prompts);
@@ -433,7 +432,7 @@ export async function createPiAgentFromDir(
       // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
       // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
       commands: () =>
-        agentCommands(agentDir, content, {
+        agentCommands(agentDir, {
           extensionPaths: assembly.extensionPaths,
           modelRuntime: assembly.createModelRuntime,
         }),

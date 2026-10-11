@@ -475,8 +475,8 @@ export interface CreatePiAgentFromDefinitionOptions {
   base?: string;
   tools?: MountedTool[];
   /**
-   * What the agent works on and knows, resolved (`resolveContent`): the prompt names each one, their AGENTS.md and
-   * skills load with the definition, and tools see them as `ctx.content`. None by default.
+   * What the agent works on and knows, resolved (`resolveContent`): the prompt names each one, and tools see them as
+   * `ctx.content`. None by default.
    */
   content?: readonly ResolvedContent[];
   /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */
@@ -509,7 +509,7 @@ export async function assemblePiFromDefinition(
   const content = options.content ?? [];
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to report
   // (skills/diagnostics/collisions).
-  const definition = await loadAgentDefinition(dir, { content });
+  const definition = await loadAgentDefinition(dir);
   const tools = options.tools ?? piAllCodingTools(cwd);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by the resolved
   // dir).
@@ -548,7 +548,7 @@ export async function assemblePiFromDefinition(
     // author's, or the agent's own self-modification) take effect on the next turn with no process restart — restarts
     // are reserved for code (tools/channels/config, module cache).
     readDefinition: async () => {
-      const def = await loadAgentDefinition(dir, { content });
+      const def = await loadAgentDefinition(dir);
       reportFindingsIfChanged(def.dir, def);
       const systemPrompt = options.base ?? def.systemPrompt?.content;
       refuseDefaultPromptOverReplacedTools(tools, systemPrompt !== undefined);

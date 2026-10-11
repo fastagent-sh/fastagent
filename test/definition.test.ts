@@ -112,13 +112,6 @@ describe("definition: loadAgentDefinition", () => {
     ]);
   });
 
-  it("refuses a skill whose name holds a slash: the slash names a content entry's skills", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-skill-slash-"));
-    await mkdir(join(dir, "skills", "deploy"), { recursive: true });
-    await writeFile(join(dir, "skills", "deploy", "SKILL.md"), "---\nname: app/deploy\ndescription: d\n---\nbody\n");
-    await expect(loadAgentDefinition(dir)).rejects.toThrow(/skill "app\/deploy".*may not contain "\/"/);
-  });
-
   it("reads prompt templates from prompts/ then .pi/prompts/, and reports .pi/extensions/ as not loaded", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-prompts-"));
     await mkdir(join(dir, "prompts"), { recursive: true });

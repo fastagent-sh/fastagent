@@ -193,9 +193,7 @@ acme-github/                  a context: a directory, a git repository or an npm
   context's own author, and a deploy copies it into the image.
 - A context declares the names of the credentials it needs, as any code or configuration does (§6.1), never their
   values: each agent supplies its own.
-- Skills keep today's namespace (agent model §2): a context's skills are named `<context>/<skill>`, and a content
-  entry's own skills `<content>/<skill>`, so skills never collide; context and content names therefore share one
-  namespace. When two contexts declare a tool, an MCP server or a content entry under the same name, the start is
+- When two contexts declare a tool, an MCP server or a content entry under the same name, the start is
   refused, and the error names both. The same happens when they declare one package at different versions. Nothing
   is overridden silently.
 - A context does not use other contexts. Nesting would make an agent's world a dependency graph, which nothing needs
@@ -1215,7 +1213,6 @@ is the whole. What still differs:
 
 | Agent model (implemented) | This design |
 |---|---|
-| A content entry's skills named `<content>/<skill>` | Kept, and a shared context's skills are named `<context>/<skill>` (§3.6) |
 | No shared contexts | A context is the unit of sharing (§3.6) |
 
 ## 12. Order of work

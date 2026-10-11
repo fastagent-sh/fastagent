@@ -1,6 +1,6 @@
 /**
- * WHERE each declared content entry is, for THIS instance: the one answer the prompt, the coding tools, skills,
- * authored tools, `info` and `deploy` all read (docs/design/core.md §2). An entry is at `content/<name>` everywhere;
+ * WHERE each declared content entry is, for THIS instance: the one answer the prompt, the coding tools, authored
+ * tools, `info` and `deploy` all read (docs/design/core.md §2). An entry is at `content/<name>` everywhere;
  * what is there is this place's: a link to a directory of this machine, a clone fastagent made, or nothing. Reads the
  * disk (git included); never the network, never a write. Making a clone real is `cloneContent`'s, and only a process
  * that runs the agent asks for it.

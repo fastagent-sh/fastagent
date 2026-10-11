@@ -1,8 +1,8 @@
 /**
  * Definition domain: read an agent definition directory into memory — its system prompt files, its skills and prompt
  * templates (each from the agent directory's root spelling first, then pi's `.pi/` and the standard `.agents/` ones),
- * its own AGENTS.md, and what its content provides: each entry's root AGENTS.md and its skills, named `<content>/<skill>`.
- * docs/design/agent-model.md §2 is the rule this follows.
+ * and its own AGENTS.md. Nothing here comes from the agent's content: what a project holds is material the agent
+ * reads, not part of its definition. docs/design/agent-model.md §2 is the rule this follows.
  */
 import { realpathSync } from "node:fs";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
@@ -15,7 +15,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { warnWhenChanged } from "./report.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
-import type { ResolvedContent } from "../../content/resolve.ts";
 
 /** A same-name skill collision (the discarded side). */
 export interface SkillCollision {
@@ -54,19 +53,18 @@ export type DefinitionDiagnostic = ResourceDiagnostic;
 
 /** Result of loading a definition directory. */
 export interface LoadedDefinition {
-  /** The agent directory's AGENTS.md, then each content entry's root one in declaration order; pi renders them as project
-   *  context, each marked with its path. */
+  /** The agent directory's AGENTS.md, which pi renders as project context, marked with its path. */
   contextFiles: DefinitionFile[];
   /** `SYSTEM.md`, else `.pi/SYSTEM.md`: replaces pi's default prompt. Absent → pi builds its default. */
   systemPrompt?: DefinitionFile;
   /** `APPEND_SYSTEM.md`, else `.pi/APPEND_SYSTEM.md`: added after the prompt, whichever it is. */
   appendSystemPrompt?: DefinitionFile;
-  /** The definition's skills, then each content entry's, named `<content>/<skill>`. */
+  /** The definition's skills. */
   skills: Skill[];
   prompts: DefinitionPrompt[];
   /** Non-fatal per-file problems reported by pi's skill and prompt-template loaders. */
   diagnostics: DefinitionDiagnostic[];
-  /** Same-name skill conflicts across the definition's skill directories, or one content entry's (first wins). */
+  /** Same-name skill conflicts across the definition's skill directories (first wins). */
   collisions: SkillCollision[];
   /** Same-name files and prompt templates across the definition's locations (first wins). */
   shadowed: DefinitionShadow[];
@@ -74,11 +72,6 @@ export interface LoadedDefinition {
   ignored: Array<{ path: string; reason: string }>;
   /** Absolute agent-definition directory path. */
   dir: string;
-}
-
-export interface LoadAgentDefinitionOptions {
-  /** The agent's content, resolved: each entry's AGENTS.md and skills are read with the definition. */
-  content?: readonly ResolvedContent[];
 }
 
 /** Where each resource is read from, in order: the root spelling first, then pi's, then the standard one. */
@@ -99,11 +92,8 @@ export const PI_PROJECT_RESOURCE_DIRS = {
 /** The file `SYSTEM.md` and `APPEND_SYSTEM.md` replaced. Refused rather than ignored: its text would do nothing. */
 const RETIRED_PERSONA = "persona.md";
 
-/** Read an agent definition: its prompt files, skills and prompt templates from `agentDir`, and what its content add. */
-export async function loadAgentDefinition(
-  agentDir: string,
-  options: LoadAgentDefinitionOptions = {},
-): Promise<LoadedDefinition> {
+/** Read the agent definition in `agentDir`: its prompt files, skills, prompt templates and AGENTS.md. */
+export async function loadAgentDefinition(agentDir: string): Promise<LoadedDefinition> {
   const root = resolve(agentDir);
 
   await refuseRetiredPersona(root);
@@ -125,14 +115,6 @@ export async function loadAgentDefinition(
   // is built and how to change it, which is the agent's own business when it improves itself.
   const own = await readIfExists(join(root, "AGENTS.md"));
   const contextFiles: DefinitionFile[] = own === undefined ? [] : [own];
-  for (const entry of options.content ?? []) {
-    const instructions = await readIfExists(join(entry.location, "AGENTS.md"));
-    if (instructions !== undefined) contextFiles.push(instructions);
-    const provided = readContentSkills(entry, ignored);
-    skills.push(...provided.skills);
-    skillDiagnostics.push(...provided.diagnostics);
-    collisions.push(...provided.collisions);
-  }
   return {
     contextFiles,
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -203,37 +185,6 @@ function loadSkills(dirs: readonly string[]): { skills: Skill[]; diagnostics: De
     diagnostics.push(...loaded.diagnostics);
   }
   return { skills, diagnostics };
-}
-
-/** Where a content entry's skills are read from, in order: the places pi reads a project's. */
-const CONTENT_SKILL_DIRS = [".pi/skills", ".agents/skills"] as const;
-
-/**
- * A content entry's skills, named `<content>/<skill>`: about working in that entry, and never colliding with the
- * agent's own or another entry's. A skill of the project's whose own name holds a `/` is left out and said; it is not the
- * author's to rename.
- */
-function readContentSkills(
-  entry: ResolvedContent,
-  ignored: LoadedDefinition["ignored"],
-): { skills: Skill[]; diagnostics: DefinitionDiagnostic[]; collisions: SkillCollision[] } {
-  const { skills: raw, diagnostics } = loadSkills(CONTENT_SKILL_DIRS.map((dir) => join(entry.location, dir)));
-  const byName = new Map<string, Skill>();
-  const collisions: SkillCollision[] = [];
-  for (const skill of raw) {
-    if (skill.name.includes("/")) {
-      ignored.push({
-        path: skill.filePath,
-        reason: `not loaded: a skill's name may not contain "/" ("${skill.name}")`,
-      });
-      continue;
-    }
-    const name = `${entry.name}/${skill.name}`;
-    const existing = byName.get(name);
-    if (existing) collisions.push({ name, winnerPath: existing.filePath, loserPath: skill.filePath });
-    else byName.set(name, { ...skill, name });
-  }
-  return { skills: [...byName.values()], diagnostics, collisions };
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -359,14 +310,6 @@ async function readSkills(
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
   for (const skill of raw) {
-    // pi only warns about a `/` in a skill name, and loads it. The slash names the content entry a skill comes from,
-    // so a definition's own skill spelled that way could collide with an entry's and is refused here.
-    if (skill.name.includes("/")) {
-      throw new Error(
-        `skill "${skill.name}" (${skill.filePath}): a skill's name may not contain "/", which names the content entry a ` +
-          `skill comes from — rename it`,
-      );
-    }
     const existing = byName.get(skill.name);
     if (existing) {
       collisions.push({ name: skill.name, winnerPath: existing.filePath, loserPath: skill.filePath });
