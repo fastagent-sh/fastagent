@@ -35,7 +35,7 @@ const DEPLOY_OWNED = new Set([
 ]);
 
 /** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED}), including the chunked carriers? */
-function isDeployOwned(name: string): boolean {
+export function isDeployOwned(name: string): boolean {
   return DEPLOY_OWNED.has(name) || /^FASTAGENT_ENV(_\d+)?$/.test(name);
 }
 
@@ -67,7 +67,9 @@ export function deploymentSecrets(
     if (!secrets.some((s) => s.name === name)) secrets.push({ name, hint });
   };
   if (isEnvKey(modelAuth)) add(modelAuth, "your model provider key");
-  for (const { name, source } of dedupeSecrets(declared)) add(name, `required by ${source}`);
+  for (const { name, source, description } of dedupeSecrets(declared)) {
+    add(name, `required by ${source}${description ? `: ${description}` : ""}`);
+  }
   for (const name of Object.keys(carriedValues(values))) add(name, `from ${valueFile}`);
   return secrets;
 }

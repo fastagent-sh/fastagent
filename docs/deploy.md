@@ -375,7 +375,9 @@ downloads nothing. The agent's `aptPackages` join the image's apt layer. `deploy
 `environment/` (`context.json` edited without it), it says so, for you to commit. `--run` stops when `package.json` does
 not list mise, when mise is not installed here to check the packages (run `fastagent env install`), on a package whose
 backend FastAgent refuses, or on a PyPI package without `python` and `uv` declared; without `--run`, these are warnings.
-Chromium with CJK fonts adds about 1 GB to the image.
+Chromium with CJK fonts adds about 1 GB to the image. The [variables](configuration.md#environment) `context.json`
+declares are required like a tool's secrets: the runbook lists each with its description, and a deploy whose
+`.secrets/production/.env` has no value for one stops before it changes anything.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

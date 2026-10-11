@@ -15,6 +15,7 @@ import { contextFileText, parseContextFile } from "../src/content/file.ts";
 import { aptAdvice, missingAptPackages } from "../src/environment/apt.ts";
 import {
   declareEnvironment,
+  declaredVariables,
   declaresTool,
   missingPythonRuntime,
   parsePackageArgument,
@@ -148,25 +149,41 @@ async function fakeNpm(dir: string): Promise<string> {
 }
 
 describe("environment: what context.json may declare", () => {
-  it("reads packages and aptPackages; an agent that declares none has no environment", () => {
+  it("reads packages, aptPackages and variables; an agent that declares none has no environment", () => {
     expect(declareEnvironment(undefined)).toBeUndefined();
-    expect(
-      declareEnvironment({
-        packages: { gh: "2", "npm:@biomejs/biome": "latest", "aqua:jqlang/jq": "1.8.1", python: "3.12" },
-        aptPackages: ["chromium", "fonts-noto-cjk", "libstdc++6"],
-      }),
-    ).toEqual({
+    const environment = {
       packages: { gh: "2", "npm:@biomejs/biome": "latest", "aqua:jqlang/jq": "1.8.1", python: "3.12" },
       aptPackages: ["chromium", "fonts-noto-cjk", "libstdc++6"],
-    });
+      variables: { GITHUB_TOKEN: { description: "gh's token, with repo scope" }, http_proxy: { description: "x" } },
+    };
+    expect(declareEnvironment(environment)).toEqual(environment);
+    // A variable is declared by name, with what it is for; its value comes from the environment.
+    expect(declaredVariables(declareEnvironment(environment))).toEqual([
+      { name: "GITHUB_TOKEN", source: "context.json", description: "gh's token, with repo scope" },
+      { name: "http_proxy", source: "context.json", description: "x" },
+    ]);
   });
 
   it("refuses what it does not hold, each by name and with its reason", () => {
     const refused = (environment: unknown) => () => declareEnvironment(environment);
     expect(refused([])).toThrow(`"environment" must be an object`);
-    expect(refused({ variables: {} })).toThrow(
-      `environment: unknown key "variables" (valid keys: packages, aptPackages)`,
+    expect(refused({ secrets: {} })).toThrow(
+      `environment: unknown key "secrets" (valid keys: packages, aptPackages, variables)`,
     );
+    // A string where the description goes reads as a value, which context.json never holds.
+    expect(refused({ variables: { GH_HOST: "github.example.com" } })).toThrow(
+      `environment: variable "GH_HOST" must be { "description": "what it is for" }: its value goes in the stage's ` +
+        `value file (.secrets/.env, .secrets/production/.env) or the host, never in context.json`,
+    );
+    expect(refused({ variables: { GH_HOST: { description: "x", value: "y" } } })).toThrow(
+      `variable "GH_HOST": unknown key "value" (valid keys: description)`,
+    );
+    expect(refused({ variables: { GH_HOST: { description: " " } } })).toThrow(`"description" must be a non-empty`);
+    expect(refused({ variables: { "MY KEY": { description: "x" } } })).toThrow(`is not an environment variable name`);
+    // The deployment sets these itself, and never carries a value file's copy: a declaration could never be met.
+    for (const name of ["PORT", "FASTAGENT_MODEL", "FASTAGENT_STATE_DIR"]) {
+      expect(refused({ variables: { [name]: { description: "x" } } })).toThrow(`is set by the deployment itself`);
+    }
     expect(refused({ packages: { "cargo:ripgrep": "14" } })).toThrow(
       `package "cargo:ripgrep" installs with cargo:, which builds from source: a whole Rust toolchain in the image ` +
         `for one binary — write the project's release with github:<owner>/<repo>, or install it in your own ` +
@@ -194,18 +211,19 @@ describe("environment: what context.json may declare", () => {
     expect(() => parseContextFile(`{"environment":{"packages":{"gh":"x y"}}}`, path)).toThrow(
       `${path}: environment: package "gh": the version must be non-empty, without spaces`,
     );
-    const file = parseContextFile(`{"content":{},"environment":{"packages":{"gh":"2"}}}`, path);
-    expect(file.environment).toEqual({ packages: { gh: "2" }, aptPackages: [] });
-    expect(JSON.parse(contextFileText(file))).toEqual({ content: {}, environment: { packages: { gh: "2" } } });
-    expect(JSON.parse(contextFileText({ content: {}, environment: { packages: {}, aptPackages: [] } }))).toEqual({
-      content: {},
-    });
+    const written = { packages: { gh: "2" }, variables: { GITHUB_TOKEN: { description: "gh's token" } } };
+    const file = parseContextFile(JSON.stringify({ content: {}, environment: written }), path);
+    expect(file.environment).toEqual({ ...written, aptPackages: [] });
+    expect(JSON.parse(contextFileText(file))).toEqual({ content: {}, environment: written });
+    expect(
+      JSON.parse(contextFileText({ content: {}, environment: { packages: {}, aptPackages: [], variables: {} } })),
+    ).toEqual({ content: {} });
     // The two edits keep each other's part of the file.
     const dir = await agentDir();
     const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "fa-env-content-")));
-    await writeEnvironment(dir, { packages: { gh: "2" }, aptPackages: ["chromium"] });
+    await writeEnvironment(dir, { packages: { gh: "2" }, aptPackages: ["chromium"], variables: {} });
     await addContent(dir, { name: "notes", entry: {}, link: elsewhere });
-    await writeEnvironment(dir, { packages: { jq: "latest" }, aptPackages: [] });
+    await writeEnvironment(dir, { packages: { jq: "latest" }, aptPackages: [], variables: {} });
     expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual({
       content: { notes: {} },
       environment: { packages: { jq: "latest" } },
@@ -458,6 +476,13 @@ describe("environment: entered by a process that runs the agent", () => {
     );
   });
 
+  it("requires the variables context.json declares before the agent runs, naming the file", async () => {
+    const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
+    await expect(resolveAgentAssembly(dir)).rejects.toThrow(/missing required secrets: FA_TEST_HOST \(context\.json\)/);
+    process.env.FA_TEST_HOST = "github.example.com";
+    await resolveAgentAssembly(dir);
+  });
+
   it("is entered by the assembly, so every process that opens the agent has it: createAgentService and chat too", async () => {
     await expect(resolveAgentAssembly(await agentDir({ packages: { gh: "2" } }))).rejects.toThrow(
       /the agent has no mise installed/,
@@ -547,6 +572,33 @@ describe("environment: `fastagent env`", () => {
     expect(apt.code, apt.stderr).toBe(0);
     expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" }, aptPackages: ["chromium"] });
     expect((await calls()).length).toBe(before);
+  });
+
+  it("keeps the variables when it changes the packages", async () => {
+    const variables = { FA_TEST_HOST: { description: "the GitHub host gh talks to" } };
+    const dir = await agentDir({ variables });
+    await fakeMise(dir);
+    expect((await cli(["env", "add", "gh@2", "apt:chromium"], dir)).code).toBe(0);
+    expect((await cli(["env", "remove", "apt:chromium"], dir)).code).toBe(0);
+    expect(await declared(dir)).toEqual({ packages: { gh: "2" }, variables });
+  });
+
+  it("lists the variables context.json declares, and whether each has a value here, never the value", async () => {
+    const dir = await agentDir({
+      variables: { FA_TEST_HOST: { description: "the GitHub host" }, FA_TEST_TOKEN: { description: "gh's token" } },
+    });
+    await mkdir(join(dir, ".secrets"));
+    await writeFile(join(dir, ".secrets", ".env"), "FA_TEST_TOKEN=ghp_value\n");
+    const list = await cli(["env", "list"], dir);
+    expect(list.code, list.stderr).toBe(0);
+    expect(list.stdout).toBe(
+      ["FA_TEST_HOST   not set   the GitHub host", "FA_TEST_TOKEN  set       gh's token", ""].join("\n"),
+    );
+    expect(list.stderr).toContain(
+      `no value here for FA_TEST_HOST: dev and start refuse to run until they have one — set them in ` +
+        `${join(dir, ".secrets", ".env")}`,
+    );
+    expect(`${list.stdout}${list.stderr}`).not.toContain("ghp_value");
   });
 
   it("refuses to edit a context.json whose content is refused, before anything is locked", async () => {

@@ -105,9 +105,11 @@ export function contextFileText(file: {
 }): string {
   const packages = file.environment?.packages ?? {};
   const aptPackages = file.environment?.aptPackages ?? [];
+  const variables = file.environment?.variables ?? {};
   const environment = {
     ...(Object.keys(packages).length > 0 ? { packages } : {}),
     ...(aptPackages.length > 0 ? { aptPackages } : {}),
+    ...(Object.keys(variables).length > 0 ? { variables } : {}),
   };
   const out = {
     ...(file.$schema !== undefined ? { $schema: file.$schema } : {}),

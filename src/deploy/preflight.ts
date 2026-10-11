@@ -40,7 +40,7 @@ import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
-import { ENVIRONMENT_DIR, declaresTool, runtimeAdvice } from "../environment/declare.ts";
+import { ENVIRONMENT_DIR, declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
 import {
   checkPackages,
   foreignEnvironment,
@@ -520,6 +520,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const declaredSecrets: DeclaredSecret[] = [
     ...allSecrets(resolvedTools.toolSecrets),
     ...allSecrets(inspected.secrets),
+    ...declaredVariables(environment),
   ];
   await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
 

@@ -79,7 +79,7 @@ describe("content: context.json", () => {
     // An edit writes the whole, so it reads the whole.
     expect(() => readContextFile(dir)).toThrow(`${path}: environment: package "cargo:x"`);
     await writeFile(path, `{ "content": { "a": { "ref": "x" } }, "environment": { "packages": { "gh": "2" } } }`);
-    expect(loadEnvironment(dir)).toEqual({ packages: { gh: "2" }, aptPackages: [] });
+    expect(loadEnvironment(dir)).toEqual({ packages: { gh: "2" }, aptPackages: [], variables: {} });
     expect(() => loadContent(dir)).toThrow(`${path}: content "a": "ref" applies`);
     await writeFile(path, `{ "contexts": {} }`);
     for (const read of [loadContent, loadEnvironment])

@@ -81,7 +81,7 @@ src/
 │   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), run in working copies: check, lock, enter
 │   └── apt.ts              # which declared apt packages THIS machine lacks (dpkg; Debian and Ubuntu only)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
-│                           # (defineTool/defineChannel): the ONE read of
+│                           # (defineTool/defineChannel, context.json's variables): the ONE read of
 │                           # an authored `secrets:`, the values handed back to the code that declared
 │                           # them, and what "has no value" means
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load

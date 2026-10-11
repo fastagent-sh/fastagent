@@ -37,7 +37,7 @@ export function gateSecrets(input: {
   reportModuleLoadFailures(input.failures);
   throw new Error(
     `missing required secrets: ${describeSecrets(missing)} — set them in .secrets/.env (or the ` +
-      `environment). Deployed, they travel as deploy secrets; a tool that should run WITHOUT the ` +
-      `value must not declare it.`,
+      `environment). Deployed, they travel as deploy secrets; what should run WITHOUT the value must ` +
+      `not declare it.`,
   );
 }

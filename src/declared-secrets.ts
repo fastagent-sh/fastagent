@@ -17,9 +17,11 @@
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "tools/x-post.ts", "channels/slack.ts", "config.tools" — printed in
+  /** Where it was declared: "tools/x-post.ts", "channels/slack.ts", "config.tools", "context.json" — printed in
    *  runbooks and failures, so it must name a place the author can open. */
   source: string;
+  /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
+  description?: string;
 }
 
 /**
@@ -30,6 +32,11 @@ export interface DeclaredSecret {
  * a real variable — only the shape a shell and every artifact format agree on.
  */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Whether `name` has the shape of an env-var name ({@link ENV_NAME}). */
+export function isEnvName(name: string): boolean {
+  return ENV_NAME.test(name);
+}
 
 /** Why an authored `secrets:` is unusable, or undefined when it is fine. A `.js` tool or a wrong type
  *  never met TypeScript, and a malformed declaration must fail as a load error rather than be

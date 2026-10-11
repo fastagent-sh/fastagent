@@ -94,7 +94,8 @@ Prints, without serving:
 - coding tools, authored tools and collisions,
 - channels that import cleanly (a failing one is reported, and listed as `channelFailures` in `--json`),
 - schedules with their next fire instant (a file that is not a valid schedule is reported),
-- declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
+- declared secrets (a tool's or channel's, and the variables `context.json` declares), flagging any with no value
+  here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
 Content that cannot be resolved (its directory is missing, say), an environment FastAgent refuses, and an
@@ -157,8 +158,10 @@ fastagent env exec -- gh --version
   version allows, locks and installs that. A version is resolved once, when a package is added, and stays locked,
   `latest` included, until `update`. `context.json` does not change; commit `environment/`. A running `dev` restarts
   on it.
-- **`list`** prints each package with the version its lock records (`(not locked)` for one added by hand), and warns
-  about what `deploy` would refuse: a refused backend, a PyPI package's undeclared runtime.
+- **`list`** prints each package with the version its lock records (`(not locked)` for one added by hand), and each
+  declared variable with whether it has a value here (never the value) and what it is for. It warns about what
+  `deploy` would refuse (a refused backend, a PyPI package's undeclared runtime) and about a variable `dev` would
+  refuse to start without. Variables are declared in `context.json` by hand: there is no command for them.
 - **`install`** brings `package.json`, the lock and this machine in line with `context.json`, as `npm install` does:
   it installs mise (adding it to `package.json` when it is not there), locks what `context.json` declares, keeping
   every version already locked, and installs it here. When that changes `environment/`, it says so: commit it. Day to
