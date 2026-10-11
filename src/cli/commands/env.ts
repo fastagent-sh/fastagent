@@ -23,6 +23,7 @@ import {
   lockEnvironment,
   lockedVersions,
   miseBinary,
+  updateEnvironment,
 } from "../../environment/mise.ts";
 import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
@@ -58,16 +59,48 @@ export async function runEnvRemove(args: string[]): Promise<void> {
     let aptPackages = [...current.aptPackages];
     for (const arg of args) {
       const apt = arg.startsWith("apt:") ? arg.slice("apt:".length) : undefined;
-      const declared = apt !== undefined ? aptPackages.includes(apt) : arg in packages;
-      if (!declared) {
-        const has = [...Object.keys(current.packages), ...current.aptPackages.map((name) => `apt:${name}`)];
-        throw new Error(`the environment has no package "${arg}" (it has: ${has.join(", ") || "none"})`);
-      }
+      const declared = apt !== undefined ? aptPackages.includes(apt) : Object.hasOwn(packages, arg);
+      if (!declared) throw noPackage(current, arg);
       if (apt !== undefined) aptPackages = aptPackages.filter((name) => name !== apt);
       else delete packages[arg];
     }
     return { packages, aptPackages };
   }).catch(failStartup);
+}
+
+export async function runEnvUpdate(names: string[]): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  const changes = await oneAtATime(agentDir, async () => {
+    const declared = loadEnvironment(agentDir) ?? NONE;
+    for (const name of names) {
+      if (name.startsWith("apt:")) {
+        throw new Error(`${name} is not locked: the image installs the version its Debian release has`);
+      }
+      if (!Object.hasOwn(declared.packages, name)) throw noPackage(declared, name);
+    }
+    if (Object.keys(declared.packages).length === 0) throw new Error("the environment declares no packages to update");
+    const bin = await checkedMise(agentDir, declared.packages);
+    if (environmentMismatch(agentDir, declared.packages) !== undefined) {
+      await lockEnvironment(agentDir, declared.packages, bin);
+    }
+    const before = lockedVersions(agentDir);
+    await updateEnvironment(agentDir, bin, names);
+    const after = lockedVersions(agentDir);
+    return (names.length > 0 ? names : Object.keys(declared.packages)).map(
+      (name) => [name, before.get(name), after.get(name)] as const,
+    );
+  }).catch(failStartup);
+  const width = Math.max(...changes.map(([name]) => name.length));
+  for (const [name, before, after] of changes) {
+    console.log(
+      `${name.padEnd(width)}  ${before === after ? `${after} (the newest it allows)` : `${before} → ${after}`}`,
+    );
+  }
+  if (changes.some(([, before, after]) => before !== after)) {
+    log.info(
+      `[fastagent] commit ${ENVIRONMENT_DIR}/; a running \`fastagent dev\` uses the new versions from its next restart`,
+    );
+  }
 }
 
 export async function runEnvList(): Promise<void> {
@@ -157,6 +190,12 @@ async function edit(
     await lockEnvironment(agentDir, next.packages, bin, commit);
     return next;
   });
+}
+
+/** The refusal for a package `environment` does not declare, with what it does. */
+function noPackage(environment: DeclaredEnvironment, name: string): Error {
+  const has = [...Object.keys(environment.packages), ...environment.aptPackages.map((apt) => `apt:${apt}`)];
+  return new Error(`the environment has no package "${name}" (it has: ${has.join(", ") || "none"})`);
 }
 
 /** The agent's mise (added when it has none), once `packages` pass: a refused one stops the command. */

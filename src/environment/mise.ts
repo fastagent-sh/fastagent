@@ -6,7 +6,17 @@
  * commands an author runs write `environment/`; a process that runs the agent installs what its lock records.
  */
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -203,45 +213,54 @@ export async function checkPackages(
 }
 
 /**
+ * The first line of every configuration FastAgent renders: what marks `environment/` as FastAgent's. A directory of
+ * that name without it is the author's, and is never run, rewritten or removed.
+ */
+export const RENDERED_CONFIG_HEADER = `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n`;
+
+/** The files FastAgent writes in `environment/`: all it removes there. */
+const RENDERED_ENTRIES = [MISE_FILE, MISE_LOCK_FILE, ENVIRONMENT_DIGEST_FILE, ".mise"] as const;
+
+/**
  * The configuration rendered from `packages`. Prebuilt runtimes only: one with no build for a platform fails there
  * rather than compiling.
  */
 function renderConfig(packages: Record<string, string>): string {
+  return RENDERED_CONFIG_HEADER + stringify({ settings: { all_compile: false }, tools: packages });
+}
+
+/** Whether `environment/` is there, and whether FastAgent wrote it (its configuration starts with the header). */
+function environmentDirState(agentDir: string): "absent" | "ours" | "foreign" {
+  const dir = join(agentDir, ENVIRONMENT_DIR);
+  if (!existsSync(dir)) return "absent";
+  try {
+    return readFileSync(join(dir, MISE_FILE), "utf8").startsWith(RENDERED_CONFIG_HEADER) ? "ours" : "foreign";
+  } catch (error) {
+    // ENOENT: a directory without FastAgent's configuration; ENOTDIR: a file of that name.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return "foreign";
+    throw error;
+  }
+}
+
+/** The refusal for an `environment/` FastAgent did not write, where the lock of declared packages goes. */
+function foreignEnvironment(agentDir: string): string {
   return (
-    `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n` +
-    stringify({ settings: { all_compile: false }, tools: packages })
+    `${join(agentDir, ENVIRONMENT_DIR)} was not written by FastAgent (it holds no ${MISE_FILE} rendered from ` +
+    `context.json), and it is where the lock of the packages context.json declares goes — move it out of the agent ` +
+    `directory, then run \`fastagent env install\``
   );
 }
 
 /**
- * Render `environment/` from `packages` and lock it: the configuration, then mise installs it here (which proves it
- * installs, and a PyPI package's lock needs uv installed), then locks it for every lock platform, keeping the version
- * the previous lock records for a package whose version is unchanged; the digest last. `commit` runs once it is
- * written, so the declaration lands after its lock. When either fails, `environment/` is put back as it was. Without
- * packages, `environment/` is removed.
+ * Run `change` on `environment/`, and put the directory back as it was when `change` fails: from a copy taken first,
+ * or by removing what `change` created.
  */
-export async function lockEnvironment(
-  agentDir: string,
-  packages: Record<string, string>,
-  bin: string | undefined,
-  commit?: () => Promise<void>,
-): Promise<void> {
-  const dir = join(agentDir, ENVIRONMENT_DIR);
+async function restoredOnFailure(dir: string, change: () => Promise<void>): Promise<void> {
   const saved = existsSync(dir) ? mkdtempSync(join(tmpdir(), "fastagent-environment-")) : undefined;
   if (saved) cpSync(dir, saved, { recursive: true });
   try {
-    if (Object.keys(packages).length === 0) {
-      rmSync(dir, { recursive: true, force: true });
-    } else {
-      if (!bin) throw new Error("lockEnvironment: locking packages needs the agent's mise");
-      mkdirSync(dir, { recursive: true });
-      rmSync(join(dir, ENVIRONMENT_DIGEST_FILE), { force: true });
-      writeFileAtomic(join(dir, MISE_FILE), renderConfig(packages));
-      await runMise(agentDir, bin, ["install"]);
-      await runMise(agentDir, bin, ["lock", "--platform", LOCK_PLATFORMS.join(",")]);
-      writeFileAtomic(join(dir, ENVIRONMENT_DIGEST_FILE), `${packagesDigest(packages)}\n`);
-    }
-    await commit?.();
+    await change();
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     if (saved) cpSync(saved, dir, { recursive: true });
@@ -252,18 +271,75 @@ export async function lockEnvironment(
 }
 
 /**
+ * Render `environment/` from `packages` and lock it: the configuration, then mise installs it here (which proves it
+ * installs, and a PyPI package's lock needs uv installed), then locks it for every lock platform, keeping the version
+ * the previous lock records for a package whose version is unchanged; the digest last. `commit` runs once it is
+ * written, so the declaration lands after its lock. When either fails, `environment/` is put back as it was. Without
+ * packages, FastAgent's files are removed from it, and the directory with them when nothing else is left. An
+ * `environment/` FastAgent did not write is refused, never touched.
+ */
+export async function lockEnvironment(
+  agentDir: string,
+  packages: Record<string, string>,
+  bin: string | undefined,
+  commit?: () => Promise<void>,
+): Promise<void> {
+  const dir = join(agentDir, ENVIRONMENT_DIR);
+  const state = environmentDirState(agentDir);
+  const declares = Object.keys(packages).length > 0;
+  if (state === "foreign" && declares) throw new Error(foreignEnvironment(agentDir));
+  await restoredOnFailure(dir, async () => {
+    if (!declares) {
+      if (state === "ours") removeRendered(dir);
+    } else {
+      if (!bin) throw new Error("lockEnvironment: locking packages needs the agent's mise");
+      mkdirSync(dir, { recursive: true });
+      rmSync(join(dir, ENVIRONMENT_DIGEST_FILE), { force: true });
+      writeFileAtomic(join(dir, MISE_FILE), renderConfig(packages));
+      await runMise(agentDir, bin, ["install"]);
+      await runMise(agentDir, bin, ["lock", "--platform", LOCK_PLATFORMS.join(",")]);
+      writeFileAtomic(join(dir, ENVIRONMENT_DIGEST_FILE), `${packagesDigest(packages)}\n`);
+    }
+    await commit?.();
+  });
+}
+
+/** Remove what FastAgent wrote in `dir`, and `dir` when that was all it held. */
+function removeRendered(dir: string): void {
+  for (const entry of RENDERED_ENTRIES) rmSync(join(dir, entry), { recursive: true, force: true });
+  if (readdirSync(dir).length === 0) rmdirSync(dir);
+}
+
+/**
+ * Resolve `names` (every package when empty) again to the newest version each one's declared version allows, in the
+ * lock FastAgent wrote for the declaration (the caller makes sure it is), then install that here. The declaration and
+ * its digest do not change: a version is resolved once, when a package is added, and stays locked until this.
+ */
+export async function updateEnvironment(agentDir: string, bin: string, names: readonly string[]): Promise<void> {
+  await restoredOnFailure(join(agentDir, ENVIRONMENT_DIR), async () => {
+    // What is locked now, first: a PyPI package's lock needs its uv installed.
+    await runMise(agentDir, bin, ["--locked", "install"]);
+    await runMise(agentDir, bin, ["lock", "--bump", ...names, "--platform", LOCK_PLATFORMS.join(",")]);
+    await runMise(agentDir, bin, ["--locked", "install"]);
+  });
+}
+
+/**
  * Why `environment/` cannot be run for `packages`, or undefined when it can: it records the digest of the packages it
  * was rendered from, and the declaration is what it is compared with, never the rendered text, so a lock another
- * FastAgent version rendered still runs.
+ * FastAgent version rendered still runs. An `environment/` FastAgent did not write is the author's: ignored when no
+ * package is declared, refused when one is.
  */
 export function environmentMismatch(agentDir: string, packages: Record<string, string>): string | undefined {
   const dir = join(agentDir, ENVIRONMENT_DIR);
   const fix = `run \`fastagent env install\` in ${agentDir}, then commit ${ENVIRONMENT_DIR}/`;
+  const state = environmentDirState(agentDir);
   if (Object.keys(packages).length === 0) {
-    return existsSync(dir)
+    return state === "ours"
       ? `${ENVIRONMENT_DIR}/ is left from packages context.json no longer declares — ${fix}`
       : undefined;
   }
+  if (state === "foreign") return foreignEnvironment(agentDir);
   let recorded: string;
   try {
     recorded = readFileSync(join(dir, ENVIRONMENT_DIGEST_FILE), "utf8").trim();

@@ -12,6 +12,8 @@ interface ArgSpec {
   default?: string;
   /** Closed value set — the parser rejects anything else as a usage error (exit 2). */
   choices?: string[];
+  /** Passed on as given, an empty value included: another program's arguments (`env exec`). */
+  verbatim?: boolean;
 }
 
 /** One flag, in the flag DSL: `--json`, or `--bind <addr>` for a value-taking flag. */
@@ -117,7 +119,7 @@ function register(parent: Command, spec: CommandSpec): void {
     if (a.default !== undefined) arg.default(a.default);
     if (a.choices) arg.choices(a.choices);
     // A required argument means a non-empty VALUE, not just a present token.
-    if (a.name.startsWith("<") && !a.choices) {
+    if (a.name.startsWith("<") && !a.choices && !a.verbatim) {
       const nonEmpty = (value: string): string => {
         if (value.trim() === "") throw new InvalidArgumentError("must not be empty.");
         return value;

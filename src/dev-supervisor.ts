@@ -29,8 +29,9 @@ const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, pac
 
 /**
  * Files a worker cannot START without but that restart nothing while it serves: the model files a serving worker reads
- * LIVE (agent-models.ts keeps the last ones that loaded), and the environment's lock, whose digest `fastagent env`
- * writes last, before the context.json edit that restarts the worker. An edit starts (or restarts) a worker that is
+ * LIVE (agent-models.ts keeps the last ones that loaded), and the environment's lock (its directory, created and removed
+ * mid-edit, and the digest `fastagent env` writes last), whose edit is followed by the context.json one that restarts
+ * the worker. An edit starts (or restarts) a worker that is
  * down or starting. Unwatched, the edit that repairs a stopped worker would not be the edit that brings it back.
  */
 export function revivesOnly(root: string, path: string): boolean {
@@ -38,6 +39,7 @@ export function revivesOnly(root: string, path: string): boolean {
   return (
     rel === AGENT_MODELS_FILE ||
     rel === AGENT_MODEL_CATALOG_FILE ||
+    rel === ENVIRONMENT_DIR ||
     rel === join(ENVIRONMENT_DIR, ENVIRONMENT_DIGEST_FILE)
   );
 }

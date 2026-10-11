@@ -467,6 +467,17 @@ const env: CommandSpec = {
       run: async (args) => (await import("./commands/env.ts")).runEnvRemove(args[0] as string[]),
     },
     {
+      name: "update",
+      summary: "lock the newest version each package's declared version allows",
+      description:
+        "A version is resolved when a package is added and stays locked, `latest` included, until this resolves the " +
+        "named packages (every one when none is named) again and installs them here. context.json does not change; " +
+        "commit environment/.",
+      args: [{ name: "[packages...]", description: "declared packages (default: every one)" }],
+      examples: [{ cmd: "fastagent env update" }, { cmd: "fastagent env update gh jq" }],
+      run: async (args) => (await import("./commands/env.ts")).runEnvUpdate((args[0] as string[] | undefined) ?? []),
+    },
+    {
       name: "list",
       summary: "the declared packages with their locked versions, and what is wrong with them",
       examples: [{ cmd: "fastagent env list" }],
@@ -485,7 +496,7 @@ const env: CommandSpec = {
     {
       name: "exec",
       summary: "run a command in the environment",
-      args: [{ name: "<command...>", description: "the command and its arguments, after --" }],
+      args: [{ name: "<command...>", description: "the command and its arguments, after --", verbatim: true }],
       examples: [{ cmd: "fastagent env exec -- gh --version" }],
       run: async (args) => (await import("./commands/env.ts")).runEnvExec(args[0] as string[]),
     },

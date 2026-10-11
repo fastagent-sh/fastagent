@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { packagesDigest } from "../src/environment/declare.ts";
+import { RENDERED_CONFIG_HEADER } from "../src/environment/mise.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("cli: info", () => {
@@ -35,6 +36,7 @@ describe("cli: info", () => {
     const dir = await agentWorkspace("fa-info-env-", {
       "fastagent.config.ts": "export default {};\n",
       "context.json": JSON.stringify({ environment }),
+      "environment/mise.toml": `${RENDERED_CONFIG_HEADER}[tools]\n`,
       "environment/declaration.sha256": `${packagesDigest(environment.packages)}\n`,
     });
     const ok = await run(["info", dir, "--json"]);

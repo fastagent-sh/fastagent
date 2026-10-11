@@ -374,7 +374,9 @@ for Windows, so an agent that declares packages does not run there.
 its lock (each package's version, download and checksum for linux-x64, linux-arm64, macos-x64 and macos-arm64, and
 the dependency lock an npm or PyPI package keeps), and the digest of the packages it was written for. Commit it, as
 you commit `package-lock.json`: every machine and every image built from a commit installs the same versions, and a
-rollback restores them.
+rollback restores them. A version is resolved when a package is added and stays locked, `latest` included, until
+`fastagent env update` resolves it again. The name is FastAgent's: a directory of your own named `environment/` is
+refused once the agent declares packages, never removed.
 
 `dev`, `start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the versions
 the lock records and put them first on the agent's `PATH`. They never write the lock: when `context.json` declares

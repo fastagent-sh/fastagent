@@ -33,6 +33,8 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     // The environment's lock is complete once its digest is written, before the context.json edit that restarts a
     // serving worker: that digest brings back one that stopped on a stale lock. The rest of the lock is not watched.
     expect(ignored(join(root, "environment"))).toBe(false);
+    // Its own creation and removal, mid-edit, restart nothing either: the context.json edit comes after.
+    expect(revivesOnly(root, join(root, "environment"))).toBe(true);
     expect(ignored(join(root, "environment", "declaration.sha256"))).toBe(false);
     expect(revivesOnly(root, join(root, "environment", "declaration.sha256"))).toBe(true);
     expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);

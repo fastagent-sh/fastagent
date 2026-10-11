@@ -28,6 +28,7 @@ import {
   lockEnvironment,
   MISE_PACKAGE_NAMES,
   miseBinary,
+  RENDERED_CONFIG_HEADER,
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/harnesses/pi/authoring.ts";
 import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
@@ -53,7 +54,7 @@ async function agentDir(environment?: unknown): Promise<string> {
 /** `environment/` as `fastagent env` leaves it for `packages`: what a process that runs the agent accepts. */
 async function locked(dir: string, packages: Record<string, string>): Promise<void> {
   await mkdir(join(dir, "environment"), { recursive: true });
-  await writeFile(join(dir, "environment", "mise.toml"), "[tools]\n");
+  await writeFile(join(dir, "environment", "mise.toml"), `${RENDERED_CONFIG_HEADER}[tools]\n`);
   await writeFile(join(dir, "environment", "declaration.sha256"), `${packagesDigest(packages)}\n`);
 }
 
@@ -76,7 +77,8 @@ case "$1" in
   install) if [ -n "$FAKE_SLOW" ]; then sleep 2; fi
     if [ -n "$FAKE_FAIL_INSTALL" ]; then echo "mise ERROR no version of jq matches 99" >&2; exit 1; fi ;;
   lock) echo "context.json at lock: $(cat ../context.json 2>/dev/null | tr -d ' \\n')" >> "${log}"
-    printf '[[tools.gh]]\\nversion = "2.83.1"\\n' > mise.lock
+    if [ "$2" = --bump ]; then version=2.90.0; else version=2.83.1; fi
+    printf '[[tools.gh]]\\nversion = "%s"\\n' "$version" > mise.lock
     mkdir -p .mise/locks/npm-prettier/3.6.2 && echo '{}' > .mise/locks/npm-prettier/3.6.2/package.json ;;
   tool) case "$2" in
       tokei) echo '{"backend":"cargo:tokei"}' ;;
@@ -282,6 +284,34 @@ describe("environment: environment/, its lock", () => {
     await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
   });
 
+  it("is FastAgent's only by its rendered configuration: an author's environment/ is ignored, refused, never removed", async () => {
+    const notes = async (dir: string) => {
+      await mkdir(join(dir, "environment"), { recursive: true });
+      await writeFile(join(dir, "environment", "notes.md"), "mine\n");
+    };
+    // Without packages it is not in the way: nothing refuses it, and nothing removes it.
+    const quiet = await agentDir({ aptPackages: ["chromium"] });
+    await notes(quiet);
+    await enterEnvironment(quiet);
+    await lockEnvironment(quiet, {}, undefined);
+    expect(await readFile(join(quiet, "environment", "notes.md"), "utf8")).toBe("mine\n");
+    // With packages it is where their lock goes: the start and the lock refuse it, and leave it as it is.
+    const dir = await agentDir({ packages: { gh: "2" } });
+    await notes(dir);
+    await writeFile(join(dir, "environment", "mise.toml"), "[tools]\n");
+    const { bin } = await fakeMise(dir);
+    const foreign = `${join(dir, "environment")} was not written by FastAgent (it holds no mise.toml rendered from context.json)`;
+    await expect(enterEnvironment(dir)).rejects.toThrow(foreign);
+    await expect(lockEnvironment(dir, { gh: "2" }, bin)).rejects.toThrow(foreign);
+    expect(await readdir(join(dir, "environment"))).toEqual(["mise.toml", "notes.md"]);
+    // FastAgent's own, with a file of the author's beside: removing the last package removes only FastAgent's files.
+    await rm(join(dir, "environment"), { recursive: true });
+    await lockEnvironment(dir, { gh: "2" }, bin);
+    await writeFile(join(dir, "environment", "notes.md"), "mine\n");
+    await lockEnvironment(dir, {}, undefined);
+    expect(await readdir(join(dir, "environment"))).toEqual(["notes.md"]);
+  });
+
   it("checks each package by its backend: a written one says it, mise resolves a registry name", async () => {
     const dir = await agentDir();
     const { bin, calls } = await fakeMise(dir);
@@ -458,9 +488,11 @@ describe("environment: `fastagent env`", () => {
     const dir = await agentDir({ packages: { gh: "2" }, aptPackages: ["chromium"] });
     await locked(dir, { gh: "2" });
     await fakeMise(dir);
-    const unknown = await cli(["env", "remove", "jq"], dir);
-    expect(unknown.code).toBe(1);
-    expect(unknown.stderr).toContain(`the environment has no package "jq" (it has: gh, apt:chromium)`);
+    for (const name of ["jq", "toString"]) {
+      const unknown = await cli(["env", "remove", name], dir);
+      expect(unknown.code, name).toBe(1);
+      expect(unknown.stderr).toContain(`the environment has no package "${name}" (it has: gh, apt:chromium)`);
+    }
     const remove = await cli(["env", "remove", "gh", "apt:chromium"], dir);
     expect(remove.code, remove.stderr).toBe(0);
     expect(await declared(dir)).toBeUndefined();
@@ -485,6 +517,33 @@ describe("environment: `fastagent env`", () => {
     ]);
   });
 
+  it("updates a locked version only when asked: the declaration stays, the lock moves, and says so", async () => {
+    const dir = await agentDir({ packages: { gh: "latest" }, aptPackages: ["chromium"] });
+    const { calls } = await fakeMise(dir);
+    expect((await cli(["env", "install"], dir)).code).toBe(0);
+    const before = (await calls()).length;
+    const update = await cli(["env", "update", "gh"], dir);
+    expect(update.code, update.stderr).toBe(0);
+    expect(update.stdout).toBe("gh  2.83.1 → 2.90.0\n");
+    expect(update.stderr).toContain("commit environment/; a running `fastagent dev` uses the new versions");
+    expect((await calls()).slice(before).map((call) => call.split("|")[0] ?? call)).toEqual([
+      "tool gh --json",
+      "--locked install",
+      "lock --bump gh --platform linux-x64,linux-arm64,macos-x64,macos-arm64",
+      expect.stringMatching(/^context\.json at lock: /),
+      "--locked install",
+    ]);
+    expect(await declared(dir)).toEqual({ packages: { gh: "latest" }, aptPackages: ["chromium"] });
+    for (const [name, error] of [
+      ["jq", `the environment has no package "jq" (it has: gh, apt:chromium)`],
+      ["apt:chromium", "apt:chromium is not locked: the image installs the version its Debian release has"],
+    ] as const) {
+      const refused = await cli(["env", "update", name], dir);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain(error);
+    }
+  });
+
   it("lists the packages with their locked versions, and what is wrong with them", async () => {
     const dir = await agentDir({
       packages: { gh: "2", tokei: "12", "pypi:markitdown": "1" },
@@ -492,6 +551,7 @@ describe("environment: `fastagent env`", () => {
     });
     await fakeMise(dir);
     await mkdir(join(dir, "environment"));
+    await writeFile(join(dir, "environment", "mise.toml"), `${RENDERED_CONFIG_HEADER}[tools]\n`);
     await writeFile(join(dir, "environment", "mise.lock"), `[[tools.gh]]\nversion = "2.83.1"\n`);
     const list = await cli(["env", "list"], dir);
     expect(list.code, list.stderr).toBe(0);
@@ -516,6 +576,10 @@ describe("environment: `fastagent env`", () => {
     const exec = await cli(["env", "exec", "--", "sh", "-c", 'echo "$PATH"; exit 3'], dir);
     expect(exec.code).toBe(3);
     expect(exec.stdout.split(delimiter)[0]).toBe("/fake/tools");
+    // The command's arguments are its own, an empty one included.
+    const empty = await cli(["env", "exec", "--", "sh", "-c", 'printf "[%s]" "$1"', "sh", ""], dir);
+    expect(empty.code, empty.stderr).toBe(0);
+    expect(empty.stdout).toBe("[]");
     const missing = await cli(["env", "exec", "--", "no-such-command-here"], dir);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("no-such-command-here: command not found in the environment");

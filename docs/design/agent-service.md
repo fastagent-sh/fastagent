@@ -278,6 +278,9 @@ platform. The author never writes mise's files.
   built from the commit installs them, two people deploying one commit get the same tools, and a rollback restores
   the environment with the rest of the definition (§2). Railway uploads what git does not ignore, so the image's
   build context has it there too.
+- **`environment/` is FastAgent's by its content, not its name.** The rendered `mise.toml` starts with a header
+  FastAgent writes. A directory of that name without it is the author's: ignored while no package is declared,
+  refused when one is, and never rewritten or removed; removing the last package removes FastAgent's files alone.
 - **The declaration is the source, and the digest is the check.** A process that runs the agent compares the digest
   of the packages it reads with the one `environment/` records, never the rendered text (apt packages are not in the
   lock: the image installs them from the declaration), so it reads an
@@ -289,8 +292,9 @@ platform. The author never writes mise's files.
   lock and the digest) and writes `context.json` last, under the lock content edits take, so a `dev` that restarts on
   the declaration finds its lock in place; a failure puts `environment/` back as it was. `remove` and `list` complete
   it; `install` renders and locks `environment/` again when the declaration changed, then installs the lock's
-  versions on this machine, adding mise to `package.json` when it is missing; `exec -- <command>` runs a command in
-  the environment. For the agent's own declaration, these and `deploy`
+  versions on this machine, adding mise to `package.json` when it is missing; `update [packages...]` resolves locked
+  versions again (`mise lock --bump`), since a version, `latest` included, is resolved once, when its package is
+  added; `exec -- <command>` runs a command in the environment. For the agent's own declaration, these and `deploy`
   write `environment/`; how a context's packages join the lock, and which context commands write it then, is open
   (§13). Every process that opens the agent (`dev`, `start`, `chat`, `invoke`, an embedder's `createAgentService`) and
   `tool` install the versions the lock records and put them first on the `PATH` their commands inherit. An edit to

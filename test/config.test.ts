@@ -81,7 +81,7 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { codingTools: false };`)).rejects.toThrow(/unknown key "codingTools"/);
     // Channels are files under channels/, never a config entry.
     await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
-    // System packages are the environment's (mise.toml), declared for every platform at once.
+    // Apt packages are the environment's (context.json's `aptPackages`).
     await expect(load(`export default { deploy: { apt: ["git"] } };`)).rejects.toThrow(
       /"deploy\.apt" is not a config key — apt packages are declared in context\.json's environment/,
     );
