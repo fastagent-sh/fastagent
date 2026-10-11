@@ -294,17 +294,20 @@ The machine is read once per process, like any environment; the definition stays
 The commands the agent runs are the machine's too, unless the `environment` of its `context.json` declares them
 (`src/environment/`, [agent service](agent-service.md) §4). `declare.ts` reads the declaration, refuses what FastAgent
 does not support, and says which backends a registry name may resolve to; `mise.ts` runs the agent's own mise, an
-optional npm dependency per platform, on `environment/mise.toml` alone; `apt.ts` asks dpkg which apt packages this
-machine lacks. `environment/` is the committed lock: `fastagent env` and `deploy` render it from the declaration
-(`lockEnvironment`: configuration, install, lock for four platforms, then the digest of the packages) and write the
-declaration after it; `fastagent env update` re-resolves locked versions (`updateEnvironment`). The rendered
-configuration's header is what makes the directory FastAgent's: one without it is refused, never touched. The assembly
-(`resolveAgentAssembly`) compares that digest with the declaration, refuses a mismatch (`environmentMismatch`), then
-runs `mise --locked install` and puts the packages on `process.env.PATH` before anything is spawned, so every process
-that opens the agent does, an embedder's `createAgentService` included; `fastagent tool`, which opens none, does it
-itself, and the `dev` supervisor does not. It writes nothing. An edit to `context.json` restarts the `dev` worker, and
-the digest revives one that stopped on a stale lock. Only the packages reach that `PATH`: the isolation variables go to
-FastAgent's own mise runs, and mise itself is not put there.
+optional npm dependency per platform, always in a working copy outside the agent directory (a configuration rendered
+from the declaration, beside a copy of the committed lock), on that file alone; `apt.ts` asks dpkg which apt packages
+this machine lacks. `environment/` is the image's lock, committed: `fastagent env` and every `deploy` write it
+(`lockEnvironment`: an install here in one copy, `mise lock` for the image's platforms in another, since an install
+adds this machine's platform to the lock it reads, then the files replaced only when they differ). Locking keeps the
+versions already locked, so it is safe on every deploy; `fastagent env update` passes `--bump`. The rendered
+configuration's header is what makes the directory FastAgent's: one without it is never read, written or removed. The
+assembly (`resolveAgentAssembly`) installs from a copy of the lock (`enterEnvironment`: the locked versions where it
+has them, the newest the declaration allows where it does not) and puts the packages on `process.env.PATH` before
+anything is spawned, so every process that opens the agent does, an embedder's `createAgentService` included;
+`fastagent tool`, which opens none, does it itself, and the `dev` supervisor does not. It writes nothing in the agent
+directory and refuses nothing about the lock. An edit to `context.json` or to the lock restarts the `dev` worker. Only
+the packages reach that `PATH`: the isolation variables go to FastAgent's own mise runs, and mise itself is not put
+there.
 
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a

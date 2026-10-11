@@ -346,7 +346,7 @@ machine's `prompts/` for `chat`, or put a template that belongs to the agent in 
 
 An agent that declares no environment runs the commands of the machine it is on: `bash` finds whatever that `PATH`
 holds, and a deployed image has Node and git. The `environment` of `context.json` declares the commands the agent
-needs, so they are the same on every machine and in the image:
+needs, installed on every machine that runs it and, at locked versions, in its image:
 
 ```json
 {
@@ -370,19 +370,21 @@ declares it. The first change adds mise to the agent's `package.json`, as one op
 newest version; the package manager installs only this machine's, and the lockfile pins it. mise publishes no package
 for Windows, so an agent that declares packages does not run there.
 
-**`environment/` is the environment's lock.** `fastagent env` writes it from the declaration: mise's configuration,
-its lock (each package's version, download and checksum for linux-x64, linux-arm64, macos-x64 and macos-arm64, and
-the dependency lock an npm or PyPI package keeps), and the digest of the packages it was written for. Commit it, as
-you commit `package-lock.json`: every machine and every image built from a commit installs the same versions, and a
-rollback restores them. A version is resolved when a package is added and stays locked, `latest` included, until
-`fastagent env update` resolves it again. The name is FastAgent's: a directory of your own named `environment/` is
-refused once the agent declares packages, never removed.
+**`environment/` is the image's lock.** `fastagent env add`, `remove`, `update` and `install`, and every `deploy`,
+write it from the declaration: mise's configuration and its lock, each package's version, download and checksum for
+linux-x64 and linux-arm64, with the dependency lock an npm or PyPI package keeps. Commit it, as you commit
+`package-lock.json`: every image built from a commit installs the same versions, and a rollback restores them. A
+version is resolved when a package is first locked and stays locked, `latest` included, until `fastagent env update`
+resolves it again; locking again keeps it, so a deploy that finds `context.json` edited by hand locks what changed and
+says so, for you to commit. The name is FastAgent's: a directory of your own named `environment/` is never read,
+written or removed, and `fastagent env` refuses to lock packages over it.
 
-`dev`, `start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the versions
-the lock records and put them first on the agent's `PATH`. They never write the lock: when `context.json` declares
-packages `environment/` was not written for (an edit by hand), they refuse to start and name
-`fastagent env install`, which locks it again. An edit to `context.json` restarts `dev`. A package is installed into
-mise's data directory on this machine (`~/.local/share/mise`), which other mise projects share.
+`dev`, `start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the declared
+packages, at the versions the lock records where it has them and at the newest their declared version allows where it
+does not yet (a package added to `context.json` by hand), and put them first on the agent's `PATH`. They install from
+a copy of the lock, so they never write `environment/`, and never refuse one that lags the declaration. A change to
+`context.json` or to the lock restarts `dev`. A package is installed into mise's data directory on this machine
+(`~/.local/share/mise`), which other mise projects share.
 
 What a package may install from is checked by the backend it resolves to, since a registry name is a backend under
 another name (`ripgrep` downloads ripgrep's GitHub release, `tokei` builds with cargo). `fastagent env add`,

@@ -371,10 +371,11 @@ excludes. Each start publishes it onto persistent storage:
 committed lock, and installs it with the agent's own mise in a layer that is rebuilt only when the environment or the
 dependencies change. The packages go to mise's system directory (`/usr/local/share/mise`), so a start on the host
 downloads nothing. The agent's `aptPackages` join the image's apt layer. `deploy` checks the packages as
-`fastagent env add` does, and when `context.json` changed without `environment/`, locks it again and says so: commit
-it. `--run` stops when `package.json` does not list mise, when mise is not installed here to check the packages (run
-`fastagent env install`), on a package whose backend FastAgent refuses, or on a PyPI package without `python` and
-`uv` declared; without `--run`, these are warnings. Chromium with CJK fonts adds about 1 GB to the image.
+`fastagent env add` does and locks them again, which keeps every version already locked: when that changes
+`environment/` (`context.json` edited without it), it says so, for you to commit. `--run` stops when `package.json` does
+not list mise, when mise is not installed here to check the packages (run `fastagent env install`), on a package whose
+backend FastAgent refuses, or on a PyPI package without `python` and `uv` declared; without `--run`, these are warnings.
+Chromium with CJK fonts adds about 1 GB to the image.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

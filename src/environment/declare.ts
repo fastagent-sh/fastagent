@@ -4,13 +4,9 @@
  * version) and `aptPackages` (Debian packages the image installs). Pure: installing it is mise.ts's.
  * docs/design/agent-service.md §4 is the rule.
  */
-import { createHash } from "node:crypto";
 
-/** The environment's lock, committed: mise's configuration rendered from the declaration, its lock, the digest. */
+/** The image's lock of the packages, committed: mise's configuration rendered from the declaration, and its lock. */
 export const ENVIRONMENT_DIR = "environment";
-
-/** In {@link ENVIRONMENT_DIR}: the digest of the packages it was rendered from (apt packages are not locked), written last. */
-export const ENVIRONMENT_DIGEST_FILE = "packages.sha256";
 
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {
@@ -182,10 +178,10 @@ export function declaresTool(packages: Record<string, string>, tool: string): bo
   );
 }
 
-/** The digest `environment/` records: of the packages alone, in a form that does not depend on their order. */
-export function packagesDigest(packages: Record<string, string>): string {
-  const sorted = Object.fromEntries(Object.entries(packages).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-  return `sha256:${createHash("sha256").update(JSON.stringify(sorted)).digest("hex")}`;
+/** Whether two declarations name the same packages at the same versions, in any order. */
+export function samePackages(a: Record<string, string>, b: Record<string, string>): boolean {
+  const names = Object.keys(a);
+  return names.length === Object.keys(b).length && names.every((name) => Object.hasOwn(b, name) && b[name] === a[name]);
 }
 
 /**

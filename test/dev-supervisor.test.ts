@@ -30,14 +30,12 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
       expect(revivesOnly(root, join(root, file))).toBe(true);
     }
     expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
-    // The environment's lock is complete once its digest is written, before the context.json edit that restarts a
-    // serving worker: that digest brings back one that stopped on a stale lock. The rest of the lock is not watched.
+    // A worker installs from the environment's lock once, and `fastagent env update` changes the lock alone: it restarts
+    // the worker. `fastagent env` replaces it whole, once complete, so nothing half-written is seen. The rest is not.
     expect(ignored(join(root, "environment"))).toBe(false);
-    // Its own creation and removal, mid-edit, restart nothing either: the context.json edit comes after.
-    expect(revivesOnly(root, join(root, "environment"))).toBe(true);
-    expect(ignored(join(root, "environment", "packages.sha256"))).toBe(false);
-    expect(revivesOnly(root, join(root, "environment", "packages.sha256"))).toBe(true);
-    expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);
+    expect(ignored(join(root, "environment", "mise.lock"))).toBe(false);
+    expect(revivesOnly(root, join(root, "environment", "mise.lock"))).toBe(false);
+    expect(ignored(join(root, "environment", "mise.toml"))).toBe(true);
     expect(ignored(join(root, "environment.lock"))).toBe(true);
     expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);
     expect(revivesOnly(root, join(root, "tools", "models.json"))).toBe(false);

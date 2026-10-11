@@ -442,8 +442,8 @@ const env: CommandSpec = {
   description:
     "The agent's environment is the `environment` of its context.json: `packages`, each a name from mise's registry " +
     "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version, and `aptPackages`, Debian " +
-    "packages the image installs. environment/ is its lock, committed with the agent: these commands and `deploy` " +
-    "write it, and every machine and image installs the versions it records. Run in the agent directory (the " +
+    "packages the image installs. environment/ is the image's lock, committed with the agent: these commands and " +
+    "`deploy` write it, and a run here installs the versions it records too. Run in the agent directory (the " +
     "current one). The first change adds mise to the agent's package.json (one optional package per platform; npm " +
     "installs this machine's), so nothing has to be installed first.",
   subcommands: [
@@ -470,7 +470,7 @@ const env: CommandSpec = {
       name: "update",
       summary: "lock the newest version each package's declared version allows",
       description:
-        "A version is resolved when a package is added and stays locked, `latest` included, until this resolves the " +
+        "A version is resolved when a package is locked and stays locked, `latest` included, until this resolves the " +
         "named packages (every one when none is named) again and installs them here. context.json does not change; " +
         "commit environment/.",
       args: [{ name: "[packages...]", description: "declared packages (default: every one)" }],
@@ -485,11 +485,11 @@ const env: CommandSpec = {
     },
     {
       name: "install",
-      summary: "install the locked versions here; lock again first when context.json changed",
+      summary: "lock what context.json declares, and install it here",
       description:
-        "Install the versions environment/ locks on this machine, adding mise to package.json when it is missing. " +
-        "When the packages context.json declares are not the ones environment/ was locked for (an edit by hand), " +
-        "lock them again first, and say so: commit environment/ with the change.",
+        "Lock the packages context.json declares into environment/, keeping every version already locked, and install " +
+        "them on this machine, adding mise to package.json when it is missing. When that changes environment/ (an " +
+        "edit to context.json by hand), it says so: commit environment/ with the change.",
       examples: [{ cmd: "fastagent env install", note: "after a clone, or an edit to context.json" }],
       run: async () => (await import("./commands/env.ts")).runEnvInstall(),
     },
@@ -502,9 +502,10 @@ const env: CommandSpec = {
     },
   ],
   notes:
-    "`dev`, `start`, `chat`, `invoke` and `tool` install the locked versions and put them first on the PATH of what " +
-    "the agent runs; they refuse an environment/ that is not the lock of what context.json declares. Apt packages " +
-    "are installed in the image; on Debian or Ubuntu a start here names the missing ones.",
+    "`dev`, `start`, `chat`, `invoke` and `tool` install the declared packages, at the locked versions where " +
+    "environment/ has them, and put them first on the PATH of what the agent runs; they never write environment/. " +
+    "`dev` restarts when it changes. Apt packages are installed in the image; on Debian or Ubuntu a start here " +
+    "names the missing ones.",
 };
 
 const content: CommandSpec = {

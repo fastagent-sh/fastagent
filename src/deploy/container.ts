@@ -134,7 +134,7 @@ const BUILD_MISE_DIR = "/tmp/mise";
  * its own data directory, so a start installs nothing.
  */
 function environmentLayer(dir: string): string {
-  const isolation = Object.entries(isolationAt(dir))
+  const isolation = Object.entries(isolationAt(`${dir}/${ENVIRONMENT_DIR}`))
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   // The agent's own mise, by its package: the bin link is not reliable (mise.ts `miseBinary`).

@@ -41,13 +41,7 @@ import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
 import { ENVIRONMENT_DIR, declaresTool, runtimeAdvice } from "../environment/declare.ts";
-import {
-  checkPackages,
-  environmentMismatch,
-  lockEnvironment,
-  MISE_PACKAGE_NAMES,
-  miseBinary,
-} from "../environment/mise.ts";
+import { checkPackages, lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -138,9 +132,9 @@ function checkContent(content: readonly DeclaredContent[], storageResets: boolea
 /**
  * What the image needs to install the packages the agent declares: the agent's own mise for linux in its package.json,
  * so the image's install brings it, packages FastAgent installs from, a PyPI package's runtime, and `environment/`, the
- * lock the image installs. The lock is committed; it is rendered again here only when the declaration changed without
- * it, and said, for the author to commit. A machine without the agent's mise cannot check or lock, which is an issue
- * (a warning without `--run`), as a code input that cannot load is.
+ * lock the image installs. Every deploy locks it again: that keeps every version already locked, and a change (the
+ * declaration edited without it) is said, for the author to commit. A machine without the agent's mise cannot check
+ * or lock, which is an issue (a warning without `--run`), as a code input that cannot load is.
  */
 async function checkEnvironment(
   agentDir: string,
@@ -149,11 +143,10 @@ async function checkEnvironment(
   pkg: { optionalDependencies?: Record<string, unknown> },
   report: DeployReport,
 ): Promise<void> {
-  const stale = environmentMismatch(agentDir, packages) !== undefined;
   if (Object.keys(packages).length === 0) {
-    if (!stale) return;
-    await lockEnvironment(agentDir, {}, undefined);
-    report.warn(`removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`);
+    if (await lockEnvironment(agentDir, {}, undefined)) {
+      report.warn(`removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`);
+    }
     return;
   }
   const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
@@ -168,9 +161,8 @@ async function checkEnvironment(
   const bin = miseBinary(agentDir);
   if (!bin) {
     report.issue(
-      `the agent's mise is not installed here, so the packages context.json declares cannot be checked` +
-        `${stale ? ` or locked into ${ENVIRONMENT_DIR}/` : ""}. Run \`fastagent env install\` in ${agentDir}, then ` +
-        `deploy again.`,
+      `the agent's mise is not installed here, so the packages context.json declares cannot be checked or locked ` +
+        `into ${ENVIRONMENT_DIR}/. Run \`fastagent env install\` in ${agentDir}, then deploy again.`,
     );
     return;
   }
@@ -178,9 +170,10 @@ async function checkEnvironment(
   for (const refusal of refusals) report.issue(refusal);
   if (runtime) report.issue(runtimeAdvice(runtime));
   // A lock of what the image cannot install would only fail the build later.
-  if (refusals.length > 0 || runtime || !stale) return;
-  await lockEnvironment(agentDir, packages, bin);
-  report.warn(`${ENVIRONMENT_DIR}/ is locked again from context.json, which changed without it — commit it`);
+  if (refusals.length > 0 || runtime) return;
+  if (await lockEnvironment(agentDir, packages, bin)) {
+    report.warn(`${ENVIRONMENT_DIR}/ is locked again from context.json, which changed without it — commit it`);
+  }
 }
 
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */

@@ -146,29 +146,31 @@ fastagent env add apt:chromium                  # a Debian package the image ins
 fastagent env exec -- gh --version
 ```
 
-- **`add`** checks each package against the backend it resolves to, installs it, writes `environment/` and then
-  `context.json`, so a `dev` that restarts on the declaration finds its lock. A version defaults to `latest`; adding a
+- **`add`** checks each package against the backend it resolves to, installs it here, locks it into `environment/`
+  and then writes `context.json`. A version defaults to `latest`; adding a
   declared package again replaces its version. An apt package is declared without installing anything; on Debian or
   Ubuntu, `add` says whether this machine has it.
 - **`remove`** takes the names as declared (`gh`, `apt:chromium`); FastAgent's files in `environment/` go with the
   last package.
 - **`update`** resolves the named packages (every one when none is named) again to the newest version their declared
   version allows, locks and installs that. A version is resolved once, when a package is added, and stays locked,
-  `latest` included, until `update`. `context.json` does not change; commit `environment/`. A running `dev` uses the
-  new versions from its next restart.
-- **`list`** prints each package with the version its lock records, and warns about what `dev` or `deploy` would
-  refuse: a lock that is not the declaration's, a refused backend, a PyPI package's undeclared runtime.
-- **`install`** installs the locked versions on this machine. After a clone, it installs mise first. After an edit
-  to `context.json` by hand, it locks the packages again first and says so: commit `environment/` with the change.
+  `latest` included, until `update`. `context.json` does not change; commit `environment/`. A running `dev` restarts
+  on it.
+- **`list`** prints each package with the version its lock records (`(not locked)` for one added by hand), and warns
+  about what `deploy` would refuse: a refused backend, a PyPI package's undeclared runtime.
+- **`install`** locks what `context.json` declares, keeping every version already locked, and installs it on this
+  machine; after a clone, it installs mise first. When that changes `environment/` (an edit to `context.json` by
+  hand), it says so: commit `environment/` with the change.
 - **`exec`** runs a command with the environment first on its `PATH`, and exits with its code.
 
-A change that fails (a package mise cannot install, a refused backend) or is interrupted (Ctrl-C) leaves
+Every run of mise happens in a copy outside the agent directory, and `environment/` is replaced only once the new lock
+is complete, so a change that fails (a package mise cannot install, a refused backend) or is interrupted (Ctrl-C) leaves
 `context.json` and `environment/` as they were. An `environment/` FastAgent did not write (its `mise.toml` is not one
-FastAgent rendered) is the author's: ignored while no package is declared, refused when one is, and never changed or
-removed. Two at once on one agent run one after the other, under a lock beside `environment/`. The first change adds
+FastAgent rendered) is the author's: never read, written or removed, and a change that would lock packages over it is
+refused. Two at once on one agent run one after the other, under a lock beside `environment/`. The first change adds
 mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and says so; an agent
-whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an
-agent with dependencies, whose image runs the FastAgent they list.
+whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an agent
+with dependencies, whose image runs the FastAgent they list.
 
 ## `fastagent models`
 

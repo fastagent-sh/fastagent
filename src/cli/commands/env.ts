@@ -11,19 +11,17 @@ import {
   type DeclaredEnvironment,
   ENVIRONMENT_DIR,
   declareEnvironment,
-  packagesDigest,
   parsePackageArgument,
   runtimeAdvice,
+  samePackages,
 } from "../../environment/declare.ts";
 import {
   checkPackages,
   ensureMise,
   enterEnvironment,
-  environmentMismatch,
   lockEnvironment,
   lockedVersions,
   miseBinary,
-  updateEnvironment,
 } from "../../environment/mise.ts";
 import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
@@ -80,11 +78,8 @@ export async function runEnvUpdate(names: string[]): Promise<void> {
     }
     if (Object.keys(declared.packages).length === 0) throw new Error("the environment declares no packages to update");
     const bin = await checkedMise(agentDir, declared.packages);
-    if (environmentMismatch(agentDir, declared.packages) !== undefined) {
-      await lockEnvironment(agentDir, declared.packages, bin);
-    }
     const before = lockedVersions(agentDir);
-    await updateEnvironment(agentDir, bin, names);
+    await lockEnvironment(agentDir, declared.packages, bin, names);
     const after = lockedVersions(agentDir);
     return (names.length > 0 ? names : Object.keys(declared.packages)).map(
       (name) => [name, before.get(name), after.get(name)] as const,
@@ -93,13 +88,11 @@ export async function runEnvUpdate(names: string[]): Promise<void> {
   const width = Math.max(...changes.map(([name]) => name.length));
   for (const [name, before, after] of changes) {
     console.log(
-      `${name.padEnd(width)}  ${before === after ? `${after} (the newest it allows)` : `${before} → ${after}`}`,
+      `${name.padEnd(width)}  ${before === after ? `${after} (the newest it allows)` : `${before ?? "(not locked)"} → ${after}`}`,
     );
   }
   if (changes.some(([, before, after]) => before !== after)) {
-    log.info(
-      `[fastagent] commit ${ENVIRONMENT_DIR}/; a running \`fastagent dev\` uses the new versions from its next restart`,
-    );
+    log.info(`[fastagent] commit ${ENVIRONMENT_DIR}/; a running \`fastagent dev\` restarts on it`);
   }
 }
 
@@ -116,8 +109,6 @@ export async function runEnvList(): Promise<void> {
     console.log(`${name.padEnd(width)}  ${version.padEnd(8)}  ${locked.get(name) ?? "(not locked)"}`);
   }
   for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
-  const stale = environmentMismatch(agentDir, declared.packages);
-  if (stale) log.warn(`[fastagent] ${stale}`);
   if (Object.keys(declared.packages).length > 0) {
     const bin = miseBinary(agentDir);
     if (!bin) {
@@ -139,11 +130,9 @@ export async function runEnvInstall(): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
   await oneAtATime(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
-    const stale = environmentMismatch(agentDir, declared.packages) !== undefined;
     const declares = Object.keys(declared.packages).length > 0;
     const bin = declares ? await checkedMise(agentDir, declared.packages) : undefined;
-    if (stale) {
-      await lockEnvironment(agentDir, declared.packages, bin);
+    if (await lockEnvironment(agentDir, declared.packages, bin)) {
       log.info(
         declares
           ? `[fastagent] ${ENVIRONMENT_DIR}/ is locked again from context.json — commit it`
@@ -169,9 +158,8 @@ export async function runEnvExec(command: string[]): Promise<void> {
 }
 
 /**
- * Change the declaration with `change`, checked as a whole. When its packages change (or `environment/` is not their
- * lock), the packages are checked and `environment/` is locked again first, which installs them here; the declaration
- * is written last, so a `dev` that restarts on it finds its lock in place.
+ * Change the declaration with `change`, checked as a whole. When its packages change, they are checked, installed here
+ * and locked into `environment/` first; the declaration is written last.
  */
 async function edit(
   agentDir: string,
@@ -180,14 +168,11 @@ async function edit(
   return oneAtATime(agentDir, async () => {
     const current = loadEnvironment(agentDir) ?? NONE;
     const next = declareEnvironment(change(current)) ?? NONE;
-    const commit = () => writeEnvironment(agentDir, next);
-    const samePackages = packagesDigest(current.packages) === packagesDigest(next.packages);
-    if (samePackages && environmentMismatch(agentDir, next.packages) === undefined) {
-      await commit();
-      return next;
+    if (!samePackages(current.packages, next.packages)) {
+      const bin = Object.keys(next.packages).length > 0 ? await checkedMise(agentDir, next.packages) : undefined;
+      await lockEnvironment(agentDir, next.packages, bin);
     }
-    const bin = Object.keys(next.packages).length > 0 ? await checkedMise(agentDir, next.packages) : undefined;
-    await lockEnvironment(agentDir, next.packages, bin, commit);
+    await writeEnvironment(agentDir, next);
     return next;
   });
 }
@@ -208,7 +193,8 @@ async function checkedMise(agentDir: string, packages: Record<string, string>): 
 }
 
 /**
- * One `fastagent env` at a time per agent: two would render `environment/` over each other. The lock is the directory
+ * One `fastagent env` at a time per agent: two would lock `environment/` over each other, and each writes the
+ * declaration it read. The lock is the directory
  * proper-lockfile keeps beside it (`environment.lock`), refreshed while it is held, so a command waits out another's
  * install.
  */

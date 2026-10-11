@@ -604,7 +604,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     optionalDependencies: Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"])),
   });
 
-  it("packages need the linux mise in package.json, and mise here to check them; environment/ is relocked only when stale", async () => {
+  it("packages need the linux mise in package.json, and mise here to check them; environment/ is locked on every deploy", async () => {
     const dir = await agent({
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
       "context.json": JSON.stringify({ environment: { packages: { jq: "1.8.1" }, aptPackages: ["chromium", "git"] } }),
@@ -625,7 +625,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({ ok: false, gate: notHere });
     const artifactsOnly = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(artifactsOnly.ok && artifactsOnly.messages).toContainEqual({ level: "warn", text: notHere });
-    // Installed, and environment/ is not the lock of what context.json declares: locked again here, and said.
+    // Installed: locked here, and said when that changed environment/.
     const locks = await installMise(dir);
     const relocked = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(relocked.ok).toBe(true);
@@ -638,11 +638,11 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       // mise downloads over TLS (the slim image has no CAs); the agent's own apt packages join the one layer.
       expect(relocked.container.apt).toEqual(["ca-certificates", "chromium", "git"]);
     }
-    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64\n");
-    // The committed lock matches: the image installs it as it is.
+    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64\n");
+    // Locked again on the next deploy, which keeps what was locked: nothing changed, so nothing is said.
     const again = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(again.ok && again.messages.map((m) => m.text).join("\n")).not.toMatch(/locked again/);
-    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64\n");
+    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64\n".repeat(2));
     // No packages left: environment/ goes, and that is said too.
     await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { aptPackages: ["chromium"] } }));
     const removed = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });

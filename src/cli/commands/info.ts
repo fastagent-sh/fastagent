@@ -26,7 +26,6 @@ import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
-import { environmentMismatch } from "../../environment/mise.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -52,8 +51,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   let environmentError: string | undefined;
   try {
     environment = loadEnvironment(agentDir);
-    // A lock that is not the declaration's stops dev and start just as a refused declaration does.
-    environmentError = environmentMismatch(agentDir, environment?.packages ?? {});
   } catch (error) {
     environmentError = (error as Error).message;
   }

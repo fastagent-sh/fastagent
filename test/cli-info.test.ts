@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { packagesDigest } from "../src/environment/declare.ts";
-import { RENDERED_CONFIG_HEADER } from "../src/environment/mise.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("cli: info", () => {
@@ -30,24 +28,17 @@ describe("cli: info", () => {
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
-  it("info reports the declared environment without installing it, and what dev and start stop on", async () => {
-    // No mise is installed in this agent: `info` must not need one (it only reads the declaration and the digest).
+  it("info reports the declared environment without installing it, and a refused one without failing", async () => {
+    // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
     const environment = { packages: { jq: "1.8.1" }, aptPackages: ["chromium"] };
     const dir = await agentWorkspace("fa-info-env-", {
       "fastagent.config.ts": "export default {};\n",
       "context.json": JSON.stringify({ environment }),
-      "environment/mise.toml": `${RENDERED_CONFIG_HEADER}[tools]\n`,
-      "environment/packages.sha256": `${packagesDigest(environment.packages)}\n`,
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
     expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null });
     expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
-    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
-    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { jq: "2" } } }));
-    expect((await run(["info", dir])).stdout).toMatch(
-      /^environment: +\(refused: dev and start stop on it\)\n +⚠ the packages context\.json declares are not the ones environment\/ was locked for/m,
-    );
     await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { "cargo:x": "1" } } }));
     const refused = await run(["info", dir, "--json"]);
     expect(refused.code).toBe(0);
@@ -55,6 +46,10 @@ describe("cli: info", () => {
       environment: null,
       environmentError: expect.stringMatching(/package "cargo:x" installs with cargo:/),
     });
+    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
+    expect((await run(["info", dir])).stdout).toMatch(
+      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*package "cargo:x" installs with cargo:/m,
+    );
   });
 
   it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {
