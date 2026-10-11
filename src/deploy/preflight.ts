@@ -41,7 +41,14 @@ import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
 import { ENVIRONMENT_DIR, declaresTool, runtimeAdvice } from "../environment/declare.ts";
-import { checkPackages, lockEnvironment, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
+import {
+  checkPackages,
+  foreignEnvironment,
+  lockEnvironment,
+  MISE_PACKAGE_NAMES,
+  miseBinary,
+  removeEnvironment,
+} from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -144,9 +151,14 @@ async function checkEnvironment(
   report: DeployReport,
 ): Promise<void> {
   if (Object.keys(packages).length === 0) {
-    if (await lockEnvironment(agentDir, {}, undefined)) {
+    if (removeEnvironment(agentDir)) {
       report.warn(`removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`);
     }
+    return;
+  }
+  const foreign = foreignEnvironment(agentDir);
+  if (foreign) {
+    report.issue(foreign);
     return;
   }
   const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
@@ -171,7 +183,7 @@ async function checkEnvironment(
   if (runtime) report.issue(runtimeAdvice(runtime));
   // A lock of what the image cannot install would only fail the build later.
   if (refusals.length > 0 || runtime) return;
-  if (await lockEnvironment(agentDir, packages, bin)) {
+  if (await lockEnvironment(agentDir, packages, async () => bin)) {
     report.warn(`${ENVIRONMENT_DIR}/ is locked again from context.json, which changed without it — commit it`);
   }
 }

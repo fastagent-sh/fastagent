@@ -1,7 +1,8 @@
 /**
  * Creating an agent and editing its content, as an API: `fastagent init` and `fastagent content` are thin CLI wrappers
- * over these (and `fastagent env` writes its declaration through {@link writeEnvironment}), so the CLI and a client (a desktop app) cannot disagree about the rules. Nothing here prints or exits;
- * every refusal is thrown with the message the CLI shows.
+ * over these (and `fastagent env` writes its declaration through {@link writeEnvironment}), so the CLI and a client (a
+ * desktop app) cannot disagree about the rules. Nothing here prints or exits; every refusal is thrown with the message
+ * the CLI shows.
  */
 import { lstatSync, statSync, unlinkSync } from "node:fs";
 import { rm } from "node:fs/promises";

@@ -30,6 +30,7 @@ import {
   lockedVersions,
   MISE_PACKAGE_NAMES,
   miseBinary,
+  removeEnvironment,
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/harnesses/pi/authoring.ts";
 import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
@@ -129,7 +130,7 @@ esac
 /** `environment/` as `fastagent env add` leaves it for `packages`, through a stand-in mise of its own. */
 async function locked(dir: string, packages: Record<string, string>): Promise<void> {
   const { bin } = await fakeMise(dir);
-  await lockEnvironment(dir, packages, bin);
+  await lockEnvironment(dir, packages, async () => bin);
   await rm(join(dir, "..", `${dir.split("/").at(-1)}-mise.log`), { force: true });
 }
 
@@ -279,7 +280,7 @@ describe("environment: environment/, the image's lock", () => {
   it("is locked in a copy of its own after an install in another, and replaced only when it changed", async () => {
     const dir = await agentDir({ packages: { gh: "2", "npm:prettier": "3" } });
     const { bin, calls } = await fakeMise(dir);
-    expect(await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, bin)).toBe(true);
+    expect(await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, async () => bin)).toBe(true);
     expect(await readFile(join(dir, "environment", "mise.toml"), "utf8")).toBe(
       `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n` +
         `[settings.python]\ncompile = false\n\n[settings.ruby]\ncompile = false\n\n[settings.node]\ncompile = false\n\n` +
@@ -303,7 +304,7 @@ describe("environment: environment/, the image's lock", () => {
     expect(install?.cwd).not.toBe(lock?.cwd);
     // Locking what is locked keeps every version: nothing to replace.
     const before = await contents(join(dir, "environment"));
-    expect(await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, bin)).toBe(false);
+    expect(await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, async () => bin)).toBe(false);
     expect((await calls()).slice(2).map((call) => [call.args, call.lock])).toEqual([
       ["install", "locked"],
       [`lock ${PLATFORMS}`, "locked"],
@@ -314,9 +315,9 @@ describe("environment: environment/, the image's lock", () => {
   it("resolves named packages again only when asked, and installs what moved", async () => {
     const dir = await agentDir({ packages: { gh: "latest" } });
     const { bin, calls } = await fakeMise(dir);
-    await lockEnvironment(dir, { gh: "latest" }, bin);
+    await lockEnvironment(dir, { gh: "latest" }, async () => bin);
     expect(lockedVersions(dir).get("gh")).toBe("2.83.1");
-    expect(await lockEnvironment(dir, { gh: "latest" }, bin, ["gh"])).toBe(true);
+    expect(await lockEnvironment(dir, { gh: "latest" }, async () => bin, ["gh"])).toBe(true);
     expect(lockedVersions(dir).get("gh")).toBe("2.90.0");
     expect((await calls()).slice(2).map((call) => call.args)).toEqual([
       "install",
@@ -329,19 +330,21 @@ describe("environment: environment/, the image's lock", () => {
   it("is left as it was by a failure; without packages, only FastAgent's files go", async () => {
     const dir = await agentDir({ packages: { gh: "2" } });
     const { bin } = await fakeMise(dir);
-    await lockEnvironment(dir, { gh: "2" }, bin);
+    await lockEnvironment(dir, { gh: "2" }, async () => bin);
     const before = await contents(join(dir, "environment"));
     process.env.FAKE_FAIL_INSTALL = "1";
-    await expect(lockEnvironment(dir, { gh: "2", jq: "99" }, bin)).rejects.toThrow("mise install failed (exit 1)");
+    await expect(lockEnvironment(dir, { gh: "2", jq: "99" }, async () => bin)).rejects.toThrow(
+      "mise install failed (exit 1)",
+    );
     delete process.env.FAKE_FAIL_INSTALL;
     expect(await contents(join(dir, "environment"))).toEqual(before);
     await writeFile(join(dir, "environment", "notes.md"), "mine\n");
-    expect(await lockEnvironment(dir, {}, undefined)).toBe(true);
+    expect(removeEnvironment(dir)).toBe(true);
     expect(await readdir(join(dir, "environment"))).toEqual(["notes.md"]);
-    expect(await lockEnvironment(dir, {}, undefined)).toBe(false);
+    expect(removeEnvironment(dir)).toBe(false);
     await rm(join(dir, "environment", "notes.md"));
-    await lockEnvironment(dir, { gh: "2" }, bin);
-    expect(await lockEnvironment(dir, {}, undefined)).toBe(true);
+    await lockEnvironment(dir, { gh: "2" }, async () => bin);
+    expect(removeEnvironment(dir)).toBe(true);
     await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
   });
 
@@ -353,14 +356,18 @@ describe("environment: environment/, the image's lock", () => {
     };
     const quiet = await agentDir({ aptPackages: ["chromium"] });
     await notes(quiet);
-    expect(await lockEnvironment(quiet, {}, undefined)).toBe(false);
+    expect(removeEnvironment(quiet)).toBe(false);
     expect(await readdir(join(quiet, "environment"))).toEqual(["mise.lock", "notes.md"]);
     const dir = await agentDir({ packages: { gh: "2" } });
     await notes(dir);
     const { bin, calls } = await fakeMise(dir);
-    await expect(lockEnvironment(dir, { gh: "2" }, bin)).rejects.toThrow(
+    // Refused before the agent's mise is asked for, which can add it to package.json.
+    const mise = vi.fn(async () => bin);
+    await expect(lockEnvironment(dir, { gh: "2" }, mise)).rejects.toThrow(
       `${join(dir, "environment")} was not written by FastAgent (it holds no mise.toml rendered from context.json)`,
     );
+    expect(mise).not.toHaveBeenCalled();
+    expect(lockedVersions(dir)).toEqual(new Map());
     // A process that runs the agent installs without it: its lock is not FastAgent's to follow.
     await enterEnvironment(dir);
     expect((await calls()).map((call) => [call.args, call.lock])).toEqual([

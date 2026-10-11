@@ -654,6 +654,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await expect(readFile(join(dir, "environment", "mise.lock"), "utf8")).rejects.toThrow(/ENOENT/);
   });
 
+  it("an environment/ of the author's own is an issue for packages, not a crash, and is left as it is", async () => {
+    const dir = await agent({
+      "package.json": withMise,
+      "context.json": JSON.stringify({ environment: { packages: { jq: "1" } } }),
+      "environment/notes.md": "mine\n",
+    });
+    const locks = await installMise(dir);
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/environment was not written by FastAgent .* move it out of the agent directory$/),
+    });
+    expect(await locks()).toBe("");
+    expect(await readFile(join(dir, "environment", "notes.md"), "utf8")).toBe("mine\n");
+  });
+
   it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {
     const dir = await agent({ "context.json": JSON.stringify({ environment: { packages: { rust: "1" } } }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });

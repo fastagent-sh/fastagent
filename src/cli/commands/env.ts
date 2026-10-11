@@ -1,6 +1,6 @@
 /**
- * `fastagent env add|remove|update|list|install|exec`: the agent's environment, declared under `environment` in context.json
- * and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
+ * `fastagent env add|remove|update|list|install|exec`: the agent's environment, declared under `environment` in
+ * context.json and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
  */
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -77,9 +77,8 @@ export async function runEnvUpdate(names: string[]): Promise<void> {
       if (!Object.hasOwn(declared.packages, name)) throw noPackage(declared, name);
     }
     if (Object.keys(declared.packages).length === 0) throw new Error("the environment declares no packages to update");
-    const bin = await checkedMise(agentDir, declared.packages);
     const before = lockedVersions(agentDir);
-    await lockEnvironment(agentDir, declared.packages, bin, names);
+    await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages), names);
     const after = lockedVersions(agentDir);
     return (names.length > 0 ? names : Object.keys(declared.packages)).map(
       (name) => [name, before.get(name), after.get(name)] as const,
@@ -130,11 +129,9 @@ export async function runEnvInstall(): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
   await oneAtATime(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
-    const declares = Object.keys(declared.packages).length > 0;
-    const bin = declares ? await checkedMise(agentDir, declared.packages) : undefined;
-    if (await lockEnvironment(agentDir, declared.packages, bin)) {
+    if (await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages))) {
       log.info(
-        declares
+        Object.keys(declared.packages).length > 0
           ? `[fastagent] ${ENVIRONMENT_DIR}/ is locked again from context.json — commit it`
           : `[fastagent] removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`,
       );
@@ -169,8 +166,7 @@ async function edit(
     const current = loadEnvironment(agentDir) ?? NONE;
     const next = declareEnvironment(change(current)) ?? NONE;
     if (!samePackages(current.packages, next.packages)) {
-      const bin = Object.keys(next.packages).length > 0 ? await checkedMise(agentDir, next.packages) : undefined;
-      await lockEnvironment(agentDir, next.packages, bin);
+      await lockEnvironment(agentDir, next.packages, () => checkedMise(agentDir, next.packages));
     }
     await writeEnvironment(agentDir, next);
     return next;
@@ -194,9 +190,8 @@ async function checkedMise(agentDir: string, packages: Record<string, string>): 
 
 /**
  * One `fastagent env` at a time per agent: two would lock `environment/` over each other, and each writes the
- * declaration it read. The lock is the directory
- * proper-lockfile keeps beside it (`environment.lock`), refreshed while it is held, so a command waits out another's
- * install.
+ * declaration it read. The lock is the directory proper-lockfile keeps beside it (`environment.lock`), refreshed while
+ * it is held, so a command waits out another's install.
  */
 async function oneAtATime<T>(agentDir: string, run: () => Promise<T>): Promise<T> {
   const path = join(agentDir, ENVIRONMENT_DIR);

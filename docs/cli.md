@@ -158,9 +158,12 @@ fastagent env exec -- gh --version
   on it.
 - **`list`** prints each package with the version its lock records (`(not locked)` for one added by hand), and warns
   about what `deploy` would refuse: a refused backend, a PyPI package's undeclared runtime.
-- **`install`** locks what `context.json` declares, keeping every version already locked, and installs it on this
-  machine; after a clone, it installs mise first. When that changes `environment/` (an edit to `context.json` by
-  hand), it says so: commit `environment/` with the change.
+- **`install`** brings `package.json`, the lock and this machine in line with `context.json`, as `npm install` does:
+  it installs mise (adding it to `package.json` when it is not there), locks what `context.json` declares, keeping
+  every version already locked, and installs it here. When that changes `environment/`, it says so: commit it. Day to
+  day it is not needed, since `add` and `remove` lock and `dev` installs at every start. It is for a declaration
+  written by hand, and for committing its lock before a deploy that runs elsewhere (CI cannot commit the lock it
+  makes).
 - **`exec`** runs a command with the environment first on its `PATH`, and exits with its code.
 
 Every run of mise happens in a copy outside the agent directory, and `environment/` is replaced only once the new lock

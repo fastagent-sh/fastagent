@@ -1,7 +1,7 @@
 /**
  * The agent's `context.json`, read and refused whole in ONE place, so the opener, `info`, `content list`, `env`, `tool`
- * and deploy read one declaration (its content, and its environment); and the one shape it is written in. JSON, like `mcp.json` and `package.json`, so a
- * command, a client or the agent itself can edit it without touching TypeScript.
+ * and deploy read one declaration (its content, and its environment); and the one shape it is written in. JSON, like
+ * `mcp.json` and `package.json`, so a command, a client or the agent itself can edit it without touching TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

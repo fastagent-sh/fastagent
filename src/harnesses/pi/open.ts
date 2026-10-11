@@ -163,7 +163,8 @@ export async function resolveAgentAssembly(
   const agentDir = resolveAgentDir(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
   // The commands the agent runs, before anything is spawned: every process that opens the agent (a `dev` worker,
-  // `start`, `invoke`, `chat`, an embedder's `createAgentService`) runs it on its locked packages, or refuses to.
+  // `start`, `invoke`, `chat`, an embedder's `createAgentService`) runs it on its declared packages, or refuses to (a
+  // declaration FastAgent refuses, no mise to install them with).
   await enterEnvironment(agentDir);
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in

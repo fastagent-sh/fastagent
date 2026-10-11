@@ -485,11 +485,13 @@ const env: CommandSpec = {
     },
     {
       name: "install",
-      summary: "lock what context.json declares, and install it here",
+      summary: "bring package.json, the lock and this machine in line with context.json",
       description:
-        "Lock the packages context.json declares into environment/, keeping every version already locked, and install " +
-        "them on this machine, adding mise to package.json when it is missing. When that changes environment/ (an " +
-        "edit to context.json by hand), it says so: commit environment/ with the change.",
+        "As `npm install` does: install the agent's mise (adding it to package.json when it is not there), lock the " +
+        "packages context.json declares into environment/, keeping every version already locked, and install them " +
+        "here. When that changes environment/, it says so: commit it. Not needed day to day (`add` and `remove` lock, " +
+        "`dev` installs at every start): it is for a declaration written by hand, and for committing its lock before " +
+        "a deploy that runs elsewhere.",
       examples: [{ cmd: "fastagent env install", note: "after a clone, or an edit to context.json" }],
       run: async () => (await import("./commands/env.ts")).runEnvInstall(),
     },
