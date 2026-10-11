@@ -1,17 +1,34 @@
 /**
  * RUNNING an agent's environment with mise. The agent carries its own mise, as optional npm dependencies, one package
  * per platform of which npm installs only this machine's: the author installs nothing, and the image's `npm ci`
- * installs the same mise, at the version the lockfile records, that wrote `mise.lock` here. Every run reads only the
- * agent's own `mise.toml`, never the machine's mise configuration or a parent directory's, so what is installed here
- * is what the image installs.
+ * installs the same mise. Every run reads only `environment/mise.toml`, the configuration FastAgent renders from the
+ * declaration: never the machine's mise configuration, an author's own `mise.toml` or a parent directory's. Only the
+ * commands an author runs write `environment/`; a process that runs the agent installs what its lock records.
  */
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { parse, stringify } from "smol-toml";
+import { writeFileAtomic } from "../atomic-write.ts";
+import { loadEnvironment } from "../content/file.ts";
 import { log } from "../log.ts";
 import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { MISE_FILE, readEnvironment } from "./declare.ts";
+import { aptAdvice, missingAptPackages } from "./apt.ts";
+import {
+  ENVIRONMENT_DIGEST_FILE,
+  ENVIRONMENT_DIR,
+  type MissingRuntime,
+  missingPythonRuntime,
+  packagesDigest,
+  resolvedBackendRefusal,
+  writtenBackend,
+} from "./declare.ts";
+
+/** In `environment/`: the configuration FastAgent renders, and the lock mise writes beside it. */
+const MISE_FILE = "mise.toml";
+const MISE_LOCK_FILE = "mise.lock";
 
 /** mise's npm package for each platform it publishes one for, by Node's `${platform}-${arch}`. */
 const MISE_PACKAGES: Readonly<Record<string, string>> = {
@@ -24,8 +41,11 @@ const MISE_PACKAGES: Readonly<Record<string, string>> = {
 /** Every platform's package: an agent lists them all, so its lockfile has the image's too. */
 export const MISE_PACKAGE_NAMES: readonly string[] = Object.values(MISE_PACKAGES);
 
-/** The platforms `deploy` locks for: an image is built for one of them (AgentCore builds linux-arm64). */
-const IMAGE_PLATFORMS = ["linux-x64", "linux-arm64"] as const;
+/**
+ * The platforms the lock records: an image is built for a linux one, and an author's machine is any. A process that
+ * runs the agent installs with `--locked`, which refuses a platform the lock does not record rather than adding it.
+ */
+const LOCK_PLATFORMS = ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"] as const;
 
 /** A path no file can be at, for the mise configuration files an agent's environment must not read. */
 const NO_FILE = "/dev/null/none.toml";
@@ -34,8 +54,7 @@ const NO_FILE = "/dev/null/none.toml";
 function platformPackage(): string {
   const key = `${process.platform}-${process.arch}`;
   const name = MISE_PACKAGES[key];
-  if (!name)
-    throw new Error(`an agent's environment (${MISE_FILE}) does not run on ${key} yet: mise has no npm package for it`);
+  if (!name) throw new Error(`an agent's environment does not run on ${key} yet: mise has no npm package for it`);
   return name;
 }
 
@@ -55,23 +74,16 @@ export function miseBinary(agentDir: string): string | undefined {
 }
 
 /**
- * What every mise run for the agent in `agentDir` is given: only its own `mise.toml` is read (not `.mise.toml`,
- * `mise.local.toml`, `.tool-versions`, a parent directory's or the machine's configuration), and it is trusted, as
- * running the agent already trusts its code. The same values go into the image the agent is deployed in. They are
- * given to these runs alone, never exported to the agent's processes: a mise the agent runs is the machine's, on the
- * machine's configuration and a content repository's own.
+ * What every mise run for the agent at `realDir` (a path no link leads through) is given: only `environment/mise.toml`
+ * is read, and it is trusted, as running the agent already trusts its code. The same values go into the image. They
+ * are given to these runs alone, never exported to the agent's processes: a mise the agent runs is the machine's.
  */
-function miseIsolation(agentDir: string): Record<string, string> {
-  return isolationAt(realpathSync(agentDir));
-}
-
-/** {@link miseIsolation} for an agent directory at `realDir`, a path no link leads through. */
 export function isolationAt(realDir: string): Record<string, string> {
   return {
-    // The file, not the directory: mise trusts by prefix, and a clone under content/ carries its own mise.toml, which
-    // would then run unasked.
-    MISE_TRUSTED_CONFIG_PATHS: join(realDir, MISE_FILE),
-    MISE_CEILING_PATHS: dirname(realDir),
+    // The file, not the directory: mise trusts by prefix.
+    MISE_TRUSTED_CONFIG_PATHS: join(realDir, ENVIRONMENT_DIR, MISE_FILE),
+    // mise does not read the ceiling directory itself, so an author's own mise.toml beside context.json is not read.
+    MISE_CEILING_PATHS: realDir,
     MISE_GLOBAL_CONFIG_FILE: NO_FILE,
     MISE_SYSTEM_CONFIG_FILE: NO_FILE,
     MISE_OVERRIDE_CONFIG_FILENAMES: MISE_FILE,
@@ -80,43 +92,36 @@ export function isolationAt(realDir: string): Record<string, string> {
 }
 
 /**
- * Run the agent's mise in its directory with `args`. Its own output goes to this process's stderr, so progress and
- * errors show; `capture` returns its stdout instead of passing it through. A failure says how mise exited.
+ * Run the agent's mise with `args`, in `environment/` unless `cwd` says otherwise. Its progress and errors go to this
+ * process's stderr; `capture` returns its stdout instead of passing it through, and `quiet` keeps its stderr for the
+ * error, which then says what mise said.
  */
 function runMise(
   agentDir: string,
   bin: string,
   args: readonly string[],
-  options: { capture?: boolean; allowExit?: readonly number[] } = {},
-): Promise<{ code: number; stdout: string }> {
+  options: { capture?: boolean; quiet?: boolean; cwd?: string } = {},
+): Promise<string> {
   return new Promise((done, fail) => {
     const child = spawn(bin, args, {
-      cwd: agentDir,
-      env: { ...process.env, ...miseIsolation(agentDir) },
-      stdio: ["inherit", options.capture ? "pipe" : process.stderr, "inherit"],
+      cwd: options.cwd ?? join(agentDir, ENVIRONMENT_DIR),
+      env: { ...process.env, ...isolationAt(realpathSync(agentDir)) },
+      stdio: ["inherit", options.capture ? "pipe" : process.stderr, options.quiet ? "pipe" : "inherit"],
     });
     let stdout = "";
+    let stderr = "";
     child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
     });
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
     child.on("error", fail);
     child.on("close", (code, signal) => {
-      if (code === 0 || (code !== null && options.allowExit?.includes(code))) done({ code, stdout });
-      else fail(new Error(`mise ${args.join(" ")} failed (${signal ?? `exit ${code}`})`));
+      if (code === 0) return done(stdout);
+      const said = stderr.match(/ERROR\s+(.+)/)?.[1];
+      fail(new Error(`mise ${args.join(" ")} failed (${signal ?? `exit ${code}`})${said ? `: ${said}` : ""}`));
     });
-  });
-}
-
-/** Run the agent's mise in its directory with `args` on this terminal, as the author typed them: its exit code. */
-export function execMise(agentDir: string, bin: string, args: readonly string[]): Promise<number> {
-  return new Promise((done, fail) => {
-    const child = spawn(bin, args, {
-      cwd: agentDir,
-      env: { ...process.env, ...miseIsolation(agentDir) },
-      stdio: "inherit",
-    });
-    child.on("error", fail);
-    child.on("close", (code, signal) => done(code ?? (signal ? 1 : 0)));
   });
 }
 
@@ -163,49 +168,160 @@ export async function ensureMise(agentDir: string): Promise<string> {
   return added;
 }
 
-/** What a command that runs the agent says when its environment has no mise to install it with. */
-function missingMise(agentDir: string): Error {
-  return new Error(
-    `${join(agentDir, MISE_FILE)} declares an environment, and the agent has no mise installed — run ` +
-      `\`fastagent env install\` in ${agentDir}`,
+/** What the packages need before they are locked: refusals, and a PyPI package's undeclared runtime. */
+export interface PackageCheck {
+  /** Registry names that resolve to a backend FastAgent leaves out. */
+  refusals: string[];
+  runtime?: MissingRuntime;
+}
+
+/**
+ * Check `packages` against the backend each resolves to: a written one says it (`npm:prettier`), and mise resolves a
+ * registry name (`tokei` is `cargo:tokei`). A name mise does not know fails the check with what mise said.
+ */
+export async function checkPackages(
+  agentDir: string,
+  bin: string,
+  packages: Record<string, string>,
+): Promise<PackageCheck> {
+  const kinds = new Map<string, string>();
+  const refusals: string[] = [];
+  await Promise.all(
+    Object.keys(packages).map(async (name) => {
+      const written = writtenBackend(name);
+      if (written) return void kinds.set(name, written);
+      const out = await runMise(agentDir, bin, ["tool", name, "--json"], { capture: true, quiet: true, cwd: agentDir });
+      const backend = (JSON.parse(out) as { backend?: unknown }).backend;
+      if (typeof backend !== "string") throw new Error(`mise tool ${name} --json reported no backend`);
+      kinds.set(name, backend.split(":")[0] ?? backend);
+      const refusal = resolvedBackendRefusal(name, backend);
+      if (refusal) refusals.push(refusal);
+    }),
+  );
+  const runtime = missingPythonRuntime(packages, kinds);
+  return { refusals: refusals.sort(), ...(runtime ? { runtime } : {}) };
+}
+
+/**
+ * The configuration rendered from `packages`. Prebuilt runtimes only: one with no build for a platform fails there
+ * rather than compiling.
+ */
+function renderConfig(packages: Record<string, string>): string {
+  return (
+    `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n` +
+    stringify({ settings: { all_compile: false }, tools: packages })
   );
 }
 
 /**
- * Enter the agent's environment, for a process that runs it: install what `mise.toml` declares, and put it on this
- * process's PATH, which every command the agent runs inherits. mise itself is not put there: `fastagent env` is how
- * the environment changes, and checks what it writes. An agent with no `mise.toml` borrows the machine's commands.
- * System packages are the image's to install; one missing here is said, with how to install it.
+ * Render `environment/` from `packages` and lock it: the configuration, then mise installs it here (which proves it
+ * installs, and a PyPI package's lock needs uv installed), then locks it for every lock platform, keeping the version
+ * the previous lock records for a package whose version is unchanged; the digest last. `commit` runs once it is
+ * written, so the declaration lands after its lock. When either fails, `environment/` is put back as it was. Without
+ * packages, `environment/` is removed.
  */
-export async function enterMiseEnvironment(agentDir: string): Promise<void> {
-  const declared = readEnvironment(agentDir);
-  if (!declared) return;
+export async function lockEnvironment(
+  agentDir: string,
+  packages: Record<string, string>,
+  bin: string | undefined,
+  commit?: () => Promise<void>,
+): Promise<void> {
+  const dir = join(agentDir, ENVIRONMENT_DIR);
+  const saved = existsSync(dir) ? mkdtempSync(join(tmpdir(), "fastagent-environment-")) : undefined;
+  if (saved) cpSync(dir, saved, { recursive: true });
+  try {
+    if (Object.keys(packages).length === 0) {
+      rmSync(dir, { recursive: true, force: true });
+    } else {
+      if (!bin) throw new Error("lockEnvironment: locking packages needs the agent's mise");
+      mkdirSync(dir, { recursive: true });
+      rmSync(join(dir, ENVIRONMENT_DIGEST_FILE), { force: true });
+      writeFileAtomic(join(dir, MISE_FILE), renderConfig(packages));
+      await runMise(agentDir, bin, ["install"]);
+      await runMise(agentDir, bin, ["lock", "--platform", LOCK_PLATFORMS.join(",")]);
+      writeFileAtomic(join(dir, ENVIRONMENT_DIGEST_FILE), `${packagesDigest(packages)}\n`);
+    }
+    await commit?.();
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    if (saved) cpSync(saved, dir, { recursive: true });
+    throw error;
+  } finally {
+    if (saved) rmSync(saved, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Why `environment/` cannot be run for `packages`, or undefined when it can: it records the digest of the packages it
+ * was rendered from, and the declaration is what it is compared with, never the rendered text, so a lock another
+ * FastAgent version rendered still runs.
+ */
+export function environmentMismatch(agentDir: string, packages: Record<string, string>): string | undefined {
+  const dir = join(agentDir, ENVIRONMENT_DIR);
+  const fix = `run \`fastagent env install\` in ${agentDir}, then commit ${ENVIRONMENT_DIR}/`;
+  if (Object.keys(packages).length === 0) {
+    return existsSync(dir)
+      ? `${ENVIRONMENT_DIR}/ is left from packages context.json no longer declares — ${fix}`
+      : undefined;
+  }
+  let recorded: string;
+  try {
+    recorded = readFileSync(join(dir, ENVIRONMENT_DIGEST_FILE), "utf8").trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return `context.json declares packages, and ${ENVIRONMENT_DIR}/ has no lock for them — ${fix}`;
+  }
+  if (recorded !== packagesDigest(packages)) {
+    return `the packages context.json declares are not the ones ${ENVIRONMENT_DIR}/ was locked for — ${fix}`;
+  }
+  return undefined;
+}
+
+/** What a process that runs the agent says when its environment has no mise to install it with. */
+function missingMise(agentDir: string): Error {
+  return new Error(
+    `context.json declares packages, and the agent has no mise installed — run \`fastagent env install\` in ${agentDir}`,
+  );
+}
+
+/**
+ * Enter the agent's environment, for a process that runs it: install the versions `environment/` locks, and put them on
+ * this process's PATH, which every command the agent runs inherits. It writes nothing, so an `environment/` that is
+ * not the declaration's lock is refused. mise itself is not put on the PATH. An agent without packages borrows the
+ * machine's commands. Apt packages are the image's to install; one missing here is said, with how to install it.
+ */
+export async function enterEnvironment(agentDir: string): Promise<void> {
+  const declared = loadEnvironment(agentDir);
+  const missingApt = missingAptPackages(declared?.aptPackages ?? []);
+  if (missingApt && missingApt.length > 0) log.warn(`[fastagent] ${aptAdvice(missingApt)}`);
+  const packages = declared?.packages ?? {};
+  const stale = environmentMismatch(agentDir, packages);
+  if (stale) throw new Error(stale);
+  if (Object.keys(packages).length === 0) return;
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
-  await runMise(agentDir, bin, ["install"]);
-  if (declared.packages.length > 0) {
-    const status = await runMise(agentDir, bin, ["bootstrap", "packages", "status", "--missing"], {
-      capture: true,
-      allowExit: [1],
-    });
-    if (status.code === 1) {
-      log.warn(
-        `[fastagent] system packages ${MISE_FILE} declares are missing here (the image installs them):\n` +
-          `${status.stdout.trimEnd()}\ninstall them with \`fastagent env bootstrap packages apply\``,
-      );
-    }
-  }
-  const env = JSON.parse((await runMise(agentDir, bin, ["env", "--json"], { capture: true })).stdout) as Record<
+  await runMise(agentDir, bin, ["--locked", "install"]);
+  const env = JSON.parse(await runMise(agentDir, bin, ["--locked", "env", "--json"], { capture: true })) as Record<
     string,
     string
   >;
   Object.assign(process.env, env);
 }
 
-/**
- * Write `mise.lock` for the platforms an image is built for, from the versions this machine resolves with the agent's
- * mise at `bin`, so the image installs what the author runs.
- */
-export async function lockEnvironment(agentDir: string, bin: string): Promise<void> {
-  await runMise(agentDir, bin, ["lock", "--platform", IMAGE_PLATFORMS.join(",")]);
+/** The version `environment/mise.lock` records for each package, for `fastagent env list`. */
+export function lockedVersions(agentDir: string): Map<string, string> {
+  let text: string;
+  try {
+    text = readFileSync(join(agentDir, ENVIRONMENT_DIR, MISE_LOCK_FILE), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+  const tools = (parse(text).tools ?? {}) as Record<string, { version?: unknown }[]>;
+  return new Map(
+    Object.entries(tools).flatMap(([name, entries]) => {
+      const version = entries[0]?.version;
+      return typeof version === "string" ? [[name, version] as [string, string]] : [];
+    }),
+  );
 }

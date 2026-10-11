@@ -173,7 +173,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
 
   it("git is baked iff the agent directory ships a .git — a non-git dir gets no silent git layer", async () => {
     // No .git: no git layer (history without a binary is a dead loop; a binary without history is dead weight —
-    // mise.toml's apt:git is the explicit way in).
+    // an apt package in context.json is the explicit way in).
     const noGit = await agent();
     const pre = await call(noGit, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -568,23 +568,46 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
   it("warns a KEPT hand-written Dockerfile that the environment won't reach, --force included", async () => {
     // `--force` does not rescue it: writeArtifacts refuses a file it did not generate whatever the flag says, so the
     // environment is dropped either way. Suppressing the warning under `--force` only hid that.
-    const dir = await agent({ Dockerfile: "FROM python:3.12\n", "mise.toml": `[tools]\njq = "1.8.1"\n` });
+    const dir = await agent({
+      Dockerfile: "FROM python:3.12\n",
+      "context.json": JSON.stringify({ environment: { aptPackages: ["chromium"] } }),
+    });
     for (const force of [false, true]) {
       const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { force });
       expect(pre.ok).toBe(true);
       if (pre.ok) {
         expect(pre.messages).toContainEqual({
           level: "warn",
-          text: expect.stringMatching(/kept your hand-written Dockerfile — it installs the environment mise\.toml/),
+          text: expect.stringMatching(/kept your hand-written Dockerfile — it installs the environment context\.json/),
         });
       }
     }
   });
 
-  it("an environment needs the agent's linux mise in its package.json, and mise installed here to lock it", async () => {
+  /** The agent's mise, faked where its platform package puts it: it resolves every name to aqua and logs each lock. */
+  async function installMise(dir: string): Promise<() => Promise<string>> {
+    const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
+    await mkdir(join(pkg, "bin"), { recursive: true });
+    await writeFile(join(pkg, "package.json"), "{}\n");
+    const locks = join(dir, "..", "locks.log");
+    await writeFile(
+      join(pkg, "bin", "mise"),
+      `#!/bin/sh\ncase "$1" in\n  tool) printf '{"backend":"aqua:o/%s"}' "$2" ;;\n  lock) echo "$*" >> "${locks}"; echo locked > mise.lock ;;\nesac\n`,
+    );
+    await chmod(join(pkg, "bin", "mise"), 0o755);
+    return () => readFile(locks, "utf8").catch(() => "");
+  }
+
+  const withMise = JSON.stringify({
+    type: "module",
+    dependencies: { "@fastagent-sh/fastagent": "^1" },
+    optionalDependencies: Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"])),
+  });
+
+  it("packages need the linux mise in package.json, and mise here to check them; environment/ is relocked only when stale", async () => {
     const dir = await agent({
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
-      "mise.toml": `[tools]\njq = "1.8.1"\n`,
+      "context.json": JSON.stringify({ environment: { packages: { jq: "1.8.1" }, aptPackages: ["chromium", "git"] } }),
     });
     const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(gated).toMatchObject({
@@ -593,70 +616,57 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         /does not list @jdxcode\/mise-linux-arm64, @jdxcode\/mise-linux-x64\. Run `fastagent env install`/,
       ),
     });
-    const optional = Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"]));
-    await writeFile(
-      join(dir, "package.json"),
-      JSON.stringify({
-        type: "module",
-        dependencies: { "@fastagent-sh/fastagent": "^1" },
-        optionalDependencies: optional,
-      }),
-    );
-    // Listed but not installed on this machine (it never installed the agent's dependencies): the lock cannot be
-    // written, which stops --run and only warns a deploy that writes the artifacts.
+    await writeFile(join(dir, "package.json"), withMise);
+    // Listed but not installed on this machine (it never installed the agent's dependencies): nothing can be checked
+    // or locked, which stops --run and only warns a deploy that writes the artifacts.
     const notHere =
-      `the agent's mise is not installed here, so mise.lock cannot be written from the versions this machine runs, ` +
-      `and the image installs only what the lock records. Run \`fastagent env install\` in ${dir}, then deploy again.`;
+      `the agent's mise is not installed here, so the packages context.json declares cannot be checked or locked ` +
+      `into environment/. Run \`fastagent env install\` in ${dir}, then deploy again.`;
     expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({ ok: false, gate: notHere });
     const artifactsOnly = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(artifactsOnly.ok && artifactsOnly.messages).toContainEqual({ level: "warn", text: notHere });
-    // Installed: the deploy writes the lock, with the agent's mise, for the image's platforms.
-    const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
-    await mkdir(join(pkg, "bin"), { recursive: true });
-    await writeFile(join(pkg, "package.json"), "{}\n");
-    // Like mise for an npm tool, the lock writes a sidecar beside it.
-    await writeFile(
-      join(pkg, "bin", "mise"),
-      `#!/bin/sh\necho "$*" > mise.lock\nmkdir -p .mise/locks/npm-cowsay/1.6.0\n`,
-    );
-    await chmod(join(pkg, "bin", "mise"), 0o755);
-    const ok = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(ok.ok).toBe(true);
-    if (ok.ok) {
-      expect(ok.container.environment).toMatchObject({ tools: ["jq"], packages: [], lockSidecars: true });
-      expect(ok.container.apt).toEqual(["ca-certificates"]); // mise downloads over TLS; the slim image has no CAs
+    // Installed, and environment/ is not the lock of what context.json declares: locked again here, and said.
+    const locks = await installMise(dir);
+    const relocked = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(relocked.ok).toBe(true);
+    if (relocked.ok) {
+      expect(relocked.messages).toContainEqual({
+        level: "warn",
+        text: "environment/ is locked again from context.json, which changed without it — commit it",
+      });
+      expect(relocked.container.environment).toBe(true);
+      // mise downloads over TLS (the slim image has no CAs); the agent's own apt packages join the one layer.
+      expect(relocked.container.apt).toEqual(["ca-certificates", "chromium", "git"]);
     }
-    expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("lock --platform linux-x64,linux-arm64\n");
-    // mise writes no lock for a file without tools: system packages alone need none.
-    await rm(join(dir, "mise.lock"));
-    await rm(join(dir, ".mise"), { recursive: true });
-    await rm(join(dir, "node_modules"), { recursive: true });
-    await writeFile(join(dir, "mise.toml"), `[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
-    const packagesOnly = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(packagesOnly.ok && packagesOnly.container.environment).toMatchObject({ lockSidecars: false });
+    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64\n");
+    // The committed lock matches: the image installs it as it is.
+    const again = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(again.ok && again.messages.map((m) => m.text).join("\n")).not.toMatch(/locked again/);
+    expect(await locks()).toBe("lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64\n");
+    // No packages left: environment/ goes, and that is said too.
+    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { aptPackages: ["chromium"] } }));
+    const removed = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
+    expect(removed.ok && removed.messages).toContainEqual({
+      level: "warn",
+      text: "removed environment/, which context.json no longer declares — commit the removal",
+    });
+    expect(removed.ok && removed.container.environment).toBeUndefined();
+    await expect(readFile(join(dir, "environment", "mise.lock"), "utf8")).rejects.toThrow(/ENOENT/);
   });
 
   it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {
-    const dir = await agent({ "mise.toml": `[tools]\n"core:rust" = "1"\n` });
+    const dir = await agent({ "context.json": JSON.stringify({ environment: { packages: { rust: "1" } } }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok && pre.container.apt).toEqual(["ca-certificates", "curl"]);
   });
 
-  it("a tool whose toolchain mise.toml leaves to the machine stops --run, before the lock it would fail", async () => {
-    const optional = Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"]));
+  it("a PyPI package without its runtime stops --run, before the lock it would fail", async () => {
     const dir = await agent({
-      "package.json": JSON.stringify({
-        dependencies: { "@fastagent-sh/fastagent": "^1" },
-        optionalDependencies: optional,
-      }),
-      "mise.toml": `[tools]\n"pypi:markitdown" = "0.1"\n`,
+      "package.json": withMise,
+      "context.json": JSON.stringify({ environment: { packages: { "pypi:markitdown": "0.1" } } }),
     });
-    const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
-    await mkdir(join(pkg, "bin"), { recursive: true });
-    await writeFile(join(pkg, "package.json"), "{}\n");
-    await writeFile(join(pkg, "bin", "mise"), `#!/bin/sh\necho "$*" > mise.lock\n`);
-    await chmod(join(pkg, "bin", "mise"), 0o755);
-    const advice = /^pypi:markitdown installs with python and uv, .* `fastagent env use python uv`$/;
+    const locks = await installMise(dir);
+    const advice = /^pypi:markitdown installs with python and uv, .* `fastagent env add python uv`$/;
     expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
       ok: false,
       gate: expect.stringMatching(advice),
@@ -668,7 +678,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       level: "warn",
       text: expect.stringMatching(advice),
     });
-    await expect(readFile(join(dir, "mise.lock"), "utf8")).rejects.toThrow(/ENOENT/);
+    expect(await locks()).toBe("");
   });
 
   it("a declared schedule keeps a machine up; the agent's own wake-ups do not", async () => {

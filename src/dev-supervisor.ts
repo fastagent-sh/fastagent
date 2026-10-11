@@ -3,7 +3,7 @@
  * debounced edits to the agent's CODE inputs.
  */
 import { spawn } from "node:child_process";
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import {
   AGENT_CONFIG_FILE,
@@ -14,7 +14,7 @@ import {
   isUnderDir,
 } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
-import { MISE_FILE } from "./environment/declare.ts";
+import { ENVIRONMENT_DIGEST_FILE, ENVIRONMENT_DIR } from "./environment/declare.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
@@ -25,16 +25,21 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
  *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
 const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, mise.toml, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, .secrets/.env`;
 
 /**
- * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
- * without: an edit restarts nothing while a worker serves, and starts (or restarts) one that is down or starting. Unwatched, the edit that repairs
- * a stopped worker's model file would not be the edit that brings it back.
+ * Files a worker cannot START without but that restart nothing while it serves: the model files a serving worker reads
+ * LIVE (agent-models.ts keeps the last ones that loaded), and the environment's lock, whose digest `fastagent env`
+ * writes last, before the context.json edit that restarts the worker. An edit starts (or restarts) a worker that is
+ * down or starting. Unwatched, the edit that repairs a stopped worker would not be the edit that brings it back.
  */
 export function revivesOnly(root: string, path: string): boolean {
   const rel = relative(root, path);
-  return rel === AGENT_MODELS_FILE || rel === AGENT_MODEL_CATALOG_FILE;
+  return (
+    rel === AGENT_MODELS_FILE ||
+    rel === AGENT_MODEL_CATALOG_FILE ||
+    rel === join(ENVIRONMENT_DIR, ENVIRONMENT_DIGEST_FILE)
+  );
 }
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
@@ -46,7 +51,9 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     const rel = relative(root, path);
     // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker (a restart is
     // their only re-read).
-    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE || rel === MISE_FILE) return false;
+    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE) return false;
+    // Not pruned, so the digest inside it is seen.
+    if (rel === ENVIRONMENT_DIR) return false;
     if (rel === "package.json") return false;
     // Watched for a worker that is down ({@link revivesOnly}).
     if (revivesOnly(root, path)) return false;

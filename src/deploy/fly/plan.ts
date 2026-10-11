@@ -137,8 +137,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     ``,
     `# The volume keeps .state and .secrets across restarts and deploys; each release replaces /data/definition.`,
     imageHasGit(input)
-      ? `# Git is installed (the definition ships its .git, github content is cloned here, or mise.toml declares it).`
-      : `# To give the agent git, declare it: fastagent env bootstrap packages use apt:git`,
+      ? `# Git is installed (the definition ships its .git, github content is cloned here, or context.json declares it in aptPackages).`
+      : `# To give the agent git, declare it: fastagent env add apt:git`,
   );
 
   // The credential is created on the box, never carried: the box is then the only holder of its grant.

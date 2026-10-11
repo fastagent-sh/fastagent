@@ -2,7 +2,10 @@
 import { Argument, Command, Help, InvalidArgumentError, Option } from "commander";
 import { errorPrefix } from "./fail.ts";
 
-/** One positional argument, in commander syntax: `<name>` required, `[dir]` optional. */
+/**
+ * One positional argument, in commander syntax: `<name>` required, `[dir]` optional, `<names...>` one or more (the
+ * command receives them as an array).
+ */
 interface ArgSpec {
   name: string;
   description: string;
@@ -41,15 +44,10 @@ export interface CommandSpec {
   /** A group command (e.g. `schedule`) declares subcommands instead of `run`. */
   subcommands?: CommandSpec[];
   /**
-   * A command that hands everything after its name to another program (`fastagent env` → mise), options and `--help`
-   * included, instead of parsing it. Declared instead of `args`, `flags` and `run`.
-   */
-  passThrough?: (args: string[]) => Promise<void> | void;
-  /**
    * The implementation: positional args in declaration order (an optional arg without a default is `undefined`), then
    * the parsed flags.
    */
-  run?: (args: (string | undefined)[], flags: Record<string, unknown>) => Promise<void> | void;
+  run?: (args: (string | string[] | undefined)[], flags: Record<string, unknown>) => Promise<void> | void;
 }
 
 export interface ProgramOptions {
@@ -104,9 +102,6 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   if (options.examples || options.notes) {
     specOf.set(program, { name: "fastagent", summary: "", examples: options.examples, notes: options.notes });
   }
-  // An option after a command name is that command's: what lets a pass-through command receive `--help` and the
-  // other program's own flags.
-  program.enablePositionalOptions();
   // Subcommands inherit exitOverride/output/suggestion settings at .command() time — register last.
   for (const spec of specs) register(program, spec);
   return program;
@@ -123,10 +118,14 @@ function register(parent: Command, spec: CommandSpec): void {
     if (a.choices) arg.choices(a.choices);
     // A required argument means a non-empty VALUE, not just a present token.
     if (a.name.startsWith("<") && !a.choices) {
-      arg.argParser((value: string) => {
+      const nonEmpty = (value: string): string => {
         if (value.trim() === "") throw new InvalidArgumentError("must not be empty.");
         return value;
-      });
+      };
+      // A parser of a variadic argument replaces commander's own collecting, so it collects too.
+      if (a.name.endsWith("...>"))
+        arg.argParser((value: string, previous: string[] = []) => [...previous, nonEmpty(value)]);
+      else arg.argParser(nonEmpty);
     }
     cmd.addArgument(arg);
   }
@@ -136,23 +135,12 @@ function register(parent: Command, spec: CommandSpec): void {
     cmd.addOption(option);
   }
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
-  const passThrough = spec.passThrough;
-  if (passThrough) {
-    cmd
-      .argument("[args...]", "passed on unchanged")
-      .allowUnknownOption()
-      .passThroughOptions()
-      .helpOption(false)
-      .action(async (args: string[] | undefined) => {
-        await passThrough(args ?? []);
-      });
-  }
   const run = spec.run;
   if (run) {
     cmd.action(async (...invocation: unknown[]) => {
       invocation.pop(); // the Command instance
       const flags = invocation.pop() as Record<string, unknown>;
-      await run(invocation as (string | undefined)[], flags);
+      await run(invocation as (string | string[] | undefined)[], flags);
     });
   }
 }

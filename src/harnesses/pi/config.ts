@@ -152,8 +152,8 @@ async function loadConfigFile(path: string): Promise<FastagentConfig> {
   }
   if (c.deploy && "apt" in c.deploy) {
     throw new Error(
-      `${path}: "deploy.apt" is not a config key — system packages are declared in mise.toml [bootstrap.packages] ` +
-        `(\`fastagent env bootstrap packages use apt:<name>\`), for every platform at once`,
+      `${path}: "deploy.apt" is not a config key — apt packages are declared in context.json's environment ` +
+        `(\`fastagent env add apt:<name>\`)`,
     );
   }
   refuseUnknownKeys(c.deploy ?? {}, ["agentcore"], "deploy.", path);

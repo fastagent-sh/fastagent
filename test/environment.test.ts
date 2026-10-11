@@ -1,7 +1,8 @@
 /**
- * The environment (src/environment/): what an agent's mise.toml may declare, and how FastAgent runs the agent's own
- * mise on it. mise itself is a stand-in here, a script at the path the agent's platform package would put it: what is
- * tested is FastAgent's side (which file, which isolation, which arguments, what reaches the process), not mise.
+ * The environment (src/environment/): what the `environment` of context.json may declare, how FastAgent renders and
+ * locks it in environment/ with the agent's own mise, and how a process that runs the agent enters it. mise itself is a
+ * stand-in here, a script at the path the agent's platform package would put it: what is tested is FastAgent's side
+ * (which file, which isolation, which arguments, in which order, what reaches the process), not mise.
  */
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -9,14 +10,26 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { missingToolchains, readEnvironment, toolchainAdvice } from "../src/environment/declare.ts";
+import { contextFileText, parseContextFile } from "../src/content/file.ts";
+import { aptAdvice, missingAptPackages } from "../src/environment/apt.ts";
 import {
-  enterMiseEnvironment,
+  declareEnvironment,
+  declaresTool,
+  missingPythonRuntime,
+  packagesDigest,
+  parsePackageArgument,
+  resolvedBackendRefusal,
+  runtimeAdvice,
+} from "../src/environment/declare.ts";
+import {
+  checkPackages,
   ensureMise,
+  enterEnvironment,
   lockEnvironment,
   MISE_PACKAGE_NAMES,
   miseBinary,
 } from "../src/environment/mise.ts";
+import { addContent, writeEnvironment } from "../src/harnesses/pi/authoring.ts";
 import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
 import { log } from "../src/log.ts";
 
@@ -24,21 +37,30 @@ const savedEnv = { ...process.env };
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
+  vi.restoreAllMocks();
 });
 
 const FASTAGENT = { "@fastagent-sh/fastagent": "^0.24.4" };
 
-async function agentDir(miseToml?: string): Promise<string> {
+async function agentDir(environment?: unknown): Promise<string> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "fa-env-")));
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   await writeFile(join(dir, "package.json"), JSON.stringify({ name: "a", private: true, dependencies: FASTAGENT }));
-  if (miseToml !== undefined) await writeFile(join(dir, "mise.toml"), miseToml);
+  if (environment !== undefined) await writeFile(join(dir, "context.json"), JSON.stringify({ environment }));
   return dir;
 }
 
+/** `environment/` as `fastagent env` leaves it for `packages`: what a process that runs the agent accepts. */
+async function locked(dir: string, packages: Record<string, string>): Promise<void> {
+  await mkdir(join(dir, "environment"), { recursive: true });
+  await writeFile(join(dir, "environment", "mise.toml"), "[tools]\n");
+  await writeFile(join(dir, "environment", "declaration.sha256"), `${packagesDigest(packages)}\n`);
+}
+
 /**
- * A stand-in mise where this machine's platform package puts it: it logs each call (its arguments and the isolation it
- * was given), answers `env --json`, and says a system package is missing when `FAKE_MISSING` is set.
+ * A stand-in mise where this machine's platform package puts it. It logs each call (its arguments, the isolation it was
+ * given, where it ran), and at `lock` what context.json held then; answers `tool <name> --json` and `env --json`;
+ * fails `install` when `FAKE_FAIL_INSTALL` is set, and sleeps in it when `FAKE_SLOW` is.
  */
 async function fakeMise(dir: string): Promise<{ bin: string; calls: () => Promise<string[]> }> {
   const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
@@ -51,14 +73,18 @@ async function fakeMise(dir: string): Promise<{ bin: string; calls: () => Promis
     `#!/bin/sh
 echo "$*|$MISE_TRUSTED_CONFIG_PATHS|$MISE_CEILING_PATHS|$MISE_OVERRIDE_CONFIG_FILENAMES|$MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES|$MISE_GLOBAL_CONFIG_FILE|$PWD" >> "${log}"
 case "$1" in
-  env) printf '{"PATH":"/fake/tools%s%s","FAKE_TOOL_HOME":"/fake/home"}' "${delimiter}" "$PATH" ;;
-  bootstrap) if [ -n "$FAKE_MISSING" ]; then echo "apt  chromium  missing"; exit 1; fi ;;
-  set) printf '[env]\\nA = "1"\\n' >> mise.toml; echo "relocked" > mise.lock
-    mkdir -p .mise/locks/npm-new/1 && echo new > .mise/locks/npm-new/1/package.json
-    if [ -d .mise/locks/npm-old ]; then echo changed > .mise/locks/npm-old/1/package.json; fi ;;
-  slowset) sleep 3; printf '[env]\\nA = "1"\\n' >> mise.toml ;;
-  use) printf 'gh = "2"\\n' >> mise.toml ;;
-  fail) exit 3 ;;
+  install) if [ -n "$FAKE_SLOW" ]; then sleep 2; fi
+    if [ -n "$FAKE_FAIL_INSTALL" ]; then echo "mise ERROR no version of jq matches 99" >&2; exit 1; fi ;;
+  lock) echo "context.json at lock: $(cat ../context.json 2>/dev/null | tr -d ' \\n')" >> "${log}"
+    printf '[[tools.gh]]\\nversion = "2.83.1"\\n' > mise.lock
+    mkdir -p .mise/locks/npm-prettier/3.6.2 && echo '{}' > .mise/locks/npm-prettier/3.6.2/package.json ;;
+  tool) case "$2" in
+      tokei) echo '{"backend":"cargo:tokei"}' ;;
+      ansible) echo '{"backend":"pypi:ansible"}' ;;
+      nope) echo "mise ERROR nope not found in mise tool registry" >&2; exit 1 ;;
+      *) printf '{"backend":"aqua:owner/%s"}' "$2" ;;
+    esac ;;
+  --locked) if [ "$2" = env ]; then printf '{"PATH":"/fake/tools%s%s","FAKE_TOOL_HOME":"/fake/home"}' "${delimiter}" "$PATH"; fi ;;
 esac
 `,
   );
@@ -78,148 +104,265 @@ async function fakeNpm(dir: string): Promise<string> {
   return fakeBin;
 }
 
-describe("environment: what mise.toml may declare", () => {
-  it("reads [tools] and [bootstrap.packages]; an agent without mise.toml has none", async () => {
-    const dir = await agentDir(
-      `[tools]\ngh = "2"\n"npm:prettier" = "3"\njq = { version = "1.8.1" }\n\n` +
-        `[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`,
-    );
-    expect(readEnvironment(dir)).toEqual({
-      path: join(dir, "mise.toml"),
-      tools: ["gh", "npm:prettier", "jq"],
-      packages: ["apt:chromium"],
+describe("environment: what context.json may declare", () => {
+  it("reads packages and aptPackages; an agent that declares none has no environment", () => {
+    expect(declareEnvironment(undefined)).toBeUndefined();
+    expect(
+      declareEnvironment({
+        packages: { gh: "2", "npm:@biomejs/biome": "latest", "aqua:jqlang/jq": "1.8.1", python: "3.12" },
+        aptPackages: ["chromium", "fonts-noto-cjk", "libstdc++6"],
+      }),
+    ).toEqual({
+      packages: { gh: "2", "npm:@biomejs/biome": "latest", "aqua:jqlang/jq": "1.8.1", python: "3.12" },
+      aptPackages: ["chromium", "fonts-noto-cjk", "libstdc++6"],
     });
-    expect(readEnvironment(await agentDir())).toBeUndefined();
   });
 
-  it.each([
-    ["not TOML", `[tools\n`, /mise\.toml is not valid TOML/],
-    ["[env]", `[env]\nA = "1"\n`, /\[env\] is not supported yet — set environment variables in \.secrets\/\.env/],
-    [
-      "[tasks]",
-      `[tasks.build]\nrun = "x"\n`,
-      /"tasks" is not supported — an agent's mise\.toml declares \[tools\] and/,
-    ],
-    ["[settings]", `[settings]\nlocked = false\n`, /"settings" is not supported/],
-    ["a postinstall", `[tools]\njq = { version = "1", postinstall = "x" }\n`, /tool "jq" has a postinstall command/],
-    [
-      "a postinstall in a list of versions",
-      `[tools]\njq = ["1.8.1", { version = "1.7.1", postinstall = "x" }]\n`,
-      /tool "jq" has a postinstall command/,
-    ],
-    [
-      "a postinstall in an array of tables",
-      `[[tools.jq]]\nversion = "1.7.1"\npostinstall = "x"\n`,
-      /tool "jq" has a postinstall command/,
-    ],
-    ["other machine setup", `[bootstrap.repos]\n"~/x" = "y"\n`, /\[bootstrap\.repos\] is not supported/],
-    ["[tools] not a table", `tools = "gh"\n`, /\[tools\] must be a table/],
-  ])("refuses %s, naming the file", async (_what, toml, message) => {
-    const dir = await agentDir(toml);
-    expect(() => readEnvironment(dir)).toThrow(message);
+  it("refuses what it does not hold, each by name and with its reason", () => {
+    const refused = (environment: unknown) => () => declareEnvironment(environment);
+    expect(refused([])).toThrow(`"environment" must be an object`);
+    expect(refused({ variables: {} })).toThrow(
+      `environment: unknown key "variables" (valid keys: packages, aptPackages)`,
+    );
+    expect(refused({ packages: { "cargo:ripgrep": "14" } })).toThrow(
+      `package "cargo:ripgrep" installs with cargo:, which builds from source: a whole Rust toolchain in the image ` +
+        `for one binary — write the project's release with github:<owner>/<repo>, or install it in your own ` +
+        `Dockerfile`,
+    );
+    expect(refused({ packages: { "vfox:jdx/vfox-php": "8" } })).toThrow(
+      /runs a plugin's code .* the lock does not pin it/,
+    );
+    expect(refused({ packages: { "s3:bucket/tool": "1" } })).toThrow(
+      /installs with s3:, which FastAgent does not install from/,
+    );
+    expect(refused({ packages: { "http:tool": "1" } })).toThrow(/needs a URL a version cannot hold/);
+    expect(refused({ packages: { "github:o/r[bin=x]": "1" } })).toThrow(/has mise's \[options\]/);
+    expect(refused({ packages: { "two words": "1" } })).toThrow(/is not a name from mise's registry/);
+    expect(refused({ packages: { gh: "ref:main" } })).toThrow(`version "ref:main" — a version is "latest"`);
+    expect(refused({ packages: { gh: "system" } })).toThrow(`version "system"`);
+    expect(refused({ packages: { gh: "" } })).toThrow(`the version must be non-empty`);
+    expect(refused({ packages: { gh: 2 } })).toThrow(`package "gh": the version must be a string`);
+    expect(refused({ aptPackages: ["Chromium"] })).toThrow(`apt package "Chromium" is not a Debian package name`);
+    expect(refused({ aptPackages: ["git", "git"] })).toThrow(`apt package "git" is listed twice`);
+  });
+
+  it("is read and written with the rest of context.json, an empty one left out", async () => {
+    const path = "/a/context.json";
+    expect(() => parseContextFile(`{"environment":{"packages":{"gh":"x y"}}}`, path)).toThrow(
+      `${path}: environment: package "gh": the version must be non-empty, without spaces`,
+    );
+    const file = parseContextFile(`{"content":{},"environment":{"packages":{"gh":"2"}}}`, path);
+    expect(file.environment).toEqual({ packages: { gh: "2" }, aptPackages: [] });
+    expect(JSON.parse(contextFileText(file))).toEqual({ content: {}, environment: { packages: { gh: "2" } } });
+    expect(JSON.parse(contextFileText({ content: {}, environment: { packages: {}, aptPackages: [] } }))).toEqual({
+      content: {},
+    });
+    // The two edits keep each other's part of the file.
+    const dir = await agentDir();
+    const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "fa-env-content-")));
+    await writeEnvironment(dir, { packages: { gh: "2" }, aptPackages: ["chromium"] });
+    await addContent(dir, { name: "notes", entry: {}, link: elsewhere });
+    await writeEnvironment(dir, { packages: { jq: "latest" }, aptPackages: [] });
+    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual({
+      content: { notes: {} },
+      environment: { packages: { jq: "latest" } },
+    });
+  });
+
+  it("refuses a registry name by the backend mise resolves it to, unless that backend is allowed", () => {
+    for (const backend of ["aqua:jqlang/jq", "github:cli/cli", "core:python", "pypi:ansible", "packslip:x/y"]) {
+      expect(resolvedBackendRefusal("x", backend), backend).toBeUndefined();
+    }
+    expect(resolvedBackendRefusal("tokei", "cargo:tokei")).toMatch(
+      /^package "tokei" resolves to cargo:tokei, which builds from source: .* — write the project's release with github:/,
+    );
+    expect(resolvedBackendRefusal("php", "vfox:jdx/vfox-php")).toMatch(
+      /resolves to vfox:jdx\/vfox-php, which runs a plugin's code/,
+    );
+    expect(resolvedBackendRefusal("x", "newthing:x")).toMatch(
+      /resolves to newthing:x, which FastAgent does not install from/,
+    );
+  });
+
+  it("names the PyPI packages whose python and uv it leaves to the machine", () => {
+    const kinds = new Map([
+      ["pypi:markitdown", "pypi"],
+      ["ansible", "pypi"],
+      ["gh", "aqua"],
+    ]);
+    const missing = missingPythonRuntime({ "pypi:markitdown": "latest", ansible: "11", gh: "2" }, kinds);
+    expect(missing).toEqual({ packages: ["pypi:markitdown", "ansible"], missing: ["python", "uv"] });
+    expect(runtimeAdvice(missing!)).toBe(
+      "pypi:markitdown, ansible install with python and uv, which the environment does not declare: mise then uses " +
+        "this machine's, and the image has none — run `fastagent env add python uv`",
+    );
+    // A runtime under any backend or owner counts.
+    const declared = { "pypi:markitdown": "latest", python: "3.12", "aqua:astral-sh/uv": "latest" };
+    expect(missingPythonRuntime(declared, kinds)).toBeUndefined();
+    expect(declaresTool(declared, "uv")).toBe(true);
+    expect(missingPythonRuntime({ gh: "2" }, kinds)).toBeUndefined();
+  });
+
+  it("digests the packages whatever their order, and reads `fastagent env add` arguments", () => {
+    expect(packagesDigest({ a: "1", b: "2" })).toBe(packagesDigest({ b: "2", a: "1" }));
+    expect(packagesDigest({ a: "1" })).not.toBe(packagesDigest({ a: "2" }));
+    expect(parsePackageArgument("gh")).toEqual({ name: "gh", version: "latest" });
+    expect(parsePackageArgument("gh@2")).toEqual({ name: "gh", version: "2" });
+    expect(parsePackageArgument("npm:@biomejs/biome")).toEqual({ name: "npm:@biomejs/biome", version: "latest" });
+    expect(parsePackageArgument("npm:@biomejs/biome@2")).toEqual({ name: "npm:@biomejs/biome", version: "2" });
+    expect(parsePackageArgument("apt:chromium")).toEqual({ apt: "chromium" });
   });
 });
 
-describe("environment: the toolchains a backend installs with", () => {
-  it("names the tools whose toolchain mise.toml leaves to the machine, grouped by what is missing", () => {
-    const tools = [
-      "pypi:markitdown",
-      "pypi:black",
-      "cargo:ripgrep",
-      "go:github.com/x/y",
-      "gem:rake",
-      "npm:cowsay",
-      "jq",
-    ];
-    expect(missingToolchains({ tools })).toEqual([
-      { tools: ["pypi:markitdown", "pypi:black"], missing: ["python", "uv"] },
-      { tools: ["cargo:ripgrep"], missing: ["rust"] },
-      { tools: ["go:github.com/x/y"], missing: ["go"] },
-      { tools: ["gem:rake"], missing: ["ruby"] },
-    ]);
-    // Declared under any backend or owner: `aqua:astral-sh/uv` is uv.
-    const declared = ["python", "aqua:astral-sh/uv", "core:rust", "go", "ruby"];
-    expect(missingToolchains({ tools: [...tools, ...declared] })).toEqual([]);
-    expect(missingToolchains({ tools: ["python", "pypi:markitdown"] })).toEqual([
-      { tools: ["pypi:markitdown"], missing: ["uv"] },
-    ]);
-    expect(toolchainAdvice({ tools: ["pypi:markitdown"], missing: ["python", "uv"] })).toBe(
-      "pypi:markitdown installs with python and uv, which mise.toml does not declare: mise then uses the machine's, " +
-        "and the image has none — run `fastagent env use python uv`",
+describe("environment: apt packages on this machine", () => {
+  it("are asked of dpkg on Debian or Ubuntu, and nowhere else", async () => {
+    expect(missingAptPackages(["chromium"], false)).toBeUndefined();
+    const fakeBin = await realpath(await mkdtemp(join(tmpdir(), "fa-env-dpkg-")));
+    // dpkg-query prints the packages it knows and exits 1 for an unknown one.
+    await writeFile(
+      join(fakeBin, "dpkg-query"),
+      `#!/bin/sh\necho "git installed"\necho "fonts-noto deinstall"\necho "dpkg-query: no packages found matching chromium" >&2\nexit 1\n`,
+    );
+    await chmod(join(fakeBin, "dpkg-query"), 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
+    expect(missingAptPackages(["git", "fonts-noto", "chromium"], true)).toEqual(["fonts-noto", "chromium"]);
+    expect(aptAdvice(["chromium"])).toBe(
+      "the image installs apt packages this machine does not have: chromium — `sudo apt-get install -y chromium`",
     );
   });
 });
 
-describe("environment: the agent's own mise", () => {
-  it("is entered by a process that runs the agent: installed, then its tools on PATH, on mise.toml alone", async () => {
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`);
-    const { calls } = await fakeMise(dir);
-    process.env.FAKE_MISSING = "1";
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      await enterMiseEnvironment(dir);
-      expect(warn.mock.calls.flat().join("\n")).toMatch(
-        /system packages mise\.toml declares are missing here \(the image installs them\):\napt {2}chromium {2}missing\n/,
-      );
-    } finally {
-      warn.mockRestore();
-    }
-    // Trusted: the agent's mise.toml, not its directory, under which content/ clones carry their own.
-    const isolation = `${join(dir, "mise.toml")}|${join(dir, "..")}|mise.toml|none|/dev/null/none.toml|${dir}`;
-    expect(await calls()).toEqual([
+describe("environment: environment/, its lock", () => {
+  it("is rendered from the packages, installed here, locked for every platform, and digested last", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
+    const { bin, calls } = await fakeMise(dir);
+    const order: string[] = [];
+    await lockEnvironment(dir, { gh: "2", "npm:prettier": "3" }, bin, async () => {
+      order.push((await readFile(join(dir, "environment", "declaration.sha256"), "utf8")).trim());
+    });
+    expect(await readFile(join(dir, "environment", "mise.toml"), "utf8")).toBe(
+      `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n` +
+        `[settings]\nall_compile = false\n\n[tools]\ngh = "2"\n"npm:prettier" = "3"\n`,
+    );
+    // The declaration is committed once the lock is in place, digest included.
+    expect(order).toEqual([packagesDigest({ gh: "2", "npm:prettier": "3" })]);
+    // Trusted: environment/mise.toml alone; the agent directory is the ceiling, so a mise.toml there is not read.
+    const isolation = `${join(dir, "environment", "mise.toml")}|${dir}|mise.toml|none|/dev/null/none.toml|${join(dir, "environment")}`;
+    expect((await calls()).filter((call) => !call.startsWith("context.json"))).toEqual([
       `install|${isolation}`,
-      `bootstrap packages status --missing|${isolation}`,
-      `env --json|${isolation}`,
+      `lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64|${isolation}`,
     ]);
+  });
+
+  it("is put back as it was when mise or the commit fails, and removed when no package is left", async () => {
+    const dir = await agentDir();
+    const { bin } = await fakeMise(dir);
+    await lockEnvironment(dir, { gh: "2" }, bin);
+    const before = await readFile(join(dir, "environment", "mise.lock"), "utf8");
+    process.env.FAKE_FAIL_INSTALL = "1";
+    const commit = vi.fn(async () => {});
+    await expect(lockEnvironment(dir, { gh: "2", jq: "99" }, bin, commit)).rejects.toThrow(
+      "mise install failed (exit 1)",
+    );
+    expect(commit).not.toHaveBeenCalled();
+    delete process.env.FAKE_FAIL_INSTALL;
+    await expect(
+      lockEnvironment(dir, { jq: "1" }, bin, async () => {
+        throw new Error("context.json is locked");
+      }),
+    ).rejects.toThrow("context.json is locked");
+    for (const _ of [0, 1]) {
+      expect(await readFile(join(dir, "environment", "mise.toml"), "utf8")).toContain(`gh = "2"`);
+      expect(await readFile(join(dir, "environment", "mise.lock"), "utf8")).toBe(before);
+      expect((await readFile(join(dir, "environment", "declaration.sha256"), "utf8")).trim()).toBe(
+        packagesDigest({ gh: "2" }),
+      );
+    }
+    await lockEnvironment(dir, {}, undefined);
+    await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("checks each package by its backend: a written one says it, mise resolves a registry name", async () => {
+    const dir = await agentDir();
+    const { bin, calls } = await fakeMise(dir);
+    const check = await checkPackages(dir, bin, { tokei: "12", ansible: "11", "pypi:markitdown": "1", gh: "2" });
+    expect(check.refusals).toEqual([expect.stringMatching(/^package "tokei" resolves to cargo:tokei, which builds/)]);
+    expect(check.runtime).toEqual({ packages: ["ansible", "pypi:markitdown"], missing: ["python", "uv"] });
+    expect((await calls()).map((call) => call.split("|")[0]).sort()).toEqual([
+      "tool ansible --json",
+      "tool gh --json",
+      "tool tokei --json",
+    ]);
+    await expect(checkPackages(dir, bin, { nope: "1" })).rejects.toThrow(
+      "mise tool nope --json failed (exit 1): nope not found in mise tool registry",
+    );
+  });
+});
+
+describe("environment: entered by a process that runs the agent", () => {
+  it("installs the locked versions and puts them on PATH, writing nothing", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
+    await locked(dir, { gh: "2" });
+    const { calls } = await fakeMise(dir);
+    await enterEnvironment(dir);
+    const isolation = `${join(dir, "environment", "mise.toml")}|${dir}|mise.toml|none|/dev/null/none.toml|${join(dir, "environment")}`;
+    expect(await calls()).toEqual([`--locked install|${isolation}`, `--locked env --json|${isolation}`]);
     expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
     expect(process.env.FAKE_TOOL_HOME).toBe("/fake/home");
-    // The isolation is these runs' alone: a mise the agent runs (the machine's shims, a content repository's
-    // mise.toml) reads its own configuration, and the agent's mise is not on its PATH.
-    for (const name of ["MISE_TRUSTED_CONFIG_PATHS", "MISE_GLOBAL_CONFIG_FILE", "MISE_OVERRIDE_CONFIG_FILENAMES"]) {
+    // The isolation is these runs' alone, and the agent's mise is not on the PATH.
+    for (const name of ["MISE_TRUSTED_CONFIG_PATHS", "MISE_CEILING_PATHS", "MISE_OVERRIDE_CONFIG_FILENAMES"]) {
       expect(process.env[name], name).toBe(savedEnv[name]);
     }
     expect(process.env.PATH).not.toContain(join(dir, "node_modules"));
+    expect(await readdir(join(dir, "environment"))).toEqual(["declaration.sha256", "mise.toml"]);
   });
 
-  it("an agent without mise.toml borrows the machine's commands; one with it and no mise is refused", async () => {
+  it("refuses an environment/ that is not the lock of what context.json declares, naming the fix", async () => {
     const before = process.env.PATH;
-    await enterMiseEnvironment(await agentDir());
+    await enterEnvironment(await agentDir());
     expect(process.env.PATH).toBe(before);
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
-    await expect(enterMiseEnvironment(dir)).rejects.toThrow(
-      `${join(dir, "mise.toml")} declares an environment, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
+    const dir = await agentDir({ packages: { gh: "2" } });
+    const fix = `run \`fastagent env install\` in ${dir}, then commit environment/`;
+    await expect(enterEnvironment(dir)).rejects.toThrow(
+      `context.json declares packages, and environment/ has no lock for them — ${fix}`,
     );
+    await locked(dir, { gh: "1" });
+    await expect(enterEnvironment(dir)).rejects.toThrow(
+      `the packages context.json declares are not the ones environment/ was locked for — ${fix}`,
+    );
+    const left = await agentDir({ aptPackages: ["chromium"] });
+    await locked(left, { gh: "2" });
+    await expect(enterEnvironment(left)).rejects.toThrow(
+      `environment/ is left from packages context.json no longer declares — run \`fastagent env install\` in ${left}`,
+    );
+    // The lock matches, and there is no mise to install it with.
+    await locked(dir, { gh: "2" });
     expect(miseBinary(dir)).toBeUndefined();
+    await expect(enterEnvironment(dir)).rejects.toThrow(
+      `context.json declares packages, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
+    );
   });
 
   it("is entered by the assembly, so every process that opens the agent has it: createAgentService and chat too", async () => {
-    await expect(resolveAgentAssembly(await agentDir(`[env]\nA = "1"\n`))).rejects.toThrow(
-      /\[env\] is not supported yet/,
+    await expect(resolveAgentAssembly(await agentDir({ packages: { gh: "2" } }))).rejects.toThrow(
+      /environment\/ has no lock for them/,
     );
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
+    const dir = await agentDir({ packages: { gh: "2" } });
+    await locked(dir, { gh: "2" });
     await fakeMise(dir);
     await resolveAgentAssembly(dir);
     expect((process.env.PATH ?? "").split(delimiter)[0]).toBe("/fake/tools");
   });
+});
 
-  it("locks for the platforms an image is built for", async () => {
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
-    const { bin, calls } = await fakeMise(dir);
-    await lockEnvironment(dir, bin);
-    expect((await calls()).map((call) => call.split("|")[0])).toEqual(["lock --platform linux-x64,linux-arm64"]);
-  });
-
+describe("environment: the agent's own mise", () => {
   it("is added to the agent's package.json, every platform pinned, by the command that changes the environment", async () => {
     const dir = await agentDir();
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
     const fakeBin = await fakeNpm(dir);
     process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
-    const info = vi.spyOn(log, "info").mockImplementation(() => {});
-    try {
-      expect(await ensureMise(dir)).toBe(join(pkg, "bin", "mise"));
-    } finally {
-      info.mockRestore();
-    }
+    vi.spyOn(log, "info").mockImplementation(() => {});
+    expect(await ensureMise(dir)).toBe(join(pkg, "bin", "mise"));
     expect((await readFile(join(dir, "npm-args"), "utf8")).trim()).toBe(
       "install --save-optional --save-exact --no-audit --no-fund @jdxcode/mise-darwin-arm64@latest " +
         "@jdxcode/mise-darwin-x64@latest @jdxcode/mise-linux-arm64@latest @jdxcode/mise-linux-x64@latest",
@@ -236,11 +379,7 @@ describe("environment: the agent's own mise", () => {
     const fakeBin = await fakeNpm(dir);
     process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
     vi.spyOn(log, "info").mockImplementation(() => {});
-    try {
-      await ensureMise(dir);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    await ensureMise(dir);
     expect((await readFile(join(dir, "npm-args"), "utf8")).trim()).toBe("install --no-audit --no-fund");
   });
 
@@ -263,76 +402,135 @@ describe("environment: the agent's own mise", () => {
 
 describe("environment: `fastagent env`", () => {
   const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-  const cli = (args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> =>
+  const cli = (
+    args: string[],
+    cwd: string,
+    env: Record<string, string> = {},
+  ): Promise<{ code: number | null; stdout: string; stderr: string }> =>
     new Promise((resolve) => {
-      const child = spawn(process.execPath, [CLI, ...args], { cwd });
+      const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...process.env, ...env } });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d) => (stdout += d));
       child.stderr.on("data", (d) => (stderr += d));
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
+  const declared = async (dir: string): Promise<unknown> =>
+    JSON.parse(await readFile(join(dir, "context.json"), "utf8")).environment;
 
-  it("hands everything to the agent's mise and exits as it does", async () => {
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
+  it("adds packages: locked first, declared last; an apt package is declared without mise", async () => {
+    const dir = await agentDir();
+    await writeFile(join(dir, "context.json"), `{"content":{}}`);
     const { calls } = await fakeMise(dir);
-    const ls = await cli(["env", "--locked", "ls", "--json"], dir);
-    expect(ls.code, ls.stderr).toBe(0);
-    expect((await calls()).at(-1)).toMatch(/^--locked ls --json\|/);
-    expect((await cli(["env", "fail"], dir)).code).toBe(3);
+    const add = await cli(["env", "add", "gh@2", "npm:prettier@3"], dir);
+    expect(add.code, add.stderr).toBe(0);
+    expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" } });
+    // At lock time the declaration was not written yet.
+    expect(await calls()).toContain(`context.json at lock: {"content":{}}`);
+    expect(await readdir(join(dir, "environment"))).toEqual([".mise", "declaration.sha256", "mise.lock", "mise.toml"]);
+    const before = (await calls()).length;
+    const apt = await cli(["env", "add", "apt:chromium"], dir);
+    expect(apt.code, apt.stderr).toBe(0);
+    expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" }, aptPackages: ["chromium"] });
+    expect((await calls()).length).toBe(before);
   });
 
-  it("runs one at a time, so a refused command does not take another's change with it", async () => {
-    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
-    const { calls } = await fakeMise(dir);
-    // The first takes the lock, then its mise runs for a while and writes what FastAgent refuses.
-    const first = cli(["env", "slowset"], dir);
-    while (!(await calls()).some((call) => call.startsWith("slowset"))) await new Promise((r) => setTimeout(r, 50));
-    const second = await cli(["env", "use", "gh@2"], dir);
-    expect((await first).code).toBe(1);
-    expect(second.code, second.stderr).toBe(0);
-    expect(await readFile(join(dir, "mise.toml"), "utf8")).toBe(`[tools]\njq = "1.8.1"\ngh = "2"\n`);
-    expect(second.stderr).toContain("waiting for another `fastagent env` on this agent to finish");
-    await expect(stat(join(dir, "mise.toml.lock"))).rejects.toThrow(/ENOENT/);
-  }, 30_000);
-
-  it("says, when it exits, which tools need a toolchain mise.toml does not declare", async () => {
-    const dir = await agentDir(`[tools]\n"cargo:ripgrep" = "14"\n`);
+  it("refuses a package FastAgent does not install from, and one mise cannot install, changing nothing", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
     await fakeMise(dir);
-    const ls = await cli(["env", "ls"], dir);
-    expect(ls.code, ls.stderr).toBe(0);
-    expect(ls.stderr).toContain("cargo:ripgrep installs with rust, which mise.toml does not declare");
+    expect((await cli(["env", "install"], dir)).code).toBe(0);
+    const lock = await readFile(join(dir, "environment", "mise.lock"), "utf8");
+    const tokei = await cli(["env", "add", "tokei"], dir);
+    expect(tokei.code).toBe(1);
+    expect(tokei.stderr).toMatch(/package "tokei" resolves to cargo:tokei, which builds from source/);
+    const vfox = await cli(["env", "add", "vfox:jdx/vfox-php"], dir);
+    expect(vfox.code).toBe(1);
+    expect(vfox.stderr).toMatch(/installs with vfox:, which runs a plugin's code/);
+    const failing = await cli(["env", "add", "jq@99"], dir, { FAKE_FAIL_INSTALL: "1" });
+    expect(failing.code).toBe(1);
+    expect(failing.stderr).toContain("mise ERROR no version of jq matches 99");
+    expect(failing.stderr).toContain("mise install failed (exit 1)");
+    expect(await declared(dir)).toEqual({ packages: { gh: "2" } });
+    expect(await readFile(join(dir, "environment", "mise.lock"), "utf8")).toBe(lock);
   });
 
-  it("undoes what mise wrote that FastAgent refuses, so the next start is not the one to find it", async () => {
-    const declared = `[tools]\njq = "1.8.1"\n`;
-    const dir = await agentDir(declared);
-    await writeFile(join(dir, "mise.lock"), "locked\n");
-    // A lock sidecar (an npm tool's dependency lock), which the lock names by digest: it goes back with the lock.
-    await mkdir(join(dir, ".mise", "locks", "npm-old", "1"), { recursive: true });
-    await writeFile(join(dir, ".mise", "locks", "npm-old", "1", "package.json"), "old\n");
+  it("removes packages, environment/ with the last one; a package it does not have is named", async () => {
+    const dir = await agentDir({ packages: { gh: "2" }, aptPackages: ["chromium"] });
+    await locked(dir, { gh: "2" });
     await fakeMise(dir);
-    const set = await cli(["env", "set", "A=1"], dir);
-    expect(set.code).toBe(1);
-    expect(set.stderr).toMatch(
-      /\[env\] is not supported yet .* — this command's change to mise\.toml and mise\.lock is undone/,
+    const unknown = await cli(["env", "remove", "jq"], dir);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain(`the environment has no package "jq" (it has: gh, apt:chromium)`);
+    const remove = await cli(["env", "remove", "gh", "apt:chromium"], dir);
+    expect(remove.code, remove.stderr).toBe(0);
+    expect(await declared(dir)).toBeUndefined();
+    await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("install locks again what context.json changed by hand, says so, then installs the lock", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
+    await locked(dir, { gh: "1" });
+    const { calls } = await fakeMise(dir);
+    const install = await cli(["env", "install"], dir);
+    expect(install.code, install.stderr).toBe(0);
+    expect(install.stderr).toContain("environment/ is locked again from context.json — commit it");
+    expect(
+      (await calls()).map((call) => call.split("|")[0] ?? call).filter((call) => !call.startsWith("context.json")),
+    ).toEqual([
+      "tool gh --json",
+      "install",
+      "lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64",
+      "--locked install",
+      "--locked env --json",
+    ]);
+  });
+
+  it("lists the packages with their locked versions, and what is wrong with them", async () => {
+    const dir = await agentDir({
+      packages: { gh: "2", tokei: "12", "pypi:markitdown": "1" },
+      aptPackages: ["chromium"],
+    });
+    await fakeMise(dir);
+    await mkdir(join(dir, "environment"));
+    await writeFile(join(dir, "environment", "mise.lock"), `[[tools.gh]]\nversion = "2.83.1"\n`);
+    const list = await cli(["env", "list"], dir);
+    expect(list.code, list.stderr).toBe(0);
+    expect(list.stdout).toBe(
+      [
+        "gh               2         2.83.1",
+        "tokei            12        (not locked)",
+        "pypi:markitdown  1         (not locked)",
+        "apt:chromium     (installed by the image)",
+        "",
+      ].join("\n"),
     );
-    expect(await readFile(join(dir, "mise.toml"), "utf8")).toBe(declared);
-    expect(await readFile(join(dir, "mise.lock"), "utf8")).toBe("locked\n");
-    expect(await readFile(join(dir, ".mise", "locks", "npm-old", "1", "package.json"), "utf8")).toBe("old\n");
-    await expect(readdir(join(dir, ".mise", "locks"))).resolves.toEqual(["npm-old"]);
-    // Files the command created are removed.
-    const fresh = await agentDir();
-    await fakeMise(fresh);
-    expect((await cli(["env", "set", "A=1"], fresh)).code).toBe(1);
-    for (const file of ["mise.toml", "mise.lock", ".mise/locks"]) {
-      await expect(stat(join(fresh, file))).rejects.toThrow(/ENOENT/);
-    }
-    // A file refused before the command is reported, not called restored: the command changed nothing.
-    await writeFile(join(dir, "mise.toml"), `[env]\nA = "1"\n`);
-    const ls = await cli(["env", "ls"], dir);
-    expect(ls.code).toBe(1);
-    expect(ls.stderr).toMatch(/\[env\] is not supported yet/);
-    expect(ls.stderr).not.toMatch(/is undone/);
+    expect(list.stderr).toMatch(/has no lock for them/);
+    expect(list.stderr).toMatch(/package "tokei" resolves to cargo:tokei/);
+    expect(list.stderr).toMatch(/pypi:markitdown installs with python and uv/);
   });
+
+  it("runs a command in the environment, and exits as it does", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
+    await locked(dir, { gh: "2" });
+    await fakeMise(dir);
+    const exec = await cli(["env", "exec", "--", "sh", "-c", 'echo "$PATH"; exit 3'], dir);
+    expect(exec.code).toBe(3);
+    expect(exec.stdout.split(delimiter)[0]).toBe("/fake/tools");
+    const missing = await cli(["env", "exec", "--", "no-such-command-here"], dir);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("no-such-command-here: command not found in the environment");
+  });
+
+  it("runs one at a time, so a second change starts from the first", async () => {
+    const dir = await agentDir();
+    const { calls } = await fakeMise(dir);
+    const first = cli(["env", "add", "gh@2"], dir, { FAKE_SLOW: "1" });
+    while (!(await calls()).some((call) => call.startsWith("install"))) await new Promise((r) => setTimeout(r, 50));
+    const second = await cli(["env", "add", "jq@1"], dir);
+    expect((await first).code).toBe(0);
+    expect(second.code, second.stderr).toBe(0);
+    expect(second.stderr).toContain("waiting for another `fastagent env` on this agent to finish");
+    expect(await declared(dir)).toEqual({ packages: { gh: "2", jq: "1" } });
+    await expect(stat(join(dir, "environment.lock"))).rejects.toThrow(/ENOENT/);
+  }, 30_000);
 });

@@ -204,7 +204,7 @@ const models: CommandSpec = {
     "definition: commit it, and it ships with a deploy. The machine's (-g) is read by every agent here and does " +
     "not ship. Nothing refreshes on its own.",
   run: async (args, f) =>
-    (await import("./commands/models.ts")).runModels(args[0], {
+    (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
       refresh: f.refresh === true,
       global: f.global === true,
     }),
@@ -368,7 +368,9 @@ const add: CommandSpec = {
         "description frontmatter; it's auto-discovered. `add skill` is only for vendoring an " +
         "existing one.",
       run: async (args, f) =>
-        (await import("./commands/add.ts")).runAddSkill(args[0], args[1] as string, { update: f.update === true }),
+        (await import("./commands/add.ts")).runAddSkill(args[0] as string | undefined, args[1] as string, {
+          update: f.update === true,
+        }),
     },
   ],
 };
@@ -436,25 +438,62 @@ const deploy: CommandSpec = {
 
 const env: CommandSpec = {
   name: "env",
-  summary: "run the agent's own mise on its environment (mise.toml): add tools and system packages",
+  summary: "add, remove or list the commands the agent runs: its environment",
   description:
-    "The agent's environment is the [tools] and [bootstrap.packages] of its mise.toml. `fastagent env` runs the " +
-    "agent's own mise, in the agent directory (the current one), on that file alone: never the machine's mise " +
-    "configuration or a parent directory's. Everything after `env` goes to mise unchanged, `--help` included. The " +
-    "first time, it adds mise to the agent's package.json (one optional package per platform; npm installs this " +
-    "machine's), so nothing has to be installed first.",
-  examples: [
-    { cmd: "fastagent env use gh@2", note: "a CLI" },
-    { cmd: "fastagent env use npm:prettier@3", note: "a CLI from npm" },
-    { cmd: "fastagent env bootstrap packages use apt:chromium", note: "image only" },
-    { cmd: "fastagent env install", note: "install mise.toml" },
-    { cmd: "fastagent env ls" },
+    "The agent's environment is the `environment` of its context.json: `packages`, each a name from mise's registry " +
+    "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version, and `aptPackages`, Debian " +
+    "packages the image installs. environment/ is its lock, committed with the agent: these commands and `deploy` " +
+    "write it, and every machine and image installs the versions it records. Run in the agent directory (the " +
+    "current one). The first change adds mise to the agent's package.json (one optional package per platform; npm " +
+    "installs this machine's), so nothing has to be installed first.",
+  subcommands: [
+    {
+      name: "add",
+      summary: "add packages: installed and locked first, then declared",
+      args: [{ name: "<packages...>", description: "name[@version] (default latest), or apt:<name> for the image" }],
+      examples: [
+        { cmd: "fastagent env add gh@2", note: "a CLI from mise's registry" },
+        { cmd: "fastagent env add npm:prettier@3", note: "an npm package" },
+        { cmd: "fastagent env add python uv pypi:markitdown", note: "PyPI, with its runtime" },
+        { cmd: "fastagent env add apt:chromium", note: "installed by the image" },
+      ],
+      run: async (args) => (await import("./commands/env.ts")).runEnvAdd(args[0] as string[]),
+    },
+    {
+      name: "remove",
+      summary: "remove packages, by the name they are declared with",
+      args: [{ name: "<packages...>", description: "a declared package, or apt:<name>" }],
+      examples: [{ cmd: "fastagent env remove gh apt:chromium" }],
+      run: async (args) => (await import("./commands/env.ts")).runEnvRemove(args[0] as string[]),
+    },
+    {
+      name: "list",
+      summary: "the declared packages with their locked versions, and what is wrong with them",
+      examples: [{ cmd: "fastagent env list" }],
+      run: async () => (await import("./commands/env.ts")).runEnvList(),
+    },
+    {
+      name: "install",
+      summary: "install the locked versions here; lock again first when context.json changed",
+      description:
+        "Install the versions environment/ locks on this machine, adding mise to package.json when it is missing. " +
+        "When the packages context.json declares are not the ones environment/ was locked for (an edit by hand), " +
+        "lock them again first, and say so: commit environment/ with the change.",
+      examples: [{ cmd: "fastagent env install", note: "after a clone, or an edit to context.json" }],
+      run: async () => (await import("./commands/env.ts")).runEnvInstall(),
+    },
+    {
+      name: "exec",
+      summary: "run a command in the environment",
+      args: [{ name: "<command...>", description: "the command and its arguments, after --" }],
+      examples: [{ cmd: "fastagent env exec -- gh --version" }],
+      run: async (args) => (await import("./commands/env.ts")).runEnvExec(args[0] as string[]),
+    },
   ],
   notes:
-    "`dev`, `start`, `chat`, `invoke` and `tool` install the [tools] and put them on the PATH of what the agent " +
-    "runs; system packages are installed in the image, and a start here says which are missing. `deploy` writes " +
-    "mise.lock for linux-x64 and linux-arm64 from the versions this machine uses.",
-  passThrough: async (args) => (await import("./commands/env.ts")).runEnv(args),
+    "`dev`, `start`, `chat`, `invoke` and `tool` install the locked versions and put them first on the PATH of what " +
+    "the agent runs; they refuse an environment/ that is not the lock of what context.json declares. Apt packages " +
+    "are installed in the image; on Debian or Ubuntu a start here names the missing ones.",
 };
 
 const content: CommandSpec = {
@@ -638,7 +677,7 @@ const login: CommandSpec = {
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
     "so it is the only holder of that grant, and logging in again replaces it there.",
   run: async (args, f) =>
-    (await import("./commands/login.ts")).runLogin(args[0], {
+    (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
       input: f.input !== false,
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),

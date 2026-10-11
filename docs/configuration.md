@@ -342,76 +342,66 @@ A deployed image has only what its build put in it. The machine's extensions and
 name matches a platform command (`prompts/start.md` against Telegram's `/start`) rewrites that message. Keep the
 machine's `prompts/` for `chat`, or put a template that belongs to the agent in its definition's `prompts/`.
 
-## Environment: `mise.toml`
+## Environment
 
-An agent without a `mise.toml` runs the commands of the machine it is on: `bash` finds whatever that `PATH` holds,
-and a deployed image has Node and git. A `mise.toml` declares the commands the agent needs, in
-[mise](https://mise.jdx.dev)'s format, so they are the same on every machine and in the image:
+An agent that declares no environment runs the commands of the machine it is on: `bash` finds whatever that `PATH`
+holds, and a deployed image has Node and git. The `environment` of `context.json` declares the commands the agent
+needs, so they are the same on every machine and in the image:
 
-```toml
-[tools]
-gh = "2"
-jq = "1.8"
-"npm:@mermaid-js/mermaid-cli" = "11"
-
-[bootstrap.packages]
-"apt:chromium" = { os = "linux" }
-"apt:fonts-noto-cjk" = { os = "linux" }
+```json
+{
+  "content": {},
+  "environment": {
+    "packages": { "gh": "2", "jq": "latest", "npm:@mermaid-js/mermaid-cli": "11" },
+    "aptPackages": ["chromium", "fonts-noto-cjk"]
+  }
+}
 ```
 
-- **`[tools]`** are CLIs and runtimes, from mise's registry (`gh`, `python`, `uv`), npm (`npm:`), PyPI (`pypi:`),
-  GitHub releases (`github:`) and mise's other backends. `dev`, `start`, `chat`, `invoke`, `tool` and an embedder's
-  [`createAgentService`](embedding.md) install what is missing, then run the agent with the tools first on its
-  `PATH`. An edit to `mise.toml` restarts `dev`.
-- **`[bootstrap.packages]`** are system packages, for what has no cross-platform build, like a browser or fonts. The
-  image installs them (`apt:` on its Debian). A start on a machine that lacks one says which;
-  `fastagent env bootstrap packages apply` installs them there. On macOS, `{ os = "linux" }` keeps an `apt:` package
-  out of the status.
+- **`packages`** are CLIs and runtimes, each with a version: `"latest"`, a prefix (`"2"`) or an exact version. A
+  package is a name from [mise](https://mise.jdx.dev)'s registry (`gh`, `ripgrep`, `python`), or one written with
+  `aqua:` or `github:` (a project's release), `gitlab:`, `conda:` (a conda-forge build), `npm:` or `pypi:`.
+- **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build, like a browser or
+  fonts. A start on Debian or Ubuntu names the ones this machine lacks, with the `apt-get` command that installs them;
+  FastAgent never runs apt itself, and elsewhere it says nothing.
 
-Some backends install with a toolchain. mise uses the one `mise.toml` declares, otherwise the machine's, and does not
-add it: such a tool installs on your machine and fails in the image, which has none. Declare them together, as mise's
-own documentation does: `fastagent env use python uv pypi:markitdown`. `fastagent env` names what is missing when it
-exits, and `deploy --run` stops on it.
+Change it with [`fastagent env`](cli.md#fastagent-env): `fastagent env add gh@2` installs the package, locks it, then
+declares it. The first change adds mise to the agent's `package.json`, as one optional dependency per platform at the
+newest version; the package manager installs only this machine's, and the lockfile pins it. mise publishes no package
+for Windows, so an agent that declares packages does not run there.
 
-| Backend | Declare with it | Notes |
-|---|---|---|
-| `pypi:` | `python` and `uv` | uv also locks the tool's dependencies, so `deploy` needs it installed here |
-| `cargo:` | `rust` | Building a crate needs a C linker: `apt:build-essential` in `[bootstrap.packages]`. With `cargo-binstall` declared, a crate that publishes a prebuilt binary is downloaded instead. The image gets curl for rustup. With a Rust toolchain the image is about 3 GB |
-| `go:` | `go` | A package that uses cgo needs `apt:build-essential` |
-| `gem:` | `ruby` | A gem with native extensions needs a compiler; not tried in an image |
-| `npm:` | nothing | The image has Node; Bun's image runs npm tools through its own `node` |
+**`environment/` is the environment's lock.** `fastagent env` writes it from the declaration: mise's configuration,
+its lock (each package's version, download and checksum for linux-x64, linux-arm64, macos-x64 and macos-arm64, and
+the dependency lock an npm or PyPI package keeps), and the digest of the packages it was written for. Commit it, as
+you commit `package-lock.json`: every machine and every image built from a commit installs the same versions, and a
+rollback restores them.
 
-The check reads how a tool is written, so a registry name that mise resolves to one of these backends is not seen; the
-image build fails on it instead. A tool's own prebuilt release needs no toolchain and keeps the image small: `ripgrep`
-from mise's registry downloads ripgrep's GitHub release, where `cargo:ripgrep` compiles it.
+`dev`, `start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the versions
+the lock records and put them first on the agent's `PATH`. They never write the lock: when `context.json` declares
+packages `environment/` was not written for (an edit by hand), they refuse to start and name
+`fastagent env install`, which locks it again. An edit to `context.json` restarts `dev`. A package is installed into
+mise's data directory on this machine (`~/.local/share/mise`), which other mise projects share.
 
-Change the file with `fastagent env`, which runs the agent's own mise in its directory
-([CLI](cli.md#fastagent-env)): `fastagent env use gh@2`. The first `fastagent env` adds mise to the agent's
-`package.json`, as one optional dependency per platform at the newest version; the package manager installs only
-this machine's, and the lockfile pins it. The commands that run the agent never add it: they refuse a `mise.toml`
-without it. mise publishes no package for Windows, so an agent with a `mise.toml` does not run there.
+What a package may install from is checked by the backend it resolves to, since a registry name is a backend under
+another name (`ripgrep` downloads ripgrep's GitHub release, `tokei` builds with cargo). `fastagent env add`,
+`fastagent env list` and `deploy` ask mise and refuse a package that builds from source (`go`, `cargo`, `spm`),
+compiles native extensions (`gem`), runs a plugin's code at install and on every start (`vfox`, `asdf`), or installs
+from a backend FastAgent has not classified; the refusal names the backend and the way around it, the project's
+release with `github:` or your own `Dockerfile`. The configuration asks mise for prebuilt runtimes: a runtime with no
+build for a platform fails there rather than compiling.
 
-The agent changes its environment the same way, from its own directory: `./node_modules/.bin/fastagent env use jq@1.8`.
-A change FastAgent refuses is undone before the command exits. The tool is on the agent's `PATH` from the next start
-(`dev` restarts on the edit); until then `./node_modules/.bin/fastagent env exec -- jq` runs it. On a host, the
-deployed prompt tells an agent with a `mise.toml` how. The tool is installed on the storage (`.state/mise/`), so a
-new container still has it; the declaration lasts until the next release replaces the definition, as any change the
-agent makes to itself does. A tool the agent installs with the machine's own means (`apt-get`, `npm install -g`)
-belongs to the machine: on a host it is gone when the container is replaced.
+A PyPI package (`pypi:markitdown`, or a registry name such as `ansible`) runs on `python` and installs and locks with
+`uv`. mise takes both from the machine when they are not declared, so such a package installs on your machine and
+fails in the image: declare them together, `fastagent env add python uv pypi:markitdown`. `fastagent env` names what
+is missing, and `deploy --run` stops on it. An `npm:` package runs on the image's Node; Bun's image runs npm packages
+through its own `node`. A runtime the agent works with itself (`go`, `rust`) is a package like any other; for `rust`
+the image adds curl.
 
-The agent's mise reads only the agent's `mise.toml`: never `~/.config/mise`, a parent directory's configuration,
-`.tool-versions` or `mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the
-machine's, in a content repository with its own `mise.toml`) works as it does in your shell.
-FastAgent supports `[tools]` and `[bootstrap.packages]`; the rest of the file (`[env]`, `[tasks]`, `[hooks]`,
-`[settings]`, `[plugins]`, the other `[bootstrap]` parts) is refused at startup, because it would run differently or
-not at all where the agent is deployed, and so is a tool's `postinstall`.
-Environment variables stay in `.secrets/.env` for now. Tools install into mise's data directory on this machine
-(`~/.local/share/mise`), which other mise projects share. `fastagent info` lists what is declared.
-
-`deploy` writes `mise.lock` ([what deploy bakes](deploy.md#what-deploy-bakes)), and for a tool from a package
-registry (`npm:`) a sidecar under `.mise/locks/` that the lock names by digest: commit both with `mise.toml`, since
-an install that reads the lock needs the sidecar too. The lock is not enforced locally: a start installs what
-`mise.toml` allows and keeps what is already installed.
+The agent's mise reads only `environment/mise.toml`: never `~/.config/mise`, a parent directory's configuration, a
+`mise.toml` you keep beside `context.json` for your own work, `.tool-versions` or `mise.local.toml`. That isolation is
+FastAgent's runs alone: a mise the agent runs (the machine's, in a content repository with its own `mise.toml`) works
+as it does in your shell. Environment variables stay in `.secrets/.env` for now. `fastagent info` lists what is
+declared, and says when `environment/` is not its lock.
 
 ## Harness settings: `~/.pi/agent/settings.json`
 

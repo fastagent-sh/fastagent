@@ -20,8 +20,9 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(true);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
-    expect(ignored(join(root, "context.json"))).toBe(false); // content is resolved once per process
-    expect(ignored(join(root, "mise.toml"))).toBe(false); // the environment is entered once per process
+    // Content is resolved, and the environment entered, once per process.
+    expect(ignored(join(root, "context.json"))).toBe(false);
+    expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
     // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
     // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
     for (const file of ["models.json", "models-store.json"]) {
@@ -29,6 +30,13 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
       expect(revivesOnly(root, join(root, file))).toBe(true);
     }
     expect(ignored(join(root, "models-store.json.lock"))).toBe(true);
+    // The environment's lock is complete once its digest is written, before the context.json edit that restarts a
+    // serving worker: that digest brings back one that stopped on a stale lock. The rest of the lock is not watched.
+    expect(ignored(join(root, "environment"))).toBe(false);
+    expect(ignored(join(root, "environment", "declaration.sha256"))).toBe(false);
+    expect(revivesOnly(root, join(root, "environment", "declaration.sha256"))).toBe(true);
+    expect(ignored(join(root, "environment", "mise.lock"))).toBe(true);
+    expect(ignored(join(root, "environment.lock"))).toBe(true);
     expect(revivesOnly(root, join(root, "fastagent.config.ts"))).toBe(false);
     expect(revivesOnly(root, join(root, "tools", "models.json"))).toBe(false);
   });

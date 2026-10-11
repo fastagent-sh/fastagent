@@ -56,7 +56,7 @@ describe("content: context.json", () => {
     expect(() => parseContextFile("[]", path)).toThrow("/a/context.json must hold a JSON object");
     // Shared contexts are not built yet, so their key is refused like any other.
     expect(() => parseContextFile(`{ "contexts": {} }`, path)).toThrow(
-      '/a/context.json: unknown key "contexts" (valid keys: $schema, content)',
+      '/a/context.json: unknown key "contexts" (valid keys: $schema, content, environment)',
     );
     expect(() => parseContextFile(`{ "content": { "a": { "ref": "x" } } }`, path)).toThrow(
       /^\/a\/context\.json: content "a": "ref" applies/,

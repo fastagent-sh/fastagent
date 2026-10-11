@@ -1,6 +1,6 @@
 /**
  * Creating an agent and editing its content, as an API: `fastagent init` and `fastagent content` are thin CLI wrappers
- * over these, so the CLI and a client (a desktop app) cannot disagree about the rules. Nothing here prints or exits;
+ * over these (and `fastagent env` writes its declaration through {@link writeEnvironment}), so the CLI and a client (a desktop app) cannot disagree about the rules. Nothing here prints or exits;
  * every refusal is thrown with the message the CLI shows.
  */
 import { lstatSync, statSync, unlinkSync } from "node:fs";
@@ -23,6 +23,7 @@ import {
   parseContextFile,
   readContextFile,
 } from "../../content/file.ts";
+import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { linkContent } from "../../content/mount.ts";
 import { type ResolvedContent, checkLinkTarget, resolveContent } from "../../content/resolve.ts";
 import type { ContentAddition } from "../../content/source.ts";
@@ -224,6 +225,22 @@ function entryNamed(file: Pick<ContextFile, "declared">, name: string): string {
   if (found) return found.name;
   const names = file.declared.map((entry) => entry.name);
   throw new ContentNameError(`no content named "${name}" (this agent has: ${names.join(", ") || "none"})`);
+}
+
+/**
+ * Replace the environment `context.json` declares with `environment`, under the lock content edits take, keeping the
+ * rest of the file as it is now.
+ */
+export async function writeEnvironment(agentDir: string, environment: DeclaredEnvironment): Promise<void> {
+  const path = join(resolveAgentDir(agentDir), CONTEXT_FILE);
+  await withLockedFile(
+    path,
+    async (src) => ({
+      result: undefined,
+      next: contextFileText({ ...parseContextFile(src ?? "{}", path), environment }),
+    }),
+    { mode: fileMode(path) },
+  );
 }
 
 /** The mode a rewrite of `path` keeps: its own, or the definition's default for a new one. */

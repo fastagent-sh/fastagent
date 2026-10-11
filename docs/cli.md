@@ -21,7 +21,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
 | `info [agent]` | Show what an agent assembles into, without serving. |
 | `content list\|add\|remove` | List, add or remove what the agent works on and knows. |
-| `env <mise args>` | Run the agent's own mise on its `mise.toml`: the commands the agent needs. |
+| `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
 | `models [search]` | List model specs. |
 | `login [provider]` | Store provider credentials in `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
 | `dev [agent]` | Serve locally with watch/reload. |
@@ -87,8 +87,8 @@ fastagent info [agent] [--json] [--model provider/modelId]
 
 Prints, without serving:
 
-- the agent directory, its content (`works on` / `knows`, each with its location), its environment (the tools and
-  system packages `mise.toml` declares), config path, model and its source,
+- the agent directory, its content (`works on` / `knows`, each with its location), its environment (the packages and
+  apt packages `context.json` declares), config path, model and its source,
 - the prompt (pi's default or `SYSTEM.md`, plus `APPEND_SYSTEM.md`),
 - skills (each content entry's named `<content>/<skill>`) and their diagnostics,
 - coding tools, authored tools and collisions,
@@ -97,9 +97,10 @@ Prints, without serving:
 - declared secrets, flagging any with no value here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
-Content that cannot be resolved (its directory is missing, say), and a `mise.toml` FastAgent refuses, are reported,
-not fatal; `info` installs nothing. `--json` carries `content`, `contentError`, `environment`, `environmentError` and
-`contextFiles` (the agent directory's `AGENTS.md`, then each content entry's).
+Content that cannot be resolved (its directory is missing, say), an environment FastAgent refuses, and an
+`environment/` that is not its lock, are reported, not fatal; `info` installs nothing. `--json` carries `content`,
+`contentError`, `environment`, `environmentError` and `contextFiles` (the agent directory's `AGENTS.md`, then each
+content entry's).
 Read-only.
 
 ## `fastagent content`
@@ -126,29 +127,40 @@ a checkout off its `ref`, a clone not made yet.
 ## `fastagent env`
 
 ```bash
-fastagent env <mise args>
+fastagent env add <packages...>       # name[@version], or apt:<name> for the image
+fastagent env remove <packages...>
+fastagent env list
+fastagent env install
+fastagent env exec -- <command...>
 ```
 
-Runs the agent's own [mise](https://mise.jdx.dev) in the agent directory, the current one, on its `mise.toml` alone
-([environment](configuration.md#environment-misetoml)). Everything after `env` goes to mise unchanged, `--help`
-included; `fastagent help env` is this command's own help. It exits with mise's code.
+The agent's [environment](configuration.md#environment), in the agent directory, the current one: the `environment`
+of its `context.json`, and `environment/`, its lock.
 
 ```bash
-fastagent env use gh@2                               # a CLI
-fastagent env use npm:prettier@3                     # a CLI from npm
-fastagent env bootstrap packages use apt:chromium    # a system package the image installs
-fastagent env install                                # install what mise.toml declares
-fastagent env ls
+fastagent env add gh@2                          # a CLI from mise's registry
+fastagent env add npm:prettier@3                # an npm package
+fastagent env add python uv pypi:markitdown     # a PyPI package, with its runtime
+fastagent env add apt:chromium                  # a Debian package the image installs
+fastagent env exec -- gh --version
 ```
 
-The first run adds mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and
-says so. After mise exits, the file is read again: a change FastAgent would refuse at startup (`fastagent env set`
-writes `[env]`) is reported at once and undone, `mise.toml` and `mise.lock` put back as they were before the command,
-so it never reaches the next start. Two at once on one agent (an agent's sessions each run their own) run one after
-the other, under a lock beside `mise.toml`, so an undone change never takes the other's with it. It also names a
-tool whose toolchain `mise.toml` does not declare ([environment](configuration.md#environment-misetoml)), with the
-command that declares it. It refuses an agent whose `package.json` does not list `@fastagent-sh/fastagent`, or that
-has none: mise would make it an agent with dependencies, whose image runs the FastAgent they list.
+- **`add`** checks each package against the backend it resolves to, installs it, writes `environment/` and then
+  `context.json`, so a `dev` that restarts on the declaration finds its lock. A version defaults to `latest`; adding a
+  declared package again replaces its version. An apt package is declared without installing anything; on Debian or
+  Ubuntu, `add` says whether this machine has it.
+- **`remove`** takes the names as declared (`gh`, `apt:chromium`); `environment/` goes with the last package.
+- **`list`** prints each package with the version its lock records, and warns about what `dev` or `deploy` would
+  refuse: a lock that is not the declaration's, a refused backend, a PyPI package's undeclared runtime.
+- **`install`** installs the locked versions on this machine. After a clone, it installs mise first. After an edit
+  to `context.json` by hand, it locks the packages again first and says so: commit `environment/` with the change.
+- **`exec`** runs a command with the environment first on its `PATH`, and exits with its code.
+
+A change that fails (a package mise cannot install, a refused backend) leaves `context.json` and `environment/` as
+they were. Two at once on one agent run one after the other, under a lock beside `environment/`. The first change adds
+mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and says so; an agent
+whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an
+agent with dependencies, whose image runs the FastAgent they list.
 
 ## `fastagent models`
 

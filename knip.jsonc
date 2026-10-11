@@ -26,5 +26,5 @@
     "src/deploy/agentcore/forwarder.js",
     "test/fixtures/**"
   ],
-  "ignoreBinaries": ["fastagent", "cloudflared", "flock"]
+  "ignoreBinaries": ["fastagent", "cloudflared", "flock", "dpkg-query"]
 }

@@ -1,21 +1,23 @@
 /**
- * The agent's `context.json`, read and refused whole in ONE place, so the opener, `info`, `content list`, `tool` and
- * deploy read one declaration; and the one shape it is written in. JSON, like `mcp.json` and `package.json`, so a
+ * The agent's `context.json`, read and refused whole in ONE place, so the opener, `info`, `content list`, `env`, `tool`
+ * and deploy read one declaration (its content, and its environment); and the one shape it is written in. JSON, like `mcp.json` and `package.json`, so a
  * command, a client or the agent itself can edit it without touching TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CONTEXT_FILE } from "../paths.ts";
+import { type DeclaredEnvironment, declareEnvironment } from "../environment/declare.ts";
 import { type ContentEntry, type DeclaredContent, declareContent } from "./declare.ts";
 
-/** `context.json` as read: the entries as written, and as declared. */
+/** `context.json` as read: the content entries as written and as declared, and the environment. */
 export interface ContextFile {
   $schema?: string;
   content: Record<string, ContentEntry>;
   declared: DeclaredContent[];
+  environment?: DeclaredEnvironment;
 }
 
-const FILE_KEYS = ["$schema", "content"] as const;
+const FILE_KEYS = ["$schema", "content", "environment"] as const;
 
 /** Read `text`, the contents of `path`. Every refusal names the file. */
 export function parseContextFile(text: string, path: string): ContextFile {
@@ -36,8 +38,10 @@ export function parseContextFile(text: string, path: string): ContextFile {
     throw new Error(`${path}: "$schema" must be a string`);
   }
   let declared: DeclaredContent[];
+  let environment: DeclaredEnvironment | undefined;
   try {
     declared = declareContent(file.content);
+    environment = declareEnvironment(file.environment);
   } catch (error) {
     throw new Error(`${path}: ${(error as Error).message}`);
   }
@@ -45,6 +49,7 @@ export function parseContextFile(text: string, path: string): ContextFile {
     ...(file.$schema !== undefined ? { $schema: file.$schema as string } : {}),
     content: (file.content ?? {}) as Record<string, ContentEntry>,
     declared,
+    ...(environment !== undefined ? { environment } : {}),
   };
 }
 
@@ -66,7 +71,27 @@ export function loadContent(agentDir: string): DeclaredContent[] {
   return readContextFile(agentDir).declared;
 }
 
-/** The text `context.json` is written as. */
-export function contextFileText(file: { $schema?: string; content: Record<string, ContentEntry> }): string {
-  return `${JSON.stringify({ ...(file.$schema !== undefined ? { $schema: file.$schema } : {}), content: file.content }, null, 2)}\n`;
+/** The environment the agent in `agentDir` declares, or undefined when it declares none. */
+export function loadEnvironment(agentDir: string): DeclaredEnvironment | undefined {
+  return readContextFile(agentDir).environment;
+}
+
+/** The text `context.json` is written as. An environment that declares nothing is left out. */
+export function contextFileText(file: {
+  $schema?: string;
+  content: Record<string, ContentEntry>;
+  environment?: DeclaredEnvironment;
+}): string {
+  const packages = file.environment?.packages ?? {};
+  const aptPackages = file.environment?.aptPackages ?? [];
+  const environment = {
+    ...(Object.keys(packages).length > 0 ? { packages } : {}),
+    ...(aptPackages.length > 0 ? { aptPackages } : {}),
+  };
+  const out = {
+    ...(file.$schema !== undefined ? { $schema: file.$schema } : {}),
+    content: file.content,
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+  };
+  return `${JSON.stringify(out, null, 2)}\n`;
 }

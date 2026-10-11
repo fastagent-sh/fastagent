@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { packagesDigest } from "../src/environment/declare.ts";
 import { agentWorkspace, run } from "./cli-run.ts";
 
 describe("cli: info", () => {
@@ -28,30 +29,30 @@ describe("cli: info", () => {
     await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
-  it("info reports the declared environment without installing it, and a refused mise.toml without failing", async () => {
-    // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
+  it("info reports the declared environment without installing it, and what dev and start stop on", async () => {
+    // No mise is installed in this agent: `info` must not need one (it only reads the declaration and the digest).
+    const environment = { packages: { jq: "1.8.1" }, aptPackages: ["chromium"] };
     const dir = await agentWorkspace("fa-info-env-", {
       "fastagent.config.ts": "export default {};\n",
-      "mise.toml": `[tools]\njq = "1.8.1"\n[bootstrap.packages]\n"apt:chromium" = { os = "linux" }\n`,
+      "context.json": JSON.stringify({ environment }),
+      "environment/declaration.sha256": `${packagesDigest(environment.packages)}\n`,
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(JSON.parse(ok.stdout)).toMatchObject({
-      environment: { tools: ["jq"], packages: ["apt:chromium"] },
-      environmentError: null,
-    });
-    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq; system packages: apt:chromium$/m);
-    await writeFile(join(dir, "mise.toml"), `[tasks.build]\nrun = "x"\n`);
+    expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null });
+    expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
+    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
+    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { jq: "2" } } }));
+    expect((await run(["info", dir])).stdout).toMatch(
+      /^environment: +\(refused: dev and start stop on it\)\n +⚠ the packages context\.json declares are not the ones environment\/ was locked for/m,
+    );
+    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { "cargo:x": "1" } } }));
     const refused = await run(["info", dir, "--json"]);
     expect(refused.code).toBe(0);
     expect(JSON.parse(refused.stdout)).toMatchObject({
       environment: null,
-      environmentError: expect.stringMatching(/"tasks" is not supported/),
+      environmentError: expect.stringMatching(/package "cargo:x" installs with cargo:/),
     });
-    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
-    expect((await run(["info", dir])).stdout).toMatch(
-      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*"tasks" is not supported/m,
-    );
   });
 
   it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {

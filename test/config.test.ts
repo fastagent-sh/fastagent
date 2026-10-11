@@ -83,7 +83,7 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { channels: (agent) => ({}) };`)).rejects.toThrow(/unknown key "channels"/);
     // System packages are the environment's (mise.toml), declared for every platform at once.
     await expect(load(`export default { deploy: { apt: ["git"] } };`)).rejects.toThrow(
-      /"deploy\.apt" is not a config key — system packages are declared in mise\.toml \[bootstrap\.packages\]/,
+      /"deploy\.apt" is not a config key — apt packages are declared in context\.json's environment/,
     );
     // Content moved to its own file; the refusal says where.
     for (const key of ["content", "contexts"]) {
