@@ -179,6 +179,10 @@ describe("environment: what context.json may declare", () => {
       `variable "GH_HOST": unknown key "value" (valid keys: description)`,
     );
     expect(refused({ variables: { GH_HOST: { description: " " } } })).toThrow(`"description" must be a non-empty`);
+    // Runbooks print it as a comment line: a line break would end the comment and leave a command to paste.
+    expect(refused({ variables: { GH_TOKEN: { description: "gh's token\nfly apps destroy x" } } })).toThrow(
+      `variable "GH_TOKEN": "description" must be one line of text, without control characters`,
+    );
     expect(refused({ variables: { "MY KEY": { description: "x" } } })).toThrow(`is not an environment variable name`);
     // The deployment sets these itself, and never carries a value file's copy: a declaration could never be met.
     for (const name of ["PORT", "FASTAGENT_MODEL", "FASTAGENT_STATE_DIR"]) {

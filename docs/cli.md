@@ -168,7 +168,9 @@ fastagent env exec -- gh --version
   day it is not needed, since `add` and `remove` lock and `dev` installs at every start. It is for a declaration
   written by hand, and for committing its lock before a deploy that runs elsewhere (CI cannot commit the lock it
   makes).
-- **`exec`** runs a command with the environment first on its `PATH`, and exits with its code.
+- **`exec`** runs a command with the environment first on its `PATH` and the agent's `.secrets/.env` in its
+  environment, tokens included, as the agent's own commands have them, and exits with its code. Every `env`
+  subcommand reads `.secrets/.env` first, so a proxy declared there carries mise's downloads too.
 
 Every run of mise happens in a copy outside the agent directory, and `environment/` is replaced only once the new lock
 is complete, so a change that fails (a package mise cannot install, a refused backend) or is interrupted (Ctrl-C) leaves

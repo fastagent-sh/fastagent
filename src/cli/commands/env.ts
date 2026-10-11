@@ -34,7 +34,8 @@ const NONE: DeclaredEnvironment = { packages: {}, aptPackages: [], variables: {}
 
 /**
  * The agent directory, the current one, entered as every command that runs in it is: its `.env` in `process.env`, and
- * the proxy that may declare, which mise's downloads go through too.
+ * the proxy that `.env` may declare. mise's downloads go through that proxy, and `env exec` runs its command with the
+ * same values the agent's own commands get.
  */
 function enterAgentHere(): string {
   const agentDir = agentDirOrExit(resolve("."));

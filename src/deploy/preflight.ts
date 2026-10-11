@@ -650,7 +650,9 @@ async function checkKeptDockerfile(
   const dockerfileHome = join(agentDir, "Dockerfile");
   const dockerfileText = (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
   if (dockerfileText === undefined || isGeneratedDockerfile(dockerfileText)) return;
-  if (loadEnvironment(agentDir)) {
+  // What the image installs: the packages and apt packages. Variables travel with the value file, whatever the image.
+  const environment = loadEnvironment(agentDir);
+  if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
     report.warn(
       `kept your hand-written Dockerfile — it installs the environment context.json declares only if it says so: ` +
         `a generated Dockerfile shows the layers (the apt packages, then \`mise --locked install\` from ` +

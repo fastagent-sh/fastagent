@@ -325,12 +325,12 @@ platform. The author never writes mise's files.
   environment.** A declaration is a name and a sentence saying what it is for
   (`"GITHUB_TOKEN": { "description": "gh's token, with repo scope" }`), as `defineTool` declares the `secrets` its code
   reads: convention over configuration. The sentence sits in an object, because a string beside a variable's name is
-  read as its value in every format an author knows (`.env`, Heroku's `app.json`, Compose), and a string is refused
-  with where its value goes. The value comes from
-  the stage's value file (`.secrets/.env` for dev, `.secrets/production/.env` for production) or the host's own
-  variables, the same way a tool's secret does; a stage is one of the two environments the
-  [channel environments](channel-environments.md) define. Nothing in `context.json` holds a value, so no value can be
-  committed with it, and nothing needs rules for which of two values wins.
+  read as its value in every format an author knows (`.env`, Heroku's `app.json`, Compose), and a string is refused with
+  where its value goes. The value comes from the stage's value file (`.secrets/.env` for dev, `.secrets/production/.env`
+  for production, which `deploy` reads and carries) or, for a process started by hand, the variables it is started with,
+  the same way a tool's secret does; a stage is one of the two environments the [channel
+  environments](channel-environments.md) define. Nothing in `context.json` holds a value, so no value can be committed
+  with it, and nothing needs rules for which of two values wins.
   - Every declared variable is required, as a tool's secret is: a serving path refuses to start without its value and
     names `context.json`, `deploy` refuses before its first side effect and lists it with its sentence, and `info` and
     `fastagent env list` say which are set. `fastagent tool` and `env exec` run one tool or one command, and are not
@@ -423,8 +423,8 @@ A credential is proof of authority over another system. Three questions decide h
 ### 6.1 Declared by what uses it
 
 A credential that code or configuration uses is declared next to it, the way `defineTool` and `defineChannel` declare
-`secrets` today. The commands the agent runs read the process environment; what they read is declared in the agent's
-environment, with `required` (§4).
+`secrets` today. The commands the agent runs read the process environment; what they read is declared, by name, in
+the `variables` of the agent's environment (§4), every one of them required.
 
 | Used by | Declared as | Today |
 |---|---|---|

@@ -582,6 +582,17 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
         });
       }
     }
+    // Variables travel with the value file, whatever the image does: no environment for the Dockerfile to install.
+    await writeFile(
+      join(dir, "context.json"),
+      JSON.stringify({ environment: { variables: { GH_HOST: { description: "the GitHub host" } } } }),
+    );
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "GH_HOST=github.example.com\n");
+    const variablesOnly = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(variablesOnly.ok && variablesOnly.messages.map((m) => m.text).join("\n")).not.toMatch(
+      /kept your hand-written/,
+    );
   });
 
   /** The agent's mise, faked where its platform package puts it: it resolves every name to aqua and logs each lock. */

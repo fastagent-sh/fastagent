@@ -101,6 +101,11 @@ function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
     if (typeof description !== "string" || description.trim() === "") {
       throw new Error(`${at}: "description" must be a non-empty sentence saying what it is for`);
     }
+    // Written verbatim into each host's runbook, as a comment: a line break would end the comment and start a command.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are what is refused
+    if (/[\u0000-\u001f\u007f]/.test(description)) {
+      throw new Error(`${at}: "description" must be one line of text, without control characters`);
+    }
   }
   return Object.fromEntries(
     Object.entries(raw as Record<string, DeclaredVariable>).map(([name, { description }]) => [name, { description }]),

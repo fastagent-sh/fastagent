@@ -368,14 +368,15 @@ needs, installed on every machine that runs it and, at locked versions, in its i
 - **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build, like a browser or
   fonts. A start on Debian or Ubuntu names the ones this machine lacks, with the `apt-get` command that installs them;
   FastAgent never runs apt itself, and elsewhere it says nothing.
-- **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as
-  a tool declares its `secrets`. Their values come from the environment, never from `context.json`: `.secrets/.env`
-  here, `.secrets/production/.env` for a deployment, or the host's own variables. Every declared variable is
-  required: `dev`, `start`, `chat`, `invoke` and an embedder's `createAgentService` refuse to start without its value
-  and name `context.json`, `deploy` refuses before it changes anything and lists each with its description, and
-  `info` and `fastagent env list` say which have a value here. A value you would share across stages, like an
-  enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template. Names the
-  deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) cannot be declared.
+- **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as a
+  tool declares its `secrets`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
+  and `.secrets/production/.env` for a deployment, the one file `deploy` reads and carries (a variable exported where
+  you run `deploy` does not reach the deployment). A process you start yourself also reads the variables it is started
+  with. Every declared variable is required: `dev`, `start`, `chat`, `invoke` and an embedder's `createAgentService`
+  refuse to start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
+  with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
+  stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
+  Names the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) cannot be declared.
 
 Change it with [`fastagent env`](cli.md#fastagent-env): `fastagent env add gh@2` installs the package, locks it, then
 declares it. The first change adds mise to the agent's `package.json`, as one optional dependency per platform at the

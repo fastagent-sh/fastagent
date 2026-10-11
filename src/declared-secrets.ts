@@ -1,6 +1,6 @@
 /**
- * WHICH ENV VARS THIS AGENT'S CODE NEEDS, in ONE shape, wherever it was declared: `defineTool` and `defineChannel`,
- * each next to the code that reads the value.
+ * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared: `defineTool` and `defineChannel`, each next
+ * to the code that reads the value, and the `variables` of `context.json`, for the commands the agent runs.
  *
  * One list, two consequences:
  *  - a serving path ASSERTS the values before it runs, so a missing one is a startup failure naming the file, not a
@@ -8,9 +8,10 @@
  *  - `deploy --run` refuses a value file that does not supply one.
  *
  * Agent code does not read `process.env`: each authoring surface hands back exactly the values it declared, so the
- * declaration cannot drift from the read, and a typo is a type error. The values still travel through the process env
- * (a provider SDK reads its own variable), and `deploy` carries the whole value file (deploy/secrets.ts) — a
- * declaration makes a value REQUIRED, it does not decide what travels.
+ * declaration cannot drift from the read, and a typo is a type error. A command the agent runs (`gh`) reads its own
+ * variable from the process env, so a `context.json` declaration hands nothing back. The values travel through the
+ * process env, and `deploy` carries the whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED,
+ * it does not decide what travels.
  */
 
 /** One env var some part of the definition declared, and where that declaration is. */
