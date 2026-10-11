@@ -170,13 +170,13 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, its own and each content entry's `AGENTS.md` as project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). `dir` is the working directory: the coding tools operate there and session records are keyed to it. Its own `AGENTS.md` is loaded first, before each content entry's.
+Load the definition from `dir` (the agent dir) and let pi build the prompt: pi's default, or `SYSTEM.md` in its place, then `APPEND_SYSTEM.md`, its `AGENTS.md` as project context, skills and FastAgent's own sections ([Configuration](configuration.md#the-system-prompt)). `dir` is the working directory: the coding tools operate there and session records are keyed to it.
 
-`content` (`ResolvedContent[]`, default none) is what the agent works on and knows: each entry is named in the prompt, its `AGENTS.md` and skills (`<content>/<skill>`) load with the definition, and tools see it as `ctx.content`. Build it from a declaration with `resolveContent(dir, declarations)` ([Content](#content)); `createPiAgentFromDir` passes the config's.
+`content` (`ResolvedContent[]`, default none) is what the agent works on and knows: each entry is named in the prompt, and tools see it as `ctx.content`. Nothing an entry holds, its `AGENTS.md` and skills included, is added to the prompt. Build it from a declaration with `resolveContent(dir, declarations)` ([Content](#content)); `createPiAgentFromDir` passes the config's.
 
 `base` replaces pi's default prompt, as `SYSTEM.md` does, and outranks it; a blank `base` is refused. A `tools` list without `read`, `bash`, `edit` and `write` needs `base` or a `SYSTEM.md`: pi's default claims those tools, so the call is refused without one.
 
-`LoadedDefinition` carries `contextFiles` (the agent directory's `AGENTS.md`, then each content entry's, `DefinitionFile[]`), `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
+`LoadedDefinition` carries `contextFiles` (the agent directory's `AGENTS.md`, `DefinitionFile[]`), `systemPrompt?` and `appendSystemPrompt?` (`DefinitionFile`: `{ path; content }`), `skills`, `prompts` (`DefinitionPrompt[]`), `diagnostics`, `collisions` (`SkillCollision[]`), `shadowed` (`DefinitionShadow[]`: a name the definition holds in two places) and `ignored` (paths deliberately not loaded). All are exported.
 
 ### `createAgentService`
 

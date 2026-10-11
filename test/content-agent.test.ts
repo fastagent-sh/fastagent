@@ -12,7 +12,6 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir, defineTool } from "../src/index.ts";
 import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
-import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { type ResolvedContent, resolveContent } from "../src/content/resolve.ts";
 import { declareContent } from "../src/content/declare.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
@@ -39,16 +38,14 @@ async function layout() {
   await writeFile(join(agentDir, "AGENTS.md"), "OWN-AGENTS: how this agent is built and changed.\n");
   await writeFile(join(app, "AGENTS.md"), "APP-AGENTS: run the tests before committing.\n");
   await writeFile(join(handbook, "AGENTS.md"), "HANDBOOK-AGENTS: style rules.\n");
-  await skill(join(app, ".pi", "skills", "deploy"), "deploy", "Deploy the app (pi spelling).");
-  await skill(join(app, ".agents", "skills", "deploy"), "deploy", "Deploy the app (standard spelling).");
-  await skill(join(app, ".agents", "skills", "release"), "release", "Cut a release.");
-  await skill(join(app, ".agents", "skills", "slashed"), "a/b", "Named with a slash.");
+  await skill(join(app, ".pi", "skills", "release"), "release", "Cut a release of the app.");
+  await skill(join(app, ".agents", "skills", "migrate"), "migrate", "Migrate the app's database.");
   await skill(join(agentDir, "skills", "deploy"), "deploy", "The agent's own deploy.");
   return { root, agentDir, app, handbook };
 }
 
 describe("an agent with content", () => {
-  it("is told where it is and what it works on, reads each entry's AGENTS.md and skills, and its tools see them", async () => {
+  it("is told where it is and what it works on, and its tools see it; what a project holds stays in the project", async () => {
     const { agentDir, app, handbook } = await layout();
     await linkAt(agentDir, "app", app);
     await linkAt(agentDir, "handbook", handbook);
@@ -92,31 +89,14 @@ describe("an agent with content", () => {
     expect(prompt).toContain(
       `You know, and do not write:\n- handbook: ${at("handbook")} (a directory on this machine) The team's style rules.`,
     );
-    // The agent's own AGENTS.md is project context first, then each content entry's root one, in declaration order.
-    expect(prompt.indexOf("OWN-AGENTS")).toBeGreaterThan(-1);
-    expect(prompt.indexOf("OWN-AGENTS")).toBeLessThan(prompt.indexOf("APP-AGENTS"));
-    expect(prompt.indexOf("APP-AGENTS")).toBeLessThan(prompt.indexOf("HANDBOOK-AGENTS"));
-    // A content entry's skills carry its name, so the agent's own `deploy` and the app's never collide.
-    expect(prompt).toContain("<name>deploy</name>");
-    expect(prompt).toContain("<name>app/deploy</name>");
-    expect(prompt).toContain("Deploy the app (pi spelling).");
-    expect(prompt).not.toContain("standard spelling");
-    expect(prompt).toContain("<name>app/release</name>");
     expect(seen).toEqual(content);
-
-    // Inside one entry, `.pi/skills` wins over `.agents/skills`, and the loser is reported like any two places
-    // holding one name; a project skill named with a slash is left out and said.
-    const definition = await loadAgentDefinition(agentDir, { content });
-    expect(definition.collisions).toEqual([
-      expect.objectContaining({
-        name: "app/deploy",
-        loserPath: join(at("app"), ".agents", "skills", "deploy", "SKILL.md"),
-      }),
-    ]);
-    expect(definition.ignored).toContainEqual({
-      path: join(at("app"), ".agents", "skills", "slashed", "SKILL.md"),
-      reason: `not loaded: a skill's name may not contain "/" ("a/b")`,
-    });
+    // The definition is the agent's own: its AGENTS.md and skills are in the prompt, and a project's AGENTS.md and
+    // skills are files in the project, read when the agent works there.
+    expect(prompt).toContain("OWN-AGENTS");
+    expect(prompt).toContain("<name>deploy</name>");
+    for (const fromContent of ["APP-AGENTS", "HANDBOOK-AGENTS", "Cut a release", "Migrate the app"]) {
+      expect(prompt).not.toContain(fromContent);
+    }
   });
 
   it("with only content it knows, it is told to write in its own directory, not in a directory it works on", async () => {

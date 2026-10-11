@@ -46,7 +46,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     contentError = (error as Error).message;
   }
-  const definition = await loadAgentDefinition(agentDir, { content }).catch(failStartup);
+  const definition = await loadAgentDefinition(agentDir).catch(failStartup);
   // Reported like content: `info` is how an author finds out context.json declares what the agent does not support.
   let environment: DeclaredEnvironment | undefined;
   let environmentError: string | undefined;

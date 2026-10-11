@@ -6,8 +6,8 @@ status: current
 
 # Configuration
 
-- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`,
-  `tools/`, and what its content provides: each entry's `AGENTS.md` and skills.
+- Agent behavior lives in its prompt files (`SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`
+  and `tools/`, all in the agent directory.
 - What it works on and knows, its content, is declared in `context.json`.
 - Deployment choices live in `fastagent.config.ts`, CLI flags, and environment variables.
 - Secrets live in `<agent dir>/.secrets/` (`.env` + the project-level `auth.json`) or provider env vars.
@@ -264,15 +264,16 @@ missing credential fails the start instead of waiting.
 may not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in
 one.
 
-What each entry gives the agent, re-read every turn:
+What each entry gives the agent:
 
-- **Its `AGENTS.md`**, at the entry's root, as project context, after the agent directory's own `AGENTS.md`
-  (how the agent is built and changed, loaded first).
-- **Its skills**, from its `.pi/skills/` then `.agents/skills/`, named `<content>/<skill>`: the `deploy` skill of the
-  entry `app` is `app/deploy`, so it never collides with the agent's own or another entry's.
 - **A place in the prompt**: its name, its location, whether the agent works on it or only knows it, and its
   `description`. The agent runs a command in it with `cd <location> && …`.
 - **Its location for tools**: an authored tool reads `ctx.content` ([API reference](api-reference.md#tool-authoring)).
+
+What a project holds stays in the project. Its `AGENTS.md` and its skills are files the agent reads when it works
+there, like any other file; none of them is added to the agent's prompt, whose instructions and skills come from the
+agent directory alone. To have the agent read the project's `AGENTS.md` before it changes anything, say so in the
+entry's `description`.
 
 The locations are resolved when a process starts; editing `context.json` restarts `dev`. A deployed host links its
 `content/` to its storage, so a `github` entry is a clone there, made and kept up to date the same way, and outlives
@@ -284,8 +285,8 @@ release ships; to have the agent work on it from a host, move it to a repository
 ## The system prompt
 
 pi builds the agent's system prompt: its default (who the agent is, its tools, its rules, where pi's documentation
-is), the project context from the agent directory's `AGENTS.md` and then each content entry's, the skills, and the
-working directory. Two more files in the agent directory change it, both re-read every turn like the `AGENTS.md` files:
+is), the project context from the agent directory's `AGENTS.md`, the skills, and the working directory. Two more
+files in the agent directory change it, both re-read every turn like `AGENTS.md`:
 
 | File | Effect |
 |---|---|
@@ -442,10 +443,10 @@ project scope is read from content.
 
 ### The prompt lives in the session record
 
-pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or an
-`AGENTS.md` (the agent's own or a content entry's) is appended
-as a patch. On models that accept mid-conversation system messages this keeps the provider's cached prefix; on
-others the edit still costs a cache miss. The session control plane reports that entry with an empty payload.
+pi records the system prompt as the transcript's first message; an edit to `SYSTEM.md`, `APPEND_SYSTEM.md` or
+`AGENTS.md` is appended as a patch. On models that accept mid-conversation system messages this keeps the
+provider's cached prefix; on others the edit still costs a cache miss. The session control plane reports that
+entry with an empty payload.
 
 ## Auth and secrets
 

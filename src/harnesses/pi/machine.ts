@@ -134,17 +134,7 @@ async function read(agentDir: string, piDir: string): Promise<Machine> {
       );
     }
   }
-  // A `/` in a skill's name names the content entry it comes from (definition.ts), and pi only warns about one. The
-  // machine's own skill spelled that way is left out rather than let collide with an entry's.
-  const lent = skills.filter((skill) => {
-    if (definitionOwns("skills", skill.filePath)) return false;
-    if (!skill.name.includes("/")) return true;
-    log.warn(
-      `[fastagent] machine skill "${skill.name}" (${skill.filePath}) is not loaded: a skill's name may not contain "/", ` +
-        `which names the content entry a skill comes from`,
-    );
-    return false;
-  });
+  const lent = skills.filter((skill) => !definitionOwns("skills", skill.filePath));
   const builtinExtensions = packages.extensions
     .filter((resource) => resource.enabled && resource.metadata.source === "builtin")
     .map((resource) => resource.path.slice("builtin:".length));

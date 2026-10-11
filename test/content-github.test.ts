@@ -360,7 +360,7 @@ describe("github content: what runs the agent clones, what reports on it does no
       expect.objectContaining({ name: "handbook", location: join(agentDir, "content", "handbook") }),
     ]);
     expect(opened.content[0]?.notices).toEqual([]);
-    expect(opened.definition.contextFiles.map((file) => file.content)).toContain("HANDBOOK: be brief.\n");
+    expect(readFileSync(join(agentDir, "content", "handbook", "AGENTS.md"), "utf8")).toBe("HANDBOOK: be brief.\n");
 
     // Offline, the next start runs on that clone and says so.
     github.offline();

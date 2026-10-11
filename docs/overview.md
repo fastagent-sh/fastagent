@@ -40,7 +40,7 @@ clone; on a host, always a clone. A local directory stays on this machine, and a
 
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content), each entry with its `AGENTS.md` as project context.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
-3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each content entry's `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
+3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Clients** — HTTP routes a served agent can add for session control (`/control/*`: state, history, live events, steer and stop; opt-in with [`sessionControl`](configuration.md#config-file), and unauthenticated, so bind loopback or put a gateway in front), and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
@@ -131,7 +131,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
-- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md`, the agent's own and each content entry's `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
+- Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
 - Session control (`/control/*`) and the authoring API for clients.
 - HTTP/SSE invoke channel.
