@@ -7,9 +7,11 @@ node_modules
 
 # machine state: sessions, channel state, schedule state
 .state
-# where this machine keeps the agent's content: links to its directories, and clones (each is its repository's,
-# not this one's). No trailing slash: on a deployed host it is a link itself.
+# where fastagent clones the agent's content (each clone is its repository's, not this one's). No trailing
+# slash: on a deployed host it is a link itself.
 /content
+# the directories of this machine the agent is bound to: this machine's, never the agent's
+/context.local.json
 .cache
 
 # fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare

@@ -23,7 +23,8 @@ import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
-import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
+import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import type { BoundContent } from "../../content/declare.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import { type DeclaredEnvironment, declaredVariables } from "../../environment/declare.ts";
 import { foreignEnvironment } from "../../environment/mise.ts";
@@ -40,9 +41,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const modelSpec = resolveModelSpec(opts.model, config);
   // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a content entry is missing.
   let content: ResolvedContent[] = [];
+  let contentAbsent: BoundContent[] = [];
   let contentError: string | undefined;
   try {
-    content = resolveContent(agentDir, loadContent(agentDir));
+    const declaration = loadContent(agentDir);
+    content = resolveContent(agentDir, declaration);
+    contentAbsent = contentAbsentHere(declaration);
   } catch (error) {
     contentError = (error as Error).message;
   }
@@ -139,6 +143,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         {
           agentDir,
           content,
+          contentAbsent,
           contentError: contentError ?? null,
           environment: environment ?? null,
           environmentError: environmentError ?? null,
@@ -188,7 +193,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
-  for (const [label, value] of contentLines(content)) line(label, value);
+  for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line(
     "environment",

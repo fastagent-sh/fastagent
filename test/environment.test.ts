@@ -224,12 +224,11 @@ describe("environment: what context.json may declare", () => {
     ).toEqual({ content: {} });
     // The two edits keep each other's part of the file.
     const dir = await agentDir();
-    const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "fa-env-content-")));
     await writeEnvironment(dir, { packages: { gh: "2" }, aptPackages: ["chromium"], variables: {} });
-    await addContent(dir, { name: "notes", entry: {}, link: elsewhere });
+    await addContent(dir, { name: "app", entry: { github: "acme/app" } });
     await writeEnvironment(dir, { packages: { jq: "latest" }, aptPackages: [], variables: {} });
     expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual({
-      content: { notes: {} },
+      content: { app: { github: "acme/app" } },
       environment: { packages: { jq: "latest" } },
     });
   });
@@ -611,7 +610,7 @@ describe("environment: `fastagent env`", () => {
     const { calls } = await fakeMise(dir);
     const add = await cli(["env", "add", "gh@2"], dir);
     expect(add.code).toBe(1);
-    expect(add.stderr).toContain(`content "a": "ref" applies`);
+    expect(add.stderr).toContain(`content "a" needs "github"`);
     expect(await calls()).toEqual([]);
   });
 

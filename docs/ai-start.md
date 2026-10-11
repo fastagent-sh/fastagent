@@ -68,9 +68,10 @@ declared as its **content**; the agent never sits inside it, and a project never
 | An agent for an existing project | `fastagent init <agent dir> --content <project>`: the agent lives beside the project, which gets no writes from `init`. |
 | An existing application embeds the agent | Keep the definition in its own directory beside the application; the app retains auth, routes, database, and deployment. See [embedding](#8-embed-only-what-the-application-needs). |
 
-A config file identifies an agent, not its directory name. Before running `init`, check whether the owner already
-has an agent (a directory holding `fastagent.config.ts`) and reuse it. `fastagent content add <dir>` declares
-content later, and `--readonly` declares a directory the agent only knows. See [content](configuration.md#content).
+A config file identifies an agent, not its directory name. Before running `init`, check whether the owner already has an
+agent (a directory holding `fastagent.config.ts`) and reuse it. `fastagent content add <dir>` adds content later, and
+`--readonly` adds a directory the agent only knows: a GitHub checkout is declared as its repository in `context.json`,
+any other directory bound on this machine only in `context.local.json`. See [content](configuration.md#content).
 Optional directories remain optional.
 
 The example below uses a **fresh, default scaffold**. Install the CLI once, then run:

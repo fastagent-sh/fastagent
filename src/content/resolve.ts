@@ -1,18 +1,18 @@
 /**
- * WHERE each declared content entry is, for THIS instance: the one answer the prompt, the coding tools, authored
- * tools, `info` and `deploy` all read (docs/design/core.md §2). An entry is at `content/<name>` everywhere;
- * what is there is this place's: a link to a directory of this machine, a clone fastagent made, or nothing. Reads the
- * disk (git included); never the network, never a write. Making a clone real is `cloneContent`'s, and only a process
- * that runs the agent asks for it.
+ * WHERE each content entry is, for THIS instance: the one answer the prompt, the coding tools, authored tools, `info`
+ * and `deploy` all read (docs/design/core.md §2). A repository `context.json` declares is fastagent's clone at
+ * `content/<name>`, or this machine's own checkout of it where `context.local.json` binds one; a directory only this
+ * machine has is where its binding says. Reads the disk (git included); never the network, never a write. Making a
+ * clone real is `cloneContent`'s, and only a process that runs the agent asks for it.
  */
-import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import { contentEntryPath } from "../paths.ts";
-import { type DeclaredContent, nestingError } from "./declare.ts";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { LOCAL_CONTEXT_FILE, contentEntryPath } from "../paths.ts";
+import { type BoundContent, type ContentDeclaration, type DeclaredContent, nestingError } from "./declare.ts";
 import { type CloneOutcome, checkoutProblem, refNotice, refreshClone } from "./git.ts";
 import { ensureContentDir } from "./mount.ts";
 
-/** A declared content entry, resolved for this instance. */
+/** A content entry, resolved for this instance. */
 export type ResolvedContent = {
   /** Unique within the agent, ignoring case; one path segment. */
   name: string;
@@ -20,15 +20,13 @@ export type ResolvedContent = {
   readonly: boolean;
   /** What the declaration tells the agent about it. */
   description?: string;
-  /** `content/<name>` in the agent directory, absolute: where the agent reaches it on every instance. */
+  /** Where the agent reaches it on this instance, absolute. */
   location: string;
-  /** The directory of this machine `location` links to, when it is a link. */
-  linkedTo?: string;
   /** What to tell the user about how it resolved: a checkout off its `ref`, a clone not made yet. */
   notices: string[];
 } & (
   | {
-      /** A directory of each machine that links one. */
+      /** A directory only this machine has, bound in `context.local.json`. */
       kind: "local";
     }
   | {
@@ -37,93 +35,122 @@ export type ResolvedContent = {
       repo: string;
       ref?: string;
       /**
-       * A clone fastagent makes at `location` and brings up to date at each start while it holds nothing of the
-       * agent's. False when `location` links to the user's own checkout, which is never touched.
+       * A clone fastagent makes at `content/<name>` and brings up to date at each start while it holds nothing of the
+       * agent's. False when this machine binds its own checkout, which is never touched.
        */
       clone: boolean;
     }
 );
 
-/** Resolve the agent's `declared` content. Refuses, naming the entry, what cannot be. */
-export function resolveContent(agentDir: string, declared: readonly DeclaredContent[]): ResolvedContent[] {
-  return declared.filter((entry) => !isAbsent(agentDir, entry)).map((entry) => resolveOne(agentDir, entry));
+/** Resolve the agent's content for this instance. Refuses, naming the entry, what cannot be. */
+export function resolveContent(agentDir: string, { declared, bound }: ContentDeclaration): ResolvedContent[] {
+  const shared = declared.map((entry) =>
+    resolveRepository(
+      agentDir,
+      entry,
+      bound.find((binding) => binding.kind === "checkout" && binding.name === entry.name),
+    ),
+  );
+  const local = bound
+    .filter((binding) => binding.kind === "local" && statOrMissing(binding.path) !== undefined)
+    .map((binding) => resolveLocal(agentDir, binding as Extract<BoundContent, { kind: "local" }>));
+  return [...shared, ...local];
 }
 
 /**
- * The declared `local` entries this instance does not have: nothing is at `content/<name>`, because this machine (a
- * host, a teammate's laptop) has no such directory linked. Not an error: the declaration says the data lives on the
- * machines that link it. Whoever opens the agent says which they are, since the agent is not told of them.
+ * The bindings of a directory only this machine has that point at nothing here: the directory was moved or removed.
+ * Not an error, since the binding is this machine's alone; the agent is not told of it, and whoever opens the agent
+ * says so.
  */
-export function contentAbsentHere(agentDir: string, declared: readonly DeclaredContent[]): DeclaredContent[] {
-  return declared.filter((entry) => isAbsent(agentDir, entry));
+export function contentAbsentHere({ bound }: ContentDeclaration): BoundContent[] {
+  return bound.filter((binding) => binding.kind === "local" && statOrMissing(binding.path) === undefined);
 }
 
-function isAbsent(agentDir: string, entry: DeclaredContent): boolean {
-  return entry.kind === "local" && lstatOrMissing(contentEntryPath(agentDir, entry.name)) === undefined;
+/** What is said of a binding {@link contentAbsentHere} returns, after the word "content". */
+export function absentNotice(binding: BoundContent): string {
+  return (
+    `${binding.name}: bound in ${LOCAL_CONTEXT_FILE} to ${binding.path}, which does not exist here: the agent is ` +
+    `not told of it`
+  );
 }
 
-function resolveOne(agentDir: string, entry: DeclaredContent): ResolvedContent {
+function resolveRepository(agentDir: string, entry: DeclaredContent, checkout?: BoundContent): ResolvedContent {
   const { name, readonly, description } = entry;
+  const repository = {
+    name,
+    readonly,
+    ...(description !== undefined ? { description } : {}),
+    kind: "github" as const,
+    repo: entry.repo,
+    ...(entry.ref !== undefined ? { ref: entry.ref } : {}),
+  };
+  if (checkout !== undefined && statOrMissing(checkout.path) !== undefined) {
+    const location = realpathSync(checkout.path);
+    const notices = checkBinding(agentDir, name, location, entry);
+    return { ...repository, location, notices, clone: false };
+  }
   const location = contentEntryPath(agentDir, name);
-  const base = { name, readonly, ...(description !== undefined ? { description } : {}), location };
   const found = lstatOrMissing(location);
   if (found?.isSymbolicLink()) {
-    const linkedTo = linkTarget(location, name);
-    const notices = checkLinkTarget(agentDir, entry, linkedTo, `content/${name} links to ${linkedTo}, which`);
-    if (entry.kind === "local") return { ...base, linkedTo, notices, kind: "local" };
-    return { ...base, linkedTo, notices, ...github(entry), clone: false };
-  }
-  if (found && !found.isDirectory()) throw new Error(`content "${name}": ${location} is not a directory`);
-  // A directory this place put there itself: for a github entry, fastagent's clone.
-  if (entry.kind === "local") return { ...base, notices: [], kind: "local" };
-  const notices = found ? [] : ["not cloned yet: it is cloned when the agent starts"];
-  return { ...base, notices, ...github(entry), clone: true };
-}
-
-function github(entry: Extract<DeclaredContent, { kind: "github" }>) {
-  return { kind: "github" as const, repo: entry.repo, ...(entry.ref !== undefined ? { ref: entry.ref } : {}) };
-}
-
-/** Where the link `location` points, resolved; a link to nothing is refused with what it names. */
-function linkTarget(location: string, name: string): string {
-  try {
-    return realpathSync(location);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error(
-      `content "${name}": content/${name} links to ${resolve(dirname(location), readlinkSync(location))}, which does ` +
-        `not exist — link it again, or remove the link`,
+      `content "${name}": content/${name} is a link, and content/ holds only the clones fastagent makes — remove ` +
+        `the link, and bind a checkout of your own in ${LOCAL_CONTEXT_FILE} instead (fastagent content add <dir>)`,
     );
   }
+  if (found && !found.isDirectory()) throw new Error(`content "${name}": ${location} is not a directory`);
+  const notices = found ? [] : ["not cloned yet: it is cloned when the agent starts"];
+  if (checkout !== undefined) {
+    notices.unshift(`bound in ${LOCAL_CONTEXT_FILE} to ${checkout.path}, which does not exist here: the clone is used`);
+  }
+  return { ...repository, location, notices, clone: true };
+}
+
+function resolveLocal(agentDir: string, binding: Extract<BoundContent, { kind: "local" }>): ResolvedContent {
+  const { name, readonly, description } = binding;
+  const location = realpathSync(binding.path);
+  checkBinding(agentDir, name, location);
+  return {
+    name,
+    readonly,
+    ...(description !== undefined ? { description } : {}),
+    location,
+    notices: [],
+    kind: "local",
+  };
 }
 
 /**
- * Whether `content/<name>` can link to `target` for `entry`: a directory of this machine, apart from the agent
- * directory, and for a github entry the root of a checkout of its repository. Returns what to tell the user (a
- * checkout off its `ref`); refuses, naming the entry, what cannot be. `what` says `target` in the refusal.
+ * Whether the content `name` can be bound to the directory `target` of this machine: a directory, apart from the agent
+ * directory, and for a declared repository the root of a checkout of it. Returns what to tell the user (a checkout off
+ * its `ref`); refuses, naming the entry, what cannot be.
  */
-export function checkLinkTarget(agentDir: string, entry: DeclaredContent, target: string, what = target): string[] {
+export function checkBinding(
+  agentDir: string,
+  name: string,
+  target: string,
+  repository?: Pick<DeclaredContent, "repo" | "ref">,
+): string[] {
   const stat = statOrMissing(target);
-  if (!stat) throw new Error(`content "${entry.name}": ${what} does not exist`);
-  if (!stat.isDirectory()) throw new Error(`content "${entry.name}": ${what} is not a directory`);
-  // The declaration was checked as written; a symlink can still put one inside the other, so ask of the real paths —
-  // including for an agent directory `init` is about to create, which a symlinked ancestor still places.
-  const nested = nestingError(realPathOf(agentDir), realpathSync(target), entry.name);
+  if (!stat) throw new Error(`content "${name}": ${target} does not exist`);
+  if (!stat.isDirectory()) throw new Error(`content "${name}": ${target} is not a directory`);
+  // A symlink can still put one inside the other, so ask of the real paths — including for an agent directory `init`
+  // is about to create, which a symlinked ancestor still places.
+  const nested = nestingError(realPathOf(agentDir), realpathSync(target), name);
   if (nested) throw new Error(nested);
-  if (entry.kind !== "github") return [];
-  const problem = checkoutProblem(target, entry.repo);
-  if (problem) throw new Error(`content "${entry.name}": ${what} ${problem}`);
-  const offRef = entry.ref === undefined ? undefined : refNotice(target, entry.ref);
+  if (repository === undefined) return [];
+  const problem = checkoutProblem(target, repository.repo);
+  if (problem) throw new Error(`content "${name}": ${target} ${problem}`);
+  const offRef = repository.ref === undefined ? undefined : refNotice(target, repository.ref);
   return offRef ? [offRef] : [];
 }
 
 /**
  * Make a clone real, or bring it up to date at its `ref` in place, by git's rules, which never overwrite what the
  * agent did in it (git.ts `refreshClone`): what git refuses, or a remote that cannot be reached, keeps it as it is,
- * with the reason. Only a process that runs the agent calls this. The user's own checkout is never cloned over.
+ * with the reason. Only a process that runs the agent calls this. A checkout this machine binds is never cloned over.
  */
 export async function cloneContent(entry: Extract<ResolvedContent, { kind: "github" }>): Promise<CloneOutcome> {
-  if (!entry.clone) throw new Error(`content "${entry.name}" links to the checkout ${entry.linkedTo}, not a clone`);
+  if (!entry.clone) throw new Error(`content "${entry.name}" is bound to the checkout ${entry.location}, not a clone`);
   ensureContentDir(dirname(entry.location));
   return refreshClone(entry.repo, entry.ref, entry.location).catch((error: unknown) => {
     throw new Error(`content "${entry.name}": ${(error as Error).message}`);

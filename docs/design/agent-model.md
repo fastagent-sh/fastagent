@@ -178,16 +178,16 @@ opposite things when a new version arrives:
 
 One store can hold both only when it can merge both sides' changes. A copy cannot: copying again overwrites
 the instance's data, and not copying leaves the release behind. So the two live in separate directories, joined
-only by a link this machine keeps (§3). An agent's directory is its own, and often its own repository:
+only by a binding this machine keeps (§3). An agent's directory is its own, and often its own repository:
 
 ```text
 ~/agents/reviewer/            the Agent: its definition and declarations, its local instance (.state/, .secrets/)
-  content/app -> ~/code/app   where this machine reaches the content: a link, never in the definition
+  context.local.json          where this machine has the content: "app" is ~/code/app; never in the definition
 ~/code/app/                   content: the project, which holds no agent
 ```
 
-The check runs when an agent is loaded, and a link to a nested layout is refused with the way out: move the agent
-directory out, or link other content. The clones an instance makes for itself are its own, kept at
+The check runs when an agent is loaded, and a binding to a nested layout is refused with the way out: move the agent
+directory out, or bind other content. The clones an instance makes for itself are its own, kept at
 `content/<name>` (§3), beside its runtime state (§5) and not inside it; they are not part of the definition.
 
 A git repository can merge both sides, so an agent committed inside the repository it works on is coherent in
@@ -196,8 +196,12 @@ strict leaves that option open; allowing it first and taking it back would break
 
 ## 3. Content
 
-An agent declares its content in `context.json`, beside its config: a map of entries by name, whose order carries no
-meaning. `init` and `fastagent content` write it ([CLI](agent-cli.md) §3, §4):
+An agent's content is declared in two files beside its config, each a map of entries by name whose order carries no
+meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4):
+
+- **`context.json`**, part of the definition, declares what every instance reaches: GitHub repositories.
+- **`context.local.json`**, this machine's, binds directories of it: a checkout of a declared repository, or a
+  directory only this machine has. It is never committed and never deployed.
 
 ```json
 {
@@ -208,21 +212,20 @@ meaning. `init` and `fastagent content` write it ([CLI](agent-cli.md) §3, §4):
 }
 ```
 
-An agent that declares no content has none: a chat-only assistant works only in its own directory. The
+An agent that declares no content has none: a chat-only assistant works only in its own directory. The shared
 declaration decides what an instance on a host receives, so it is visible in the definition instead of being a
-hidden default. It names no path of any machine: the definition is shared, and a path describes one machine.
+hidden default. It names no path of any machine: the definition is shared, and a path describes one machine. A path
+is what `context.local.json` holds, which is why it is a file of its own that no other machine reads.
 
-### Where an entry is: `content/<name>`
+### Where an entry is
 
-On every instance the agent reaches an entry at `content/<name>` in its own directory. What is there is the place's
-choice, the way a manifest's projects land at their paths (a submodule's directory, a west project):
+- **A repository** is a clone the instance makes at `content/<name>` in the agent directory, or, where
+  `context.local.json` binds this machine's checkout of it under the same name, that checkout.
+- **A directory only this machine has** is where its binding says, and on any other instance does not exist.
 
-- **A link to a directory of this machine**: the author's checkout, or a folder. `fastagent content add` makes it.
-- **A clone the instance makes**, for a repository with nothing linked.
-- **Nothing**, for a directory entry on a machine that links none.
-
-`content/` belongs to the machine, never to the definition: it carries its own `.gitignore`, and a deployment keeps it
-out of the image. On a host it is a link into the host's storage, which a release does not replace.
+`content/` holds only those clones. It belongs to the machine, never to the definition: it carries its own
+`.gitignore`, and a deployment keeps it out of the image. On a host it is a link into the host's storage, which a
+release does not replace.
 
 ### Types
 
@@ -230,17 +233,17 @@ A content entry's type says where its data lives, and so how an instance anywher
 `init` and `fastagent content` infer it from what they are given, and every command prints it (§4), so an author
 rarely writes one.
 
-| Type | Declared as | Where it lives | On a machine that links it | Elsewhere (a host) | Where changes go |
+| Type | Written in | Where it lives | Here | Elsewhere (a host) | Where changes go |
 |---|---|---|---|---|---|
-| **local** | `{}` | A directory of each machine that links one | That directory, edited in place | Absent, and said to be (below) | The directory |
-| **github** | `{ "github": "acme/app" }` | A repository | The linked checkout, used as it is | A clone the instance makes | To the repository, when pushed |
+| **github** | `context.json`: `{ "github": "acme/app" }` | A repository | A clone, or this machine's checkout bound in `context.local.json`, used as it is | A clone the instance makes | To the repository, when pushed |
+| **local** | `context.local.json`: `{ "path": "~/notes" }` | A directory of this machine | That directory, edited in place | Absent: never declared there (below) | The directory |
 
 **Only data with a home every instance can reach is the same data everywhere.** A local directory lives on one
 machine, so it is content of that machine's instance alone. A copy of it on a host would not be the same data:
-each copy would become its own, and nothing would bring them back together. So content reaches a host only by a
-type whose home the host reaches: a repository today; object storage, or a service that shares directories, are
-further types (§8). The declaration says where the data lives; how each place reaches it (a clone, a sync, a mount)
-is that place's.
+each copy would become its own, and nothing would bring them back together. So the shared declaration holds only a
+type whose home every instance reaches: a repository today; object storage, or a service that shares directories,
+are further types (§8). The declaration says where the data lives; how each place reaches it (a clone, a checkout
+of its own, a sync, a mount) is that place's.
 
 **The agent directory is the one local directory that reaches a host, and it does so as the definition.** A release
 carries it; the next replaces it whole, the same on every instance (§2). So what an author wants on every instance,
@@ -251,43 +254,45 @@ Attributes:
 
 | Attribute | Types | Meaning | Supported |
 |---|---|---|---|
-| the key | all | The entry's name: how the agent and the commands refer to it, and where the agent reaches it (`content/<name>`). `init` and `content add` default it to the repository or folder name | yes |
-| `readonly` | all | The agent knows it and does not write it, for example a company handbook | yes |
-| `description` | all | One sentence for the agent: what it is and how to treat it, given in the prompt beside the entry | yes |
+| the key | all | The entry's name: how the agent and the commands refer to it, and where a clone is (`content/<name>`). `init` and `content add` default it to the repository or folder name | yes |
+| `readonly` | all | The agent knows it and does not write it, for example a company handbook. A binding of a declared repository takes it from the declaration | yes |
+| `description` | all | One sentence for the agent: what it is and how to treat it, given in the prompt beside the entry. As `readonly` | yes |
 | `ref` | github | Branch, tag or commit. Defaults to the default branch | yes |
-| `path` | github | Only a subdirectory of the repository (monorepos) | not yet |
+| `path` | local, and a checkout bound for a github entry | Where the directory is on this machine | yes |
+| a subdirectory | github | Only a subdirectory of the repository (monorepos) | not yet |
 
 ### Rules
 
 - **Read-only is an instruction, not enforced.** The agent is told not to write content it only knows;
   nothing stops a shell from writing it. A read-only `github` entry is never pushed back.
-- **A repository is the user's checkout when this machine links one, else a clone the instance makes and brings up
+- **A repository is the user's checkout when this machine binds one, else a clone the instance makes and brings up
   to date in place.**
-  - A linked checkout is the user's: FastAgent never fetches it and never switches its branch. When it is not at
-    the declared `ref`, startup says so. A link to anything but a checkout of that repository is refused.
-  - With nothing linked, the instance clones the repository at its declared `ref` the first time it starts, and at
-    each later start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether
-    the agent works on it or only knows it. git refuses whatever would overwrite the agent's work, and the clone is
-    then kept as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on
-    another branch than declared. Bringing the agent's work and the remote together is git's, the agent's or the
-    user's (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
+  - A bound checkout is the user's: FastAgent never fetches it and never switches its branch. When it is not at
+    the declared `ref`, startup says so. A binding to anything but the root of a checkout of that repository is
+    refused; one to a directory that is gone is said, and the clone is used.
+  - Otherwise the instance clones the repository at its declared `ref` the first time it starts, and at each later
+    start brings that clone up to date in place by git's own rules (a fetch and a fast-forward), whether the agent
+    works on it or only knows it. git refuses whatever would overwrite the agent's work, and the clone is then kept
+    as it is, with the reason; so it is when the remote cannot be reached, or when the clone is on another branch
+    than declared. Bringing the agent's work and the remote together is git's, the agent's or the user's
+    (synchronization, §8). The clone is never replaced, so nothing the agent did is lost to a restart.
 - **A clone lives as long as the instance's storage.** A host whose storage a deployment resets (AgentCore,
   [core](core.md) §9) clones every repository again, and what the agent did not push is lost; its deployment says
   so before it runs.
-- **FastAgent never deletes a directory in `content/`.** Removing an entry removes its link; a clone is left, and
-  said to be, because it may hold the agent's work.
-- **A name is one path segment, unique within the agent regardless of case.** It becomes a directory name, so it
-  is letters, digits, `-` and `_`, the spelling a release's agent name already has (`isReleaseAgentName`), and two
-  names that differ only in case are the same name on a case-insensitive filesystem. A name that breaks either
-  rule is refused when the agent is loaded; adding an entry whose default name is taken or misspelled asks for an
-  explicit one.
-- **A `local` entry is absent from an instance that links nothing for it, and said to be.** It is, by declaration,
-  a directory of the machines that link one: another machine does not have it, which is what the type says, not an
-  error. So an author keeps it for local work and still deploys. The instance elsewhere is not told of it, and is
-  never missing it silently: the deployment names it (a warning when the agent works on it, since the deployed
-  agent lacks data it was meant to work on), with the two ways to change that, and the instance's start names it
-  again. What the agent only reads there can be copied into the agent directory (outside `content/`), which every
-  release carries; what it works on moves to a repository declared as `github`.
+- **FastAgent never deletes a directory in `content/`.** Removing an entry removes it from both files; a clone is
+  left, and said to be, because it may hold the agent's work.
+- **A name is one path segment, unique within the agent regardless of case, across both files.** It becomes a
+  directory name, so it is letters, digits, `-` and `_`, the spelling a release's agent name already has
+  (`isReleaseAgentName`), and two names that differ only in case are the same name on a case-insensitive
+  filesystem. A name that breaks either rule is refused when the agent is loaded; adding an entry whose default
+  name is taken or misspelled asks for an explicit one.
+- **A `local` entry is this machine's alone, and said to be when it is not there.** No other instance reads
+  `context.local.json`, so no other instance is told of the directory; the deployment names each one it leaves
+  behind (a warning when the agent works on it, since the deployed agent lacks data it was meant to work on), with
+  the two ways to change that. What the agent only reads there can be copied into the agent directory, which every
+  release carries; what it works on moves to a repository declared as `github`. On this machine, a binding whose
+  directory is gone is left out with a warning rather than refused: the binding is this machine's own record, and
+  the agent still runs without it.
 - **A `github` entry needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.
@@ -298,24 +303,23 @@ would be another content type. It is not part of this note.
 ### Example: an agent with a folder of its own
 
 A client such as duang may give a new agent a folder it creates for its work, and let the user attach folders
-they already have. The agent's folder is content like any other, separate from its definition:
+they already have. The agent's folder is content like any other, separate from its definition, bound on this
+machine in `context.local.json`:
 
 ```json
 {
   "content": {
-    "researcher": { "description": "Your notes and output. Keep what you find here." },
-    "papers": { "readonly": true },
-    "handbook": { "github": "acme/handbook", "readonly": true }
+    "researcher": { "path": "~/Documents/researcher", "description": "Your notes and output. Keep what you find here." },
+    "papers": { "path": "~/Documents/papers", "readonly": true }
   }
 }
 ```
 
-with `content/researcher` linked to `~/Documents/researcher` and `content/papers` to `~/Documents/papers` on this
-machine. It is content, not part of the agent's directory, because it is data the user keeps, which a release must
-not replace. On this machine that is all it needs. To run the same agent online as well, the folder needs a home
-both reach: a repository today, so `researcher` becomes `{ "github": "me/researcher" }`, its link here becomes a
-checkout of it, and both instances work on one history. A content type for object storage or a directory-sharing
-service would give it another home; only the type in the declaration changes.
+It is content, not part of the agent's directory, because it is data the user keeps, which a release must not
+replace. On this machine that is all it needs. To run the same agent online as well, the folder needs a home both
+reach: a repository today, so `researcher` becomes `{ "github": "me/researcher" }` in `context.json`, its binding
+here becomes a checkout of it, and both instances work on one history. A content type for object storage or a
+directory-sharing service would give it another home; only the type in the declaration changes.
 
 ## 4. How the agent works
 
@@ -387,7 +391,7 @@ When a change takes effect:
 | `extensions/` | On the next session: it is listed again, and changed code is loaded afresh |
 | `models.json`, `models-store.json` (the agent's and the machine's) | On the next read: a turn, the model list or `update({ model })`. An edit that does not load, or drops the default model, keeps the models read before |
 | `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the recurring EventBridge schedules itself) |
-| What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts`, `context.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts`, `context.json`, `context.local.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
 through `bash`, its prompt files and `AGENTS.md`, an extension when it needs a tool or a command of its own, a

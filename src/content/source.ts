@@ -1,10 +1,10 @@
 /**
  * What a command's `<source>` adds (`init --content`, `fastagent content add`; docs/design/agent-cli.md §3), read the
- * same way by both: `github:owner/repo`, a directory in a GitHub checkout, or any other directory.
+ * same way by both: `github:owner/repo`, the root of a GitHub checkout, or any other directory.
  */
 import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { type ContentEntry, isGithubRepo } from "./declare.ts";
+import { type ContentBinding, type ContentEntry, isGithubRepo } from "./declare.ts";
 import { checkoutOf, githubRepoOf } from "./git.ts";
 
 export interface SourceOptions {
@@ -15,26 +15,28 @@ export interface SourceOptions {
   description?: string;
 }
 
-/** A content entry to add: its name, the entry `context.json` gets, and what `content/<name>` links to here. */
+/**
+ * A content entry to add, by name: the repository `context.json` declares for every instance, this machine's binding
+ * in `context.local.json`, or both (a checkout of the declared repository). At least one.
+ */
 export interface ContentAddition {
   name: string;
-  entry: ContentEntry;
-  /** The directory of this machine `content/<name>` links to; absent for a repository fastagent clones. */
-  link?: string;
+  entry?: ContentEntry;
+  binding?: ContentBinding;
 }
 
 /**
- * The addition `source` asks for, with what to tell the user about how it was read. The root of a checkout whose
- * `origin` is on GitHub is that repository, linked to that checkout. Any other directory is a `local` entry linked to
- * it, a subdirectory of such a checkout included (the note names the repository form, which is the whole repository).
- * `github:owner/repo` is a repository fastagent clones. The name defaults to the repository's or the directory's.
+ * The addition `source` asks for, with what to tell the user about how it was read. `github:owner/repo` is a
+ * repository fastagent clones. The root of a checkout whose `origin` is on GitHub is that repository, declared for
+ * every instance and bound to this checkout here. Any other directory, a subdirectory of such a checkout included, is
+ * bound on this machine alone. The name defaults to the repository's or the directory's.
  */
 export function readContentSource(
   source: string,
   cwd: string,
   options: SourceOptions = {},
 ): { addition: ContentAddition; notes: string[] } {
-  const treated: ContentEntry = {
+  const treated = {
     ...(options.readonly ? { readonly: true } : {}),
     ...(options.description !== undefined ? { description: options.description } : {}),
   };
@@ -55,16 +57,20 @@ export function readContentSource(
   if (repo !== undefined && atRoot) {
     const root = (checkout as { root: string }).root;
     return {
-      addition: { name: options.name ?? repoName(repo), entry: { github: repo, ...ref, ...treated }, link: root },
+      addition: {
+        name: options.name ?? repoName(repo),
+        entry: { github: repo, ...ref, ...treated },
+        binding: { path: root },
+      },
       notes: [],
     };
   }
   if (options.ref !== undefined) {
-    throw new Error(`--ref applies to a repository, and ${dir} is added as a directory`);
+    throw new Error(`--ref applies to a repository, and ${dir} is bound as a directory of this machine`);
   }
   const notes =
     repo !== undefined && !atRoot
       ? [`${dir} is in a checkout of github ${repo}: add github:${repo} for the whole repository`]
       : [];
-  return { addition: { name: options.name ?? basename(dir), entry: treated, link: dir }, notes };
+  return { addition: { name: options.name ?? basename(dir), binding: { path: dir, ...treated } }, notes };
 }

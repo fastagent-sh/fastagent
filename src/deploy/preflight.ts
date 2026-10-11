@@ -10,12 +10,12 @@ import { type FastagentConfig, providerOf } from "../harnesses/pi/config.ts";
 import { resolveAuthPath } from "../harnesses/pi/auth.ts";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, exists } from "../paths.ts";
+import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, LOCAL_CONTEXT_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, inspectChannels } from "../channels/discover.ts";
 import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover.ts";
 import { resolveAgentTools } from "../harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
-import type { DeclaredContent } from "../content/declare.ts";
+import type { ContentDeclaration } from "../content/declare.ts";
 import { loadContent, loadEnvironment } from "../content/file.ts";
 import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
@@ -109,31 +109,37 @@ export interface DeployReport {
 
 /**
  * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
- * repository is cloned there, as on this machine without a checkout. A directory of this machine stays here: the
- * deployed agent works without it, which the line says and says how to change. One the agent works on is a warning,
- * since the deployed agent lacks data it was meant to work on; one it only knows, a note.
+ * repository `context.json` declares is cloned there, as on this machine without a checkout bound. A directory only
+ * this machine binds stays here: the deployed agent works without it, which the line says and says how to change. One
+ * the agent works on is a warning, since the deployed agent lacks data it was meant to work on; one it only knows, a
+ * note.
  */
-function checkContent(content: readonly DeclaredContent[], storageResets: boolean, report: DeployReport): void {
-  for (const entry of content) {
-    const role = entry.readonly ? "knows" : "works on";
-    if (entry.kind === "github") {
-      const fate = storageResets
-        ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
-        : "cloned on the host, and brought up to date in place at each start";
-      report.note(`${role} ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
-    } else if (entry.readonly) {
+function checkContent({ declared, bound }: ContentDeclaration, storageResets: boolean, report: DeployReport): void {
+  for (const entry of declared) {
+    const fate = storageResets
+      ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
+      : "cloned on the host, and brought up to date in place at each start";
+    report.note(`${roleOf(entry)} ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
+  }
+  for (const binding of bound) {
+    if (binding.kind !== "local") continue;
+    const stays =
+      `${roleOf(binding)} ${binding.name}: a directory of this machine (${binding.path}, bound in ` +
+      `${LOCAL_CONTEXT_FILE}), stays here, and the deployed agent works without it`;
+    if (binding.readonly) {
       report.note(
-        `${role} ${entry.name}: a directory of this machine (content/${entry.name}), stays here, and the deployed ` +
-          `agent works without it; to ship what the agent reads there, copy it into the agent directory outside ` +
-          `content/, which every release carries`,
+        `${stays}; to ship what the agent reads there, copy it into the agent directory, which every release carries`,
       );
     } else {
       report.warn(
-        `${role} ${entry.name}: a directory of this machine (content/${entry.name}), stays here, and the deployed ` +
-          `agent works without it; to work on it from a host, move it to a GitHub repository and declare it as github`,
+        `${stays}; to work on it from a host, move it to a GitHub repository and add it as github:owner/repo`,
       );
     }
   }
+}
+
+function roleOf(entry: { readonly: boolean }): string {
+  return entry.readonly ? "knows" : "works on";
 }
 
 /**
@@ -271,7 +277,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const valueFile = relative(agentDir, dotEnvPath(agentDir));
   const values = loadEnvValues(dotEnvPath(agentDir));
   // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, which travels like every value.
-  if (content.some((entry) => entry.kind === "github") && !values.get("GITHUB_TOKEN")) {
+  if (content.declared.length > 0 && !values.get("GITHUB_TOKEN")) {
     report.note(
       `no GITHUB_TOKEN in ${valueFile}: the host clones without a credential, which reaches public repositories ` +
         `only, and the agent cannot push from its clones. Set one there to give it access; it travels with the ` +
@@ -466,7 +472,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
   // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates; rustup, which
   // mise installs rust with, downloads with curl. The agent's own apt packages join them, in one layer.
-  const needsGit = shipsGit || content.some((entry) => entry.kind === "github");
+  const needsGit = shipsGit || content.declared.length > 0;
   const apt = [
     ...new Set([
       ...(needsGit ? ["git"] : []),

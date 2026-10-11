@@ -856,7 +856,10 @@ my-agent/
   context.json                                the contexts it uses, and its own content and environment (§4)
   mcp.json                                    connectors that speak MCP
   fastagent.config.ts                         what only the author sets: the model, serving, deploy
-  content/<name>/                             where each content entry is: a clone, a link, a mount; never in git
+  context.local.json                          this machine's directories the agent is bound to; never in git
+                                              or an image
+  content/<name>/                             the clone of each declared repository with no checkout bound
+                                              here, or a mount; never in git
   environment/                                the image's lock: mise's configuration rendered from the
                                               declaration, and its lock; committed
   .contexts/<name>/                           the contexts it uses, fetched at their pinned versions; never in git
@@ -915,12 +918,13 @@ own `context.json` holds its content, its environment and a description.
 }
 ```
 
-Each content entry, the agent's own or a context's, is materialized at `content/<name>/`, the way a manifest's projects
-land at their paths (DVC's `.dvc` file beside its data, a submodule's directory, a west project). What is there is the
-place's choice: a clone by default; on a laptop, a link to the author's own checkout, so no machine's path is
-committed; on a host, a link into the host's storage, which a release does not replace. Content's home stays outside
-the agent's directory (agent model §2); `content/<name>/` is only where this place mounts it, and neither git nor a
-deploy's build context includes it.
+`context.json` is shared, so it declares only content every instance reaches: a repository. Each is cloned at
+`content/<name>/`, the way a manifest's projects land at their paths (DVC's `.dvc` file beside its data, a
+submodule's directory, a west project); on a host `content/` is a link into the host's storage, which a release does
+not replace. A machine with its own checkout binds it in `context.local.json`, beside, under the entry's name; a
+directory only this machine has is bound there too, and stays on it. That file holds this machine's paths, so neither
+git nor a deploy's build context includes it, nor `content/`. Content's home stays outside the agent's directory
+(agent model §2).
 
 ```ts
 export default {
@@ -933,7 +937,7 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` links `content/<name>/` to that directory, and another machine links its own or clones |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
 | Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image; it already locks the environment and installs the lock there (§4) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
@@ -1122,7 +1126,8 @@ router in front (§7.8).
 |---|---|---|
 | The definition | Identity, behavior, skills, tools, triggers, the config | In git; built into the image |
 | `.state/` | The service's state: session records, schedule claims, wake-ups, channel state | Not in git; where the deployment puts it (§10.2) |
-| `content/<name>/` | Each content entry, as this place reaches it: a clone, a link, a mount | Not in git; on a host, a link into the host's storage |
+| `context.local.json` | This machine's directories the agent is bound to: its checkouts, and directories only it has | Not in git; never in an image |
+| `content/<name>/` | The clone of each declared repository, or a mount | Not in git; on a host, a link into the host's storage |
 | `.contexts/<name>/` | The contexts the agent uses, fetched at their pinned versions | Not in git; built into the image |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
@@ -1190,7 +1195,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 |---|---|---|
 | Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), the packages locked in the committed `environment/` and installed by the agent's own mise (step 3) | Joined with the contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | Content in `context.json`, at `content/<name>/`: a clone or a link to the author's checkout (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
+| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1208,8 +1213,8 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 ### 11.1 What changes in the agent model
 
 The [agent model](agent-model.md) describes what is implemented. It took this design's vocabulary in step 3 (§12):
-the data an agent works on is its content, declared in `context.json` and reached at `content/<name>/`, and *context*
-is the whole. What still differs:
+the data an agent works on is its content, declared in `context.json` (repositories, cloned at `content/<name>/`) and
+bound on each machine in `context.local.json`, and *context* is the whole. What still differs:
 
 | Agent model (implemented) | This design |
 |---|---|
@@ -1287,9 +1292,9 @@ The product and the model:
   content, MCP servers, the environment, schedules); the config keeps what only the author sets and nothing standard
   describes: the model, serving and deploy options, and `tools` (§8.1).
 - `context.json` (JSON, with a JSON Schema) lists the contexts an agent uses, its own content and its environment
-  (§4), each content entry with a description for the agent; each is materialized at `content/<name>/`: a clone, a
-  link to the author's checkout, or a mount, never committed (§8.1). Content: implemented, without a published JSON
-  Schema yet.
+  (§4), each content entry a repository with a description for the agent, cloned at `content/<name>/` (§8.1);
+  `context.local.json` binds this machine's checkouts and its own directories, never committed. Content:
+  implemented, without a published JSON Schema yet.
 - A service that speaks MCP is declared in `mcp.json` at the root, in pi's format (`.pi/mcp.json` is read too). A
   service without MCP is reached through a CLI and a skill, code tools, or an MCP server of one's own: there is no
   connector file type, and `fastagent info` lists every connector (§5).

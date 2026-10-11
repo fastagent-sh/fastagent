@@ -1,8 +1,9 @@
 /**
- * GitHub content against a local stand-in for GitHub (github-standin.ts): a checkout of the user's is used as it is,
- * and a repository with no checkout here is cloned, and brought up to date at each start while that loses nothing.
+ * GitHub content against a local stand-in for GitHub (github-standin.ts): a checkout of the user's that this machine
+ * binds is used as it is, and a repository with none bound here is cloned, and brought up to date at each start while
+ * that loses nothing.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -12,7 +13,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cloneContent, resolveContent } from "../src/content/resolve.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { type ContentEntry, declareContent } from "../src/content/declare.ts";
+import { type ContentEntry, declareBindings, declareContent } from "../src/content/declare.ts";
 import { githubRepoOf } from "../src/content/git.ts";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { git, githubStandIn } from "./github-standin.ts";
@@ -28,36 +29,31 @@ async function agent(): Promise<{ root: string; agentDir: string }> {
   return { root, agentDir };
 }
 
-/** The github entry `entry` declares, named after its repository or `name`, resolved and narrowed. */
-function resolveOne(agentDir: string, { name, ...entry }: ContentEntry & { name?: string }) {
-  const [resolved] = resolveContent(
-    agentDir,
-    declareContent({ [name ?? ((entry.github as string).split("/")[1] as string)]: entry }),
-  );
+/**
+ * The github entry `entry` declares, named after its repository or `name`, resolved and narrowed; bound to the
+ * directory `checkout` of this machine when one is given, as `content add <checkout>` binds it.
+ */
+function resolveOne(agentDir: string, { name, ...entry }: ContentEntry & { name?: string }, checkout?: string) {
+  const key = name ?? (entry.github.split("/")[1] as string);
+  const declared = declareContent({ [key]: entry });
+  const bound = checkout === undefined ? [] : declareBindings({ [key]: { path: checkout } }, declared, agentDir);
+  const [resolved] = resolveContent(agentDir, { declared, bound });
   if (resolved?.kind !== "github") throw new Error("not github content");
   return resolved;
 }
 
-/** Link `content/<name>` of the agent in `agentDir` to `target`, as `content add` or the user would. */
-function linkAt(agentDir: string, name: string, target: string): void {
-  mkdirSync(join(agentDir, "content"), { recursive: true });
-  symlinkSync(target, join(agentDir, "content", name));
-}
-
 describe("github content: resolved, without touching the network or the disk", () => {
-  it("uses the user's checkout as it is, and says when it is off the declared ref", async () => {
+  it("uses the user's checkout bound here as it is, and says when it is off the declared ref", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "README.md": "app\n" });
     const { root, agentDir } = await agent();
     const checkout = join(root, "app");
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
 
-    linkAt(agentDir, "app", checkout);
-    expect(resolveOne(agentDir, { github: "acme/app" })).toEqual({
+    expect(resolveOne(agentDir, { github: "acme/app" }, checkout)).toEqual({
       name: "app",
       readonly: false,
-      location: join(agentDir, "content", "app"),
-      linkedTo: checkout,
+      location: checkout,
       notices: [],
       kind: "github",
       repo: "acme/app",
@@ -68,13 +64,13 @@ describe("github content: resolved, without touching the network or the disk", (
     writeFileSync(join(checkout, "feat.md"), "feat\n");
     git(checkout, "add", "-A");
     git(checkout, "commit", "-q", "-m", "feat");
-    expect(resolveOne(agentDir, { github: "acme/app", ref: "main" }).notices).toEqual([
+    expect(resolveOne(agentDir, { github: "acme/app", ref: "main" }, checkout).notices).toEqual([
       "the checkout is on feat, declared main; it is left as it is",
     ]);
     expect(existsSync(join(agentDir, ".state"))).toBe(false);
   });
 
-  it("clones when nothing is linked here, and refuses a link to anything but a checkout of that repository", async () => {
+  it("clones when nothing is bound here, and refuses a binding to anything but a checkout of that repository", async () => {
     const github = githubStandIn();
     github.repo("acme/other").commit({ "README.md": "other\n" });
     const { root, agentDir } = await agent();
@@ -84,9 +80,8 @@ describe("github content: resolved, without touching the network or the disk", (
     const bare = resolveOne(agentDir, { github: "acme/app" });
     expect(bare).toMatchObject({ location: join(agentDir, "content", "app"), clone: true });
     expect(bare.notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
-    linkAt(agentDir, "app", elsewhere);
-    expect(() => resolveOne(agentDir, { github: "acme/app" })).toThrow(
-      `content "app": content/app links to ${elsewhere}, which is a checkout of https://github.com/acme/other.git, not of github acme/app`,
+    expect(() => resolveOne(agentDir, { github: "acme/app" }, elsewhere)).toThrow(
+      `content "app": ${elsewhere} is a checkout of https://github.com/acme/other.git, not of github acme/app`,
     );
     expect(existsSync(join(agentDir, ".state"))).toBe(false);
   });
@@ -94,9 +89,8 @@ describe("github content: resolved, without touching the network or the disk", (
   it("refuses, naming it, when git is not installed", async () => {
     const { root, agentDir } = await agent();
     await mkdir(join(root, "app"));
-    linkAt(agentDir, "app", join(root, "app"));
     vi.stubEnv("PATH", await mkdtemp(join(tmpdir(), "fa-nogit-")));
-    expect(() => resolveOne(agentDir, { github: "acme/app" })).toThrow(
+    expect(() => resolveOne(agentDir, { github: "acme/app" }, join(root, "app"))).toThrow(
       "git is not installed: github content needs it on this machine",
     );
   });
@@ -322,9 +316,8 @@ describe("github content: a clone is brought up to date in place, never over the
     const { root, agentDir } = await agent();
     const checkout = join(root, "app");
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
-    linkAt(agentDir, "app", checkout);
-    await expect(cloneContent(resolveOne(agentDir, { github: "acme/app" }))).rejects.toThrow(
-      /links to the checkout .*, not a clone/,
+    await expect(cloneContent(resolveOne(agentDir, { github: "acme/app" }, checkout))).rejects.toThrow(
+      /is bound to the checkout .*, not a clone/,
     );
   });
 });
@@ -377,41 +370,43 @@ describe("github content: what runs the agent clones, what reports on it does no
     }
   });
 
-  it("where nothing is linked (a host), a repository is cloned and a directory is absent, and said to be", async () => {
+  it("a repository is cloned, and a directory bound here that is gone is left out and said to be", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "AGENTS.md": "APP: ship it.\n" });
-    const { agentDir } = await agent();
+    const { root, agentDir } = await agent();
     await writeFile(join(agentDir, "fastagent.config.ts"), `export default {};\n`);
-    await writeFile(join(agentDir, "context.json"), `{ "content": { "app": { "github": "acme/app" }, "notes": {} } }`);
-    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    await writeFile(join(agentDir, "context.json"), `{ "content": { "app": { "github": "acme/app" } } }`);
+    const gone = join(root, "notes");
+    await writeFile(join(agentDir, "context.local.json"), JSON.stringify({ content: { notes: { path: gone } } }));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const opened = await createPiAgentFromDir(agentDir);
-    const said = info.mock.calls.map(([line]) => line);
-    info.mockRestore();
+    const said = warn.mock.calls.map(([line]) => line);
+    warn.mockRestore();
     const clone = join(agentDir, "content", "app");
     expect(opened.content).toEqual([expect.objectContaining({ location: clone, clone: true, notices: [] })]);
     expect(said).toContain(
-      `[fastagent] content "notes" is a directory of the machines that link one, and none is linked at content/notes here: the agent is not told of it`,
+      `[fastagent] content notes: bound in context.local.json to ${gone}, which does not exist here: the agent is not told of it`,
     );
     expect(readFileSync(join(clone, "AGENTS.md"), "utf8")).toBe("APP: ship it.\n");
     // What fastagent puts in content/ stays out of the agent's own repository.
     expect(readFileSync(join(agentDir, "content", ".gitignore"), "utf8")).toBe("*\n");
   });
 
-  it("the agent is told what it changes in a clone stays, and that a checkout is the user's", async () => {
+  it("the agent is told what it changes in a clone stays, and that a checkout bound here is the user's", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "README.md": "app\n" });
     github.repo("acme/docs").commit({ "README.md": "docs\n" });
     const { root, agentDir } = await agent();
     const checkout = join(root, "docs");
     git(root, "clone", "-q", "https://github.com/acme/docs.git", checkout);
-    linkAt(agentDir, "docs", checkout);
-    const content = resolveContent(
-      agentDir,
-      declareContent({
-        app: { github: "acme/app", ref: "main", description: "The product. Open pull requests against main." },
-        docs: { github: "acme/docs", readonly: true },
-      }),
-    );
+    const declared = declareContent({
+      app: { github: "acme/app", ref: "main", description: "The product. Open pull requests against main." },
+      docs: { github: "acme/docs", readonly: true },
+    });
+    const content = resolveContent(agentDir, {
+      declared,
+      bound: declareBindings({ docs: { path: checkout } }, declared, agentDir),
+    });
     const { faux } = makeFaux();
     let prompt = "";
     faux.setResponses([
@@ -429,9 +424,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     expect(prompt).toContain(
       `- app: ${join(agentDir, "content", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change) The product. Open pull requests against main.`,
     );
-    expect(prompt).toContain(
-      `- docs: ${join(agentDir, "content", "docs")} (a checkout of github acme/docs on this machine)`,
-    );
+    expect(prompt).toContain(`- docs: ${checkout} (a checkout of github acme/docs on this machine)`);
   });
 });
 
@@ -451,7 +444,7 @@ describe("github content: what a command's <source> adds", () => {
     }
   });
 
-  it("a checkout's root is its repository; a directory in it is itself", async () => {
+  it("a checkout's root is its repository, bound here; a directory in it is itself", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "src/index.ts": "x\n" });
     const { root } = await agent();
@@ -459,18 +452,18 @@ describe("github content: what a command's <source> adds", () => {
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
 
     expect(readContentSource(checkout, root, { ref: "main" })).toEqual({
-      addition: { name: "app", entry: { github: "acme/app", ref: "main" }, link: checkout },
+      addition: { name: "app", entry: { github: "acme/app", ref: "main" }, binding: { path: checkout } },
       notes: [],
     });
     // Never widened to the repository: an agent kept in that same checkout can still work on one directory of it.
     expect(readContentSource(join(checkout, "src"), root)).toEqual({
-      addition: { name: "src", entry: {}, link: join(checkout, "src") },
+      addition: { name: "src", binding: { path: join(checkout, "src") } },
       notes: [
         `${join(checkout, "src")} is in a checkout of github acme/app: add github:acme/app for the whole repository`,
       ],
     });
     expect(() => readContentSource(join(checkout, "src"), root, { ref: "main" })).toThrow(
-      /--ref applies to a repository, and .* is added as a directory/,
+      /--ref applies to a repository, and .* is bound as a directory of this machine/,
     );
     expect(() => readContentSource("github:https://github.com/acme/app", root)).toThrow(
       "github:https://github.com/acme/app names no repository: write github:owner/repo",

@@ -17,7 +17,7 @@ describe("deploy/container: shared Docker context", () => {
   it("refuses an agent name the release manifest could not carry", () => {
     expect(() => containerArtifacts({ ...input, agent: "../agent" })).toThrow("manifest");
   });
-  it("keeps tracked secrets scaffolds without shipping credentials, state or clones", () => {
+  it("keeps tracked secrets scaffolds without shipping credentials, state, clones or this machine's bindings", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
     const dockerfileIgnore = artifacts.find((artifact) => artifact.path === "Dockerfile.dockerignore")!.content;
@@ -41,6 +41,7 @@ describe("deploy/container: shared Docker context", () => {
       "content/app/README.md",
       "content/notes",
       ".state/channels/telegram.json",
+      "context.local.json",
     ];
 
     // With .git shipped, this difference is the set `git ls-files --deleted` would report after COPY.

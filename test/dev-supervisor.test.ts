@@ -22,6 +22,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
     // Content is resolved, and the environment entered, once per process.
     expect(ignored(join(root, "context.json"))).toBe(false);
+    expect(ignored(join(root, "context.local.json"))).toBe(false);
     expect(ignored(join(root, "mise.toml"))).toBe(true); // an author's own: the environment is not read from it
     // The model files are read live by a running worker, but a malformed one fails a START: watched so the edit that
     // repairs a stopped worker brings it back, and only that (revivesOnly). The catalog's lock is not watched.
