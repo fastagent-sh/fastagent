@@ -102,7 +102,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).not.toContain("https://bot.fly.dev/lark"); // only what is mounted
   });
 
-  it("bakes config deploy.apt into the generated Dockerfile (G6 — system tools the agent's tools need)", () => {
+  it("installs the image's apt packages in one layer, and adds no layer when there are none", () => {
     const docker = dockerfile(planFlyDeploy({ ...base, channels: [], apt: ["git", "ripgrep"] }));
     expect(docker).toMatch(/apt-get install -y --no-install-recommends git ripgrep/);
     // omitted when no apt declared: no apt layer at all

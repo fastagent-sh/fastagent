@@ -13,6 +13,7 @@ import {
   toolchainAdvice,
 } from "../../environment/declare.ts";
 import { log } from "../../log.ts";
+import lockfile from "proper-lockfile";
 import { ensureMise, execMise } from "../../environment/mise.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 
@@ -27,20 +28,52 @@ interface Snapshot {
 
 export async function runEnv(args: string[]): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
-  const bin = await ensureMise(agentDir).catch(failStartup);
-  const before = takeSnapshot(agentDir);
-  const { code, environment, refusal } = await execMise(agentDir, bin, args)
-    .then((code) => ({ code, ...undoIfRefused(agentDir, before) }))
-    .finally(() => {
+  const { code, environment, refusal } = await oneAtATime(agentDir, async () => {
+    const bin = await ensureMise(agentDir);
+    const before = takeSnapshot(agentDir);
+    try {
+      return { code: await execMise(agentDir, bin, args), ...undoIfRefused(agentDir, before) };
+    } finally {
       if (before.sidecars) rmSync(before.sidecars, { recursive: true, force: true });
-    })
-    .catch(failStartup);
+    }
+  }).catch(failStartup);
   if (refusal) failStartup(refusal);
   // Said by the command that declared them, before an image build is the first to fail on it.
   for (const group of environment ? missingToolchains(environment) : []) {
     log.warn(`[fastagent] ${toolchainAdvice(group)}`);
   }
   if (code !== 0) process.exit(code);
+}
+
+/**
+ * One `fastagent env` at a time per agent, whose sessions each run their own: a refused command puts back what it
+ * found, which would take another command's change made meanwhile with it. The lock is the directory proper-lockfile
+ * keeps beside `mise.toml` (`mise.toml.lock`), refreshed while it is held, so a command waits out another's install.
+ */
+async function oneAtATime<T>(agentDir: string, run: () => Promise<T>): Promise<T> {
+  const path = join(agentDir, MISE_FILE);
+  let compromised: Error | undefined;
+  // `realpath: false`: mise.toml may not exist yet.
+  const options = { realpath: false, stale: 30_000, onCompromised: (error: Error) => (compromised = error) };
+  const release = await lockfile.lock(path, options).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code !== "ELOCKED") throw error;
+    log.info("[fastagent] waiting for another `fastagent env` on this agent to finish");
+    return lockfile.lock(path, { ...options, retries: { forever: true, minTimeout: 200, maxTimeout: 2_000 } });
+  });
+  let result: T;
+  try {
+    result = await run();
+  } catch (error) {
+    // The primary failure is the one to report; a lock that cannot be released cleanly then is secondary.
+    await release().catch(() => {});
+    throw error;
+  }
+  // A compromised lock cannot be released cleanly; that, not the release, is what to report.
+  await release().catch((error: unknown) => {
+    if (!compromised) throw error;
+  });
+  if (compromised) throw compromised;
+  return result;
 }
 
 /**

@@ -60,8 +60,11 @@ export function readEnvironment(agentDir: string): DeclaredEnvironment | undefin
   }
   const tools = table(raw.tools, "[tools]", path);
   for (const [name, value] of Object.entries(tools)) {
-    if (value && typeof value === "object" && !Array.isArray(value) && "postinstall" in value) {
-      throw new Error(`${path}: tool "${name}" has a postinstall command — an install must not run code`);
+    // mise also takes a list of versions (`jq = [{ ... }]`, `[[tools.jq]]`), each with its own options.
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      if (entry && typeof entry === "object" && "postinstall" in entry) {
+        throw new Error(`${path}: tool "${name}" has a postinstall command — an install must not run code`);
+      }
     }
   }
   const bootstrap = table(raw.bootstrap, "[bootstrap]", path);

@@ -181,7 +181,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("agent", agentDir);
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
-  line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
+  line(
+    "environment",
+    environmentError
+      ? "(refused: dev and start stop on it)"
+      : environment
+        ? describeEnvironment(environment)
+        : "(none: the machine's commands)",
+  );
   if (environmentError) cont(`⚠ ${environmentError}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");

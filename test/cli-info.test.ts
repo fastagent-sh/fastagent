@@ -48,6 +48,10 @@ describe("cli: info", () => {
       environment: null,
       environmentError: expect.stringMatching(/"tasks" is not supported/),
     });
+    // Said as what it is: dev and start stop on it, they do not fall back to the machine's commands.
+    expect((await run(["info", dir])).stdout).toMatch(
+      /^environment: +\(refused: dev and start stop on it\)\n +⚠ .*"tasks" is not supported/m,
+    );
   });
 
   it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {

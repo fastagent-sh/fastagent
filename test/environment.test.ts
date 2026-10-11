@@ -56,6 +56,8 @@ case "$1" in
   set) printf '[env]\\nA = "1"\\n' >> mise.toml; echo "relocked" > mise.lock
     mkdir -p .mise/locks/npm-new/1 && echo new > .mise/locks/npm-new/1/package.json
     if [ -d .mise/locks/npm-old ]; then echo changed > .mise/locks/npm-old/1/package.json; fi ;;
+  slowset) sleep 3; printf '[env]\\nA = "1"\\n' >> mise.toml ;;
+  use) printf 'gh = "2"\\n' >> mise.toml ;;
   fail) exit 3 ;;
 esac
 `,
@@ -100,6 +102,16 @@ describe("environment: what mise.toml may declare", () => {
     ],
     ["[settings]", `[settings]\nlocked = false\n`, /"settings" is not supported/],
     ["a postinstall", `[tools]\njq = { version = "1", postinstall = "x" }\n`, /tool "jq" has a postinstall command/],
+    [
+      "a postinstall in a list of versions",
+      `[tools]\njq = ["1.8.1", { version = "1.7.1", postinstall = "x" }]\n`,
+      /tool "jq" has a postinstall command/,
+    ],
+    [
+      "a postinstall in an array of tables",
+      `[[tools.jq]]\nversion = "1.7.1"\npostinstall = "x"\n`,
+      /tool "jq" has a postinstall command/,
+    ],
     ["other machine setup", `[bootstrap.repos]\n"~/x" = "y"\n`, /\[bootstrap\.repos\] is not supported/],
     ["[tools] not a table", `tools = "gh"\n`, /\[tools\] must be a table/],
   ])("refuses %s, naming the file", async (_what, toml, message) => {
@@ -269,6 +281,20 @@ describe("environment: `fastagent env`", () => {
     expect((await calls()).at(-1)).toMatch(/^--locked ls --json\|/);
     expect((await cli(["env", "fail"], dir)).code).toBe(3);
   });
+
+  it("runs one at a time, so a refused command does not take another's change with it", async () => {
+    const dir = await agentDir(`[tools]\njq = "1.8.1"\n`);
+    const { calls } = await fakeMise(dir);
+    // The first takes the lock, then its mise runs for a while and writes what FastAgent refuses.
+    const first = cli(["env", "slowset"], dir);
+    while (!(await calls()).some((call) => call.startsWith("slowset"))) await new Promise((r) => setTimeout(r, 50));
+    const second = await cli(["env", "use", "gh@2"], dir);
+    expect((await first).code).toBe(1);
+    expect(second.code, second.stderr).toBe(0);
+    expect(await readFile(join(dir, "mise.toml"), "utf8")).toBe(`[tools]\njq = "1.8.1"\ngh = "2"\n`);
+    expect(second.stderr).toContain("waiting for another `fastagent env` on this agent to finish");
+    await expect(stat(join(dir, "mise.toml.lock"))).rejects.toThrow(/ENOENT/);
+  }, 30_000);
 
   it("says, when it exits, which tools need a toolchain mise.toml does not declare", async () => {
     const dir = await agentDir(`[tools]\n"cargo:ripgrep" = "14"\n`);
