@@ -5,18 +5,21 @@
  *
  * - mise does not read the ceiling directory itself, so an author's own mise.toml beside context.json is not read;
  * - `mise lock --platform linux-x64,linux-arm64` records those platforms alone, and twice is byte for byte the same;
- * - an install over a copy of the lock follows the versions it records and resolves what it lacks;
+ * - an install over a copy of the lock follows the versions it records, older than the newest one a declaration allows,
+ *   and resolves what the lock lacks;
  * - `mise tool <name> --json` names the backend a registry name resolves to (`tokei` is cargo, `php` is vfox);
  * - `<runtime>.compile = false` refuses a runtime with no prebuilt build instead of compiling it (python by default);
  * - a PyPI package locks once its uv is installed.
  *
  * Network only: no credential.
  */
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { isolationAt, miseBinary } from "../../src/environment/mise.ts";
 import { CLI, installSpec } from "./env.ts";
 
 let agentDir = "";
@@ -32,6 +35,30 @@ const fastagent = (args: string[]): Promise<{ code: number | null; stdout: strin
   });
 
 const lock = () => readFile(join(agentDir, "environment", "mise.lock"), "utf8");
+
+/**
+ * Leave `environment/` as an add made when `version` was the newest `jq` its declaration allowed: the agent's own mise
+ * locks that version, and the request it records is put back to the declared one, as that add would have recorded it.
+ */
+async function lockJqAsOf(version: string, declared: string): Promise<void> {
+  const environment = await realpath(join(agentDir, "environment"));
+  await promisify(execFile)(
+    miseBinary(agentDir) as string,
+    ["lock", `jq@${version}`, "--platform", "linux-x64,linux-arm64"],
+    {
+      cwd: environment,
+      env: { ...process.env, ...isolationAt(environment) },
+    },
+  );
+  const locked = await lock();
+  const v = version.replaceAll(".", "\\.");
+  const pinned = locked.replace(
+    new RegExp(`(\\[\\[tools\\.jq\\]\\]\\nversion = "${v}"\\n(?:[^\\n]+\\n)*?specifiers = )\\["${v}"\\]`),
+    `$1["${declared}"]`,
+  );
+  expect(pinned, "jq's lock records the request it answered").not.toBe(locked);
+  await writeFile(join(environment, "mise.lock"), pinned);
+}
 
 beforeAll(async () => {
   agentDir = await mkdtemp(join(tmpdir(), "fa-live-env-"));
@@ -73,7 +100,12 @@ describe("fastagent env on the real mise", () => {
     expect(await lock()).toBe(before);
   });
 
-  it("runs the locked versions, resolves what the lock lacks, and writes nothing in environment/", async () => {
+  it("runs the version the lock records over the newest one, resolves what it lacks, and writes nothing", async () => {
+    // Declared "1": a lock made today records the newest 1.x, which is what a run would get without the lock.
+    const add = await fastagent(["env", "add", "jq@1"]);
+    expect(add.code, add.stderr).toBe(0);
+    expect((await lock()).match(/\[\[tools\.jq\]\]\nversion = "([^"]+)"/)?.[1]).not.toBe("1.7");
+    await lockJqAsOf("1.7", "1");
     const before = await lock();
     const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
     context.environment.packages.yq = "4";

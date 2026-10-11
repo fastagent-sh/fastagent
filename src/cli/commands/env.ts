@@ -3,8 +3,7 @@
  * context.json and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
  */
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
-import lockfile from "proper-lockfile";
+import { resolve } from "node:path";
 import { loadEnvironment } from "../../content/file.ts";
 import { aptAdvice, missingAptPackages } from "../../environment/apt.ts";
 import {
@@ -22,6 +21,7 @@ import {
   lockEnvironment,
   lockedVersions,
   miseBinary,
+  withEnvironmentLock,
 } from "../../environment/mise.ts";
 import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
@@ -68,7 +68,7 @@ export async function runEnvRemove(args: string[]): Promise<void> {
 
 export async function runEnvUpdate(names: string[]): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
-  const changes = await oneAtATime(agentDir, async () => {
+  const changes = await withEnvironmentLock(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
     for (const name of names) {
       if (name.startsWith("apt:")) {
@@ -127,7 +127,7 @@ export async function runEnvList(): Promise<void> {
 
 export async function runEnvInstall(): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
-  await oneAtATime(agentDir, async () => {
+  await withEnvironmentLock(agentDir, async () => {
     const declared = loadEnvironment(agentDir) ?? NONE;
     if (await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages))) {
       log.info(
@@ -162,7 +162,7 @@ async function edit(
   agentDir: string,
   change: (current: DeclaredEnvironment) => DeclaredEnvironment,
 ): Promise<DeclaredEnvironment> {
-  return oneAtATime(agentDir, async () => {
+  return withEnvironmentLock(agentDir, async () => {
     const current = loadEnvironment(agentDir) ?? NONE;
     const next = declareEnvironment(change(current)) ?? NONE;
     if (!samePackages(current.packages, next.packages)) {
@@ -186,35 +186,4 @@ async function checkedMise(agentDir: string, packages: Record<string, string>): 
   if (refusals.length > 0) throw new Error(refusals.join("\n"));
   if (runtime) log.warn(`[fastagent] ${runtimeAdvice(runtime)}`);
   return bin;
-}
-
-/**
- * One `fastagent env` at a time per agent: two would lock `environment/` over each other, and each writes the
- * declaration it read. The lock is the directory proper-lockfile keeps beside it (`environment.lock`), refreshed while
- * it is held, so a command waits out another's install.
- */
-async function oneAtATime<T>(agentDir: string, run: () => Promise<T>): Promise<T> {
-  const path = join(agentDir, ENVIRONMENT_DIR);
-  let compromised: Error | undefined;
-  // `realpath: false`: environment/ may not exist yet.
-  const options = { realpath: false, stale: 30_000, onCompromised: (error: Error) => (compromised = error) };
-  const release = await lockfile.lock(path, options).catch(async (error: NodeJS.ErrnoException) => {
-    if (error.code !== "ELOCKED") throw error;
-    log.info("[fastagent] waiting for another `fastagent env` on this agent to finish");
-    return lockfile.lock(path, { ...options, retries: { forever: true, minTimeout: 200, maxTimeout: 2_000 } });
-  });
-  let result: T;
-  try {
-    result = await run();
-  } catch (error) {
-    // The primary failure is the one to report; a lock that cannot be released cleanly then is secondary.
-    await release().catch(() => {});
-    throw error;
-  }
-  // A compromised lock cannot be released cleanly; that, not the release, is what to report.
-  await release().catch((error: unknown) => {
-    if (!compromised) throw error;
-  });
-  if (compromised) throw compromised;
-  return result;
 }

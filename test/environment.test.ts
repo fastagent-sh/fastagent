@@ -31,6 +31,7 @@ import {
   MISE_PACKAGE_NAMES,
   miseBinary,
   removeEnvironment,
+  withEnvironmentLock,
 } from "../src/environment/mise.ts";
 import { addContent, writeEnvironment } from "../src/harnesses/pi/authoring.ts";
 import { resolveAgentAssembly } from "../src/harnesses/pi/open.ts";
@@ -312,6 +313,29 @@ describe("environment: environment/, the image's lock", () => {
     expect(await contents(join(dir, "environment"))).toEqual(before);
   });
 
+  it("is changed by one caller at a time, a deploy's included, and re-entered by the caller that holds it", async () => {
+    const dir = await agentDir({ packages: { gh: "2" } });
+    const { bin, calls } = await fakeMise(dir);
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    process.env.FAKE_SLOW = "1";
+    // Two call chains of their own, as `fastagent env add` and `deploy` are: the second waits out the first's install.
+    await Promise.all([
+      lockEnvironment(dir, { gh: "2" }, async () => bin),
+      lockEnvironment(dir, { gh: "2", jq: "1" }, async () => bin),
+    ]);
+    delete process.env.FAKE_SLOW;
+    expect((await calls()).map((call) => call.args)).toEqual([
+      "install",
+      `lock ${PLATFORMS}`,
+      "install",
+      `lock ${PLATFORMS}`,
+    ]);
+    expect(info).toHaveBeenCalledWith("[fastagent] waiting for another change to this agent's environment to finish");
+    // `fastagent env` holds it across its read and write of the declaration, and locks inside it.
+    await withEnvironmentLock(dir, () => lockEnvironment(dir, { gh: "2", jq: "1" }, async () => bin));
+    await expect(stat(join(dir, "environment.lock"))).rejects.toThrow(/ENOENT/);
+  }, 30_000);
+
   it("resolves named packages again only when asked, and installs what moved", async () => {
     const dir = await agentDir({ packages: { gh: "latest" } });
     const { bin, calls } = await fakeMise(dir);
@@ -339,12 +363,12 @@ describe("environment: environment/, the image's lock", () => {
     delete process.env.FAKE_FAIL_INSTALL;
     expect(await contents(join(dir, "environment"))).toEqual(before);
     await writeFile(join(dir, "environment", "notes.md"), "mine\n");
-    expect(removeEnvironment(dir)).toBe(true);
+    expect(await removeEnvironment(dir)).toBe(true);
     expect(await readdir(join(dir, "environment"))).toEqual(["notes.md"]);
-    expect(removeEnvironment(dir)).toBe(false);
+    expect(await removeEnvironment(dir)).toBe(false);
     await rm(join(dir, "environment", "notes.md"));
     await lockEnvironment(dir, { gh: "2" }, async () => bin);
-    expect(removeEnvironment(dir)).toBe(true);
+    expect(await removeEnvironment(dir)).toBe(true);
     await expect(stat(join(dir, "environment"))).rejects.toThrow(/ENOENT/);
   });
 
@@ -356,7 +380,7 @@ describe("environment: environment/, the image's lock", () => {
     };
     const quiet = await agentDir({ aptPackages: ["chromium"] });
     await notes(quiet);
-    expect(removeEnvironment(quiet)).toBe(false);
+    expect(await removeEnvironment(quiet)).toBe(false);
     expect(await readdir(join(quiet, "environment"))).toEqual(["mise.lock", "notes.md"]);
     const dir = await agentDir({ packages: { gh: "2" } });
     await notes(dir);
@@ -660,7 +684,7 @@ describe("environment: `fastagent env`", () => {
     const second = await cli(["env", "add", "jq@1"], dir);
     expect((await first).code).toBe(0);
     expect(second.code, second.stderr).toBe(0);
-    expect(second.stderr).toContain("waiting for another `fastagent env` on this agent to finish");
+    expect(second.stderr).toContain("waiting for another change to this agent's environment to finish");
     expect(await declared(dir)).toEqual({ packages: { gh: "2", jq: "1" } });
     await expect(stat(join(dir, "environment.lock"))).rejects.toThrow(/ENOENT/);
   }, 30_000);

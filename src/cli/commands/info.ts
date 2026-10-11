@@ -26,6 +26,7 @@ import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { loadContent, loadEnvironment } from "../../content/file.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
+import { foreignEnvironment } from "../../environment/mise.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -49,8 +50,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // Reported like content: `info` is how an author finds out context.json declares what the agent does not support.
   let environment: DeclaredEnvironment | undefined;
   let environmentError: string | undefined;
+  // What `fastagent env` and `deploy` refuse, and dev and start run past: an author's environment/ where the lock goes.
+  let environmentWarning: string | undefined;
   try {
     environment = loadEnvironment(agentDir);
+    if (environment && Object.keys(environment.packages).length > 0) environmentWarning = foreignEnvironment(agentDir);
   } catch (error) {
     environmentError = (error as Error).message;
   }
@@ -134,6 +138,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           contentError: contentError ?? null,
           environment: environment ?? null,
           environmentError: environmentError ?? null,
+          environmentWarning: environmentWarning ?? null,
           contextFiles: definition.contextFiles.map((file) => file.path),
           configPath: configPath ?? null,
           model: modelSpec ?? null,
@@ -190,6 +195,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
         : "(none: the machine's commands)",
   );
   if (environmentError) cont(`⚠ ${environmentError}`);
+  if (environmentWarning) cont(`⚠ ${environmentWarning}`);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);

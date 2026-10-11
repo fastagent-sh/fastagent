@@ -293,7 +293,8 @@ platform. The author never writes mise's files.
   installs the packages in one copy first, which proves they install and gives a PyPI package's lock the `uv` it
   needs, and locks in another, because an install adds this machine's platform to the lock it reads and
   `mise lock --platform` does not take it out again. `environment/` is replaced only once the new lock is complete and
-  differs, so a failure or an interrupt leaves it as it was.
+  differs, so a failure or an interrupt leaves it as it was, and one change at a time replaces it: `fastagent env` and
+  `deploy` take the same lock, inside the function that writes it.
 - **`environment/` is FastAgent's by its content, not its name.** The rendered `mise.toml` starts with a header
   FastAgent writes. A directory of that name without it is the author's: never read, written or removed, and a
   command that would lock packages over it is refused; removing the last package removes FastAgent's files alone.

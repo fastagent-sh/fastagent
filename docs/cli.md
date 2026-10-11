@@ -98,9 +98,10 @@ Prints, without serving:
 - state, sessions and auth paths.
 
 Content that cannot be resolved (its directory is missing, say), an environment FastAgent refuses, and an
-`environment/` that is not its lock, are reported, not fatal; `info` installs nothing. `--json` carries `content`,
-`contentError`, `environment`, `environmentError` and `contextFiles` (the agent directory's `AGENTS.md`, then each
-content entry's).
+`environment/` of your own where the packages' lock goes, are reported, not fatal; `info` installs nothing. `--json`
+carries `content`, `contentError`, `environment`, `environmentError` (what dev and start stop on),
+`environmentWarning` (what `fastagent env` and `deploy` refuse) and `contextFiles` (the agent directory's `AGENTS.md`,
+then each content entry's).
 Read-only.
 
 ## `fastagent content`
@@ -170,10 +171,10 @@ Every run of mise happens in a copy outside the agent directory, and `environmen
 is complete, so a change that fails (a package mise cannot install, a refused backend) or is interrupted (Ctrl-C) leaves
 `context.json` and `environment/` as they were. An `environment/` FastAgent did not write (its `mise.toml` is not one
 FastAgent rendered) is the author's: never read, written or removed, and a change that would lock packages over it is
-refused. Two at once on one agent run one after the other, under a lock beside `environment/`. The first change adds
-mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and says so; an agent
-whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would make it an agent
-with dependencies, whose image runs the FastAgent they list.
+refused. Changes to `environment/`, from `fastagent env` and from `deploy`, run one at a time under a lock beside it.
+The first change adds mise to the agent's `package.json` (`npm install --save-optional --save-exact`, or `bun add`) and
+says so; an agent whose `package.json` does not list `@fastagent-sh/fastagent`, or that has none, is refused: mise would
+make it an agent with dependencies, whose image runs the FastAgent they list.
 
 ## `fastagent models`
 

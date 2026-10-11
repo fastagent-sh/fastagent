@@ -151,7 +151,7 @@ async function checkEnvironment(
   report: DeployReport,
 ): Promise<void> {
   if (Object.keys(packages).length === 0) {
-    if (removeEnvironment(agentDir)) {
+    if (await removeEnvironment(agentDir)) {
       report.warn(`removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`);
     }
     return;

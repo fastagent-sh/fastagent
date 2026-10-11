@@ -401,11 +401,11 @@ is missing, and `deploy --run` stops on it. An `npm:` package runs on the image'
 through its own `node`. A runtime the agent works with itself (`go`, `rust`) is a package like any other; for `rust`
 the image adds curl.
 
-The agent's mise reads only `environment/mise.toml`: never `~/.config/mise`, a parent directory's configuration, a
-`mise.toml` you keep beside `context.json` for your own work, `.tool-versions` or `mise.local.toml`. That isolation is
-FastAgent's runs alone: a mise the agent runs (the machine's, in a content repository with its own `mise.toml`) works
-as it does in your shell. Environment variables stay in `.secrets/.env` for now. `fastagent info` lists what is
-declared, and says when `environment/` is not its lock.
+The agent's mise reads only the configuration FastAgent renders from the declaration: never `~/.config/mise`, a parent
+directory's configuration, a `mise.toml` you keep beside `context.json` for your own work, `.tool-versions` or
+`mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the machine's, in a content
+repository with its own `mise.toml`) works as it does in your shell. Environment variables stay in `.secrets/.env` for
+now. `fastagent info` lists what is declared, and says when an `environment/` of your own is where the lock goes.
 
 ## Harness settings: `~/.pi/agent/settings.json`
 

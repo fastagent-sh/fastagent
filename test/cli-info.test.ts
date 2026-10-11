@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, run } from "./cli-run.ts";
 
@@ -37,8 +37,20 @@ describe("cli: info", () => {
     });
     const ok = await run(["info", dir, "--json"]);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null });
+    expect(JSON.parse(ok.stdout)).toMatchObject({ environment, environmentError: null, environmentWarning: null });
     expect((await run(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
+    // An environment/ of the author's own, where the packages' lock goes: what `env` and `deploy` would refuse.
+    await mkdir(join(dir, "environment"));
+    await writeFile(join(dir, "environment", "notes.md"), "mine\n");
+    const foreign = await run(["info", dir, "--json"]);
+    expect(JSON.parse(foreign.stdout)).toMatchObject({
+      environment,
+      environmentError: null,
+      environmentWarning: expect.stringMatching(/environment was not written by FastAgent/),
+    });
+    expect((await run(["info", dir])).stdout).toMatch(
+      /^environment: +jq 1\.8\.1, apt:chromium\n +⚠ .*environment was not written by FastAgent/m,
+    );
     await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { packages: { "cargo:x": "1" } } }));
     const refused = await run(["info", dir, "--json"]);
     expect(refused.code).toBe(0);

@@ -8,6 +8,7 @@
  * and they replace it once a new lock is complete. A process that runs the agent installs from a copy of it, so it
  * follows the locked versions, resolves a package the lock does not cover yet, and writes nothing that is committed.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import {
   cpSync,
@@ -24,6 +25,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import lockfile from "proper-lockfile";
 import { parse, stringify } from "smol-toml";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { loadEnvironment } from "../content/file.ts";
@@ -296,6 +298,44 @@ async function installHere(agentDir: string, packages: Record<string, string>, b
   await inWorkingCopy(agentDir, packages, (work) => runMise(work, bin, ["install"]));
 }
 
+/** The agent directories whose environment lock this async call chain holds: what makes it re-entrant. */
+const heldEnvironmentLocks = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/**
+ * Run `change` holding the agent's environment lock, waiting for whoever holds it: one change to `environment/` at a
+ * time, from `fastagent env` and `deploy` alike, which would otherwise lock it over each other. The lock is the
+ * directory proper-lockfile keeps beside it (`environment.lock`), refreshed while held, so a wait outlasts an install.
+ * Re-entrant within one call chain: `fastagent env` holds it across its read and write of the declaration, and the lock
+ * it makes in between takes it again.
+ */
+export async function withEnvironmentLock<T>(agentDir: string, change: () => Promise<T>): Promise<T> {
+  const path = join(resolve(agentDir), ENVIRONMENT_DIR);
+  const held = heldEnvironmentLocks.getStore() ?? new Set<string>();
+  if (held.has(path)) return change();
+  let compromised: Error | undefined;
+  // `realpath: false`: environment/ may not exist yet.
+  const options = { realpath: false, stale: 30_000, onCompromised: (error: Error) => (compromised = error) };
+  const release = await lockfile.lock(path, options).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code !== "ELOCKED") throw error;
+    log.info("[fastagent] waiting for another change to this agent's environment to finish");
+    return lockfile.lock(path, { ...options, retries: { forever: true, minTimeout: 200, maxTimeout: 2_000 } });
+  });
+  let result: T;
+  try {
+    result = await heldEnvironmentLocks.run(new Set([...held, path]), change);
+  } catch (error) {
+    // The primary failure is the one to report; a lock that cannot be released cleanly then is secondary.
+    await release().catch(() => {});
+    throw error;
+  }
+  // A compromised lock cannot be released cleanly; that, not the release, is what to report.
+  await release().catch((error: unknown) => {
+    if (!compromised) throw error;
+  });
+  if (compromised) throw compromised;
+  return result;
+}
+
 /**
  * Lock `packages` into `environment/`, for the platforms an image is built for, and say whether that changed it. An
  * `environment/` FastAgent did not write is refused first, before `mise` (the agent's mise, asked for only when there
@@ -313,19 +353,21 @@ export async function lockEnvironment(
   bump?: readonly string[],
 ): Promise<boolean> {
   if (Object.keys(packages).length === 0) return removeEnvironment(agentDir);
-  const refusal = foreignEnvironment(agentDir);
-  if (refusal) throw new Error(refusal);
-  const dir = join(agentDir, ENVIRONMENT_DIR);
-  const bin = await mise();
-  await installHere(agentDir, packages, bin);
-  const changed = await inWorkingCopy(agentDir, packages, async (work) => {
-    if (bump) await runMise(work, bin, ["lock", "--bump", ...bump, "--platform", LOCK_PLATFORMS]);
-    await runMise(work, bin, ["lock", "--platform", LOCK_PLATFORMS]);
-    return publish(work, dir);
+  return withEnvironmentLock(agentDir, async () => {
+    const refusal = foreignEnvironment(agentDir);
+    if (refusal) throw new Error(refusal);
+    const dir = join(agentDir, ENVIRONMENT_DIR);
+    const bin = await mise();
+    await installHere(agentDir, packages, bin);
+    const changed = await inWorkingCopy(agentDir, packages, async (work) => {
+      if (bump) await runMise(work, bin, ["lock", "--bump", ...bump, "--platform", LOCK_PLATFORMS]);
+      await runMise(work, bin, ["lock", "--platform", LOCK_PLATFORMS]);
+      return publish(work, dir);
+    });
+    // What was resolved again is installed here too, so `fastagent env update` proves it installs.
+    if (bump && changed) await installHere(agentDir, packages, bin);
+    return changed;
   });
-  // What was resolved again is installed here too, so `fastagent env update` proves it installs.
-  if (bump && changed) await installHere(agentDir, packages, bin);
-  return changed;
 }
 
 /** Replace FastAgent's files in `dir` with the working copy's, when they differ; whether they did. */
@@ -369,12 +411,14 @@ export function foreignEnvironment(agentDir: string): string | undefined {
  * Remove what FastAgent wrote in `environment/`, and the directory when that was all it held: what is left of the lock
  * once no package is declared. Whether there was anything to remove; an author's `environment/` is left alone.
  */
-export function removeEnvironment(agentDir: string): boolean {
-  if (environmentDirState(agentDir) !== "ours") return false;
-  const dir = join(agentDir, ENVIRONMENT_DIR);
-  for (const entry of RENDERED_ENTRIES) rmSync(join(dir, entry), { recursive: true, force: true });
-  if (readdirSync(dir).length === 0) rmdirSync(dir);
-  return true;
+export function removeEnvironment(agentDir: string): Promise<boolean> {
+  return withEnvironmentLock(agentDir, async () => {
+    if (environmentDirState(agentDir) !== "ours") return false;
+    const dir = join(agentDir, ENVIRONMENT_DIR);
+    for (const entry of RENDERED_ENTRIES) rmSync(join(dir, entry), { recursive: true, force: true });
+    if (readdirSync(dir).length === 0) rmdirSync(dir);
+    return true;
+  });
 }
 
 /** What a process that runs the agent says when its environment has no mise to install it with. */
