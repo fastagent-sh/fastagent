@@ -2,6 +2,8 @@
  * Agent assembly (configuration-time): the definition's assets (tools, prompt) plus the reusable ladder that puts a
  * pi agent together.
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { toUSVString } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Skill } from "@earendil-works/pi-coding-agent";
@@ -15,6 +17,7 @@ import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
+import { MISE_FILE } from "../../environment/declare.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { log } from "../../log.ts";
@@ -247,7 +250,12 @@ export function fastagentPromptSections(options: {
   // deployment replaces (or, on AgentCore, erases with everything else) — so the sentence says so, and where a skill
   // that should outlast it has to go. A skill outside the definition would survive, but it is machine state, read
   // once per process (machine.ts), so it would not be live.
-  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute, and models.json from the next turn; changes to tools, channels or other configuration (fastagent.config.ts, context.json, .pi/settings.json, package.json) take effect when the service restarts. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash — or, for a tool or command of your own, a pi extension in extensions/, loaded from your next session on. Either lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
+  const runtimeChanges = ` Markdown definition files are read each turn, and schedules/ (a <name>.md whose frontmatter holds only cron and, optionally, tz, over the prompt; at most every 10 minutes, at most 20) within half a minute, and models.json from the next turn; changes to tools, channels or other configuration (fastagent.config.ts, context.json, .pi/settings.json, package.json, mise.toml) take effect when the service restarts.${
+    // Only for an agent with an environment to change: on one without, the command would first add mise to it.
+    options.workingSet && existsSync(join(options.workingSet.agentDir, MISE_FILE))
+      ? " The command-line tools you have are declared in mise.toml: `./node_modules/.bin/fastagent env use <tool>@<version>` adds one, installs it and checks the change, and until the restart you run it with `./node_modules/.bin/fastagent env exec -- <command>`."
+      : ""
+  } A tool you install yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. To give yourself a new capability now, write a skill — a SKILL.md in your definition's skills/ directory, with any script it needs run through bash — or, for a tool or command of your own, a pi extension in extensions/, loaded from your next session on. Either lasts until the next deployment replaces that directory, so a capability that should outlast it belongs in the author's release: propose it to them.${
     // Named only when mounted (a serve; not a one-shot invoke), like the deferred tools above: naming a tool the model
     // does not have invites calls to it.
     mountedNames.has("wake") ? " To schedule your own follow-up work, use the wake tool." : ""

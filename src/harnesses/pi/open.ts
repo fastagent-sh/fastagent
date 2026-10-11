@@ -21,6 +21,7 @@ import type { SessionObserver } from "./turn-kit.ts";
 import { createPiSessionControl } from "./session-control.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
+import { enterMiseEnvironment } from "../../environment/mise.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -161,6 +162,9 @@ export async function resolveAgentAssembly(
 ): Promise<AgentAssembly> {
   const agentDir = resolveAgentDir(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
+  // The commands the agent runs, before anything is spawned: every process that opens the agent (a `dev` worker,
+  // `start`, `invoke`, `chat`, an embedder's `createAgentService`) runs it on its declared tools, or refuses to.
+  await enterMiseEnvironment(agentDir);
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
   // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.

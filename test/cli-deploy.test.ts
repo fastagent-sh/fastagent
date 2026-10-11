@@ -109,11 +109,12 @@ export default channel;\n`,
 
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
     // deploy KEEPS any existing Dockerfile without --force (no silent data loss). A generated one (marker)
-    // that drifted from current config is flagged stale; a hand-written one is kept + warned (its apt won't
-    // apply). An up-to-date generated one is kept quietly. Marker/predicate come from container.ts (single source).
+    // that drifted from current config is flagged stale; a hand-written one is kept (preflight warns when the
+    // environment then won't reach the image). An up-to-date generated one is kept quietly. Marker/predicate come
+    // from container.ts (single source).
     const setup = async (dockerfileContent: string) => {
-      const dir = await agentWorkspace("fa-apt-", {
-        "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };\n`,
+      const dir = await agentWorkspace("fa-kept-", {
+        "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
         Dockerfile: dockerfileContent,
       });
       await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
@@ -127,7 +128,6 @@ export default channel;\n`,
     expect(gen.res.stderr).toMatch(/no longer matches what deploy would generate/); // stale flagged
     expect(gen.res.stderr).toMatch(/--force to regenerate/);
     expect(gen.dockerfile).toBe(edited); // preserved — the user's edit survives (no data loss)
-    expect(gen.res.stderr).not.toMatch(/deploy\.apt.*NOT applied/); // generated → not the hand-written warn
 
     // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
     const current = containerArtifacts({
@@ -137,14 +137,13 @@ export default channel;\n`,
       runtime: "node",
       hasLockfile: false,
       version: await fastagentVersion(),
-      apt: ["git"],
+      apt: [],
     }).find((a) => a.path === "Dockerfile")!.content;
     const fresh = await setup(current);
     expect(fresh.res.stderr).not.toMatch(/no longer matches/); // identical → nothing to flag
 
-    // A HAND-WRITTEN Dockerfile (no marker) → kept verbatim + warned (its apt won't include the packages).
+    // A HAND-WRITTEN Dockerfile (no marker) → kept verbatim.
     const hw = await setup("FROM python:3.12\n");
     expect(hw.dockerfile).toBe("FROM python:3.12\n"); // preserved, never clobbered
-    expect(hw.res.stderr).toMatch(/deploy\.apt.*NOT applied/); // warn: install those packages yourself
   });
 });

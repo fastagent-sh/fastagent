@@ -111,7 +111,10 @@ await service.close();    // stops long connections and schedules
 ```
 
 `createAgentService` is the assembly `fastagent dev`/`start` perform, minus the process: no port is
-bound, no signal handlers are installed, nothing calls `process.exit`. With `sessionControl` on,
+bound, no signal handlers are installed, nothing calls `process.exit`. Like them, it enters the agent's
+[environment](configuration.md#environment-misetoml): the tools its `mise.toml` declares are installed and put first
+on this process's `PATH`, which the agent's commands inherit, and a `mise.toml` FastAgent refuses fails the call. Two
+agents opened in one process share that `PATH`. With `sessionControl` on,
 `service.controlPrefix` names the prefix the plane owns (`/control`) so your app can route around it.
 
 **Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the handler behind

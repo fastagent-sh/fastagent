@@ -44,7 +44,8 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 - **Connectors** are the systems that are not files the agent reaches: an API, a service, and their credentials. The
   code tools and pi extensions that reach them are part of the definition; the system each one reaches is the
   connector (agent service §3.3). MCP servers are not supported yet (#678).
-- **The environment** is the commands and runtimes the agent runs: today the machine lends it (below).
+- **The environment** is the commands and runtimes the agent runs, declared in its `mise.toml` and the same on every
+  instance ([agent service](agent-service.md) §4). An agent with none borrows the machine's (below).
 
 Relations:
 
@@ -62,10 +63,10 @@ is read as the user left it, and a difference from the declared version is repor
 
 The one exception is the machine's environment. What a machine lends an agent (pi's user-level skills and prompt
 templates, `.agents/skills` found above the agent directory, installed pi packages, harness settings, the programs
-on its `PATH`) comes from that machine wherever the agent runs, and is not compared between instances
-([core](core.md) §5). A skill an agent must have everywhere belongs in its definition or in its content. A machine
-never lends a system prompt: its `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are not read, because a prompt
-from someone's machine would make the agent theirs.
+on its `PATH` that the agent's `mise.toml` does not declare) comes from that machine wherever the agent runs, and is
+not compared between instances ([core](core.md) §5). A skill an agent must have everywhere belongs in its definition
+or in its content. A machine never lends a system prompt: its `~/.pi/agent/SYSTEM.md` and `APPEND_SYSTEM.md` are not
+read, because a prompt from someone's machine would make the agent theirs.
 
 Keeping the data itself the same across instances afterwards is not this layer's job. It belongs to
 collaboration and synchronization (§8): git for a repository, a content service for what is not one.
@@ -393,14 +394,17 @@ When a change takes effect:
 | `extensions/` | On the next session: it is listed again, and changed code is loaded afresh |
 | `models.json`, `models-store.json` (the agent's and the machine's) | On the next read: a turn, the model list or `update({ model })`. An edit that does not load, or drops the default model, keeps the models read before |
 | `schedules/` | Within 30 seconds: the running clock re-reads it (on AgentCore, the container sets the recurring EventBridge schedules itself) |
-| What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts`, `context.json`, `package.json` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
+| What a process loads once: `tools/`, `channels/`, `.pi/settings.json`, `fastagent.config.ts`, `context.json`, `package.json`, `mise.toml` | When the process next starts: the author's restart, or the next release. `dev` restarts on such an edit itself |
 
 So an agent improves itself while it runs through what takes effect on the next turn: a skill whose script it runs
 through `bash`, its prompt files and `AGENTS.md`, an extension when it needs a tool or a command of its own, a
-schedule for recurring work, and `wake` for its own follow-up work. `tools/`, `channels/` and configuration are the
-author's to put into service, with a restart or a release: the rule #600 set, which [core](core.md) §2 and the
-deployed prompt give. Extensions are the code an agent can add for itself, because pi reloads them (jiti, with its
-module cache off) where Node's own loader, which `tools/` and `channels/` use, cannot.
+schedule for recurring work, and `wake` for its own follow-up work. A command-line tool it needs goes into
+`mise.toml` through `fastagent env use`, which undoes a change FastAgent would refuse, and runs through
+`fastagent env exec` until the next start puts it on the `PATH`; one it installs with the machine's own means
+(`apt-get`, `npm install -g`) is the machine's, gone with the container on a host. `tools/`, `channels/` and
+configuration are the author's to put into service, with a restart or a release: the rule #600 set, which
+[core](core.md) §2 and the deployed prompt give. Extensions are the code an agent can add for itself, because pi
+reloads them (jiti, with its module cache off) where Node's own loader, which `tools/` and `channels/` use, cannot.
 
 An earlier version of this note reversed that rule: every process would restart onto a changed definition by
 itself once idle, after checking that it loads. It was not built:

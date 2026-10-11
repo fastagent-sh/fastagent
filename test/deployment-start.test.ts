@@ -91,7 +91,11 @@ export default defineTool({ name: "context", description: "Read invocation conte
     await writeFile(join(root, ".secrets/auth.json"), rotated);
     const env = { ...process.env };
     for (const key of Object.keys(env)) {
-      if (key.startsWith("FASTAGENT_") || ["https_proxy", "http_proxy", "all_proxy"].includes(key.toLowerCase()))
+      if (
+        key.startsWith("FASTAGENT_") ||
+        key === "MISE_DATA_DIR" ||
+        ["https_proxy", "http_proxy", "all_proxy"].includes(key.toLowerCase())
+      )
         delete env[key];
     }
     const bin = join(dir, "bin");
@@ -138,7 +142,7 @@ try {
   for await (const event of service.agent.invoke({ session: "deployed-conversation" }, { text: "Read my context" })) events.push(event);
   // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
   const { realpathSync } = await import("node:fs");
-  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, content: realpathSync("content") }));
+  console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
 } finally {
   await service.close();
 }
@@ -156,12 +160,18 @@ try {
     const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
       events: { type: string; content?: unknown }[];
       state: string;
+      mise: string;
       content: string;
     };
     const { events } = reported;
     // Every machinery dir lands on the storage, never in `definition/`, which each release replaces: a clone there
     // would take the agent's unpushed work with it. content/ is the storage's, through the link the release carries.
-    expect(reported).toMatchObject({ state: join(root, ".state"), content: join(await realpath(root), "content") });
+    expect(reported).toMatchObject({
+      state: join(root, ".state"),
+      // The tools the agent adds on the host: on the storage, so a new container still has them.
+      mise: join(root, ".state", "mise"),
+      content: join(await realpath(root), "content"),
+    });
     expect(events.at(-1)).toEqual({ type: "completed" });
     const result = events.find((event) => event.type === "tool_ended");
     expect(JSON.stringify(result)).toContain("deployed-conversation");
