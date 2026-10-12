@@ -156,12 +156,12 @@ describe("authoring API", () => {
       content: { app: { github: "acme/app", readonly: true } },
     });
     expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
-      content: { app: { path: checkout } },
+      checkouts: { app: checkout },
     });
     await removeContent(agentDir, "app");
-    for (const file of ["context.json", "context.local.json"]) {
-      expect(JSON.parse(await readFile(join(agentDir, file), "utf8"))).toEqual({ content: {} });
-    }
+    expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({ content: {} });
+    // Both maps are empty: this machine's file holds nothing again.
+    expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({});
   });
 
   it("two edits of one name that write different files queue: one is added, the other refused", async () => {
@@ -224,6 +224,7 @@ describe("authoring API", () => {
     expect(await listContent(agentDir)).toEqual({
       content: [expect.objectContaining({ name: "c" }), expect.objectContaining({ name: "b" })],
       absent: [expect.objectContaining({ name: "moved", path: join(base, "moved") })],
+      stale: [],
     });
     // Something else in its place does not resolve: an edit is refused with that entry's reason, and nothing written.
     await writeFile(join(base, "moved"), "");

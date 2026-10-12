@@ -7,7 +7,7 @@
  */
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { LOCAL_CONTEXT_FILE, contentEntryPath } from "../paths.ts";
+import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath } from "../paths.ts";
 import { type BoundContent, type ContentDeclaration, type DeclaredContent, nestingError } from "./declare.ts";
 import { type CloneOutcome, checkoutProblem, refNotice, refreshClone } from "./git.ts";
 import { ensureContentDir } from "./mount.ts";
@@ -46,11 +46,12 @@ export type ResolvedContent = {
 
 /** Resolve the agent's content for this instance. Refuses, naming the entry, what cannot be. */
 export function resolveContent(agentDir: string, { declared, bound }: ContentDeclaration): ResolvedContent[] {
+  refuseOneNameEach(declared, bound);
   const shared = declared.map((entry) =>
     resolveRepository(
       agentDir,
       entry,
-      bound.find((binding) => binding.kind === "checkout" && binding.name === entry.name),
+      bound.find((binding) => binding.kind === "checkout" && binding.name.toLowerCase() === entry.name.toLowerCase()),
     ),
   );
   const local = bound
@@ -66,6 +67,44 @@ export function resolveContent(agentDir: string, { declared, bound }: ContentDec
  */
 export function contentAbsentHere({ bound }: ContentDeclaration): BoundContent[] {
   return bound.filter((binding) => binding.kind === "local" && statOrMissing(binding.path) === undefined);
+}
+
+/**
+ * The checkout bindings no entry declares: this machine's leftovers after an entry was renamed, removed, or withdrawn
+ * by a context refresh. Nothing is written for them and they are never read as local content — what is left here is
+ * said, and the file is the user's to edit.
+ */
+export function staleCheckouts({ declared, bound }: ContentDeclaration): BoundContent[] {
+  return bound.filter(
+    (binding) =>
+      binding.kind === "checkout" && !declared.some((entry) => entry.name.toLowerCase() === binding.name.toLowerCase()),
+  );
+}
+
+/** What is said of a binding {@link staleCheckouts} returns, after the word "content". */
+export function staleCheckoutNotice(binding: BoundContent): string {
+  return (
+    `${binding.name}: bound in ${LOCAL_CONTEXT_FILE} to ${binding.path} as this machine's checkout, which no content ` +
+    `entry declares: the agent is not told of it (fastagent content remove ${binding.name})`
+  );
+}
+
+/**
+ * Content names are unique across the agent, ignoring case: one becomes a directory, and some filesystems do not tell
+ * two apart. A directory of this machine under a declared entry's name is the one collision the reader can name both
+ * sides of.
+ */
+function refuseOneNameEach(declared: readonly DeclaredContent[], bound: readonly BoundContent[]): void {
+  for (const binding of bound) {
+    if (binding.kind !== "local") continue;
+    const entry = declared.find((one) => one.name.toLowerCase() === binding.name.toLowerCase());
+    if (entry !== undefined) {
+      throw new Error(
+        `content "${binding.name}" is declared in ${CONTEXT_FILE} and bound as a directory of this machine in ` +
+          `${LOCAL_CONTEXT_FILE}: the checkout of a declared entry goes in "checkouts"`,
+      );
+    }
+  }
 }
 
 /** What is said of a binding {@link contentAbsentHere} returns, after the word "content". */

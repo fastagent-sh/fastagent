@@ -200,8 +200,9 @@ An agent's content is declared in two files beside its config, each a map of ent
 meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4):
 
 - **`context.json`**, part of the definition, declares what every instance reaches: GitHub repositories.
-- **`context.local.json`**, this machine's, binds directories of it: a checkout of a declared repository, or a
-  directory only this machine has. It is never committed and never deployed.
+- **`context.local.json`**, this machine's, binds directories of it, in two maps: `checkouts`, this machine's own
+  checkout of a declared repository by name, and `content`, a directory only this machine has. It is never committed
+  and never deployed.
 
 ```json
 {
@@ -212,18 +213,26 @@ meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4
 }
 ```
 
+```json
+{ "checkouts": { "app": "~/code/app" }, "content": { "notes": { "path": "~/notes" } } }
+```
+
 An agent that declares no content has none: a chat-only assistant works only in its own directory. The shared
 declaration decides what an instance on a host receives, so it is visible in the definition instead of being a
 hidden default. It names no path of any machine: the definition is shared, and a path describes one machine. A path
-is what `context.local.json` holds, which is why it is a file of its own that no other machine reads. The agent also
-joins declarations from the contexts it uses, fetched under `.contexts/<name>/`. A context never supplies this agent's
-prompt files, code tools or skills ([agent service](agent-service.md) §3.6).
+is what `context.local.json` holds, which is why it is a file of its own that no other machine reads. Its two maps are
+kept apart for the same reason: a binding whose treatment was derived from the shared declaration would change
+meaning when that declaration went away, a checkout becoming a directory of this machine without either file being
+touched. A `checkouts` name no entry declares is therefore a leftover, said to be one and never resolved. The agent
+also joins declarations from the contexts it uses, fetched under `.contexts/<name>/`. A context never supplies this
+agent's prompt files, code tools or skills ([agent service](agent-service.md) §3.6).
 
 ### Where an entry is
 
 - **A repository** is a clone the instance makes at `content/<name>` in the agent directory, or, where
-  `context.local.json` binds this machine's checkout of it under the same name, that checkout.
-- **A directory only this machine has** is where its binding says, and on any other instance does not exist.
+  `context.local.json`'s `checkouts` names this machine's checkout of it, that checkout.
+- **A directory only this machine has** is where its binding in `content` says, and on any other instance does not
+  exist.
 
 `content/` holds only those clones. It belongs to the machine, never to the definition: it carries its own
 `.gitignore`, and a deployment keeps it out of the image. On a host it is a link into the host's storage, which a
@@ -237,8 +246,8 @@ rarely writes one.
 
 | Type | Written in | Where it lives | Here | Elsewhere (a host) | Where changes go |
 |---|---|---|---|---|---|
-| **github** | `context.json`: `{ "github": "acme/app" }` | A repository | A clone, or this machine's checkout bound in `context.local.json`, used as it is | A clone the instance makes | To the repository, when pushed |
-| **local** | `context.local.json`: `{ "path": "~/notes" }` | A directory of this machine | That directory, edited in place | Absent: never declared there (below) | The directory |
+| **github** | `context.json`: `{ "github": "acme/app" }` | A repository | A clone, or this machine's checkout named in `checkouts`, used as it is | A clone the instance makes | To the repository, when pushed |
+| **local** | `context.local.json`'s `content`: `{ "path": "~/notes" }` | A directory of this machine | That directory, edited in place | Absent: never declared there (below) | The directory |
 
 **Only data with a home every instance can reach is the same data everywhere.** A local directory lives on one
 machine, so it is content of that machine's instance alone. A copy of it on a host would not be the same data:
@@ -281,8 +290,10 @@ Attributes:
 - **A clone lives as long as the instance's storage.** A host whose storage a deployment resets (AgentCore,
   [core](core.md) §9) clones every repository again, and what the agent did not push is lost; its deployment says
   so before it runs.
-- **FastAgent never deletes a directory in `content/`.** Removing an entry removes it from both files; a clone is
-  left, and said to be, because it may hold the agent's work.
+- **FastAgent never deletes a directory in `content/`.** Removing an entry removes it from the files that name it; a
+  clone is left, and said to be, because it may hold the agent's work. A `checkouts` entry for content a context
+  withdrew is left for the same reason: it is a path of this machine, and the reader reports it rather than
+guessing what it stood for.
 - **A name is one path segment, unique within the agent regardless of case, across both files.** It becomes a
   directory name, so it is letters, digits, `-` and `_`, the spelling a release's agent name already has
   (`isReleaseAgentName`), and two names that differ only in case are the same name on a case-insensitive
@@ -294,7 +305,9 @@ Attributes:
   the two ways to change that. What the agent only reads there can be copied into the agent directory, which every
   release carries; what it works on moves to a repository declared as `github`. On this machine, a binding whose
   directory is gone is left out with a warning rather than refused: the binding is this machine's own record, and
-  the agent still runs without it.
+  the agent still runs without it. A `checkouts` entry nothing declares is left out the same way, and named as a
+  leftover: never read as a directory of this machine, which is what an inference from a missing copy would make of
+  it.
 - **A `github` entry needs access.** Cloning a private repository and pushing to it take a credential: on this
   machine the user's own git credentials, on a host one held in its secret store, like any other credential of
   the instance.

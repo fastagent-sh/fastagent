@@ -25,7 +25,7 @@ export interface StandInRepo {
   commit(files: Record<string, string>): string;
   /** Switch the working clone to `branch`, creating it from the current commit when it is new. */
   branch(name: string): void;
-  tag(name: string): void;
+  tag(name: string, message?: string): void;
 }
 
 /** Stand GitHub in for the rest of the test (env stubbed: restore with `vi.unstubAllEnvs`). */
@@ -63,8 +63,8 @@ export function githubStandIn(): { repo(name: string): StandInRepo; offline(): v
         branch(branch) {
           git(work, "checkout", "-q", "-B", branch);
         },
-        tag(tag) {
-          git(work, "tag", tag);
+        tag(tag, message) {
+          git(work, "tag", ...(message !== undefined ? ["-a", "-m", message] : []), tag);
           git(work, "push", "-q", "origin", tag);
         },
       };

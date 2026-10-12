@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { gitFor } from "../git.ts";
+import { CONTEXT_FILE } from "../paths.ts";
 
 const { answer: gitAnswer, run: runGit } = gitFor("github content needs it on this machine");
 
@@ -78,6 +79,11 @@ const FULL_COMMIT = /^[0-9a-f]{40}$/i;
  * test: it takes a remote that stops answering.
  */
 const SLOW_NETWORK = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15"];
+
+/** What a failure to reach a repository is explained by, wherever git was asked about one: how it authenticates. */
+const CREDENTIALS =
+  "git's own credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH), and " +
+  "GITHUB_TOKEN when it has none";
 
 /**
  * The ref that holds the commit a clone pinned to a commit was last put on. Fetching a commit by its hash creates no
@@ -164,35 +170,89 @@ export async function refreshClone(repo: string, ref: string | undefined, dir: s
 }
 
 /**
- * A shallow clone of github `repo` at `ref` (a branch, a tag or a full commit; the default branch when unset) made in
- * `dir`, which must not exist, and the commit it is at. A context's snapshot: nothing works in it, so it is made
- * afresh rather than brought up to date. One fetch serves every kind of `ref`: git resolves a branch or a tag the
- * remote has, and fetches a commit by its hash.
+ * The commit a branch or tag `ref` names on github `repo` right now, asked of the remote alone (in `cwd`, for git's own
+ * configuration), or undefined when it names none: a copy already at that commit is then not fetched at all (fetch.ts).
+ * A ref given as a full commit is not asked about, since no ref of the remote answers with one, and a commit is
+ * fetched by its hash.
  */
-export async function cloneSnapshot(repo: string, ref: string | undefined, dir: string): Promise<string> {
+export async function remoteCommit(repo: string, ref: string | undefined, cwd: string): Promise<string | undefined> {
+  if (ref !== undefined && FULL_COMMIT.test(ref)) return undefined;
+  const asked = ref === undefined ? ["HEAD"] : [`refs/tags/${ref}`, `refs/tags/${ref}^{}`, `refs/heads/${ref}`];
+  let out: string;
+  try {
+    out = await runGit(["-c", `${HELPER_KEY}=${TOKEN_HELPER}`, "ls-remote", "--", githubUrl(repo), ...asked], cwd);
+  } catch (error) {
+    throw new Error(`could not list github ${repo}: ${gitReason(error)} — ${CREDENTIALS}`);
+  }
+  const refs = new Map(
+    out.split("\n").flatMap((line) => {
+      const [commit, name] = line.split("\t");
+      return commit === undefined || name === undefined ? [] : [[name, commit] as const];
+    }),
+  );
+  if (ref === undefined) return refs.get("HEAD");
+  // git resolves a name that is both a tag and a branch to the tag (gitrevisions), and an annotated tag to the commit
+  // it points at: the peeled line is where `rev-parse FETCH_HEAD^{commit}` lands after a fetch.
+  return refs.get(`refs/tags/${ref}^{}`) ?? refs.get(`refs/tags/${ref}`) ?? refs.get(`refs/heads/${ref}`);
+}
+
+/** What a context is fetched for: the commit, and the `context.json` at that commit's root when there is one. */
+export interface ContextSnapshot {
+  commit: string;
+  declaration?: string;
+}
+
+/**
+ * A context's snapshot, fetched afresh into `dir` (which must not exist): the commit github `repo` at `ref` (a branch,
+ * a tag or a full commit; the default branch when unset) is at, and the `context.json` at its root. Nothing is checked
+ * out: `context.json` is the only file a snapshot is read for, and it is read out of the fetched tree, so a context
+ * costs one shallow, blobless fetch and no worktree.
+ */
+export async function fetchSnapshot(repo: string, ref: string | undefined, dir: string): Promise<ContextSnapshot> {
   if (repo.startsWith("-") || ref?.startsWith("-")) {
     throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
   }
+  const at = `github ${repo}${ref !== undefined ? ` at ${ref}` : ""}`;
   mkdirSync(dir, { recursive: true });
   try {
     await runGit(["init", "-q"], dir);
     await runGit(["config", HELPER_KEY, TOKEN_HELPER], dir);
     await runGit(["remote", "add", "origin", githubUrl(repo)], dir);
-    await runGit([...SLOW_NETWORK, "fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref ?? "HEAD"], dir);
-    await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], dir);
-  } catch (error) {
-    throw new Error(
-      `could not fetch github ${repo}${ref !== undefined ? ` at ${ref}` : ""}: ${gitReason(error)} — git's own ` +
-        `credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH), and ` +
-        `GITHUB_TOKEN when it has none`,
+    // A server that does not filter says so and sends everything; the one file read below is then already here.
+    await runGit(
+      [
+        ...SLOW_NETWORK,
+        "fetch",
+        "-q",
+        "--depth",
+        "1",
+        "--filter=blob:none",
+        "--end-of-options",
+        "origin",
+        ref ?? "HEAD",
+      ],
+      dir,
     );
+  } catch (error) {
+    throw new Error(`could not fetch ${at}: ${gitReason(error)} — ${CREDENTIALS}`);
   }
-  return headCommit(dir) as string;
+  const commit = gitAnswer(["rev-parse", "FETCH_HEAD^{commit}"], dir);
+  if (commit === undefined) throw new Error(`could not fetch ${at}: git resolved no commit`);
+  const declaration = snapshotFile(dir, CONTEXT_FILE);
+  return { commit, ...(declaration !== undefined ? { declaration } : {}) };
 }
 
-/** The commit the checkout `dir` is at, or undefined when it is none. */
-function headCommit(dir: string): string | undefined {
-  return existsSync(dir) ? gitAnswer(["rev-parse", "HEAD"], dir) : undefined;
+/** A tree entry of `FETCH_HEAD`: the mode, and the name as the tree spells it. */
+const TREE_ENTRY = /^(\d{6}) blob [0-9a-f]+\t(.*)$/;
+
+/**
+ * The content of the regular file `path` in the fetched tree, or undefined when there is none: a directory, a symlink
+ * and a missing entry are all "no context.json here", and only the first of them is a file at all.
+ */
+function snapshotFile(dir: string, path: string): string | undefined {
+  const entry = TREE_ENTRY.exec(gitAnswer(["ls-tree", "FETCH_HEAD", "--", path], dir) ?? "");
+  if (entry === null || entry[2] !== path || !(entry[1] as string).startsWith("100")) return undefined;
+  return gitAnswer(["cat-file", "blob", `FETCH_HEAD:${path}`], dir);
 }
 
 /** git's own words for a refusal, without its hints. */

@@ -23,7 +23,7 @@ import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
-import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import { type ResolvedContent, contentAbsentHere, resolveContent, staleCheckouts } from "../../content/resolve.ts";
 import type { BoundContent } from "../../content/declare.ts";
 import { loadContent, loadContexts, loadEnvironmentParts } from "../../content/file.ts";
 import { type DeclaredEnvironment, declaredVariables } from "../../environment/declare.ts";
@@ -51,11 +51,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a content entry is missing.
   let content: ResolvedContent[] = [];
   let contentAbsent: BoundContent[] = [];
+  let contentStale: BoundContent[] = [];
   let contentError: string | undefined;
   try {
     const declaration = loadContent(agentDir);
     content = resolveContent(agentDir, declaration);
     contentAbsent = contentAbsentHere(declaration);
+    contentStale = staleCheckouts(declaration);
   } catch (error) {
     contentError = (error as Error).message;
   }
@@ -151,6 +153,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           contextsError: contextsError ?? null,
           content,
           contentAbsent,
+          contentStale,
           contentError: contentError ?? null,
           environment: environment ?? null,
           environmentError: environmentError ?? null,
@@ -201,7 +204,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("agent", agentDir);
   for (const context of contexts) line("context", describeContext(context));
   if (contextsError) line("context", `⚠ ${contextsError}`);
-  for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
+  for (const [label, value] of contentLines(content, contentAbsent, contentStale)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line(
     "environment",
@@ -249,7 +252,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportFindingsIfChanged(definition.dir, definition);
 }
 
-/** The packages and apt packages an environment declares, as one line. */
+/** One context the agent uses, as this machine has it fetched. */
 function describeContext(context: FetchedContext): string {
   const from = `github ${context.repo}${context.ref ? `@${context.ref}` : ""}`;
   const at = context.commit ? `fetched at ${context.commit.slice(0, 7)}` : "not fetched here";
@@ -257,6 +260,7 @@ function describeContext(context: FetchedContext): string {
   return `${context.name}  ${from}, ${at}${said}`;
 }
 
+/** The packages and apt packages an environment declares, as one line. */
 function describeEnvironment(environment: DeclaredEnvironment): string {
   const packages = Object.entries(environment.packages).map(([name, version]) => `${name} ${version}`);
   const apt = environment.aptPackages.map((name) => `apt:${name}`);

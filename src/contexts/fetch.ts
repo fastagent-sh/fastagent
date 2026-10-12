@@ -1,14 +1,14 @@
 /**
  * Fetch contexts into .contexts/<name>, validating a fresh snapshot before replacing the copy. Development can use a
- * cached copy when its remote is unreachable; add, fetch and deploy cannot. Production only reads copies.
+ * cached copy when its remote is unreachable; add, fetch and deploy cannot. Production only reads copies. A copy whose
+ * commit is the one its remote names is left alone without fetching anything: the common case is that nothing moved.
  */
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { withLockedFile } from "../locked-file.ts";
-import { withRevokedContextBindings } from "./bindings.ts";
 import lockfile from "proper-lockfile";
-import { cloneSnapshot } from "../content/git.ts";
+import { fetchSnapshot, remoteCommit } from "../content/git.ts";
 import { loadContexts, parseContextCopy } from "../content/file.ts";
 import { log } from "../log.ts";
 import { CONTEXT_FILE, contextCopyPath, isUnderDir } from "../paths.ts";
@@ -21,23 +21,54 @@ export type ContextFetch = { name: string; commit: string } & (
   | { outcome: "kept"; reason: string }
 );
 
-/** The lock is transient process coordination, not a version lock: fetch and remove must not replace each other's copy. */
-export async function withContextCopy<T>(agentDir: string, name: string, use: () => Promise<T>): Promise<T> {
+/**
+ * The lock is transient process coordination, not a version lock: fetch and remove must not replace each other's copy.
+ * It is held across a clone, which can outlast the staleness window (a laptop that sleeps), and a lock judged
+ * compromised must be reported rather than thrown from a timer inside this process (`proper-lockfile`'s default, which
+ * is an uncaught exception): `assertOwned` is the state check, as in `src/locked-file.ts`.
+ */
+export async function withContextCopy<T>(
+  agentDir: string,
+  name: string,
+  use: (assertOwned: () => void) => Promise<T>,
+): Promise<T> {
   const dir = contextCopyPath(agentDir, name);
   const root = dirname(dir);
   if (lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink()) {
     throw new Error(`${root} is a link: contexts must be fetched inside the agent directory`);
   }
   mkdirSync(root, { recursive: true });
+  let compromised: Error | undefined;
+  const assertOwned = (): void => {
+    if (compromised !== undefined) {
+      throw new Error(`the lock for ${dir} was lost while it was held (${compromised.message}): retry the fetch`);
+    }
+  };
   const release = await lockfile.lock(dir, {
     realpath: false,
-    retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10_000 },
+    retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10_000, randomize: true },
+    stale: 30_000,
+    onCompromised: (error) => {
+      compromised = error;
+    },
   });
+  let result: T;
   try {
-    return await use();
-  } finally {
-    await release();
+    result = await use(assertOwned);
+  } catch (error) {
+    // The primary failure stays the signal; a compromised lock often cannot release cleanly.
+    if (compromised === undefined) await release();
+    throw error;
   }
+  try {
+    await release();
+  } catch (releaseError) {
+    // A failed release is a real cleanup failure (a leftover lock stalls the next writer for the staleness window with
+    // no diagnostics), so it surfaces — unless the lock was already lost, which is the stronger fact.
+    if (compromised === undefined) throw releaseError;
+  }
+  assertOwned();
+  return result;
 }
 
 export async function fetchContexts(
@@ -55,7 +86,7 @@ export async function fetchContexts(
     async () => {
       const outcomes = await Promise.allSettled(
         checked.map((context) =>
-          withContextCopy(agentDir, context.name, () => {
+          withContextCopy(agentDir, context.name, (assertOwned) => {
             if (
               requireListed &&
               !loadContexts(agentDir).some(
@@ -64,7 +95,7 @@ export async function fetchContexts(
             ) {
               throw new Error(`context "${context.name}" is no longer declared at that repository and ref`);
             }
-            return fetchOne(agentDir, context, onFailure);
+            return fetchOne(agentDir, context, onFailure, assertOwned);
           }),
         ),
       );
@@ -76,67 +107,62 @@ export async function fetchContexts(
   );
 }
 
-async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "keep" | "fail"): Promise<ContextFetch> {
+async function fetchOne(
+  agentDir: string,
+  context: DeclaredContext,
+  onFailure: "keep" | "fail",
+  assertOwned: () => void,
+): Promise<ContextFetch> {
   const { name, repo, ref } = context;
   const dir = contextCopyPath(agentDir, name);
   const found = lstatSync(dir, { throwIfNoEntry: false });
   if (found && (!found.isDirectory() || !existsSync(join(dir, COPY_RECORD)))) {
     throw new Error(`${dir} is not a fetched context copy: move it away before fetching`);
   }
+  const keptOr = (error: unknown): ContextFetch => {
+    if (onFailure === "keep" && found) {
+      const had = copyRecord(agentDir, context);
+      return { name, commit: had.commit, outcome: "kept", reason: (error as Error).message };
+    }
+    throw new Error(`context "${name}": ${(error as Error).message}`);
+  };
+  let remote: string | undefined;
+  try {
+    remote = await remoteCommit(repo, ref, agentDir);
+  } catch (error) {
+    return keptOr(error);
+  }
+  if (remote !== undefined && recorded(agentDir, dir, context, remote) !== undefined) {
+    return { name, commit: remote, outcome: "current" };
+  }
   const next = mkdtempSync(join(tmpdir(), "fastagent-context-"));
   try {
     if (isUnderDir(realpathSync(next), realpathSync(agentDir))) {
       throw new Error(`temporary context clones must be outside ${agentDir}: set TMPDIR to another directory`);
     }
-    let commit: string;
+    let snapshot: Awaited<ReturnType<typeof fetchSnapshot>>;
     try {
-      commit = await cloneSnapshot(repo, ref, next);
+      snapshot = await fetchSnapshot(repo, ref, next);
     } catch (error) {
-      if (onFailure === "keep" && found) {
-        const had = copyRecord(agentDir, context);
-        return { name, commit: had.commit, outcome: "kept", reason: (error as Error).message };
-      }
-      throw new Error(`context "${name}": ${(error as Error).message}`);
+      return keptOr(error);
     }
-    const path = join(next, CONTEXT_FILE);
-    if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) {
+    if (snapshot.declaration === undefined) {
       throw new Error(
         `context "${name}": github ${repo}${ref ? ` at ${ref}` : ""} has no context.json at its root: it is not a context`,
       );
     }
-    const declaration = readFileSync(path, "utf8");
-    const parsed = parseContextCopy(declaration, contextSource(name));
-    if (found) {
-      const previous = readCopyRecord(agentDir, name);
-      if (
-        previous.repo === repo &&
-        previous.ref === ref &&
-        previous.commit === commit &&
-        previous.declaration === declaration &&
-        existsSync(join(dir, CONTEXT_FILE)) &&
-        readFileSync(join(dir, CONTEXT_FILE), "utf8") === declaration
-      ) {
-        return { name, commit, outcome: "current" };
-      }
+    const declaration = snapshot.declaration;
+    const commit = snapshot.commit;
+    if (found && recorded(agentDir, dir, context, commit) === declaration) {
+      return { name, commit, outcome: "current" };
     }
-    const declared = loadContexts(agentDir).some((entry) => entry.name === name);
-    const publish = () => {
+    parseContextCopy(declaration, contextSource(name));
+    mkdirSync(dir, { recursive: true });
+    try {
+      assertOwned();
       writeFileAtomic(join(dir, CONTEXT_FILE), declaration);
       // This single rename publishes identity and declaration together; the directory never moves.
       writeFileAtomic(join(dir, COPY_RECORD), JSON.stringify({ repo, ref, commit, declaration }));
-    };
-    mkdirSync(dir, { recursive: true });
-    try {
-      if (found || declared) {
-        withRevokedContextBindings(
-          agentDir,
-          name,
-          parsed.content.map((entry) => entry.name),
-          publish,
-        );
-      } else {
-        publish();
-      }
     } catch (error) {
       if (!found) rmSync(dir, { recursive: true, force: true });
       throw error;
@@ -145,6 +171,18 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
   } finally {
     rmSync(next, { recursive: true, force: true });
   }
+}
+
+/**
+ * The declaration the copy `dir` already holds for `commit`, or undefined when it does not hold that commit: its
+ * record checked against the mirror file, so a copy that is already what was asked for is not written again. The
+ * record alone would be one writer's word for it; the mirror file is what every reader opens.
+ */
+function recorded(agentDir: string, dir: string, context: DeclaredContext, commit: string): string | undefined {
+  if (!existsSync(join(dir, COPY_RECORD)) || !existsSync(join(dir, CONTEXT_FILE))) return undefined;
+  const previous = readCopyRecord(agentDir, context.name);
+  if (previous.repo !== context.repo || previous.ref !== context.ref || previous.commit !== commit) return undefined;
+  return readFileSync(join(dir, CONTEXT_FILE), "utf8") === previous.declaration ? previous.declaration : undefined;
 }
 
 export interface FetchedContext {

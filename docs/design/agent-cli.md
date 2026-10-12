@@ -73,15 +73,16 @@ fastagent init <dir> [--content <source>]...
 `--content`. Without `--content` the agent has none and only talks. Content it only knows is added afterwards
 with `fastagent content add --readonly`.
 
-| `<source>` | Declared in `context.json` | Bound in `context.local.json` | Here |
+| `<source>` | Declared in `context.json` | Written in `context.local.json` | Here |
 |---|---|---|---|
-| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | `{ "path": "<checkout>" }` | The checkout |
-| Any other directory, a subdirectory of such a checkout included | Nothing; for a subdirectory, a note names the `github:` form, which is the whole repository | `{ "path": "<dir>" }` | The directory |
+| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | `checkouts`: `"<name>": "<checkout>"` | The checkout |
+| Any other directory, a subdirectory of such a checkout included | Nothing; for a subdirectory, a note names the `github:` form, which is the whole repository | `content`: `{ "path": "<dir>" }` | The directory |
 | `github:owner/repo` | `{ "github": "owner/repo" }` | Nothing | A clone at `content/<name>`, made when the agent starts |
 
 - **No path is declared; a binding is written absolute.** The declaration is shared with the definition and a path
   describes one machine, so the path lives only in `context.local.json`, which `init` ignores in git, and an
-  absolute path keeps meaning the same directory when the agent directory moves.
+  absolute path keeps meaning the same directory when the agent directory moves. `checkouts` and `content` are two
+  maps so that what a binding is never has to be derived from what `context.json` declares.
 - **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
   agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
 - **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
@@ -132,7 +133,7 @@ fastagent content remove <name> [agent]
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
 - On another machine, a declared repository is cloned; a checkout of it there is bound by adding the checkout
   (`content add <checkout>` on an agent that already declares the repository asks for another name, so the binding
-  is written by hand: `{ "content": { "<name>": { "path": "<checkout>" } } }` in `context.local.json`;
+  is written by hand: `{ "checkouts": { "<name>": "<checkout>" } }` in `context.local.json`;
   [configuration](../configuration.md#content)).
 
 ## 5. Running: `dev`, `start`, `chat`, `invoke`

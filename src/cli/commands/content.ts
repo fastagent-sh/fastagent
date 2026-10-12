@@ -17,12 +17,12 @@ export function failEdit(hint: string) {
 }
 
 export async function runContentList(dirArg: string, json: boolean): Promise<void> {
-  const { content, absent } = await listContent(resolve(dirArg)).catch(failStartup);
+  const { content, absent, stale } = await listContent(resolve(dirArg)).catch(failStartup);
   if (json) {
-    console.log(JSON.stringify({ content, absent }, null, 2));
+    console.log(JSON.stringify({ content, absent, stale }, null, 2));
     return;
   }
-  for (const [label, value] of contentLines(content, absent)) console.log(`${`${label}:`.padEnd(10)} ${value}`);
+  for (const [label, value] of contentLines(content, absent, stale)) console.log(`${`${label}:`.padEnd(10)} ${value}`);
 }
 
 export async function runContentAdd(source: string, dirArg: string, opts: SourceOptions): Promise<void> {

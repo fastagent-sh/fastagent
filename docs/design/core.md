@@ -44,7 +44,7 @@ One agent shape, one marker:
 ├── skills/  prompts/  tools/  channels/  schedules/
 ├── fastagent.config.ts     # THE marker
 ├── context.json            # the agent's declared content: repositories by name, no machine's path
-├── context.local.json      # this machine's bindings: its directories by name; never in git or an image
+├── context.local.json      # this machine's two maps: `checkouts` and its own `content`; never in git or an image
 ├── models.json             # optional custom model endpoints (pi's schema, definition-local so it
 │                           # travels into the image). The machine's ~/.fastagent/models.json layers
 │                           # under it as environment and does not travel
@@ -65,31 +65,35 @@ it is declared as its **content** ([agent model](agent-model.md) §3): the repos
 { "content": { "app": { "github": "acme/app" }, "handbook": { "github": "acme/handbook", "readonly": true } } }
 ```
 
-`src/content/` owns it, harness-neutral. `declare.ts` reads both maps and refuses in one place: unknown keys, an entry
-of `context.json` without `github`, a binding without `path` or one that redeclares a shared entry's treatment, a name
-that is not one path segment or collides ignoring case; `file.ts` reads both files through it (`loadContent` returns the
-`ContentDeclaration`, both halves), naming the file in every refusal. `src/contexts/` reads the agent's declared
-contexts in a temporary directory outside the agent's build context and publishes their source/ref/commit and
-declaration in a single atomically replaced snapshot
-(`.fastagent-context.json`), with `context.json` as an inspection mirror. Each read opens the snapshot once, then
-joins its content and environment with the agent's in one place (`join.ts`). A duplicate content name or a package
-at conflicting versions refuses, naming both sources; the variable gate attributes each to its declarer. Refresh
-and removal revoke bindings of withdrawn content before replacing the old snapshot, under the same `context.json`
-lock as declaration edits. The lock is re-entrant (`src/locked-file.ts`), so `context add` can fetch while holding it;
-the order is always declaration lock then copy lock. Binding revocation wraps publication: it restores the original
-binding bytes if publication fails, and reports both errors if restoration fails too. Removal uses the old snapshot
-regardless of the current ref; removal and recovery of a declared context refuse when the missing snapshot makes
-existing bindings impossible to attribute. The shared
-declaration holds no path; a path is
+`src/content/` owns it, harness-neutral. `declare.ts` reads all three maps and refuses in one place: unknown keys, an
+entry of `context.json` without `github`, a binding without `path` or a checkout without a directory, a name that is
+not one path segment or that collides ignoring case; `file.ts` reads both files through it (`loadContent` returns the
+`ContentDeclaration`, both halves), naming the file in every refusal, and refuses one name in both of this machine's
+maps — the maps are kept apart so that no binding's meaning comes from the other file (agent-model.md §3).
+`src/contexts/` reads the agent's declared contexts into a temporary directory outside the agent's build context,
+which is fetched and never checked out (one shallow, blobless `git fetch`, read with `git cat-file`), and publishes
+their source/ref/commit and declaration in a single atomically replaced snapshot (`.fastagent-context.json`), with
+`context.json` as an inspection mirror. Each read opens the snapshot once, then joins its content and environment with
+the agent's in one place (`join.ts`). A duplicate content name or a package at conflicting versions refuses, naming
+both sources; the variable gate attributes each to its declarer. The lock is re-entrant (`src/locked-file.ts`), so
+`context add` can fetch while holding `context.json`'s; the order is always declaration lock then copy lock, and a
+lock judged compromised is reported rather than thrown from a timer. Nothing in `src/contexts/` writes
+`context.local.json`: a checkout binding for content a refresh or a removal withdraws stays where it is, outside the
+agent, and is reported (`staleCheckouts`) instead of being read as a directory of this machine. Before fetching, a
+context whose copy already holds the commit its `ref` names is not fetched at all (`remoteCommit`), and a fetch that
+finds only the recorded declaration changed returns `current` without writing.
+The shared declaration holds no path; a path is
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
 readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
 process start; the content at those locations is re-read per turn. It reads the disk and git, never the network, and
 writes nothing. The prompt's `content` section, `ctx.content`, `info`, `fastagent content list` and the opener all read
 that one resolution.
 
-A `github` entry that `context.local.json` binds under its name to the root of a checkout of that repository is that
+A `github` entry that `context.local.json`'s `checkouts` names the root of a checkout of is that
 checkout, used as it is: never fetched, never moved to its `ref`, only said to be off it; a binding to anything else
-is refused, and one to a directory that is gone is said, with the clone used. A `github` entry with no checkout bound
+is refused, and one to a directory that is gone is said, with the clone used. A `checkouts` name no entry declares is
+this machine's leftover: it is reported (`staleCheckouts`, on the opener's startup warnings and in `content list` and
+`info`) and never resolved as content. A `github` entry with no checkout bound
 is a clone at `content/<name>` (`mount.ts` makes `content/` with its own `.gitignore`, and a link there is refused),
 which `cloneContent` makes or brings up to date each time a process that runs the agent opens it (the opener, before
 it resolves). The first clone is shallow, at `ref`, built
@@ -101,7 +105,8 @@ warning. No directory is ever replaced or deleted, so a running agent's writes, 
 stake. A clone of another repository under the entry's name stops the start, named. `info`, `content list` and `fastagent tool` resolve without
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
 directory); `authoring.ts` (pi) edits both files under one lock, `context.json`'s, since whether a name is taken is
-asked of both, and writes only the files an edit changes, so a refusal leaves both as they were. A deployed host links
+asked of both, and writes only the files an edit changes, so a refusal leaves both as they were. An entry's checkout
+is written to `checkouts` and a directory of this machine to `content`, each as the addition says. A deployed host links
 each release's `content/` to its storage's (`workspace.ts`), so a `github` entry is a clone there that outlives
 releases. `context.local.json` never reaches a host (`init`'s `.gitignore`, the generated `.dockerignore`), so a `local`
 entry is only ever this machine's; one whose directory is gone is left out of the resolution (`contentAbsentHere`): the

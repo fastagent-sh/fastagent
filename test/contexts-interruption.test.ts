@@ -17,10 +17,13 @@ afterEach(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
-it("refuses a TMPDIR inside the agent before cloning anything into the build context", async () => {
+it("refuses a TMPDIR inside the agent before fetching anything into the build context", async () => {
+  const github = githubStandIn();
+  github.repo("acme/context").commit({ "context.json": "{}" });
   root = await mkdtemp(join(tmpdir(), "fa-ctx-tmpdir-"));
   const agent = join(root, "agent");
   await mkdir(agent);
+  await writeFile(join(agent, "context.json"), JSON.stringify({ contexts: { acme: { github: "acme/context" } } }));
   vi.stubEnv("TMPDIR", agent);
   await expect(fetchContexts(agent, [{ name: "acme", repo: "acme/context" }], "fail")).rejects.toThrow(
     /temporary context clones must be outside.*set TMPDIR/,
@@ -28,7 +31,7 @@ it("refuses a TMPDIR inside the agent before cloning anything into the build con
   expect((await readdir(agent)).filter((entry) => entry.startsWith("fastagent-context-"))).toEqual([]);
 });
 
-it("a process killed after checkout leaves its full repository outside the build context, and retry ships only declarations", async () => {
+it("a process killed after fetching leaves its repository outside the build context, and retry ships only declarations", async () => {
   const github = githubStandIn();
   github.repo("acme/context").commit({ "context.json": "{}", "secret.txt": "must not ship" });
   root = await realpath(await mkdtemp(join(tmpdir(), "fa-ctx-interrupt-")));
@@ -45,9 +48,13 @@ it("a process killed after checkout leaves its full repository outside the build
     `#!/bin/sh
 "${realGit}" "$@"
 code=$?
-if [ "$code" = 0 ] && [ "$1" = checkout ]; then
-  printf '%s' "$PWD" > "${stageFile}"
-  while :; do sleep 1; done
+if [ "$code" = 0 ]; then
+  for arg in "$@"; do
+    if [ "$arg" = fetch ]; then
+      printf '%s' "$PWD" > "${stageFile}"
+      while :; do sleep 1; done
+    fi
+  done
 fi
 exit "$code"
 `,
@@ -82,8 +89,10 @@ exit "$code"
     if (child.signalCode === null && child.exitCode === null) process.kill(-child.pid!, "SIGKILL");
     await stopped;
   }
-  expect(await readFile(join(abandoned, "secret.txt"), "utf8")).toBe("must not ship");
   expect(isUnderDir(abandoned, agent)).toBe(false);
+  // A snapshot is fetched, never checked out: what a kill leaves behind is an object store, not the repository's files.
+  expect(existsSync(join(abandoned, ".git"))).toBe(true);
+  expect(existsSync(join(abandoned, "secret.txt"))).toBe(false);
   // These lock owners were killed, rather than timed out; clearing their locks makes retry deterministic.
   await rm(join(agent, "context.json.lock"), { recursive: true, force: true });
   await rm(join(agent, ".contexts", "acme.lock"), { recursive: true, force: true });

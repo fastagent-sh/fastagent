@@ -56,8 +56,9 @@ offered to callers. To go without it, delete the file and `npm uninstall @fastag
 **To have it work on a project**, declare the project as its content: `fastagent init my-agent --content ~/code/app`,
 or later `fastagent content add ~/code/app`. The agent stays in its own directory and is told where the project is,
 and reads the project's files, its `AGENTS.md` included, when it works there. A GitHub checkout is declared as its
-repository in `context.json`, so every instance has it; any other directory is bound in `context.local.json`, on this
-machine only. A directory it should only read is added with `--readonly`. See [content](configuration.md#content).
+repository in `context.json`, so every instance has it; any other directory is bound in `context.local.json`'s
+`content`, on this machine only. A directory it should only read is added with `--readonly`. See
+[content](configuration.md#content).
 
 ## 2. Inspect it
 

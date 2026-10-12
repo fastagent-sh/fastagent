@@ -1,8 +1,11 @@
 /**
  * WHAT AN AUTHOR DECLARES an agent works on or knows, read and refused in ONE place (file.ts reads the files through
  * it): the `content` map of `context.json`, which is shared and so holds only repositories every instance reaches, and
- * the `content` map of `context.local.json`, the directories of this machine it is bound to. Pure: what is on the disk
- * is resolve.ts's question. docs/design/agent-model.md §3 is the rule.
+ * `context.local.json`'s two maps of THIS machine: `checkouts`, its own checkout of a declared repository, and
+ * `content`, a directory only it has. Two maps, because one map's meaning would come from what `context.json`
+ * declares: when that declaration goes away, a checkout would silently become writable local data, or the reverse,
+ * with neither file touched. Pure: what is on the disk is resolve.ts's question. docs/design/agent-model.md §3 is the
+ * rule.
  */
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -32,10 +35,7 @@ export interface DeclaredContent {
   description?: string;
 }
 
-/**
- * One binding as `context.local.json` holds it, under its name: a directory of this machine. Under the name of an
- * entry `context.json` declares it is this machine's checkout of that repository, and carries only `path`.
- */
+/** One directory of this machine as `context.local.json`'s `content` map holds it, under its name. */
 export interface ContentBinding {
   /** Absolute, `~/`, or relative to the agent directory. */
   path: string;
@@ -46,7 +46,7 @@ export interface ContentBinding {
 /** A binding, read: `path` absolute. */
 export type BoundContent = { name: string; path: string } & (
   | {
-      /** This machine's checkout of the declared entry of the same name. */
+      /** This machine's checkout of the declared entry of the same name, from `checkouts`. */
       kind: "checkout";
     }
   | {
@@ -57,7 +57,7 @@ export type BoundContent = { name: string; path: string } & (
     }
 );
 
-/** What an agent's content is declared as: the shared declaration, and this machine's bindings. */
+/** What an agent's content is declared as: the shared declaration, and this machine's two maps bound. */
 export interface ContentDeclaration {
   declared: DeclaredContent[];
   bound: BoundContent[];
@@ -106,37 +106,33 @@ function pick(value: object, keys: readonly string[]): Record<string, unknown> {
 
 /** Read `context.json`'s `content` map (undefined is none). Every refusal names the entry; nothing is defaulted. */
 export function declareContent(raw: unknown): DeclaredContent[] {
-  return entriesByName(raw).map(([name, entry]) => declareOne(name, entry));
+  return entriesByName(raw, "content").map(([name, entry]) => declareOne(name, entry));
 }
 
 /**
- * Read `context.local.json`'s `content` map (undefined is none) beside `declared`, with relative paths resolved against
- * `agentDir`. A binding under a declared entry's name is that entry's checkout here; any other is a directory of this
- * machine alone.
+ * Read `context.local.json`'s `content` map (undefined is none) beside `agentDir`, with relative paths resolved
+ * against it: directories only this machine has, and how the agent treats each.
  */
-export function declareBindings(raw: unknown, declared: readonly DeclaredContent[], agentDir: string): BoundContent[] {
-  return entriesByName(raw).map(([name, binding]) => {
+export function declareBindings(raw: unknown, agentDir: string): BoundContent[] {
+  return entriesByName(raw, "content").map(([name, binding]) => {
     const at = `content "${name}"`;
     const e = objectWithKeys(at, binding, BINDING_KEYS);
     if (typeof e.path !== "string" || e.path === "") throw new Error(`${at}: "path" must be a non-empty string`);
-    const path = absolutePath(e.path, agentDir);
-    const shared = declared.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
-    if (shared !== undefined) {
-      if (shared.name !== name) {
-        throw new Error(`${at} binds the entry ${CONTEXT_FILE} names "${shared.name}": spell it the same`);
-      }
-      for (const key of ["readonly", "description"] as const) {
-        if (e[key] !== undefined) {
-          throw new Error(
-            `${at} binds this machine's checkout of the entry ${CONTEXT_FILE} declares, which says "${key}" for ` +
-              `every instance: give it only "path"`,
-          );
-        }
-      }
-      return { name, path, kind: "checkout" };
-    }
     const treatment = treatmentOf(at, e);
-    return { name, path, kind: "local", ...treatment };
+    return { name, path: absolutePath(e.path, agentDir), kind: "local", ...treatment };
+  });
+}
+
+/**
+ * Read `context.local.json`'s `checkouts` map (undefined is none) beside `agentDir`: this machine's own checkout of a
+ * declared entry of the same name. A name nothing declares is kept as it is — what it no longer stands for is SAID by
+ * the reader (resolve.ts), never inferred from a copy that may be gone.
+ */
+export function declareCheckouts(raw: unknown, agentDir: string): BoundContent[] {
+  return entriesByName(raw, "checkouts").map(([name, path]) => {
+    const at = `checkouts "${name}"`;
+    if (typeof path !== "string" || path === "") throw new Error(`${at}: the directory must be a non-empty string`);
+    return { name, path: absolutePath(path, agentDir), kind: "checkout" };
   });
 }
 
@@ -146,22 +142,22 @@ function absolutePath(path: string, agentDir: string): string {
   return isAbsolute(path) ? resolve(path) : resolve(agentDir, path);
 }
 
-/** The entries of a `content` map, each name checked, unique ignoring case. */
-function entriesByName(raw: unknown): [string, unknown][] {
+/** The entries of a `content` or `checkouts` map, each name checked, unique ignoring case. */
+function entriesByName(raw: unknown, what: string): [string, unknown][] {
   if (raw === undefined) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`"content" must be an object of entries by name`);
+    throw new Error(`"${what}" must be an object of entries by name`);
   }
   const seen = new Map<string, string>();
   return Object.entries(raw).map(([name, entry]) => {
     if (!NAME.test(name)) {
-      throw new Error(`content "${name}": a name is one path segment of letters, digits, "-" and "_"`);
+      throw new Error(`${what} "${name}": a name is one path segment of letters, digits, "-" and "_"`);
     }
     const key = name.toLowerCase();
     const taken = seen.get(key);
     // Equal ignoring case is the same name: it becomes a directory, and some filesystems do not tell them apart.
     if (taken !== undefined) {
-      throw new Error(`two content entries are named "${taken}" and "${name}" — names must differ ignoring case`);
+      throw new Error(`two ${what} entries are named "${taken}" and "${name}" — names must differ ignoring case`);
     }
     seen.set(key, name);
     return [name, entry];

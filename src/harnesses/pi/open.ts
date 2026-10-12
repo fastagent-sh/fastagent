@@ -46,6 +46,8 @@ import {
   cloneContent,
   contentAbsentHere,
   resolveContent,
+  staleCheckoutNotice,
+  staleCheckouts,
 } from "../../content/resolve.ts";
 import { loadContent, loadContexts, loadEnvironmentParts } from "../../content/file.ts";
 
@@ -199,6 +201,7 @@ export async function resolveAgentAssembly(
   }
   const content = resolveContent(agentDir, declaration);
   for (const absent of contentAbsentHere(declaration)) log.warn(`[fastagent] content ${absentNotice(absent)}`);
+  for (const stale of staleCheckouts(declaration)) log.warn(`[fastagent] content ${staleCheckoutNotice(stale)}`);
   const modelSpec = resolveModelSpec(options.model, config);
   const { tools, toolNames, toolSources, indirectTools, toolCollisions, toolFailures, toolSecrets } =
     await resolveAgentTools(config, agentDir);

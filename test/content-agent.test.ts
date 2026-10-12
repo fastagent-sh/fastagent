@@ -50,7 +50,6 @@ describe("an agent with content", () => {
       declared: [],
       bound: declareBindings(
         { app: { path: app }, handbook: { path: handbook, readonly: true, description: "The team's style rules." } },
-        [],
         agentDir,
       ),
     });
@@ -111,7 +110,7 @@ describe("an agent with content", () => {
     ]);
     const content = resolveContent(agentDir, {
       declared: [],
-      bound: declareBindings({ handbook: { path: handbook, readonly: true } }, [], agentDir),
+      bound: declareBindings({ handbook: { path: handbook, readonly: true } }, agentDir),
     });
     const { agent } = await createPiAgentFromDefinition(agentDir, {
       model: "faux/faux-1",
@@ -201,6 +200,7 @@ describe("one resolution", () => {
     expect(listed).toEqual({
       content: [],
       absent: [{ name: "gone", path: join(root, "gone"), kind: "local", readonly: false }],
+      stale: [],
     });
   });
 

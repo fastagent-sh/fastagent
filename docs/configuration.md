@@ -202,8 +202,8 @@ directory sits, in two files:
 
 - **`context.json`** is part of the definition: committed and shared with everyone who has the agent, so it declares
   only what every instance reaches, a GitHub repository.
-- **`context.local.json`** is this machine's: the directories of it the agent is bound to. `init` ignores it in git
-  and `deploy` keeps it out of the image, so it never reaches another machine.
+- **`context.local.json`** is this machine's: its maps of the directories of it the agent is bound to. `init` ignores
+  it in git and `deploy` keeps it out of the image, so it never reaches another machine.
 
 ```json
 {
@@ -216,20 +216,21 @@ directory sits, in two files:
 
 ```json
 {
-  "content": {
-    "app": { "path": "/Users/me/code/app" },
-    "notes": { "path": "~/Documents/notes", "readonly": true, "description": "My notes. Cite them." }
-  }
+  "checkouts": { "app": "/Users/me/code/app" },
+  "content": { "notes": { "path": "~/Documents/notes", "readonly": true, "description": "My notes. Cite them." } }
 }
 ```
 
 Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case across both files.
+The two maps of `context.local.json` are kept apart because a name's meaning must not depend on the other file: a
+binding whose treatment came from `context.json` would change what it is when that declaration goes away.
 
 | Key | In | Meaning |
 |---|---|---|
 | `github` | `context.json` | A repository, `owner/repo`. Required: an entry every instance reaches is a repository |
 | `ref` | `context.json` | The branch, tag or full commit to clone. Defaults to the repository's default branch |
-| `path` | `context.local.json` | A directory of this machine: absolute, `~/`, or relative to the agent directory |
+| `path` | `context.local.json`, under `checkouts` | This machine's own checkout of the entry of that name: absolute, `~/`, or relative to the agent directory |
+| `path` | `context.local.json`, under `content` | A directory only this machine has: absolute, `~/`, or relative to the agent directory |
 | `readonly` | both | The agent knows it and does not write it. An instruction to the agent, not a permission |
 | `description` | both | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
 
@@ -248,12 +249,16 @@ Where the agent reaches each one on this machine:
   with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
   the start and is named, never removed: move it away yourself. `content/` carries its own `.gitignore` (`*`) and
   holds only clones: a link there is refused.
-- **A repository this machine has a checkout of** is that checkout, when `context.local.json` binds it under the
-  entry's name with only `path` (`fastagent content add <checkout>` writes both files). It is used as it is: never
-  fetched, never switched to `ref`, and startup and `info` say when it is not at `ref`. A binding to anything but the
-  root of a checkout of that repository is refused; one to a directory that is gone is said, and the clone is used.
-- **A directory only this machine has** is where its binding says. One that is gone is left out with a warning, and
-  the agent is not told of it.
+- **A repository this machine has a checkout of** is that checkout, when `checkouts` names it
+  (`fastagent content add <checkout>` writes both files). It is used as it is: never fetched, never switched to `ref`,
+  and startup and `info` say when it is not at `ref`. A binding to anything but the root of a checkout of that
+  repository is refused; one to a directory that is gone is said, and the clone is used.
+- **A directory only this machine has** is where its binding in `content` says. One that is gone is left out with a
+  warning, and the agent is not told of it.
+
+A name in `checkouts` that no entry declares is this machine's leftover: `content list`, `info` and the startup
+report say so, and it is never read as a directory of `content`. Remove it with `fastagent content remove <name>`, or
+by editing the file.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). When git has none of its
@@ -441,11 +446,10 @@ tools and prompts are not the agent's. A skill that teaches a context's CLI live
 **Joined, never overridden.** The agent's declarations and its contexts' are one:
 
 - Content: each entry, the agent's own or a context's, is cloned at `content/<name>`, named in the prompt with its
-  `description`, and can be bound to a checkout here in `context.local.json`. A name declared twice refuses the start,
-  naming both files. When refresh or removal withdraws a context's content, its checkout bindings are removed too;
-  checkout directories and unrelated bindings stay. Without the old snapshot, removal and recovery of a declared
-  context refuse if existing bindings cannot be attributed safely. A failed snapshot publication restores revoked
-  bindings, or reports that restoration failed.
+  `description`, and can be bound to a checkout here in `context.local.json`'s `checkouts`. A name declared twice
+  refuses the start, naming both files. When refresh or removal withdraws a context's content, the checkout bindings
+  for it are left where they are and reported as binding content nothing declares: nothing is written for another
+  machine's paths, and nothing is inferred from a copy that may be gone.
 - Environment: the packages and apt packages are joined, and installed as the agent's own. One package at two versions
   refuses the start, naming both.
 - Variables: a name declared twice is one variable with one value, required by each; the start, `info`, `deploy` and
@@ -460,8 +464,9 @@ uses each context as its `ref` names it then. So pin a context your team does no
 
 **Who fetches.** Each context is fetched into `.contexts/<name>/`, never in git (`init`'s `.gitignore` keeps it out):
 
-- `dev`, `chat`, `invoke`, `tool` and `env exec` bring each context to its `ref` at start. When GitHub cannot be
-  reached they run on the copy they have and say so; a context never fetched stops the start.
+- `dev`, `chat`, `invoke`, `tool` and `env exec` bring each context to its `ref` at start. A copy already at the
+  commit its `ref` names is left alone, asked of the remote with `git ls-remote` and not fetched; when GitHub cannot
+  be reached they run on the copy they have and say so, and a context never fetched stops the start.
 - `fastagent context add`, `fastagent context fetch` and `deploy` fetch every context, and fail when one cannot be
   fetched.
 - `start`, a deployed box and an embedder's `createAgentService` never fetch: they run on `.contexts/` as it is, and

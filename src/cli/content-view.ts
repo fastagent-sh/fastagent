@@ -1,7 +1,7 @@
 /** How the CLI writes an agent's content. */
 import type { BoundContent } from "../content/declare.ts";
 import { LOCAL_CONTEXT_FILE } from "../paths.ts";
-import { type ResolvedContent, absentNotice } from "../content/resolve.ts";
+import { type ResolvedContent, absentNotice, staleCheckoutNotice } from "../content/resolve.ts";
 
 /** What a content entry is, in the words the reports use. */
 function contentKind(c: ResolvedContent): string {
@@ -15,18 +15,21 @@ function contentKind(c: ResolvedContent): string {
 
 /**
  * The report lines for an agent's content — `works on` / `knows`, one per entry, then a `notice` line for each
- * thing its resolution has to say, then one for each directory this machine binds that is not here — shared by the
- * startup report, `info` and `content list`, so the three say the same thing.
+ * thing its resolution has to say, then one for each directory this machine binds that is not here and one for each
+ * checkout binding nothing declares — shared by the startup report, `info` and `content list`, so the three say the
+ * same thing.
  */
 export function contentLines(
   content: readonly ResolvedContent[],
   absent: readonly BoundContent[] = [],
+  stale: readonly BoundContent[] = [],
 ): [label: string, value: string][] {
   const lines = content.flatMap((c): [string, string][] => [
     [c.readonly ? "knows" : "works on", `${c.name.padEnd(width(content))}  ${c.location} (${contentKind(c)})`],
     ...c.notices.map((notice): [string, string] => ["notice", `${c.name}: ${notice}`]),
   ]);
   for (const binding of absent) lines.push(["notice", absentNotice(binding)]);
+  for (const binding of stale) lines.push(["notice", staleCheckoutNotice(binding)]);
   return lines.length === 0 ? [["content", "(none)"]] : lines;
 }
 

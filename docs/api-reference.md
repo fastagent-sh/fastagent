@@ -247,15 +247,16 @@ function fetchContexts(
   agentDir: string, contexts: DeclaredContext[], onFailure: "keep" | "fail", requireListed?: boolean,
 ): Promise<ContextFetch[]>;
 function fetchedContexts(agentDir: string, contexts: DeclaredContext[]): FetchedContext[];
-function loadContent(agentDir: string): ContentDeclaration; // agent + fetched contexts + local bindings, joined
+function loadContent(agentDir: string): ContentDeclaration; // agent + fetched contexts + this machine's
 function resolveContent(agentDir: string, declaration: ContentDeclaration): ResolvedContent[];
 function contentAbsentHere(declaration: ContentDeclaration): BoundContent[]; // bound here, gone: left out
+function staleCheckouts(declaration: ContentDeclaration): BoundContent[]; // checkouts no entry declares
 function cloneContent(
   entry: ResolvedContent & { kind: "github" },
 ): Promise<{ outcome: "cloned" | "updated" | "current" } | { outcome: "kept"; reason: string }>;
 
 type ContentEntry = { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
-type ContentBinding = { path: string; readonly?: boolean; description?: string }; // in context.local.json
+type ContentBinding = { path: string; readonly?: boolean; description?: string }; // context.local.json `content`
 type ContextEntry = { github: string; ref?: string }; // in the agent's context.json `contexts`
 type DeclaredContext = { name: string; repo: string; ref?: string };
 type ContentDeclaration = { declared: DeclaredContent[]; bound: BoundContent[] };
@@ -268,8 +269,8 @@ type ResolvedContent = {
   location: string;                     // where the agent reaches it here, absolute
   notices: string[];                    // what to tell the user: a checkout off its ref, a clone not made yet
 } & (
-  | { kind: "local" }                   // a directory only this machine has, bound in context.local.json
-  | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: false when a checkout is bound here
+  | { kind: "local" }                   // a directory only this machine has: context.local.json's `content`
+  | { kind: "github"; repo: string; ref?: string; clone: boolean } // clone: false when `checkouts` names one
 );
 ```
 
@@ -277,12 +278,16 @@ The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fas
 context's `context.json` joins the agent's; duplicate content names and packages at conflicting versions are refused,
 naming both files. A missing or mismatched copy refuses with `fastagent context fetch` as the remedy.
 `loadContent` refuses a file that is malformed, naming the file and the entry: an entry of `context.json` without
-`github`, a binding without `path`, or one under a declared entry's name that says more than its `path`.
+`github`, a binding without `path`, a checkout entry that is not a directory, or one name in both of this machine's
+maps.
 `resolveContent` refuses, naming the entry, a binding to a file, to a directory that contains the agent directory or
 sits inside it, or, for a declared repository, to anything but the root of a checkout of it; and a link or a file at a
 repository's `content/<name>` ([Configuration](configuration.md#content)). It reads the disk and git, never the
 network, and writes nothing. A binding whose directory is gone is not refused: a repository resolves to its clone,
-with a notice, and a directory only this machine has is left out, which `contentAbsentHere` lists. A repository with
+with a notice, and a directory only this machine has is left out, which `contentAbsentHere` lists; a directory of
+this machine under a declared entry's name is refused, since it would be two entries under one name. A `checkouts`
+binding no entry declares is never resolved: `staleCheckouts` lists it, and each caller says so
+(`staleCheckoutNotice`). A repository with
 no checkout bound here resolves to its clone at `content/<name>`, which `cloneContent` makes, or brings up to date in
 place by git's rules, which never overwrite the agent's work: what git refuses, a fetch that fails, or a clone on
 another branch than declared keeps it as it is (`kept`, with the `reason`). `createPiAgentFromDir` clones before it
@@ -324,9 +329,10 @@ the scaffold and is thrown, like a failed content write. The agent is then a git
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
 no commit identity), as a sentence to show.
 
-`addContent` writes the addition's `entry` into `context.json` and its `binding` into `context.local.json`, under one
-lock for both, so concurrent edits apply one after the other; its `notes` say when git would commit
-`context.local.json`. `removeContent` matches the name ignoring case, drops the entry from both files, and leaves a
+`addContent` writes the addition's `entry` into `context.json`, its `checkout` into `context.local.json`'s
+`checkouts` and its `binding` into that file's `content`, under one lock for both files, so concurrent edits apply one
+after the other; its `notes` say when git would commit `context.local.json`. `removeContent` matches the name
+ignoring case, drops the entry from the files that name it, and leaves a
 clone at `content/<name>` as it is, saying so in `notes`. Each returns the name it acted on with the content after the
 edit. A name that cannot name an entry, is taken in either file (ignoring case, including by another entry
 `createAgent` was given), or is not the agent's is a `ContentNameError`, which the CLI reports with exit code 2. The

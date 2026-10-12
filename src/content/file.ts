@@ -26,6 +26,7 @@ import {
   type ContentEntry,
   type DeclaredContent,
   declareBindings,
+  declareCheckouts,
   declareContent,
 } from "./declare.ts";
 
@@ -46,20 +47,24 @@ export interface ContextCopy {
   environment?: DeclaredEnvironment;
 }
 
-/** `context.local.json` as read: the bindings as written and as declared. */
+/** `context.local.json` as read: the two maps as written, and the bindings they hold. */
 export interface LocalContextFile {
+  /** This machine's own checkouts, by name, as written. */
+  checkouts: Record<string, string>;
+  /** The directories only this machine has, by name, as written. */
   content: Record<string, ContentBinding>;
   bound: BoundContent[];
 }
 
 const AGENT_FILE_KEYS = ["$schema", "contexts", "content", "environment"] as const;
 const CONTEXT_COPY_KEYS = ["$schema", "description", "content", "environment"] as const;
-const LOCAL_FILE_KEYS = ["content"] as const;
+const LOCAL_FILE_KEYS = ["checkouts", "content"] as const;
 
 /** The key each kind of file refuses because the other holds it, with why. */
 const MISPLACED: Readonly<Record<string, string>> = {
   description: `"description" says what a context is for, and this is an agent's: list the contexts it uses instead`,
   contexts: `a context uses no contexts: only an agent lists them`,
+  checkouts: `"checkouts" are the checkouts of one machine: bind them in ${LOCAL_CONTEXT_FILE}`,
 };
 
 /** `text`, the contents of `path`, as the object a context file is: refused when the file itself is wrong. */
@@ -135,16 +140,35 @@ function declareDescription(raw: unknown): string | undefined {
   return raw;
 }
 
-/** Read `text`, the contents of `path`, whole, beside the entries the agent's contexts and its own file declare. */
-export function parseLocalContextFile(
-  text: string,
-  path: string,
-  declared: readonly DeclaredContent[],
-  agentDir: string,
-): LocalContextFile {
+/** Read `text`, the contents of `path` (an agent's `context.local.json`), with paths resolved against `agentDir`. */
+export function parseLocalContextFile(text: string, path: string, agentDir: string): LocalContextFile {
   const file = parseFile(text, path, LOCAL_FILE_KEYS);
-  const bound = declarePart(path, () => declareBindings(file.content, declared, resolve(agentDir)));
-  return { content: (file.content ?? {}) as Record<string, ContentBinding>, bound };
+  const bound = declarePart(path, () => {
+    bothMapsRefused(file.checkouts, file.content);
+    return [
+      ...declareCheckouts(file.checkouts, resolve(agentDir)),
+      ...declareBindings(file.content, resolve(agentDir)),
+    ];
+  });
+  return {
+    checkouts: (file.checkouts ?? {}) as Record<string, string>,
+    content: (file.content ?? {}) as Record<string, ContentBinding>,
+    bound,
+  };
+}
+
+/**
+ * A name in both maps would be two directories under one name, and neither file says which one is meant. The bad
+ * spellings are read from the maps as written, so the refusal names them the way the file does.
+ */
+function bothMapsRefused(checkouts: unknown, content: unknown): void {
+  if (!checkouts || typeof checkouts !== "object") return;
+  for (const name of Object.keys(checkouts)) {
+    const other = Object.keys(content ?? {}).find((one) => one.toLowerCase() === name.toLowerCase());
+    if (other !== undefined) {
+      throw new Error(`content "${other}" is bound in both "checkouts" and "content": pick one`);
+    }
+  }
 }
 
 /** The file at `path` and its text, or undefined text when there is none. */
@@ -170,10 +194,10 @@ export function readContextFile(agentDir: string): ContextFile {
     : parseContextFile(text, path);
 }
 
-/** This machine's `context.local.json` for the agent in `agentDir`, read whole, beside what is `declared`. */
-function readLocalContextFile(agentDir: string, declared: readonly DeclaredContent[]): LocalContextFile {
+/** This machine's `context.local.json` for the agent in `agentDir`, read whole. */
+function readLocalContextFile(agentDir: string): LocalContextFile {
   const { path, text } = fileAt(join(resolve(agentDir), LOCAL_CONTEXT_FILE));
-  return text === undefined ? { content: {}, bound: [] } : parseLocalContextFile(text, path, declared, agentDir);
+  return text === undefined ? { checkouts: {}, content: {}, bound: [] } : parseLocalContextFile(text, path, agentDir);
 }
 
 /** The contexts the agent in `agentDir` uses, as its `context.json` lists them. */
@@ -234,7 +258,7 @@ export function contextsEnvironment(
  */
 export function loadContent(agentDir: string): ContentDeclaration {
   const declared = joinContent(partsOf(agentDir, (file) => declareContent(file.content), []));
-  return { declared, bound: readLocalContextFile(agentDir, declared).bound };
+  return { declared, bound: readLocalContextFile(agentDir).bound };
 }
 
 /** Each declarer's environment, the agent's own first: what a reader that attributes (a variable's source) reads. */
@@ -274,7 +298,14 @@ export function contextFileText(file: {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-/** The text `context.local.json` is written as. */
-export function localContextFileText(content: Record<string, ContentBinding>): string {
-  return `${JSON.stringify({ content }, null, 2)}\n`;
+/** The text `context.local.json` is written as: each map left out when it holds nothing. */
+export function localContextFileText(maps: {
+  checkouts?: Record<string, string>;
+  content?: Record<string, ContentBinding>;
+}): string {
+  const out = {
+    ...(Object.keys(maps.checkouts ?? {}).length > 0 ? { checkouts: maps.checkouts } : {}),
+    ...(Object.keys(maps.content ?? {}).length > 0 ? { content: maps.content } : {}),
+  };
+  return `${JSON.stringify(out, null, 2)}\n`;
 }

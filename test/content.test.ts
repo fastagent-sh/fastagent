@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type ContentDeclaration, declareBindings, declareContent } from "../src/content/declare.ts";
+import { type ContentDeclaration, declareBindings, declareCheckouts, declareContent } from "../src/content/declare.ts";
 import {
   contextFileText,
   loadContent,
@@ -16,7 +16,13 @@ import {
   readContextFile,
 } from "../src/content/file.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { checkBinding, contentAbsentHere, resolveContent } from "../src/content/resolve.ts";
+import {
+  checkBinding,
+  contentAbsentHere,
+  resolveContent,
+  staleCheckoutNotice,
+  staleCheckouts,
+} from "../src/content/resolve.ts";
 
 describe("content: the declaration", () => {
   it("reads each repository by name", () => {
@@ -59,21 +65,35 @@ describe("content: the declaration", () => {
 });
 
 describe("content: this machine's bindings", () => {
-  const declared = declareContent({ app: { github: "acme/app" } });
+  it("reads this machine's own checkouts, by name, from `checkouts`", () => {
+    expect(declareCheckouts({ app: "/code/app", notes: "~/notes", drafts: "../drafts" }, "/agents/me")).toEqual([
+      { name: "app", path: "/code/app", kind: "checkout" },
+      { name: "notes", path: join(homedir(), "notes"), kind: "checkout" },
+      { name: "drafts", path: "/agents/drafts", kind: "checkout" },
+    ]);
+    expect(declareCheckouts(undefined, "/agents/me")).toEqual([]);
+  });
 
-  it("binds a declared repository to its checkout here, and any other name to a directory only this machine has", () => {
+  it.each([
+    [
+      "a checkout that is not a directory",
+      { app: { path: "/code/app" } },
+      /checkouts "app": the directory must be a non-empty string/,
+    ],
+    ["an empty one", { app: "" }, /checkouts "app": the directory must be a non-empty string/],
+    ["a name that is not one path segment", { "my app": "/x" }, /checkouts "my app": a name is one path segment/],
+    ["two names equal ignoring case", { App: "/x", app: "/y" }, /two checkouts entries are named "App" and "app"/],
+  ])("refuses %s, naming it", (_what, raw, message) => {
+    expect(() => declareCheckouts(raw, "/agents/me")).toThrow(message);
+  });
+
+  it("reads a directory of this machine alone, with how the agent treats it", () => {
     expect(
       declareBindings(
-        {
-          app: { path: "/code/app" },
-          notes: { path: "~/notes", readonly: true, description: "My notes." },
-          drafts: { path: "../drafts" },
-        },
-        declared,
+        { notes: { path: "~/notes", readonly: true, description: "My notes." }, drafts: { path: "../drafts" } },
         "/agents/me",
       ),
     ).toEqual([
-      { name: "app", path: "/code/app", kind: "checkout" },
       { name: "notes", path: join(homedir(), "notes"), kind: "local", readonly: true, description: "My notes." },
       { name: "drafts", path: "/agents/drafts", kind: "local", readonly: false },
     ]);
@@ -82,14 +102,9 @@ describe("content: this machine's bindings", () => {
   it.each([
     ["a binding without a path", { notes: { readonly: true } }, /content "notes": "path" must be a non-empty string/],
     ["an unknown key", { notes: { path: "/x", github: "a/b" } }, /content "notes": unknown key "github"/],
-    [
-      "a treatment of the shared entry it binds",
-      { app: { path: "/x", readonly: true } },
-      /content "app" binds this machine's checkout .* says "readonly" for every instance: give it only "path"/,
-    ],
-    ["the shared entry's name spelled otherwise", { App: { path: "/x" } }, /binds the entry context\.json names "app"/],
+    ["a non-boolean flag", { notes: { path: "/x", readonly: "yes" } }, /content "notes": "readonly" must be a boolean/],
   ])("refuses %s, naming it", (_what, raw, message) => {
-    expect(() => declareBindings(raw, declared, "/agents/me")).toThrow(message);
+    expect(() => declareBindings(raw, "/agents/me")).toThrow(message);
   });
 });
 
@@ -138,22 +153,35 @@ describe("content: context.json and context.local.json", () => {
       expect(() => read(dir)).toThrow(`${path}: unknown key "contents"`);
   });
 
-  it("content is read from both, and a refused binding names this machine's file", async () => {
+  it("content is read from all three, and a refused binding names this machine's file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-context-local-"));
     await writeFile(join(dir, "context.json"), `{ "content": { "app": { "github": "acme/app" } } }`);
     const local = join(dir, "context.local.json");
-    await writeFile(local, `{ "content": { "app": { "path": "/code/app" }, "notes": { "path": "notes" } } }`);
+    await writeFile(local, `{ "checkouts": { "app": "code/app" }, "content": { "notes": { "path": "notes" } } }`);
     expect(loadContent(dir)).toEqual({
       declared: [{ name: "app", repo: "acme/app", readonly: false }],
       bound: [
-        { name: "app", path: "/code/app", kind: "checkout" },
+        { name: "app", path: join(dir, "code", "app"), kind: "checkout" },
         { name: "notes", path: join(dir, "notes"), kind: "local", readonly: false },
       ],
     });
-    // The environment is the shared file's alone.
+    // The environment is the shared file's alone, and a checkout of one machine is not a shared declaration.
     await writeFile(local, `{ "environment": {} }`);
-    expect(() => loadContent(dir)).toThrow(`${local}: unknown key "environment" (valid keys: content)`);
+    expect(() => loadContent(dir)).toThrow(`${local}: unknown key "environment" (valid keys: checkouts, content)`);
     expect(loadEnvironment(dir)).toBeUndefined();
+    await writeFile(join(dir, "context.json"), `{ "checkouts": { "app": "/code/app" } }`);
+    expect(() => loadContent(dir)).toThrow(
+      `${join(dir, "context.json")}: "checkouts" are the checkouts of one machine: bind them in context.local.json`,
+    );
+  });
+
+  it("refuses one name in both maps of this machine's file: neither of them is the one meant", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-context-both-"));
+    const local = join(dir, "context.local.json");
+    await writeFile(local, `{ "checkouts": { "app": "/code/app" }, "content": { "App": { "path": "/x" } } }`);
+    expect(() => loadContent(dir)).toThrow(
+      `${local}: content "App" is bound in both "checkouts" and "content": pick one`,
+    );
   });
 });
 
@@ -186,7 +214,7 @@ describe("content: resolved for this instance", () => {
   }
   const local = (agentDir: string, bindings: Record<string, unknown>): ContentDeclaration => ({
     declared: [],
-    bound: declareBindings(bindings, [], agentDir),
+    bound: declareBindings(bindings, agentDir),
   });
 
   it("a directory this machine binds is where it is; one that is gone is left out, and said to be", async () => {
@@ -219,7 +247,7 @@ describe("content: resolved for this instance", () => {
         notices: [expect.stringMatching(/^not cloned yet/)],
       }),
     ]);
-    const bound = declareBindings({ app: { path: join(root, "gone") } }, declared, agentDir);
+    const bound = declareCheckouts({ app: join(root, "gone") }, agentDir);
     expect(resolveContent(agentDir, { declared, bound })).toEqual([
       expect.objectContaining({
         clone: true,
@@ -230,6 +258,29 @@ describe("content: resolved for this instance", () => {
       }),
     ]);
     expect(contentAbsentHere({ declared, bound })).toEqual([]);
+  });
+
+  it("says a checkout nothing declares is one, and never reads it as local content", async () => {
+    const { root, agentDir } = await layout();
+    const bound = declareCheckouts({ notes: "../notes" }, agentDir);
+    const declaration = { declared: [], bound };
+    expect(resolveContent(agentDir, declaration)).toEqual([]);
+    expect(staleCheckouts(declaration)).toEqual(bound);
+    for (const one of bound) {
+      expect(staleCheckoutNotice(one)).toBe(
+        `notes: bound in context.local.json to ${join(root, "notes")} as this machine's checkout, which no ` +
+          `content entry declares: the agent is not told of it (fastagent content remove notes)`,
+      );
+    }
+  });
+
+  it("refuses a directory of this machine under a declared entry's name: two things, one name", async () => {
+    const { root, agentDir } = await layout();
+    const declared = declareContent({ app: { github: "acme/app" } });
+    const bound = declareBindings({ app: { path: join(root, "notes") } }, agentDir);
+    expect(() => resolveContent(agentDir, { declared, bound })).toThrow(
+      /content "app" is declared in context\.json and bound as a directory of this machine in context\.local\.json/,
+    );
   });
 
   it("refuses a link where a clone belongs, a file in its place, and a binding to a file", async () => {

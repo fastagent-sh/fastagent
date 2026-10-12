@@ -100,8 +100,8 @@ Prints, without serving:
 
 Content that cannot be resolved (its directory is missing, say), a context not fetched and an environment FastAgent
 refuses are reported, not fatal; `info` installs nothing and fetches nothing. `--json` carries `contexts`,
-`contextsError`, `content`, `contentError`, `environment`, `environmentError` (what dev and start stop on) and
-`contextFiles` (the agent directory's `AGENTS.md`; nothing of its content).
+`contextsError`, `content`, `contentAbsent`, `contentStale`, `contentError`, `environment`, `environmentError` (what
+dev and start stop on) and `contextFiles` (the agent directory's `AGENTS.md`; nothing of its content).
 Read-only.
 
 ## `fastagent context`
@@ -117,12 +117,11 @@ A [context](configuration.md#contexts) is a GitHub repository whose root `contex
 environment shared by several agents. `add` fetches and checks it against the agent's own declarations, installs new
 packages here, then writes the entry in the agent's `context.json`. `list` reports its source, description, commit and
 what it declares, without fetching. `fetch` updates every declared context to its `ref`, and stops if any cannot be
-fetched. `remove` deletes the declaration, fetched copy and local bindings of its content. Checkout directories,
-content clones and installed packages are kept; unrelated local bindings are unchanged. Refresh also removes bindings
-for content withdrawn by the new snapshot. If the old snapshot is missing and local bindings cannot be attributed,
-removal or recovery of an already-declared context is refused: restore the old snapshot or explicitly remove the
-affected bindings first. Removal can use the old snapshot even after changing the requested repository or `ref`.
-Failed snapshot publication restores the original bindings; if restoration also fails, both errors are reported.
+fetched; a copy already at the commit its `ref` names is not fetched at all (`git ls-remote` answers that). `remove`
+deletes the declaration and the fetched copy, using the copy's own snapshot even after the requested repository or
+`ref` was edited. Checkout directories, content clones, installed packages and this machine's `context.local.json` are
+ever written by any of these: a checkout binding for content a context declared stays where it is, and is reported as
+binding content nothing declares (`fastagent content remove <name>` removes it).
 
 Development commands (`dev`, `chat`, `invoke`, `tool`, `env exec`) refresh contexts automatically and warn if offline
 while using an existing copy. `start` and `createAgentService` never fetch: run `context fetch` before a manual start.
@@ -138,20 +137,22 @@ fastagent content remove <name> [agent]
 ```
 
 Edits `context.json` (what every instance reaches) and `context.local.json` (the directories of this machine the agent
-is bound to). `add` reads `<source>` the way `init --content` does: a directory (bound here), the root of a GitHub
-checkout (declared as that repository, and bound here to the checkout), or `github:owner/repo` (declared, and cloned
-at the next start). A binding is written absolute. `--readonly` makes it content the agent knows rather than works
-on; `--ref` names a repository's branch, tag or commit; `--description` gives the agent one sentence about it. An
-entry's name defaults to its directory's or repository's; `add` asks for `--name` when that name is taken (ignoring
-case) or is not one segment of letters, digits, `-` and `_`, and refuses a repository to clone when something is
-already at `content/<name>`. `add` says when git would commit `context.local.json` (an agent made before `init`
-ignored it). `remove` drops the entry from both files; the directory it was bound to is untouched, and so is a
-clone, which may hold the agent's work: `remove` says it is left, for you to delete.
+is bound to: `checkouts`, this machine's own checkout of a declared entry, and `content`, a directory only it has).
+`add` reads `<source>` the way `init --content` does: a directory (bound in `content`), the root of a GitHub checkout
+(declared as that repository, and written to `checkouts`), or `github:owner/repo` (declared, and cloned at the next
+start). A path is written absolute. `--readonly` makes it content the agent knows rather than works on; `--ref` names
+a repository's branch, tag or commit; `--description` gives the agent one sentence about it. An entry's name defaults
+to its directory's or repository's; `add` asks for `--name` when that name is taken (ignoring case) or is not one
+segment of letters, digits, `-` and `_`, and refuses a repository to clone when something is already at
+`content/<name>`. `add` says when git would commit `context.local.json` (an agent made before `init` ignored it).
+`remove` drops the entry from the files it is in; the directory it was bound to is untouched, and so is a clone, which
+may hold the agent's work: `remove` says it is left, for you to delete.
 
 Edits take one lock, `context.json`'s (which `fastagent env` edits take too), so two at once apply one after the other
 whichever files they write, and a refusal leaves both files as they were. `list` names a directory bound here that is
-gone; `list --json` prints `{ content, absent }`: each entry as every command resolves it, with its `notices` (a
-checkout off its `ref`, a clone not made yet), and each binding whose directory is gone.
+gone and a `checkouts` entry nothing declares; `list --json` prints `{ content, absent, stale }`: each entry as every
+command resolves it, with its `notices` (a checkout off its `ref`, a clone not made yet), each binding whose directory
+is gone, and each checkout binding no entry declares.
 
 ## `fastagent env`
 

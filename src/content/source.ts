@@ -16,12 +16,15 @@ export interface SourceOptions {
 }
 
 /**
- * A content entry to add, by name: the repository `context.json` declares for every instance, this machine's binding
- * in `context.local.json`, or both (a checkout of the declared repository). At least one.
+ * A content entry to add, by name: the repository `context.json` declares for every instance, this machine's checkout
+ * of it in `context.local.json`, a directory only this machine has, or a declaration alone (cloned here). At least one.
  */
 export interface ContentAddition {
   name: string;
   entry?: ContentEntry;
+  /** This machine's own checkout of `entry`; only with an entry, and only one of the two local maps. */
+  checkout?: string;
+  /** A directory only this machine has, with how the agent treats it. */
   binding?: ContentBinding;
 }
 
@@ -60,7 +63,7 @@ export function readContentSource(
       addition: {
         name: options.name ?? repoName(repo),
         entry: { github: repo, ...ref, ...treated },
-        binding: { path: root },
+        checkout: root,
       },
       notes: [],
     };

@@ -27,6 +27,7 @@ import {
   canonicalBinding,
   canonicalEntry,
   declareBindings,
+  declareCheckouts,
   declareContent,
   isContentName,
 } from "../../content/declare.ts";
@@ -51,8 +52,13 @@ import {
 } from "../../contexts/declare.ts";
 import { type FetchedContext, fetchContexts, fetchedContexts, withContextCopy } from "../../contexts/fetch.ts";
 import { type DeclaredPart, joinContent, joinEnvironment } from "../../contexts/join.ts";
-import { withRevokedContextBindings } from "../../contexts/bindings.ts";
-import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import {
+  type ResolvedContent,
+  checkBinding,
+  contentAbsentHere,
+  resolveContent,
+  staleCheckouts,
+} from "../../content/resolve.ts";
 import type { ContentAddition } from "../../content/source.ts";
 import { type LockResult, withLockedFile } from "../../locked-file.ts";
 
@@ -101,13 +107,22 @@ export interface CreatedAgent {
 }
 
 /**
- * The two content maps an edit rewrites, as written: `context.json`'s entries and `context.local.json`'s bindings, beside
- * the content the agent's contexts declare, which no content edit writes and every one joins.
+ * The three content maps an edit rewrites, as written: `context.json`'s entries, and `context.local.json`'s two,
+ * beside the content the agent's contexts declare, which no content edit writes and every one joins.
  */
 interface ContentMaps {
-  content: Record<string, ContentEntry>;
+  /** `context.json`'s entries: the repositories every instance reaches. */
+  shared: Record<string, ContentEntry>;
+  /** `context.local.json`'s `checkouts`: this machine's own checkout of a declared entry, by name. */
+  checkouts: Record<string, string>;
+  /** `context.local.json`'s `content`: directories only this machine has. */
   bindings: Record<string, ContentBinding>;
   contexts: DeclaredPart<DeclaredContent[]>[];
+}
+
+/** The text `context.local.json` holds for `maps`. */
+function localContextText(maps: ContentMaps): string {
+  return localContextFileText({ checkouts: maps.checkouts, content: maps.bindings });
 }
 
 /**
@@ -120,7 +135,7 @@ interface ContentMaps {
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
   const agentDir = resolve(dir);
   const additions = options.content ?? [];
-  let maps: ContentMaps = { content: {}, bindings: {}, contexts: [] };
+  let maps: ContentMaps = { shared: {}, checkouts: {}, bindings: {}, contexts: [] };
   for (const addition of additions) maps = withAddition(agentDir, maps, addition).maps;
   const { created, undo } = await scaffoldAgent(agentDir, { webAccess: options.webAccess });
   const removeAll = async (error: unknown): Promise<never> => {
@@ -132,11 +147,11 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
   // The content was checked above, so a refusal here is one that check could not foresee (the disk changed in
   // between); the scaffold goes with it, or a retry would find "already an agent" declaring no content.
   try {
-    if (Object.keys(maps.content).length > 0) {
-      writeFileAtomic(join(agentDir, CONTEXT_FILE), contextFileText({ content: maps.content }), CONTEXT_FILE_MODE);
+    if (Object.keys(maps.shared).length > 0) {
+      writeFileAtomic(join(agentDir, CONTEXT_FILE), contextFileText({ content: maps.shared }), CONTEXT_FILE_MODE);
     }
-    if (Object.keys(maps.bindings).length > 0) {
-      writeFileAtomic(join(agentDir, LOCAL_CONTEXT_FILE), localContextFileText(maps.bindings), CONTEXT_FILE_MODE);
+    if (Object.keys(maps.checkouts).length > 0 || Object.keys(maps.bindings).length > 0) {
+      writeFileAtomic(join(agentDir, LOCAL_CONTEXT_FILE), localContextText(maps), CONTEXT_FILE_MODE);
     }
   } catch (error) {
     await removeAll(error);
@@ -147,13 +162,19 @@ export async function createAgent(dir: string, options: CreateAgentOptions = {})
 }
 
 /**
- * The agent's content, resolved for this instance (what `fastagent content list` shows), and the directories this
- * machine binds that are not here: the agent is not told of those.
+ * The agent's content, resolved for this instance (what `fastagent content list` shows), the directories this machine
+ * binds that are not here, and the checkout bindings nothing declares: the agent is told of none of them.
  */
-export async function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }> {
+export async function listContent(
+  agentDir: string,
+): Promise<{ content: ResolvedContent[]; absent: BoundContent[]; stale: BoundContent[] }> {
   const dir = resolveAgentDir(agentDir);
   const declaration = loadContent(dir);
-  return { content: resolveContent(dir, declaration), absent: contentAbsentHere(declaration) };
+  return {
+    content: resolveContent(dir, declaration),
+    absent: contentAbsentHere(declaration),
+    stale: staleCheckouts(declaration),
+  };
 }
 
 /**
@@ -174,15 +195,24 @@ export interface ContentEdit {
 export async function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
   const declaration = await editContext(dir, (shared, local, contexts) => {
-    const { maps } = withAddition(dir, { content: shared.content, bindings: local.content, contexts }, addition);
+    const { maps } = withAddition(
+      dir,
+      { shared: shared.content, checkouts: local.checkouts, bindings: local.content, contexts },
+      addition,
+    );
     return {
       result: declarationOf(dir, maps),
-      ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
-      ...(addition.binding !== undefined ? { local: localContextFileText(maps.bindings) } : {}),
+      ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.shared }) } : {}),
+      ...(writesLocal(addition) ? { local: localContextText(maps) } : {}),
     };
   });
-  const notes = addition.binding !== undefined ? unignored(dir, LOCAL_CONTEXT_FILE, "directories of this machine") : [];
+  const notes = writesLocal(addition) ? unignored(dir, LOCAL_CONTEXT_FILE, "directories of this machine") : [];
   return { name: addition.name, content: resolveContent(dir, declaration), notes };
+}
+
+/** Whether adding `addition` writes `context.local.json`: a checkout here, or a directory only this machine has. */
+function writesLocal(addition: ContentAddition): boolean {
+  return addition.checkout !== undefined || addition.binding !== undefined;
 }
 
 /**
@@ -193,9 +223,13 @@ export async function addContent(agentDir: string, addition: ContentAddition): P
 export async function removeContent(agentDir: string, name: string): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
   const { removed, wasDeclared, declaration } = await editContext(dir, (shared, local, contexts) => {
-    const found = entryNamed({ content: shared.content, bindings: local.content, contexts }, name);
+    const found = entryNamed(
+      { shared: shared.content, checkouts: local.checkouts, bindings: local.content, contexts },
+      name,
+    );
     const maps = {
-      content: without(shared.content, found.name),
+      shared: without(shared.content, found.name),
+      checkouts: without(local.checkouts, found.name),
       bindings: without(local.content, found.name),
       contexts,
     };
@@ -205,8 +239,8 @@ export async function removeContent(agentDir: string, name: string): Promise<Con
     resolveContent(dir, declaration);
     return {
       result: { removed: found.name, wasDeclared: found.shared, declaration },
-      ...(found.shared ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
-      ...(found.local ? { local: localContextFileText(maps.bindings) } : {}),
+      ...(found.shared ? { shared: contextFileText({ ...shared, content: maps.shared }) } : {}),
+      ...(found.local ? { local: localContextText(maps) } : {}),
     };
   });
   const notes: string[] = [];
@@ -225,36 +259,46 @@ export async function removeContent(agentDir: string, name: string): Promise<Con
  * it once made).
  */
 function withAddition(agentDir: string, maps: ContentMaps, addition: ContentAddition): { maps: ContentMaps } {
-  const { name, entry, binding } = addition;
-  if (entry === undefined && binding === undefined) throw new Error(`content "${name}": nothing to add`);
+  const { name, entry, checkout, binding } = addition;
+  if (entry === undefined && binding === undefined && checkout === undefined) {
+    throw new Error(`content "${name}": nothing to add`);
+  }
   if (!isContentName(name)) {
     throw new ContentNameError(`"${name}" cannot name content (one path segment of letters, digits, "-" and "_")`);
   }
-  const taken = [...Object.keys(maps.content), ...Object.keys(maps.bindings)].find(
+  if (checkout !== undefined && entry === undefined) {
+    throw new Error(`content "${name}": a checkout is this machine's copy of a repository, which "entry" declares`);
+  }
+  const taken = [...Object.keys(maps.shared), ...Object.keys(maps.checkouts), ...Object.keys(maps.bindings)].find(
     (key) => key.toLowerCase() === name.toLowerCase(),
   );
   if (taken) throw new ContentNameError(`this agent already has content named "${taken}"`);
   const fromContext = contextEntry(maps, name);
-  // A binding alone under a context's entry is this machine's checkout of it, which declareBindings checks.
   if (fromContext !== undefined && entry !== undefined) {
     throw new ContentNameError(
       `the context "${fromContext.context}" declares content named "${fromContext.entry.name}" (${fromContext.source})`,
     );
   }
   const next: ContentMaps = {
-    content: entry !== undefined ? { ...maps.content, [name]: canonicalEntry(entry) } : maps.content,
+    shared: entry !== undefined ? { ...maps.shared, [name]: canonicalEntry(entry) } : maps.shared,
+    checkouts: checkout !== undefined ? { ...maps.checkouts, [name]: checkout } : maps.checkouts,
     bindings: binding !== undefined ? { ...maps.bindings, [name]: canonicalBinding(binding) } : maps.bindings,
     contexts: maps.contexts,
   };
   const declaration = declarationOf(agentDir, next);
-  if (binding === undefined) {
+  if (checkout === undefined && binding === undefined) {
     if (lstatSync(contentEntryPath(agentDir, name), { throwIfNoEntry: false })) {
       throw new Error(`content/${name} already exists in ${agentDir}: move it away first`);
     }
   } else {
-    const bound = declaration.bound.find((b) => b.name === name) as BoundContent;
-    const repository = declaration.declared.find((d) => d.name === name);
-    checkBinding(agentDir, name, bound.path, repository);
+    const at = declaration.bound.find((one) => one.name === name) as BoundContent;
+    // A checkout is checked against the repository it is declared to be; a directory of this machine against nothing.
+    checkBinding(
+      agentDir,
+      name,
+      at.path,
+      at.kind === "checkout" ? declaration.declared.find((one) => one.name === name) : undefined,
+    );
   }
   resolveContent(agentDir, declaration);
   return { maps: next };
@@ -262,8 +306,11 @@ function withAddition(agentDir: string, maps: ContentMaps, addition: ContentAddi
 
 /** `maps` declared, the agent's own content joined with its contexts': what every reader of the files would read. */
 function declarationOf(agentDir: string, maps: ContentMaps): ContentDeclaration {
-  const declared = joinContent([{ source: CONTEXT_FILE, declared: declareContent(maps.content) }, ...maps.contexts]);
-  return { declared, bound: declareBindings(maps.bindings, declared, agentDir) };
+  const declared = joinContent([{ source: CONTEXT_FILE, declared: declareContent(maps.shared) }, ...maps.contexts]);
+  return {
+    declared,
+    bound: [...declareCheckouts(maps.checkouts, agentDir), ...declareBindings(maps.bindings, agentDir)],
+  };
 }
 
 /** The content entry a context declares under `name` (ignoring case), with the context and its file. */
@@ -288,8 +335,8 @@ function without<T>(map: Record<string, T>, name: string): Record<string, T> {
  */
 function entryNamed(maps: ContentMaps, name: string): { name: string; shared: boolean; local: boolean } {
   const matches = (key: string) => key.toLowerCase() === name.toLowerCase();
-  const shared = Object.keys(maps.content).find(matches);
-  const local = Object.keys(maps.bindings).find(matches);
+  const shared = Object.keys(maps.shared).find(matches);
+  const local = [...Object.keys(maps.checkouts), ...Object.keys(maps.bindings)].find(matches);
   const found = shared ?? local;
   if (found !== undefined) return { name: found, shared: shared !== undefined, local: local !== undefined };
   const fromContext = contextEntry(maps, name);
@@ -299,7 +346,9 @@ function entryNamed(maps: ContentMaps, name: string): { name: string; shared: bo
         `— it goes with the context (fastagent context remove ${fromContext.context})`,
     );
   }
-  const names = [...new Set([...Object.keys(maps.content), ...Object.keys(maps.bindings)])];
+  const names = [
+    ...new Set([...Object.keys(maps.shared), ...Object.keys(maps.checkouts), ...Object.keys(maps.bindings)]),
+  ];
   throw new ContentNameError(`no content named "${name}" (this agent has: ${names.join(", ") || "none"})`);
 }
 
@@ -323,11 +372,11 @@ async function editContext<T>(
     async (sharedText): Promise<LockResult<T>> => {
       const shared = parseContextFile(sharedText ?? "{}", sharedPath);
       const contexts = contextsContent(dir, shared.declaredContexts);
-      // A binding is a checkout under the name of any declared repository, the agent's own or a context's.
-      const joined = joinContent([{ source: CONTEXT_FILE, declared: shared.declared }, ...contexts]);
       const localText = textIfExists(localPath);
       const local =
-        localText === undefined ? { content: {}, bound: [] } : parseLocalContextFile(localText, localPath, joined, dir);
+        localText === undefined
+          ? { checkouts: {}, content: {}, bound: [] }
+          : parseLocalContextFile(localText, localPath, dir);
       const out = edit(shared, local, contexts);
       if (out.local !== undefined) writeFileAtomic(localPath, out.local, fileMode(localPath));
       return { result: out.result, next: out.shared };
@@ -408,7 +457,7 @@ export async function addContext(
         const parts = contextsContent(dir, contexts);
         const declared = joinContent([{ source: CONTEXT_FILE, declared: file.declared }, ...parts]);
         const localPath = join(dir, LOCAL_CONTEXT_FILE);
-        const local = parseLocalContextFile(textIfExists(localPath) ?? "{}", localPath, declared, dir);
+        const local = parseLocalContextFile(textIfExists(localPath) ?? "{}", localPath, dir);
         resolveContent(dir, { declared, bound: local.bound });
         const own = { source: CONTEXT_FILE, declared: file.environment };
         const had = joinEnvironment([own, ...contextsEnvironment(dir, file.declaredContexts)]);
@@ -435,7 +484,11 @@ export async function addContext(
   };
 }
 
-/** Remove the cached copy and declaration under the agent's lock; content clones and installed packages are kept. */
+/**
+ * Remove the cached copy and declaration under the agent's lock; content clones, installed packages and this machine's
+ * bindings are kept. A checkout binding of content the context declared is left in `context.local.json`, where it is
+ * reported as a checkout nothing declares: nothing here can tell what a context declared once its copy is gone.
+ */
 export async function removeContext(agentDir: string, name: string): Promise<ContextEdit> {
   const dir = resolveAgentDir(agentDir);
   const path = join(dir, CONTEXT_FILE);
@@ -450,9 +503,7 @@ export async function removeContext(agentDir: string, name: string): Promise<Con
       }
       const contexts = without(file.contexts, found.name);
       await withContextCopy(dir, found.name, async () => {
-        withRevokedContextBindings(dir, found.name, [], () => {
-          rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
-        });
+        rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
       });
       return { result: found.name, next: contextFileText({ ...file, contexts }) };
     },
@@ -461,7 +512,11 @@ export async function removeContext(agentDir: string, name: string): Promise<Con
   return {
     name: removed,
     contexts: fetchedContexts(dir, readContextFile(dir).declaredContexts),
-    notes: ["content clones and installed packages are left as they are"],
+    notes: [
+      "content clones and installed packages are left as they are",
+      `checkout bindings in ${LOCAL_CONTEXT_FILE} are left as they are, and reported as binding content nothing ` +
+        "declares (fastagent content remove <name>)",
+    ],
   };
 }
 

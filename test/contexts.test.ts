@@ -11,12 +11,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { declareContent } from "../src/content/declare.ts";
-import { resolveContent } from "../src/content/resolve.ts";
+import { resolveContent, staleCheckouts } from "../src/content/resolve.ts";
 import { fastagentPromptSections } from "../src/harnesses/pi/create.ts";
 import { loadContent, loadEnvironment, loadEnvironmentParts, parseContextCopy } from "../src/content/file.ts";
 import { declareContexts } from "../src/contexts/declare.ts";
 import { copyRecord } from "../src/contexts/copy.ts";
 import { fetchContexts, fetchedContexts } from "../src/contexts/fetch.ts";
+import { remoteCommit } from "../src/content/git.ts";
 import { joinContent, joinEnvironment } from "../src/contexts/join.ts";
 import { declareEnvironment, declaredVariables } from "../src/environment/declare.ts";
 import {
@@ -29,8 +30,41 @@ import {
 import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { log } from "../src/log.ts";
 import { git, githubStandIn } from "./github-standin.ts";
+import type { LockOptions } from "proper-lockfile";
+
+/**
+ * `proper-lockfile` as it behaves when a lock is lost: an `onCompromised` callback, or — with none, its own default —
+ * an exception thrown from a timer, which is an uncaught exception that takes the process down.
+ */
+let compromiseNext = false;
+vi.mock("proper-lockfile", async (original) => {
+  const real = await original<typeof import("proper-lockfile")>();
+  // The runtime module is CommonJS: `import lockfile from "proper-lockfile"` sees it as the default export, while its
+  // types declare the named ones.
+  const { lock } = (real as unknown as { default: { lock: typeof real.lock } }).default;
+  return {
+    default: {
+      ...real,
+      lock: async (path: string, options: LockOptions = {}) => {
+        const release = await lock(path, options);
+        if (compromiseNext && path.endsWith("/.contexts/acme")) {
+          compromiseNext = false;
+          const lost = new Error("the lock file's mtime could not be updated");
+          // With no handler, `proper-lockfile` throws this from a timer: an uncaught exception, not a report.
+          if (options.onCompromised === undefined)
+            setTimeout(() => {
+              throw lost;
+            }, 0);
+          else options.onCompromised(lost);
+        }
+        return release;
+      },
+    },
+  };
+});
 
 afterEach(() => {
+  compromiseNext = false;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -60,7 +94,8 @@ async function boundContext() {
   await writeFile(
     join(dir, "context.local.json"),
     JSON.stringify({
-      content: { handbook: { path: checkout }, notes: { path: notes, readonly: true } },
+      checkouts: { handbook: checkout },
+      content: { notes: { path: notes, readonly: true } },
     }),
   );
   return { dir, checkout, notes, repo };
@@ -168,6 +203,57 @@ describe("contexts: fetched into .contexts/<name>", () => {
     expect(existsSync(join(outside, "acme"))).toBe(false);
   });
 
+  it("asks the remote what a ref names, without fetching, and reads a tag as the commit it points at", async () => {
+    const github = githubStandIn();
+    const repo = github.repo("acme/github-context");
+    const first = repo.commit({ "context.json": `{ "description": "one" }` });
+    const dir = await agent({});
+    // No ref: the default branch, as a fetch of HEAD would resolve it (context add does not fetch).
+    expect(await remoteCommit("acme/github-context", undefined, dir)).toBe(first);
+    expect(await remoteCommit("acme/github-context", "main", dir)).toBe(first);
+    // A ref the remote does not have, and one no ref of the remote answers with.
+    expect(await remoteCommit("acme/github-context", "nope", dir)).toBeUndefined();
+    expect(await remoteCommit("acme/github-context", first, dir)).toBeUndefined();
+    const second = repo.commit({ "context.json": `{ "description": "two" }` });
+    expect(await remoteCommit("acme/github-context", "main", dir)).toBe(second);
+    repo.tag("light", "");
+    // An annotated tag is two objects: the commit a context would be fetched to is the one it points at.
+    repo.tag("annotated", "v1");
+    expect(await remoteCommit("acme/github-context", "light", dir)).toBe(second);
+    expect(await remoteCommit("acme/github-context", "annotated", dir)).toBe(second);
+  });
+
+  it("a copy already at the commit its ref names is not fetched: no temporary clone is made for it", async () => {
+    const github = githubStandIn();
+    const repo = github.repo("acme/github-context");
+    const first = repo.commit({ "context.json": `{ "description": "one" }` });
+    const dir = await agent({});
+    expect(await fetchContexts(dir, acme(), "fail")).toEqual([{ name: "acme", commit: first, outcome: "fetched" }]);
+    // A fetch clones into a temporary directory; there is none to make one in, so one would fail loudly here.
+    vi.stubEnv("TMPDIR", join(dir, "no-such-directory"));
+    expect(await fetchContexts(dir, acme(), "fail")).toEqual([{ name: "acme", commit: first, outcome: "current" }]);
+    expect(await fetchContexts(dir, acme(), "keep")).toEqual([{ name: "acme", commit: first, outcome: "current" }]);
+    // And that the same setup does fail once the ref really names another commit: the check above is not vacuous.
+    repo.commit({ "context.json": `{ "description": "two" }` });
+    await expect(fetchContexts(dir, acme(), "fail")).rejects.toThrow(/no such file or directory/);
+  });
+
+  it("reports a lock lost mid-fetch instead of throwing from a timer, publishing nothing", async () => {
+    const github = githubStandIn();
+    const repo = github.repo("acme/github-context");
+    const first = repo.commit({ "context.json": `{ "description": "one" }` });
+    const dir = await agent({});
+    await fetchContexts(dir, acme(), "fail");
+    const before = await readFile(join(dir, ".contexts", "acme", ".fastagent-context.json"), "utf8");
+    repo.commit({ "context.json": `{ "description": "two" }` });
+    compromiseNext = true;
+    await expect(fetchContexts(dir, acme(), "fail")).rejects.toThrow(
+      /the lock for .* was lost while it was held .*: retry the fetch/,
+    );
+    expect(await readFile(join(dir, ".contexts", "acme", ".fastagent-context.json"), "utf8")).toBe(before);
+    expect(fetchedContexts(dir, acme())[0]).toMatchObject({ commit: first, description: "one" });
+  });
+
   it("at its ref, and again only when the ref names another commit", async () => {
     const github = githubStandIn();
     const repo = github.repo("acme/github-context");
@@ -218,9 +304,9 @@ describe("contexts: fetched into .contexts/<name>", () => {
     await expect(fetchContexts(dir, acme(), "fail")).rejects.toThrow(/unknown key "skills"/);
     github.offline();
     expect(await fetchContexts(dir, acme(), "keep")).toEqual([
-      { name: "acme", commit: good, outcome: "kept", reason: expect.stringMatching(/could not fetch github/) },
+      { name: "acme", commit: good, outcome: "kept", reason: expect.stringMatching(/could not list github/) },
     ]);
-    await expect(fetchContexts(dir, acme(), "fail")).rejects.toThrow(/context "acme": could not fetch github/);
+    await expect(fetchContexts(dir, acme(), "fail")).rejects.toThrow(/context "acme": could not list github/);
     expect(fetchedContexts(dir, acme())[0]).toMatchObject({ commit: good, description: "good" });
   });
 });
@@ -328,50 +414,77 @@ describe("contexts: added and removed", () => {
     await expect(removeContext(dir, "acme")).rejects.toThrow('no context named "acme" (this agent uses: none)');
   });
 
-  it("removing a context unbinds its content without changing the checkout or unrelated bindings", async () => {
-    const { dir, checkout, notes } = await boundContext();
-    const before = resolveContent(dir, loadContent(dir));
-    expect(before.find((entry) => entry.name === "handbook")?.readonly).toBe(true);
-    await removeContext(dir, "acme");
+  it("removing a context leaves this machine's checkout binding of it, and reports it as one nothing declares", async () => {
+    const { dir, checkout } = await boundContext();
+    const local = await readFile(join(dir, "context.local.json"), "utf8");
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => [entry.name, entry.kind])).toEqual([
+      ["handbook", "github"],
+      ["notes", "local"],
+    ]);
+    const removed = await removeContext(dir, "acme");
+    expect(JSON.parse(local).checkouts.handbook).toBe(checkout);
+    // Nothing writes this machine's file: the binding is left where it is, and said to be one nothing declares.
+    expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
     expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
-    expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).content).toEqual({
-      notes: { path: notes, readonly: true },
-    });
+    expect(staleCheckouts(loadContent(dir)).map((entry) => entry.name)).toEqual(["handbook"]);
+    expect(removed.notes.join(" ")).toMatch(/checkout bindings in context\.local\.json are left as they are/);
     expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
   });
 
-  it("refreshing a context unbinds content the new snapshot no longer declares", async () => {
-    const { dir, checkout, notes, repo } = await boundContext();
+  it("a refresh that withdraws content leaves the checkout binding, outside the agent, and never local content", async () => {
+    const { dir, checkout, repo } = await boundContext();
     repo.commit({ "context.json": JSON.stringify({ content: {} }) });
     await fetchContexts(dir, acme(), "fail", true);
-    expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
-    expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).content).toEqual({
-      notes: { path: notes, readonly: true },
+    // The directory is still there and still bound: what changed is that no entry declares it any more, and the one
+    // thing that must not happen is it becoming writable content the agent works on.
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => [entry.name, entry.kind])).toEqual([
+      ["notes", "local"],
+    ]);
+    expect(staleCheckouts(loadContent(dir))).toEqual([
+      expect.objectContaining({ name: "handbook", path: checkout, kind: "checkout" }),
+    ]);
+    expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).checkouts).toEqual({
+      handbook: checkout,
     });
     expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
   });
 
-  it("missing a snapshot refuses removal when bindings cannot be attributed, without writing either declaration", async () => {
-    const { dir } = await boundContext();
-    const shared = await readFile(join(dir, "context.json"), "utf8");
-    const local = await readFile(join(dir, "context.local.json"), "utf8");
-    await rm(join(dir, ".contexts"), { recursive: true });
-    await expect(removeContext(dir, "acme")).rejects.toThrow(/restore.*snapshot|cannot.*bindings/);
-    expect(await readFile(join(dir, "context.json"), "utf8")).toBe(shared);
-    expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
+  it("fetches a declared context into an agent whose machine already binds other content, with no copy yet", async () => {
+    // A colleague's clone: .contexts/ is git-ignored, so this is the state of every machine that pulls the agent.
+    const github = githubStandIn();
+    github.repo("acme/github-context").commit({ "context.json": JSON.stringify({ content: {} }) });
+    const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
+    const notes = join(dir, "..", "notes");
+    await mkdir(notes);
+    await writeFile(join(dir, "context.local.json"), JSON.stringify({ content: { notes: { path: notes } } }));
+    expect(await fetchContexts(dir, acme(), "fail", true)).toEqual([
+      expect.objectContaining({ name: "acme", outcome: "fetched" }),
+    ]);
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
+    // And with one of its own checkouts bound as well: nothing here is attributed to the context being fetched.
+    await writeFile(
+      join(dir, "context.local.json"),
+      JSON.stringify({ checkouts: { other: join(dir, "..", "other") }, content: { notes: { path: notes } } }),
+    );
+    expect(await fetchContexts(dir, acme(), "fail", true)).toEqual([
+      expect.objectContaining({ name: "acme", outcome: "current" }),
+    ]);
+    expect(staleCheckouts(loadContent(dir)).map((entry) => entry.name)).toEqual(["other"]);
   });
 
-  it("recovering a declared context's missing snapshot refuses bindings with unknown ownership", async () => {
-    const { dir, checkout, repo } = await boundContext();
-    const shared = await readFile(join(dir, "context.json"), "utf8");
-    const local = await readFile(join(dir, "context.local.json"), "utf8");
+  it("removes and recovers a context whose copy is gone: nothing has to be attributed to do either", async () => {
+    const { dir, repo } = await boundContext();
     await rm(join(dir, ".contexts"), { recursive: true });
+    const local = await readFile(join(dir, "context.local.json"), "utf8");
     repo.commit({ "context.json": JSON.stringify({ content: {} }) });
-    await expect(fetchContexts(dir, acme(), "fail", true)).rejects.toThrow(/cannot attribute local bindings safely/);
-    expect(await readFile(join(dir, "context.json"), "utf8")).toBe(shared);
+    expect(await fetchContexts(dir, acme(), "fail", true)).toEqual([
+      expect.objectContaining({ name: "acme", outcome: "fetched", commit: expect.any(String) }),
+    ]);
     expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
-    expect(existsSync(join(dir, ".contexts", "acme", ".fastagent-context.json"))).toBe(false);
-    expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
+    await rm(join(dir, ".contexts"), { recursive: true });
+    await removeContext(dir, "acme");
+    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8")).contexts).toBeUndefined();
+    expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
   });
 
   it("removal without a snapshot still works when there are no local bindings to attribute", async () => {
@@ -380,7 +493,7 @@ describe("contexts: added and removed", () => {
     expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8")).contexts).toBeUndefined();
   });
 
-  it("removal cleans bindings from the old snapshot even when the requested ref has changed", async () => {
+  it("removes a context whose requested ref was edited to one that was never fetched", async () => {
     const { dir, checkout } = await boundContext();
     const file = JSON.parse(await readFile(join(dir, "context.json"), "utf8"));
     file.contexts.acme.ref = "does-not-exist";
@@ -388,6 +501,7 @@ describe("contexts: added and removed", () => {
     expect(() => loadContent(dir)).toThrow(/was fetched from another repository or ref/);
     await removeContext(dir, "acme");
     expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
+    expect(staleCheckouts(loadContent(dir)).map((entry) => entry.name)).toEqual(["handbook"]);
     expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
   });
 

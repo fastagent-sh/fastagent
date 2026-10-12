@@ -404,11 +404,8 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
       // A checkout of a declared repository is this machine's way to it; the host clones that one.
       "context.local.json": JSON.stringify({
-        content: {
-          handbook: { path: "/code/handbook" },
-          app: { path: "/code/app" },
-          docs: { path: "/docs", readonly: true },
-        },
+        checkouts: { handbook: "/code/handbook" },
+        content: { app: { path: "/code/app" }, docs: { path: "/docs", readonly: true } },
       }),
     });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
@@ -712,7 +709,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(await call(dir, { model: "openai/gpt-4o-mini" })).toMatchObject({
       ok: false,
       gate: expect.stringMatching(
-        /^context "acme": could not fetch github acme\/github-context: .* — the image carries/,
+        /^context "acme": could not list github acme\/github-context: .* — the image carries/,
       ),
     });
   });

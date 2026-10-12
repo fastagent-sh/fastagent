@@ -70,17 +70,20 @@ src/
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
-│   ├── declare.ts          # a shared entry and a machine's binding, read and refused in ONE place (names, keys)
-│   ├── file.ts             # agent + fetched contexts + local binding read, joined for every reader; edits read whole
+│   ├── declare.ts          # a shared entry and a machine's two maps, read and refused in ONE place
+│   ├── file.ts             # agent + fetched contexts + this machine's two maps read, joined for every reader;
+│                           # edits read the whole
 │   ├── mount.ts            # content/, where the clones go: the dir with its own .gitignore
-│   ├── resolve.ts          # where each entry is for THIS instance (a clone, a bound dir): the one answer every reader uses
-│   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
+│   ├── resolve.ts          # where each entry is for THIS instance (a clone, a checkout, a bound dir), what is
+│                           # absent, and which checkouts nothing declares: the one answer every reader uses
+│   ├── git.ts              # a checkout's repository and ref, a clone, and a context snapshot: a ref's commit
+│                           # asked of the remote, its declaration read out of the fetched tree
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── contexts/               # shared external declarations the agent uses, fetched at a GitHub ref
 │   ├── declare.ts          # which contexts an agent uses, by name, repository and optional ref
-│   ├── bindings.ts         # binding revocation around publication/removal, with restoration on failure
 │   ├── copy.ts             # ONE atomic snapshot of fetched identity and declaration, independent of git metadata
-│   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep) and reporting
+│   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep), the copy lock's state
+│                           # check, and the short-circuit every development start reads through
 │   └── join.ts             # ONE refusal of conflicts; join content and environment with attribution
 ├── environment/            # the commands an agent runs, declared in context.json — harness-neutral
 │   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist

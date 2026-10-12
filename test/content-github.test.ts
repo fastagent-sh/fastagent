@@ -13,7 +13,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cloneContent, resolveContent } from "../src/content/resolve.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { type ContentEntry, declareBindings, declareContent } from "../src/content/declare.ts";
+import { type ContentEntry, declareCheckouts, declareContent } from "../src/content/declare.ts";
 import { githubRepoOf } from "../src/content/git.ts";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
 import { git, githubStandIn } from "./github-standin.ts";
@@ -36,7 +36,7 @@ async function agent(): Promise<{ root: string; agentDir: string }> {
 function resolveOne(agentDir: string, { name, ...entry }: ContentEntry & { name?: string }, checkout?: string) {
   const key = name ?? (entry.github.split("/")[1] as string);
   const declared = declareContent({ [key]: entry });
-  const bound = checkout === undefined ? [] : declareBindings({ [key]: { path: checkout } }, declared, agentDir);
+  const bound = checkout === undefined ? [] : declareCheckouts({ [key]: checkout }, agentDir);
   const [resolved] = resolveContent(agentDir, { declared, bound });
   if (resolved?.kind !== "github") throw new Error("not github content");
   return resolved;
@@ -405,7 +405,7 @@ describe("github content: what runs the agent clones, what reports on it does no
     });
     const content = resolveContent(agentDir, {
       declared,
-      bound: declareBindings({ docs: { path: checkout } }, declared, agentDir),
+      bound: declareCheckouts({ docs: checkout }, agentDir),
     });
     const { faux } = makeFaux();
     let prompt = "";
@@ -452,7 +452,7 @@ describe("github content: what a command's <source> adds", () => {
     git(root, "clone", "-q", "https://github.com/acme/app.git", checkout);
 
     expect(readContentSource(checkout, root, { ref: "main" })).toEqual({
-      addition: { name: "app", entry: { github: "acme/app", ref: "main" }, binding: { path: checkout } },
+      addition: { name: "app", entry: { github: "acme/app", ref: "main" }, checkout },
       notes: [],
     });
     // Never widened to the repository: an agent kept in that same checkout can still work on one directory of it.
