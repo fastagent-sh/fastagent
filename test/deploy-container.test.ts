@@ -55,7 +55,8 @@ describe("deploy/container: shared Docker context", () => {
     const dockerfile = (i: Parameters<typeof containerArtifacts>[0]) =>
       artifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(dockerfile(input)).not.toMatch(/mise/);
-    expect(artifacts(input).map((a) => a.path)).not.toContain("fastagent.packages");
+    // Empty without packages, so a list an earlier deploy wrote does not outlive the last package.
+    expect(artifacts(input).find((a) => a.path === "fastagent.packages")?.content).toBe("");
     const packages = ["gh@2", "npm:@biomejs/biome@latest"];
     // The list is build output, one per line; the Dockerfile reads it, so a package change is no Dockerfile change.
     expect(artifacts({ ...input, packages }).find((a) => a.path === "fastagent.packages")?.content).toBe(

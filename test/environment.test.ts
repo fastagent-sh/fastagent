@@ -607,6 +607,10 @@ describe("environment: `fastagent env`", () => {
     for (let run = 0; run < 2; run++) {
       const install = await cli(["env", "install"], dir);
       expect(install.code, install.stderr).toBe(0);
+      // Nothing it writes restarts `dev`, so it says what a running one keeps.
+      expect(install.stderr).toContain(
+        "a running `fastagent dev` keeps the releases it started with until it restarts",
+      );
     }
     // The packages are checked in parallel, so their `tool` runs are in no particular order.
     const args = (await calls()).map((call) => call.args);

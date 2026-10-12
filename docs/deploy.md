@@ -356,9 +356,9 @@ excludes. Each start publishes it onto persistent storage:
 ```
 
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
-  installs to `fastagent.packages` (both rewritten every time; do not edit them). Restarting the same release keeps what
-  the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent made to itself, or
-  a file it left there, lasts until the next release. `.state/`, `.secrets/` and `content/` stay.
+  installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
+  release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
+  made to itself, or a file it left there, lasts until the next release. `.state/`, `.secrets/` and `content/` stay.
 - Updates are staged and an interrupted one completes before the agent opens. A file lock at
   `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
 - Storage an earlier FastAgent laid out holds the agent's workspace in `base/`; a start refuses it rather than leave

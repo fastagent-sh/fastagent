@@ -159,7 +159,8 @@ fastagent env exec -- gh --version
 - **`install`** installs mise (adding it to `package.json` when it is not there), then every declared package at the
   newest release its version allows, a newer one where one is out. Day to day it is not needed, since `add` installs
   what it adds and every start installs what is missing: it is for newer releases, and for a clone that has not
-  installed its mise yet.
+  installed its mise yet. It changes nothing in the agent directory, so a running `dev` keeps the releases it started
+  with until it restarts, and says so.
 - **`exec`** runs a command with the environment first on its `PATH` and the agent's `.secrets/.env` in its
   environment, tokens included, as the agent's own commands have them, and exits with its code. Every `env`
   subcommand reads `.secrets/.env` first, so a proxy declared there carries mise's downloads too.

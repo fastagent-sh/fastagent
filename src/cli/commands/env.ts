@@ -126,6 +126,8 @@ export async function runEnvInstall(): Promise<void> {
       const declared = loadEnvironment(agentDir) ?? NONE;
       if (Object.keys(declared.packages).length > 0) {
         await installPackages(agentDir, await checkedMise(agentDir, declared.packages), declared.packages, "all");
+        // Nothing in the agent directory changes, so `dev` does not restart: its PATH names the releases it started on.
+        log.info("[fastagent] a running `fastagent dev` keeps the releases it started with until it restarts");
       }
       const missing = missingAptPackages(declared.aptPackages);
       if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);

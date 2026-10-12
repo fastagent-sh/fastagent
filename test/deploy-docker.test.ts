@@ -37,6 +37,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent.compose.yml",
       "fastagent.release.json",
+      "fastagent.packages",
       "Dockerfile",
       ".dockerignore",
       "Dockerfile.dockerignore",

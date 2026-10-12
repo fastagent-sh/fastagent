@@ -256,9 +256,8 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
   parseDeploymentRelease(JSON.stringify(release));
   return [
     { path: RELEASE_FILE, content: `${JSON.stringify(release, null, 2)}\n` },
-    ...(input.packages && input.packages.length > 0
-      ? [{ path: PACKAGES_FILE, content: `${input.packages.join("\n")}\n` }]
-      : []),
+    // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
+    { path: PACKAGES_FILE, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },
     // Both names: BuildKit prefers the one beside the Dockerfile, the classic builder reads the context root's.
     { path: ".dockerignore", content: ignore },
