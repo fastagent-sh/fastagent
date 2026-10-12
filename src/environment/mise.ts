@@ -69,8 +69,9 @@ export function miseBinary(agentDir: string): string | undefined {
 export const MISE_ENVIRONMENT: Readonly<Record<string, string>> = {
   MISE_GLOBAL_CONFIG_FILE: NO_FILE,
   MISE_SYSTEM_CONFIG_FILE: NO_FILE,
-  MISE_OVERRIDE_CONFIG_FILENAMES: "none",
-  MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES: "none",
+  // A path, not a name: mise looks for a file of the name given here in every directory up to the root.
+  MISE_OVERRIDE_CONFIG_FILENAMES: NO_FILE,
+  MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES: NO_FILE,
   MISE_PYTHON_COMPILE: "false",
   MISE_NODE_COMPILE: "false",
   MISE_RUBY_COMPILE: "false",
@@ -205,24 +206,84 @@ export async function installPackages(
   which: "missing" | "all",
 ): Promise<void> {
   const specs = packageSpecs(packages);
-  const wanted =
-    which === "all"
-      ? specs
-      : (
-          await Promise.all(
-            // A failed `where` is what mise says of a package with no install here; the install that follows reports
-            // any other reason it cannot be had.
-            specs.map((spec) =>
-              runMise(agentDir, bin, ["where", spec], { capture: true, quiet: true }).then(
-                () => undefined,
-                () => spec,
-              ),
-            ),
-          )
-        ).filter((spec): spec is string => spec !== undefined);
-  if (wanted.length === 0) return;
-  log.info(`[fastagent] installing the agent's packages: ${wanted.join(", ")}`);
-  await runMise(agentDir, bin, ["install", "--quiet", ...wanted], { quiet: true });
+  if (which === "all") return runInstall(agentDir, bin, specs, {});
+  const installed = await Promise.all(
+    // A failed `where` is what mise says of a package with no install here; the install that follows reports any other
+    // reason it cannot be had.
+    specs.map((spec) =>
+      runMise(agentDir, bin, ["where", spec], { capture: true, quiet: true }).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  const missing = specs.filter((_, i) => !installed[i]);
+  if (missing.length === 0) return;
+  const present = specs.filter((_, i) => installed[i]);
+  // A package installs with the ones it needs (a PyPI one runs uv), which mise finds in the packages it is given or on
+  // the PATH. The installed ones go on the PATH: given as packages, mise would install a newer release of them.
+  await runInstall(agentDir, bin, missing, present.length > 0 ? await packagesEnvironment(agentDir, bin, present) : {});
+}
+
+/** What `mise env` puts in a process's environment for `specs`: the PATH their commands are on. */
+async function packagesEnvironment(agentDir: string, bin: string, specs: string[]): Promise<Record<string, string>> {
+  return JSON.parse(await runMise(agentDir, bin, ["env", "--json", ...specs], { capture: true })) as Record<
+    string,
+    string
+  >;
+}
+
+/**
+ * The notice mise prints after installing a package no configuration file names, with the `mise use` it suggests: not
+ * the agent's way to a package, so it is not passed on.
+ */
+const NOT_ACTIVATED = /installed but not activated|^To install and activate, run:|^\s+mise use /;
+
+/**
+ * `mise install` of `specs`, with `env` added to its environment. Its progress is passed on to this process's stderr as
+ * it comes, so a runtime that takes minutes is seen to; a failure carries what mise said, every line of it, since
+ * mise names the packages on its first line and the reason (a 404, a proxy, a rate limit) on the lines after.
+ */
+function runInstall(agentDir: string, bin: string, specs: string[], env: Record<string, string>): Promise<void> {
+  log.info(`[fastagent] installing the agent's packages: ${specs.join(", ")}`);
+  return new Promise((done, fail) => {
+    const child = spawn(bin, ["install", ...specs], {
+      cwd: agentDir,
+      env: { ...process.env, ...env, ...MISE_ENVIRONMENT },
+      stdio: ["inherit", process.stderr, "pipe"],
+    });
+    const said: string[] = [];
+    let partial = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      const lines = (partial + chunk).split("\n");
+      partial = lines.pop() ?? "";
+      for (const line of lines) {
+        if (NOT_ACTIVATED.test(line)) continue;
+        process.stderr.write(`${line}\n`);
+        said.push(line);
+      }
+    });
+    child.on("error", fail);
+    child.on("close", (code, signal) => {
+      if (partial !== "") said.push(partial);
+      if (code === 0) return done();
+      const reason = said
+        .slice(
+          Math.max(
+            0,
+            said.findIndex((line) => /\bERROR\b/.test(line)),
+          ),
+        )
+        .filter((line) => !/ERROR\s+(Version:|Run with --verbose)/.test(line))
+        .map((line) => line.replace(/^mise\s+ERROR\s+/, "").trim())
+        .filter((line) => line !== "");
+      fail(
+        new Error(
+          `mise install ${specs.join(" ")} failed (${signal ?? `exit ${code}`})${reason.length > 0 ? `: ${reason.join("; ")}` : ""}`,
+        ),
+      );
+    });
+  });
 }
 
 /** What a process that runs the agent says when its environment has no mise to install it with. */
@@ -247,9 +308,6 @@ export async function enterEnvironment(agentDir: string): Promise<DeclaredEnviro
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
   await installPackages(agentDir, bin, packages, "missing");
-  const env = JSON.parse(
-    await runMise(agentDir, bin, ["env", "--json", ...packageSpecs(packages)], { capture: true }),
-  ) as Record<string, string>;
-  Object.assign(process.env, env);
+  Object.assign(process.env, await packagesEnvironment(agentDir, bin, packageSpecs(packages)));
   return declared;
 }

@@ -64,19 +64,22 @@ async function contents(dir: string): Promise<Record<string, string>> {
   );
 }
 
-/** One logged mise run: its arguments, where it ran, and the isolation it was given. */
+/** One logged mise run: its arguments, where it ran, the isolation it was given, and its PATH's first entry. */
 interface MiseCall {
   args: string;
   cwd: string;
   /** MISE_OVERRIDE_CONFIG_FILENAMES, MISE_GLOBAL_CONFIG_FILE and MISE_PYTHON_COMPILE, as it saw them. */
   isolation: string;
+  path: string;
 }
 
 /**
  * A stand-in mise where this machine's platform package puts it. It logs each run, and at `install` what the agent's
  * context.json held then. It keeps what it installed in a file beside the agent: `where <spec>` answers for those and
- * fails for any other, as mise does for a package with no install; `install` adds its specs, fails when
- * `FAKE_FAIL_INSTALL` is set, and sleeps when `FAKE_SLOW` is. It answers `tool <name> --json` and `env --json`.
+ * fails for any other, as mise does for a package with no install; `install` adds its specs and says what mise says
+ * of a package no configuration names, fails when `FAKE_FAIL_INSTALL` is set (with the reason on the lines after, as
+ * mise does for several packages, when it is `many`), and sleeps when `FAKE_SLOW` is. It answers
+ * `tool <name> --json` and `env --json`.
  */
 async function fakeMise(
   dir: string,
@@ -90,14 +93,17 @@ async function fakeMise(
   await writeFile(
     bin,
     `#!/bin/sh
-echo "run|$*|$PWD|$MISE_OVERRIDE_CONFIG_FILENAMES,$MISE_GLOBAL_CONFIG_FILE,$MISE_PYTHON_COMPILE" >> "${logFile}"
+echo "run|$*|$PWD|$MISE_OVERRIDE_CONFIG_FILENAMES,$MISE_GLOBAL_CONFIG_FILE,$MISE_PYTHON_COMPILE|\${PATH%%${delimiter}*}" >> "${logFile}"
 case "$1" in
   where) grep -qxF "$2" "${installed}" 2>/dev/null || { echo "mise ERROR $2 is not installed" >&2; exit 1; } ;;
   install) shift; [ "$1" = --quiet ] && shift
     echo "context.json at install: $(cat "${dir}/context.json" 2>/dev/null | tr -d ' \\n')" >> "${logFile}"
     if [ -n "$FAKE_SLOW" ]; then sleep 2; fi
-    if [ -n "$FAKE_FAIL_INSTALL" ]; then echo "mise ERROR no version of jq matches 99" >&2; exit 1; fi
-    for spec in "$@"; do echo "$spec" >> "${installed}"; done ;;
+    if [ "$FAKE_FAIL_INSTALL" = many ]; then
+      printf 'mise ERROR Failed to install tools: %s\\nGET https://example.com/jq: 404 Not Found\\nmise ERROR Version: 2026.10.8\\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\\n' "$*" >&2; exit 1
+    elif [ -n "$FAKE_FAIL_INSTALL" ]; then echo "mise ERROR no version of jq matches 99" >&2; exit 1; fi
+    for spec in "$@"; do echo "$spec" >> "${installed}"; echo "mise $spec ✓ installed" >&2; done
+    printf 'mise WARN  %s installed but not activated — it is not in any config file.\\nTo install and activate, run:\\n  mise use %s\\n' "$1" "$1" >&2 ;;
   tool) case "$2" in
       tokei) echo '{"backend":"cargo:tokei"}' ;;
       ansible) echo '{"backend":"pypi:ansible"}' ;;
@@ -115,8 +121,8 @@ esac
       .split("\n")
       .filter((line) => line.startsWith("run|"))
       .map((line) => {
-        const [, args, cwd, isolation] = line.split("|") as string[];
-        return { args, cwd, isolation } as MiseCall;
+        const [, args, cwd, isolation, path] = line.split("|") as string[];
+        return { args, cwd, isolation, path } as MiseCall;
       });
   return { bin, calls, log };
 }
@@ -289,13 +295,13 @@ describe("environment: installed by the agent's own mise", () => {
     await installPackages(dir, bin, { gh: "2", "npm:prettier": "3" }, "missing");
     const runs = await calls();
     expect(runs.map((call) => call.args).sort()).toEqual([
-      "install --quiet gh@2 npm:prettier@3",
+      "install gh@2 npm:prettier@3",
       "where gh@2",
       "where npm:prettier@3",
     ]);
     for (const call of runs) {
       expect(call.cwd).toBe(dir);
-      expect(call.isolation).toBe("none,/dev/null/none.toml,false");
+      expect(call.isolation).toBe("/dev/null/none.toml,/dev/null/none.toml,false");
     }
   });
 
@@ -306,16 +312,36 @@ describe("environment: installed by the agent's own mise", () => {
     await installPackages(dir, bin, { gh: "2" }, "missing");
     await installPackages(dir, bin, { gh: "2", jq: "1" }, "missing");
     await installPackages(dir, bin, { gh: "2" }, "missing");
-    expect((await calls()).map((call) => call.args).filter((args) => args.startsWith("install"))).toEqual([
-      "install --quiet gh@2",
-      "install --quiet jq@1",
-    ]);
+    const installs = (await calls()).filter((call) => call.args.startsWith("install"));
+    expect(installs.map((call) => call.args)).toEqual(["install gh@2", "install jq@1"]);
+    // What is installed goes on the install's PATH, as a PyPI package needs its uv there; never as a package, which
+    // would install a newer release of it.
+    expect((await calls()).map((call) => call.args)).toContain("env --json gh@2");
+    expect(installs.map((call) => call.path)).toEqual([process.env.PATH?.split(delimiter)[0], "/fake/tools"]);
     // `all` asks mise for each again: a newer release where one is out.
     await installPackages(dir, bin, { gh: "2", jq: "1" }, "all");
-    expect((await calls()).at(-1)?.args).toBe("install --quiet gh@2 jq@1");
+    expect((await calls()).at(-1)?.args).toBe("install gh@2 jq@1");
     process.env.FAKE_FAIL_INSTALL = "1";
     await expect(installPackages(dir, bin, { jq: "99" }, "missing")).rejects.toThrow(
-      "mise install --quiet jq@99 failed (exit 1): no version of jq matches 99",
+      "mise install jq@99 failed (exit 1): no version of jq matches 99",
+    );
+  });
+
+  it("passes mise's progress on, without the `mise use` it suggests; a failure carries every line of the reason", async () => {
+    const dir = await agentDir();
+    const { bin } = await fakeMise(dir);
+    vi.spyOn(log, "info").mockImplementation(() => {});
+    const written: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    await installPackages(dir, bin, { gh: "2" }, "missing");
+    expect(written.join("")).toBe("mise gh@2 ✓ installed\n");
+    process.env.FAKE_FAIL_INSTALL = "many";
+    await expect(installPackages(dir, bin, { jq: "99", yq: "0" }, "missing")).rejects.toThrow(
+      "mise install jq@99 yq@0 failed (exit 1): Failed to install tools: jq@99 yq@0; " +
+        "GET https://example.com/jq: 404 Not Found",
     );
   });
 
@@ -348,7 +374,7 @@ describe("environment: entered by a process that runs the agent", () => {
     expect([...args.slice(0, 2).sort(), ...args.slice(2)]).toEqual([
       "where gh@2",
       "where jq@1",
-      "install --quiet gh@2 jq@1",
+      "install gh@2 jq@1",
       "env --json gh@2 jq@1",
     ]);
     expect(await contents(dir)).toEqual(before);
@@ -472,7 +498,7 @@ describe("environment: `fastagent env`", () => {
     // At install time the declaration was not written yet.
     expect(await log()).toContain(`context.json at install: {"content":{}}`);
     expect((await calls()).map((call) => call.args).filter((args) => args.startsWith("install"))).toEqual([
-      "install --quiet gh@2 npm:prettier@3",
+      "install gh@2 npm:prettier@3",
     ]);
     const before = (await calls()).length;
     const apt = await cli(["env", "add", "apt:chromium"], dir);
@@ -481,7 +507,7 @@ describe("environment: `fastagent env`", () => {
     expect((await calls()).length).toBe(before);
     // Only what it adds, or declares at another version, is installed.
     expect((await cli(["env", "add", "gh@2", "jq@1"], dir)).code).toBe(0);
-    expect((await calls()).at(-1)?.args).toBe("install --quiet jq@1");
+    expect((await calls()).at(-1)?.args).toBe("install jq@1");
   });
 
   it("keeps the variables when it changes the packages", async () => {
@@ -532,7 +558,8 @@ describe("environment: `fastagent env`", () => {
     expect(vfox.stderr).toMatch(/installs with vfox:, which runs a plugin's code/);
     const failing = await cli(["env", "add", "jq@99"], dir, { FAKE_FAIL_INSTALL: "1" });
     expect(failing.code).toBe(1);
-    expect(failing.stderr).toContain("mise install --quiet jq@99 failed (exit 1): no version of jq matches 99");
+    // What is declared and not installed here is installed with it: gh as well.
+    expect(failing.stderr).toContain("mise install gh@2 jq@99 failed (exit 1): no version of jq matches 99");
     expect(await declared(dir)).toEqual({ packages: { gh: "2" } });
   });
 
@@ -574,10 +601,7 @@ describe("environment: `fastagent env`", () => {
     // The packages are checked in parallel, so their `tool` runs are in no particular order.
     const args = (await calls()).map((call) => call.args);
     expect(args.slice(0, 2).sort()).toEqual(["tool gh --json", "tool jq --json"]);
-    expect(args.filter((call) => call.startsWith("install"))).toEqual([
-      "install --quiet gh@2 jq@1",
-      "install --quiet gh@2 jq@1",
-    ]);
+    expect(args.filter((call) => call.startsWith("install"))).toEqual(["install gh@2 jq@1", "install gh@2 jq@1"]);
   });
 
   it("lists the packages with their versions, and what is wrong with them", async () => {

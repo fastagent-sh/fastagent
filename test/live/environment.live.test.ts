@@ -8,25 +8,29 @@
  *   nothing to install and needs no network, and `mise install jq@1` then installs the newest 1.x;
  * - `mise tool <name> --json` names the backend a registry name resolves to (`tokei` is cargo, `php` is vfox);
  * - `MISE_PYTHON_COMPILE=false` refuses a runtime with no prebuilt build instead of compiling it;
- * - a PyPI package installs once the python and uv it declares are installed.
+ * - a PyPI package installs once the python and uv it declares are installed, given on its install's PATH alone (the
+ *   machine's own uv is not on it), whether `env add` adds it or a start finds it missing.
  *
  * Installs into a data directory of its own, never the machine's. Network only: no credential.
  */
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI, installSpec } from "./env.ts";
 
 let agentDir = "";
 let miseData = "";
 
-const fastagent = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> =>
+const fastagent = (
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> =>
   new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: agentDir,
-      env: { ...process.env, MISE_DATA_DIR: miseData, MISE_CACHE_DIR: join(miseData, "cache") },
+      env: { ...process.env, MISE_DATA_DIR: miseData, MISE_CACHE_DIR: join(miseData, "cache"), ...env },
     });
     let stdout = "";
     let stderr = "";
@@ -100,10 +104,19 @@ describe("fastagent env on the real mise", () => {
     expect(python.stderr).toMatch(/no precompiled python found/);
   });
 
-  it("installs a PyPI package once the python and uv it declares are installed", async () => {
-    const add = await fastagent(["env", "add", "python@3.12", "uv", "pypi:markitdown@0.1"]);
+  it("installs a PyPI package with the python and uv it declares, installed before it, on its PATH alone", async () => {
+    // Node's own directory and the system's: no uv of the machine's, which would hide a missing one.
+    const bare = { PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) };
+    const runtime = await fastagent(["env", "add", "python@3.12", "uv"], bare);
+    expect(runtime.code, runtime.stderr).toBe(0);
+    const add = await fastagent(["env", "add", "pypi:markitdown@0.1.7"], bare);
     expect(add.code, add.stderr).toBe(0);
-    const exec = await fastagent(["env", "exec", "--", "markitdown", "--version"]);
+    // A start that finds only the PyPI package missing installs it the same way.
+    const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
+    context.environment.packages["pypi:markitdown"] = "0.1.8";
+    await writeFile(join(agentDir, "context.json"), JSON.stringify(context));
+    const exec = await fastagent(["env", "exec", "--", "markitdown", "--version"], bare);
     expect(exec.code, exec.stderr).toBe(0);
+    expect(exec.stderr).toContain("installing the agent's packages: pypi:markitdown@0.1.8");
   });
 });
