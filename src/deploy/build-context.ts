@@ -5,7 +5,7 @@
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { isAbsolute, relative, join, sep } from "node:path";
+import { dirname, isAbsolute, relative, join, sep } from "node:path";
 import ignore from "ignore";
 import {
   AGENT_CONFIG_FILE,
@@ -21,6 +21,7 @@ import { isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
 import { loadContexts } from "../content/file.ts";
 import { contextSource } from "../contexts/declare.ts";
+import { COPY_RECORD } from "../contexts/copy.ts";
 
 /**
  * "Would docker's packer drop this path?" — built from a `.dockerignore`'s text via the `ignore` matcher (the same
@@ -67,7 +68,7 @@ export interface BuildContextPaths {
   contentShips?: string;
   /** `context.local.json`, when it exists: the directories of this machine the agent is bound to. */
   bindingsShip?: string;
-  /** The `context.json` of each context the agent uses, fetched: what the image must carry. */
+  /** Each fetched context's declaration mirror and authoritative snapshot: what the image must carry. */
   contextCopies: string[];
   /** The agent's node_modules, when it exists. */
   depDirs: string[];
@@ -101,7 +102,12 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const stateShips = stateRel !== undefined && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
   const contentShips = (await exists(join(agentDir, CONTENT_DIRNAME))) ? CONTENT_DIRNAME : undefined;
   const bindingsShip = (await exists(join(agentDir, LOCAL_CONTEXT_FILE))) ? LOCAL_CONTEXT_FILE : undefined;
-  const contextCopies = await present(loadContexts(agentDir).map((context) => contextSource(context.name)));
+  const contextCopies = await present(
+    loadContexts(agentDir).flatMap((context) => {
+      const declaration = contextSource(context.name);
+      return [declaration, `${dirname(declaration)}/${COPY_RECORD}`];
+    }),
+  );
   // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
   const envFiles = (await entriesIfExists(agentDir))
     .map((entry) => entry.name)

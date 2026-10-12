@@ -258,8 +258,9 @@ acme-github/                  a context: a GitHub repository
 - **The commands.** `fastagent context add github:owner/repo [--name <name>] [--ref <ref>]` fetches the context, checks
   that it joins the agent's declarations, installs its packages here as `fastagent env add` does, and declares it.
   `context list` shows each context with its description, repository, `ref`, the commit fetched and what it brings.
-  `context fetch` brings every context to its `ref` here. `context remove <name>` drops it and its copy. `fastagent env`
-  and `fastagent content` edit the agent's own declarations: `env remove gh` for a context's `gh` is refused, naming the
+  `context fetch` brings every context to its `ref` here. `context remove <name>` drops it, its copy and its content's
+  local bindings, keeping checkout directories and content clones. `fastagent env` and `fastagent content` edit the
+  agent's own declarations: `env remove gh` for a context's `gh` is refused, naming the
   context. `fastagent info` lists every entry with the context it comes from.
 
 ## 4. The environment is declared, for every platform

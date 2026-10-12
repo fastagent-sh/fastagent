@@ -28,7 +28,7 @@ import {
 } from "../src/harnesses/pi/authoring.ts";
 import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { log } from "../src/log.ts";
-import { githubStandIn } from "./github-standin.ts";
+import { git, githubStandIn } from "./github-standin.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -304,6 +304,34 @@ describe("contexts: added and removed", () => {
     expect(existsSync(join(dir, ".contexts", "acme"))).toBe(false);
     expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8")).contexts).toBeUndefined();
     await expect(removeContext(dir, "acme")).rejects.toThrow('no context named "acme" (this agent uses: none)');
+  });
+
+  it("removing a context unbinds its content without changing the checkout or unrelated bindings", async () => {
+    const github = githubStandIn();
+    github.repo("acme/github-context").commit({
+      "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook", readonly: true } } }),
+    });
+    github.repo("acme/handbook").commit({ "README.md": "keep this checkout\n" });
+    const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
+    await fetchContexts(dir, acme(), "fail");
+    const checkout = join(dir, "..", "handbook");
+    git(dir, "clone", "-q", "https://github.com/acme/handbook.git", checkout);
+    const notes = join(dir, "..", "notes");
+    await mkdir(notes);
+    await writeFile(
+      join(dir, "context.local.json"),
+      JSON.stringify({
+        content: { handbook: { path: checkout }, notes: { path: notes, readonly: true } },
+      }),
+    );
+    const before = resolveContent(dir, loadContent(dir));
+    expect(before.find((entry) => entry.name === "handbook")?.readonly).toBe(true);
+    await removeContext(dir, "acme");
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
+    expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).content).toEqual({
+      notes: { path: notes, readonly: true },
+    });
+    expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
   });
 
   it("serializes context additions and removes a context even when its declarations conflict", async () => {

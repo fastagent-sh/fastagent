@@ -1,10 +1,11 @@
 /**
- * The identity of a fetched context copy: repository, requested ref and fetched commit, alongside its declaration.
- * Railway strips nested .git directories, so the copy cannot rely on git to identify itself on a deployed host.
+ * A fetched context's authoritative snapshot: identity and declaration in one atomically replaced file. Readers
+ * open it once, so refreshing never exposes a missing directory or mismatched identity/declaration. context.json is
+ * a human-readable mirror; Railway strips .git, so neither identity nor declaration depends on git metadata.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { CONTEXT_FILE, contextCopyPath } from "../paths.ts";
+import { contextCopyPath } from "../paths.ts";
 import type { DeclaredContext } from "./declare.ts";
 
 export const COPY_RECORD = ".fastagent-context.json";
@@ -13,6 +14,7 @@ export interface CopyRecord {
   repo: string;
   ref?: string;
   commit: string;
+  declaration: string;
 }
 
 export function readCopyRecord(agentDir: string, name: string, repo?: string): CopyRecord {
@@ -39,7 +41,8 @@ export function readCopyRecord(agentDir: string, name: string, repo?: string): C
     typeof record.repo !== "string" ||
     (record.ref !== undefined && typeof record.ref !== "string") ||
     typeof record.commit !== "string" ||
-    !/^[0-9a-f]{40}$/i.test(record.commit)
+    !/^[0-9a-f]{40}$/i.test(record.commit) ||
+    typeof record.declaration !== "string"
   ) {
     throw new Error(`${path} is not a fetched context record: run \`fastagent context fetch\``);
   }
@@ -57,11 +60,5 @@ export function copyRecord(agentDir: string, context: DeclaredContext): CopyReco
 }
 
 export function contextCopyText(agentDir: string, context: DeclaredContext): string {
-  copyRecord(agentDir, context);
-  const path = join(contextCopyPath(agentDir, context.name), CONTEXT_FILE);
-  try {
-    return readFileSync(path, "utf8");
-  } catch (error) {
-    throw new Error(`${path} could not be read: ${(error as Error).message}`);
-  }
+  return copyRecord(agentDir, context).declaration;
 }

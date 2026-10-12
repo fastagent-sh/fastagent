@@ -2,24 +2,15 @@
  * Fetch contexts into .contexts/<name>, validating a fresh snapshot before replacing the copy. Development can use a
  * cached copy when its remote is unreachable; add, fetch and deploy cannot. Production only reads copies.
  */
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { cloneSnapshot } from "../content/git.ts";
 import { loadContexts, parseContextCopy } from "../content/file.ts";
 import { log } from "../log.ts";
 import { CONTEXT_FILE, contextCopyPath } from "../paths.ts";
-import { COPY_RECORD, contextCopyText, copyRecord, readCopyRecord } from "./copy.ts";
+import { COPY_RECORD, copyRecord, readCopyRecord } from "./copy.ts";
+import { writeFileAtomic } from "../atomic-write.ts";
 import { type DeclaredContext, contextSource, declareContexts } from "./declare.ts";
 
 export type ContextFetch = { name: string; commit: string } & (
@@ -101,33 +92,30 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
         `context "${name}": github ${repo}${ref ? ` at ${ref}` : ""} has no context.json at its root: it is not a context`,
       );
     }
-    parseContextCopy(readFileSync(path, "utf8"), contextSource(name));
-    // Only the declaration travels into an image: everything else, including .git, belongs to the source repository.
-    for (const entry of readdirSync(next)) {
-      if (entry !== CONTEXT_FILE) rmSync(join(next, entry), { recursive: true, force: true });
-    }
-    writeFileSync(join(next, COPY_RECORD), JSON.stringify({ repo, ref, commit }));
+    const declaration = readFileSync(path, "utf8");
+    parseContextCopy(declaration, contextSource(name));
     if (found) {
       const previous = readCopyRecord(agentDir, name);
       if (
         previous.repo === repo &&
         previous.ref === ref &&
         previous.commit === commit &&
-        readFileSync(join(dir, CONTEXT_FILE), "utf8") === readFileSync(path, "utf8")
+        previous.declaration === declaration &&
+        existsSync(join(dir, CONTEXT_FILE)) &&
+        readFileSync(join(dir, CONTEXT_FILE), "utf8") === declaration
       ) {
         return { name, commit, outcome: "current" };
       }
     }
-    const old = `${next}.old`;
-    if (found) renameSync(dir, old);
+    mkdirSync(dir, { recursive: true });
     try {
-      renameSync(next, dir);
+      writeFileAtomic(join(dir, CONTEXT_FILE), declaration);
+      // This single rename publishes identity and declaration together; the directory never moves.
+      writeFileAtomic(join(dir, COPY_RECORD), JSON.stringify({ repo, ref, commit, declaration }));
     } catch (error) {
-      // Restore the usable copy if publishing fails; never delete it on the failure path.
-      if (found) renameSync(old, dir);
+      if (!found) rmSync(dir, { recursive: true, force: true });
       throw error;
     }
-    rmSync(old, { recursive: true, force: true });
     return { name, commit, outcome: "fetched" };
   } finally {
     rmSync(next, { recursive: true, force: true });
@@ -151,11 +139,8 @@ export function fetchedContexts(agentDir: string, contexts: readonly DeclaredCon
     const at = { name, repo, ...(ref !== undefined ? { ref } : {}) };
     if (!existsSync(contextCopyPath(agentDir, name))) return at;
     try {
-      const { commit } = copyRecord(agentDir, context);
-      const { description, content, environment } = parseContextCopy(
-        contextCopyText(agentDir, context),
-        contextSource(name),
-      );
+      const { commit, declaration } = copyRecord(agentDir, context);
+      const { description, content, environment } = parseContextCopy(declaration, contextSource(name));
       return {
         ...at,
         commit,

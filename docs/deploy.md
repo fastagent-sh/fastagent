@@ -361,7 +361,8 @@ excludes. Each start publishes it onto persistent storage:
 - Every `fastagent deploy <host>` fetches each context at its `ref` before making the image; a failed fetch stops the
   deploy rather than shipping an older copy. The contexts' declarations are checked with the agent's own, and
   `.contexts/` is built into the image. The deployed box never fetches contexts; content repositories are still cloned
-  on the box at start. Each fetched copy carries its source and commit beside `context.json`.
+  on the box at start. Each copy's `.fastagent-context.json` is the authoritative snapshot: source, commit and
+  declaration, atomically replaced as one file. `context.json` is a mirror for inspection; the image carries both.
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
   installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
   release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
@@ -394,8 +395,8 @@ rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.y
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
-- A kept ignore file that drops `fastagent.config.ts` or `.contexts/<name>/context.json`, or does not exclude
-  `.secrets/auth.json` or `content`, gates
+- A kept ignore file that drops `fastagent.config.ts`, `.contexts/<name>/context.json` or its
+  `.fastagent-context.json` snapshot, or does not exclude `.secrets/auth.json` or `content`, gates
   `--run`; an unexcluded `.state`, `node_modules` or `context.local.json` warns.
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some

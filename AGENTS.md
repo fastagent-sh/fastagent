@@ -78,7 +78,7 @@ src/
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── contexts/               # shared external declarations the agent uses, fetched at a GitHub ref
 │   ├── declare.ts          # which contexts an agent uses, by name, repository and optional ref
-│   ├── copy.ts             # fetched-copy identity on hosts without git metadata
+│   ├── copy.ts             # ONE atomic snapshot of fetched identity and declaration, independent of git metadata
 │   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep) and reporting
 │   └── join.ts             # ONE refusal of conflicts; join content and environment with attribution
 ├── environment/            # the commands an agent runs, declared in context.json — harness-neutral

@@ -448,6 +448,20 @@ export async function removeContext(agentDir: string, name: string): Promise<Con
         throw new ContextNameError(`no context named "${name}" (this agent uses: ${names.join(", ") || "none"})`);
       }
       const contexts = without(file.contexts, found.name);
+      const localPath = join(dir, LOCAL_CONTEXT_FILE);
+      const localText = textIfExists(localPath);
+      if (localText !== undefined && existsSync(contextCopyPath(dir, found.name))) {
+        const declared = contextsContent(dir, [found]).flatMap((part) => part.declared);
+        const names = new Set(declared.map((entry) => entry.name.toLowerCase()));
+        const local = parseLocalContextFile(localText, localPath, [], dir);
+        const bindings = Object.fromEntries(
+          Object.entries(local.content).filter(([name]) => !names.has(name.toLowerCase())),
+        );
+        if (Object.keys(bindings).length !== Object.keys(local.content).length) {
+          // Leaving path-only checkout bindings behind would turn them into writable local entries.
+          writeFileAtomic(localPath, localContextFileText(bindings), fileMode(localPath));
+        }
+      }
       await withContextCopy(dir, found.name, async () => {
         rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
       });

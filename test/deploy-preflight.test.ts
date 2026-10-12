@@ -700,7 +700,13 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await writeFile(join(dir, ".dockerignore"), "**/.secrets\n**/.env\n.contexts\n");
     expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
       ok: false,
-      gate: expect.stringMatching(/excludes `\.contexts\/acme\/context\.json` — the image would ship without/),
+      gate: expect.stringMatching(/excludes `\.contexts\/acme\/context\.json`.* — the image would ship without/),
+    });
+    // Keeping context.json while excluding the authoritative snapshot still makes the image unusable.
+    await writeFile(join(dir, ".dockerignore"), "**/.secrets\n**/.env\n**/.*.json\n");
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/excludes `\.contexts\/acme\/\.fastagent-context\.json`/),
     });
     github.offline();
     expect(await call(dir, { model: "openai/gpt-4o-mini" })).toMatchObject({
