@@ -24,6 +24,8 @@ export interface BuildSessionRuntimeOptions {
   model?: string;
   /** Credentials file override (the SDK `authPath` option; the CLI has only `FASTAGENT_AUTH_PATH`). */
   authPath?: string;
+  /** Bring each context to its `ref` first, as the commands that develop the agent do ({@link resolveAgentAssembly}). */
+  fetchContexts?: boolean;
 }
 
 /**

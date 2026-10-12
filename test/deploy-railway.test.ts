@@ -37,7 +37,10 @@ describe("deploy/railway: planRailwayDeploy", () => {
       "Dockerfile",
       ".dockerignore",
       "Dockerfile.dockerignore",
+      ".railwayignore",
     ]);
+    // `railway up` uploads what .gitignore lets through; the contexts deploy fetches are git-ignored, so let back in.
+    expect(artifacts.find((a) => a.path === ".railwayignore")?.content).toMatch(/^!\/\.contexts\/$/m);
     // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
     // creep back in silently; machinery/secret excludes are the hard contract instead.
     const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;

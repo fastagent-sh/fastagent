@@ -8,7 +8,6 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import {
-  CONTEXT_FILE,
   AGENT_MODEL_CATALOG_FILE,
   resolveAgentDir,
   resolveOverridePath,
@@ -24,6 +23,7 @@ import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import { enterEnvironment } from "../../environment/mise.ts";
+import { refreshContexts } from "../../contexts/fetch.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { servedExtensionCommands } from "./agent-session-factory.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -47,7 +47,7 @@ import {
   contentAbsentHere,
   resolveContent,
 } from "../../content/resolve.ts";
-import { loadContent } from "../../content/file.ts";
+import { loadContent, loadContexts, loadEnvironmentParts } from "../../content/file.ts";
 
 /**
  * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
@@ -105,6 +105,12 @@ export async function agentCommands(
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). */
   model?: string;
+  /**
+   * Bring each context the agent uses to its `ref` before opening it, keeping the copy here when GitHub cannot be
+   * reached: what the commands that develop the agent do. Production (`start`, a deployed box, an embedder) leaves it
+   * unset, runs on the copies it has, and refuses to open without one.
+   */
+  fetchContexts?: boolean;
   /**
    * Where conversations are stored, for an EMBEDDER that puts them somewhere the state root does not cover. There is
    * no env or flag spelling of it: sessions are machine state, and the one knob that moves machine state is
@@ -165,14 +171,17 @@ export interface AgentAssembly {
 
 export async function resolveAgentAssembly(
   dir: string,
-  options: { model?: string } & CredentialSourceOptions = {},
+  options: { model?: string; fetchContexts?: boolean } & CredentialSourceOptions = {},
 ): Promise<AgentAssembly> {
   const agentDir = resolveAgentDir(dir);
   const { config, path: configPath }: LoadedConfig = await loadConfig(agentDir);
+  // The contexts first: what they declare is part of everything below. Only a command that develops the agent fetches
+  // them; production runs on the copies it has (docs/design/agent-service.md §3.6).
+  if (options.fetchContexts) await refreshContexts(agentDir, loadContexts(agentDir));
   // The commands the agent runs, before anything is spawned: every process that opens the agent (a `dev` worker,
   // `start`, `invoke`, `chat`, an embedder's `createAgentService`) runs it on its declared packages, or refuses to (a
   // declaration FastAgent refuses, no mise to install them with).
-  const environment = await enterEnvironment(agentDir);
+  await enterEnvironment(agentDir);
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
   // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.
@@ -204,9 +213,10 @@ export async function resolveAgentAssembly(
   //
   // DEFERRED tools gate too, deliberately: native discovery can activate one mid-turn, so "registered"
   // means "may run in this process" — letting it start would put the empty-credential failure back
-  // inside a turn. An author who does not want that opts out per tool by not declaring. The variables context.json
-  // declares are one more owner: the commands the agent runs read them.
-  gateSecrets({ declared: new Map([...toolSecrets, [CONTEXT_FILE, declaredVariables(environment)]]), failures: [] });
+  // inside a turn. An author who does not want that opts out per tool by not declaring. The variables the agent's
+  // context.json and each context's declare are more owners: the commands the agent runs read them.
+  const variables = loadEnvironmentParts(agentDir).map((part) => [part.source, declaredVariables([part])] as const);
+  gateSecrets({ declared: new Map([...toolSecrets, ...variables]), failures: [] });
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it in one knob —
   // a container points it at its volume).
   const stateRoot = resolveStateRoot(agentDir);

@@ -7,6 +7,7 @@ import type { FastagentConfig } from "../src/harnesses/pi/config.ts";
 import { globalCatalogPath } from "../src/harnesses/pi/models.ts";
 import { createPiModels } from "../src/harnesses/pi/agent-models.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
+import { githubStandIn } from "./github-standin.ts";
 
 /** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
  *  directory's, and the temp prefix would not pass the release-name rule. */
@@ -666,6 +667,48 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { aptPackages: ["chromium"] } }));
     const none = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(none.ok && none.container.packages).toBeUndefined();
+  });
+
+  it("fetches the contexts and builds them into the image; one it cannot fetch stops the deploy", async () => {
+    const github = githubStandIn();
+    const commit = github.repo("acme/github-context").commit({
+      "context.json": JSON.stringify({
+        content: { handbook: { github: "acme/handbook" } },
+        environment: { aptPackages: ["chromium"], variables: { FA_CTX_TOKEN: { description: "a token" } } },
+      }),
+    });
+    const dir = await agent({
+      "context.json": JSON.stringify({ contexts: { acme: { github: "acme/github-context" } } }),
+    });
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.messages).toContainEqual({
+        level: "note",
+        text: `context acme: fetched at ${commit.slice(0, 7)}, built into the image`,
+      });
+      // What it declares is the agent's: its content cloned on the host, its apt packages and variables required.
+      expect(pre.messages.map((m) => m.text)).toContain(
+        "works on handbook: github acme/handbook, cloned on the host, and brought up to date in place at each start",
+      );
+      expect(pre.container.apt).toEqual(["git", "chromium"]);
+      expect(pre.declaredSecrets).toContainEqual(
+        expect.objectContaining({ name: "FA_CTX_TOKEN", source: ".contexts/acme/context.json" }),
+      );
+    }
+    // A kept .dockerignore that leaves the copies out would ship an image the box cannot start on.
+    await writeFile(join(dir, ".dockerignore"), "**/.secrets\n**/.env\n.contexts\n");
+    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(/excludes `\.contexts\/acme\/context\.json` — the image would ship without/),
+    });
+    github.offline();
+    expect(await call(dir, { model: "openai/gpt-4o-mini" })).toMatchObject({
+      ok: false,
+      gate: expect.stringMatching(
+        /^context "acme": could not fetch github acme\/github-context: .* — the image carries/,
+      ),
+    });
   });
 
   it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {

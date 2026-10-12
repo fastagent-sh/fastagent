@@ -101,14 +101,22 @@ describe("content: context.json and context.local.json", () => {
     expect(parseContextFile(contextFileText(file), path)).toEqual(file);
     expect(() => parseContextFile("{ content: {} }", path)).toThrow(/^\/a\/context\.json is not valid JSON/);
     expect(() => parseContextFile("[]", path)).toThrow("/a/context.json must hold a JSON object");
-    // Shared contexts are not built yet, so their key is refused like any other.
-    expect(() => parseContextFile(`{ "contexts": {} }`, path)).toThrow(
-      '/a/context.json: unknown key "contexts" (valid keys: $schema, content, environment)',
+    expect(() => parseContextFile(`{ "contents": {} }`, path)).toThrow(
+      '/a/context.json: unknown key "contents" (valid keys: $schema, contexts, content, environment)',
+    );
+    // What only a context's own context.json holds is refused with why.
+    expect(() => parseContextFile(`{ "description": "x" }`, path)).toThrow(
+      `/a/context.json: "description" says what a context is for, and this is an agent's`,
     );
     expect(() => parseContextFile(`{ "content": { "a": { "github": "a/b", "ref": "" } } }`, path)).toThrow(
       /^\/a\/context\.json: content "a": "ref" must be/,
     );
-    expect(readContextFile(await mkdtemp(join(tmpdir(), "fa-context-file-")))).toEqual({ content: {}, declared: [] });
+    expect(readContextFile(await mkdtemp(join(tmpdir(), "fa-context-file-")))).toEqual({
+      contexts: {},
+      declaredContexts: [],
+      content: {},
+      declared: [],
+    });
   });
 
   it("a reader declares the part it uses, so a refused part stops only what uses it; the file itself stops both", async () => {
@@ -125,9 +133,9 @@ describe("content: context.json and context.local.json", () => {
     await writeFile(path, `{ "content": { "a": {} }, "environment": { "packages": { "gh": "2" } } }`);
     expect(loadEnvironment(dir)).toEqual({ packages: { gh: "2" }, aptPackages: [], variables: {} });
     expect(() => loadContent(dir)).toThrow(`${path}: content "a" needs "github"`);
-    await writeFile(path, `{ "contexts": {} }`);
+    await writeFile(path, `{ "contents": {} }`);
     for (const read of [loadContent, loadEnvironment])
-      expect(() => read(dir)).toThrow(`${path}: unknown key "contexts"`);
+      expect(() => read(dir)).toThrow(`${path}: unknown key "contents"`);
   });
 
   it("content is read from both, and a refused binding names this machine's file", async () => {

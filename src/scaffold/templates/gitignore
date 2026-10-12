@@ -12,6 +12,8 @@ node_modules
 /content
 # the directories of this machine the agent is bound to: this machine's, never the agent's
 /context.local.json
+# the contexts the agent uses, fetched at their ref by each start and each deploy
+/.contexts
 .cache
 
 # fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare

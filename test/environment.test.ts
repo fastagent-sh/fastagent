@@ -149,7 +149,7 @@ describe("environment: what context.json may declare", () => {
     };
     expect(declareEnvironment(environment)).toEqual(environment);
     // A variable is declared by name, with what it is for; its value comes from the environment.
-    expect(declaredVariables(declareEnvironment(environment))).toEqual([
+    expect(declaredVariables([{ source: "context.json", declared: declareEnvironment(environment) }])).toEqual([
       { name: "GITHUB_TOKEN", source: "context.json", description: "gh's token, with repo scope" },
       { name: "http_proxy", source: "context.json", description: "x" },
     ]);

@@ -15,7 +15,7 @@ Coding agents made it cheap to vibe useful agent directories. The next gap is se
 ```txt
 reviewer/                   # the agent, its working directory, and a git repository
 ├── fastagent.config.ts     # the marker, plus deployment choices
-├── context.json            # its content: the repositories it works on and knows, shared with the agent
+├── context.json            # its own content and environment, and the contexts it uses
 ├── context.local.json      # this machine's directories it is bound to (kept out of git and of every image)
 ├── APPEND_SYSTEM.md        # optional standing instructions (SYSTEM.md replaces pi's default prompt)
 ├── AGENTS.md               # optional: how this agent is built and changed, loaded every turn
@@ -25,7 +25,8 @@ reviewer/                   # the agent, its working directory, and a git reposi
 ├── schedules/              # optional prompts run on a cron (<name>.md)
 ├── extensions/             # optional pi extension modules (see configuration.md)
 ├── reference.md            # optional reference material the agent reads (any file layout)
-├── content/handbook/       # a clone fastagent makes of each repository with no checkout bound here
+├── content/handbook/       # a clone of a repository declared here or in a context
+├── .contexts/acme/         # a fetched context, built into the image; never in git
 └── .state/ .secrets/       # this machine's instance: sessions, credentials (kept out of git, except .secrets/.env.example)
 
 ~/code/app/                 # a checkout of acme/app, declared in context.json and bound here
@@ -34,7 +35,9 @@ reviewer/                   # the agent, its working directory, and a git reposi
 
 `context.json` declares GitHub repositories (`{ "github": "acme/app" }`), which reach every place the agent runs: here,
 your checkout when `context.local.json` binds one, otherwise a clone; on a host, always a clone. A directory only this
-machine has is bound in `context.local.json` alone: it stays here, and a deployment says so.
+machine has is bound in `context.local.json` alone: it stays here, and a deployment says so. A
+[context](configuration.md#contexts) is a shared GitHub repository that declares content and environment, joined
+with this agent's own declarations. Its prompt and skills do not become this agent's.
 
 ## What FastAgent provides
 

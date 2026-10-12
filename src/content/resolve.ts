@@ -20,6 +20,8 @@ export type ResolvedContent = {
   readonly: boolean;
   /** What the declaration tells the agent about it. */
   description?: string;
+  /** The context that declares it; undefined for the agent's own. */
+  context?: string;
   /** Where the agent reaches it on this instance, absolute. */
   location: string;
   /** What to tell the user about how it resolved: a checkout off its `ref`, a clone not made yet. */
@@ -80,6 +82,7 @@ function resolveRepository(agentDir: string, entry: DeclaredContent, checkout?: 
     name,
     readonly,
     ...(description !== undefined ? { description } : {}),
+    ...(entry.context !== undefined ? { context: entry.context } : {}),
     kind: "github" as const,
     repo: entry.repo,
     ...(entry.ref !== undefined ? { ref: entry.ref } : {}),

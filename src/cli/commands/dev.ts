@@ -63,6 +63,7 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   assertTunnelBindable(host, tunnel);
   const a = await createPiAgentFromDir(agentDir, {
     model: modelSpec,
+    fetchContexts: true, // a command that develops the agent: production runs on the copies it has
     serving: true, // long-running serve: the scheduler poller runs (and the wake tool is mounted)
   }).catch(failStartup);
   // The same report `start` prints; `config:` is dev's own extra (see reportAssembly on the asymmetry).

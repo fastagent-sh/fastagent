@@ -1,7 +1,8 @@
 /**
- * The git GitHub content needs on this machine: which repository a checkout is of, whether it is at the declared
- * `ref`, and a clone, made or brought up to date in place. git's own configuration applies throughout (credential helpers, `url.<base>.insteadOf`), so
- * a private repository is reached the way the user's own `git clone` reaches it.
+ * The git GitHub content and contexts need on this machine: which repository a checkout is of, whether it is at the
+ * declared `ref`, a clone, made or brought up to date in place, and a context's snapshot. git's own configuration
+ * applies throughout (credential helpers, `url.<base>.insteadOf`), so a private repository is reached the way the
+ * user's own `git clone` reaches it.
  */
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -160,6 +161,38 @@ export async function refreshClone(repo: string, ref: string | undefined, dir: s
     return kept(`git would not update it: ${gitReason(error)}`);
   }
   return { outcome: "updated" };
+}
+
+/**
+ * A shallow clone of github `repo` at `ref` (a branch, a tag or a full commit; the default branch when unset) made in
+ * `dir`, which must not exist, and the commit it is at. A context's snapshot: nothing works in it, so it is made
+ * afresh rather than brought up to date. One fetch serves every kind of `ref`: git resolves a branch or a tag the
+ * remote has, and fetches a commit by its hash.
+ */
+export async function cloneSnapshot(repo: string, ref: string | undefined, dir: string): Promise<string> {
+  if (repo.startsWith("-") || ref?.startsWith("-")) {
+    throw new Error(`github ${repo}${ref !== undefined ? ` at ${ref}` : ""} would reach git as an option`);
+  }
+  mkdirSync(dir, { recursive: true });
+  try {
+    await runGit(["init", "-q"], dir);
+    await runGit(["config", HELPER_KEY, TOKEN_HELPER], dir);
+    await runGit(["remote", "add", "origin", githubUrl(repo)], dir);
+    await runGit([...SLOW_NETWORK, "fetch", "-q", "--depth", "1", "--end-of-options", "origin", ref ?? "HEAD"], dir);
+    await runGit(["checkout", "-q", "--detach", "FETCH_HEAD"], dir);
+  } catch (error) {
+    throw new Error(
+      `could not fetch github ${repo}${ref !== undefined ? ` at ${ref}` : ""}: ${gitReason(error)} — git's own ` +
+        `credentials on this machine are used (a credential helper, or url.<base>.insteadOf for SSH), and ` +
+        `GITHUB_TOKEN when it has none`,
+    );
+  }
+  return headCommit(dir) as string;
+}
+
+/** The commit the checkout `dir` is at, or undefined when it is none. */
+function headCommit(dir: string): string | undefined {
+  return existsSync(dir) ? gitAnswer(["rev-parse", "HEAD"], dir) : undefined;
 }
 
 /** git's own words for a refusal, without its hints. */

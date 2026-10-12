@@ -68,7 +68,10 @@ it is declared as its **content** ([agent model](agent-model.md) §3): the repos
 `src/content/` owns it, harness-neutral. `declare.ts` reads both maps and refuses in one place: unknown keys, an entry
 of `context.json` without `github`, a binding without `path` or one that redeclares a shared entry's treatment, a name
 that is not one path segment or collides ignoring case; `file.ts` reads both files through it (`loadContent` returns the
-`ContentDeclaration`, both halves), naming the file in every refusal. The shared declaration holds no path; a path is
+`ContentDeclaration`, both halves), naming the file in every refusal. `src/contexts/` reads the agent's declared
+contexts, fetches snapshots and checks the source/ref recorded in each, then joins their content and environment with
+the agent's in one place (`join.ts`). A duplicate content name or a package at conflicting versions refuses, naming
+both sources; the variable gate attributes each to its declarer. The shared declaration holds no path; a path is
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
 readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per
 process start; the content at those locations is re-read per turn. It reads the disk and git, never the network, and

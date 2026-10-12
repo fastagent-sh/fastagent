@@ -501,6 +501,64 @@ const env: CommandSpec = {
     "here names the missing ones.",
 };
 
+const context: CommandSpec = {
+  name: "context",
+  summary: "add, list, fetch or remove the contexts the agent uses",
+  description:
+    "A context is a GitHub repository whose context.json declares what agents work with: content, an environment " +
+    "and a description. The agent lists the contexts it uses in its context.json; each is fetched into .contexts/ " +
+    "(never in git) and joined with the agent's own declarations. A ref that is a branch or a tag follows the " +
+    "context; a full commit pins it.",
+  subcommands: [
+    {
+      name: "add",
+      summary: "fetch a context, check that it joins the agent's declarations, install its packages, declare it",
+      args: [{ name: "<source>", description: "github:owner/repo" }, AGENT_ARG],
+      flags: [
+        { flags: "--name <name>", description: "its name (default: the repository's)" },
+        { flags: "--ref <ref>", description: "a branch or a tag to follow, or a full commit to pin" },
+      ],
+      examples: [
+        { cmd: "fastagent context add github:acme/github-context" },
+        { cmd: "fastagent context add github:acme/billing --ref v2", note: "follows a tag" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/context.ts")).runContextAdd(args[0] as string, args[1] as string, {
+          ...(typeof f.name === "string" ? { name: f.name } : {}),
+          ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
+        }),
+    },
+    {
+      name: "list",
+      summary: "each context, the commit fetched here, what it is for and what it declares",
+      args: [AGENT_ARG],
+      flags: [JSON_FLAG],
+      examples: [{ cmd: "fastagent context list" }],
+      run: async (args, f) =>
+        (await import("./commands/context.ts")).runContextList(args[0] as string, f.json === true),
+    },
+    {
+      name: "fetch",
+      summary: "bring every context to its ref here, failing when one cannot be fetched",
+      description:
+        "The commands that develop the agent (dev, chat, invoke, tool, env exec) fetch the contexts at each start, " +
+        "and deploy fetches them before it builds; start never does. Run this before start on a host you run by " +
+        "hand, as you run npm install.",
+      args: [AGENT_ARG],
+      examples: [{ cmd: "fastagent context fetch" }],
+      run: async (args) => (await import("./commands/context.ts")).runContextFetch(args[0] as string),
+    },
+    {
+      name: "remove",
+      summary: "stop using a context, and remove its copy (a clone of its content is left as it is)",
+      args: [{ name: "<name>", description: "the context's name" }, AGENT_ARG],
+      examples: [{ cmd: "fastagent context remove acme-github" }],
+      run: async (args) =>
+        (await import("./commands/context.ts")).runContextRemove(args[0] as string, args[1] as string),
+    },
+  ],
+};
+
 const content: CommandSpec = {
   name: "content",
   summary: "list, add or remove what the agent works on and knows",
@@ -699,6 +757,7 @@ export const specs: readonly CommandSpec[] = [
   init,
   models,
   info,
+  context,
   content,
   env,
   tool,

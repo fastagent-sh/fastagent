@@ -32,7 +32,7 @@ What an author thinks: **I created an agent. It works on some things, and it kno
 | **Agent** | A model, a harness and a context, composed by a definition, the way a program is | As declared in its directory |
 | Model | What the agent thinks with, from a model provider | The default model and thinking level. Credentials are not part of it |
 | Harness | The loop that runs it: pi | Supplied by pi. The word means what it means across the ecosystem |
-| Context | What the agent works with: its content, connectors and environment | Below |
+| Context | What the agent works with: its content, connectors and environment | Its own declarations joined with the shared contexts its `context.json` lists (§3; [agent service](agent-service.md) §3.6) |
 | Content | The data: a directory the agent **works on** (writable) or **knows** (read-only) | A project, a folder, a repository. Its type says how it reaches each instance (§3) |
 | Definition | The program: who the agent is and how it works, and which model and context it uses | `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, `extensions/`, `fastagent.config.ts`, `context.json`, `models.json`, `models-store.json`, `package.json`, `.agents/skills/`, and pi's project files in `.pi/` (`settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/`); §2 lists where each format comes from and which wins |
 | **Instance** | One Agent in one place: on this machine, or on one host | Its runtime state: conversations, credentials, channel state, schedule state, and what it fetched (§5). It exists while no process runs; one or more processes serve it (a `dev`, a `start`, a one-off `invoke`) |
@@ -215,7 +215,9 @@ meaning. `init` and `fastagent content` write both ([CLI](agent-cli.md) §3, §4
 An agent that declares no content has none: a chat-only assistant works only in its own directory. The shared
 declaration decides what an instance on a host receives, so it is visible in the definition instead of being a
 hidden default. It names no path of any machine: the definition is shared, and a path describes one machine. A path
-is what `context.local.json` holds, which is why it is a file of its own that no other machine reads.
+is what `context.local.json` holds, which is why it is a file of its own that no other machine reads. The agent also
+joins declarations from the contexts it uses, fetched under `.contexts/<name>/`. A context never supplies this agent's
+prompt files, code tools or skills ([agent service](agent-service.md) §3.6).
 
 ### Where an entry is
 

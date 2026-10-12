@@ -33,7 +33,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy docker [agent]` | Generate `fastagent.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). `--tunnel --run` also starts a Quick Tunnel and registers webhooks. |
 | `deploy fly [agent]` | Generate `fly.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
-| `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
+| `deploy railway [agent]` | Generate `Dockerfile`, `.dockerignore` and `.railwayignore`, and print a railway runbook. `--run` provisions an unlinked dir end to end; a linked one needs `--into-linked`. |
 | `deploy agentcore [agent]` | Generate `agentcore.template.yaml`, `lambda/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -98,10 +98,31 @@ Prints, without serving:
   here (`dev`/`start` refuse to boot without them),
 - state, sessions and auth paths.
 
-Content that cannot be resolved (its directory is missing, say) and an environment FastAgent refuses are reported, not
-fatal; `info` installs nothing. `--json` carries `content`, `contentError`, `environment`, `environmentError` (what
-dev and start stop on) and `contextFiles` (the agent directory's `AGENTS.md`; nothing of its content).
+Content that cannot be resolved (its directory is missing, say), a context not fetched and an environment FastAgent
+refuses are reported, not fatal; `info` installs nothing and fetches nothing. `--json` carries `contexts`,
+`contextsError`, `content`, `contentError`, `environment`, `environmentError` (what dev and start stop on) and
+`contextFiles` (the agent directory's `AGENTS.md`; nothing of its content).
 Read-only.
+
+## `fastagent context`
+
+```bash
+fastagent context add github:owner/repo [agent] [--name <name>] [--ref <ref>]
+fastagent context list [agent] [--json]
+fastagent context fetch [agent]
+fastagent context remove <name> [agent]
+```
+
+A [context](configuration.md#contexts) is a GitHub repository whose root `context.json` declares content and an
+environment shared by several agents. `add` fetches and checks it against the agent's own declarations, installs new
+packages here, then writes the entry in the agent's `context.json`. `list` reports its source, description, commit and
+what it declares, without fetching. `fetch` updates every declared context to its `ref`, and stops if any cannot be
+fetched. `remove` deletes the declaration and fetched copy, leaving any content clone and installed packages alone.
+
+Development commands (`dev`, `chat`, `invoke`, `tool`, `env exec`) refresh contexts automatically and warn if offline
+while using an existing copy. `start` and `createAgentService` never fetch: run `context fetch` before a manual start.
+A deploy fetches and builds `.contexts/` into the image; the box does not fetch. A full commit in `ref` pins the
+context, while a branch or tag follows it. `init` git-ignores `.contexts/`.
 
 ## `fastagent content`
 
@@ -137,8 +158,9 @@ fastagent env install
 fastagent env exec -- <command...>
 ```
 
-The agent's [environment](configuration.md#environment), in the agent directory, the current one: the `environment`
-of its `context.json`, installed by the agent's own mise.
+The agent's [environment](configuration.md#environment), in the agent directory, the current one: its own
+`context.json` joined with its contexts', installed by the agent's own mise. `add` and `remove` edit only the agent's
+own declaration; a package only a context declares cannot be removed here.
 
 ```bash
 fastagent env add gh@2                          # a CLI from mise's registry

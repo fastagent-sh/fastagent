@@ -23,6 +23,8 @@ export interface ContentEntry {
 /** A declared entry, read. */
 export interface DeclaredContent {
   name: string;
+  /** The context that declares it; undefined for the agent's own (contexts/join.ts sets it). */
+  context?: string;
   /** `owner/repo`. */
   repo: string;
   ref?: string;

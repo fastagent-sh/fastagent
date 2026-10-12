@@ -7,9 +7,10 @@ status: current
 # Deploy
 
 FastAgent has no application build step: the directory is the deployable unit. Deploying means copying the agent to
-a host with Node >= 22.19 (or Bun), installing dependencies, and running `fastagent start`. `fastagent deploy`
-generates a container recipe and target config and prints an ordered runbook; `--run` executes it with the host's
-CLI.
+a host with Node >= 22.19 (or Bun), installing dependencies, fetching any declared contexts with
+`fastagent context fetch`, and running `fastagent start`. `start` never fetches contexts; a missing copy is an error.
+`fastagent deploy` generates a container recipe and target config and prints an ordered runbook; `--run`
+executes it with the host's CLI.
 
 ```bash
 fastagent deploy docker                 # Dockerfile + local Compose + runbook
@@ -216,7 +217,9 @@ Requires the [Railway CLI](https://docs.railway.com/guides/cli) and `railway log
 fastagent deploy railway
 ```
 
-Generates `Dockerfile` and `.dockerignore`, and prints the runbook:
+Generates `Dockerfile`, `.dockerignore` and `.railwayignore`, and prints the runbook. The `.railwayignore` adds
+`!/.contexts/`: Railway reads it over `.gitignore`, so fetched contexts enter the upload without uploading other
+git-ignored files. An author-owned `.railwayignore` must re-include `.contexts/` itself. The runbook:
 
 1. `railway init` (or `railway link`).
 2. `railway add --service <name>`.
@@ -355,6 +358,10 @@ excludes. Each start publishes it onto persistent storage:
 └── .deployment/          # release and recovery metadata
 ```
 
+- Every `fastagent deploy <host>` fetches each context at its `ref` before making the image; a failed fetch stops the
+  deploy rather than shipping an older copy. The contexts' declarations are checked with the agent's own, and
+  `.contexts/` is built into the image. The deployed box never fetches contexts; content repositories are still cloned
+  on the box at start. Each fetched copy carries its source and commit beside `context.json`.
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
   installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
   release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
@@ -387,7 +394,8 @@ rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.y
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
-- A kept ignore file that drops `fastagent.config.ts`, or does not exclude `.secrets/auth.json` or `content`, gates
+- A kept ignore file that drops `fastagent.config.ts` or `.contexts/<name>/context.json`, or does not exclude
+  `.secrets/auth.json` or `content`, gates
   `--run`; an unexcluded `.state`, `node_modules` or `context.local.json` warns.
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some

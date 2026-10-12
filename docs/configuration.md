@@ -416,6 +416,62 @@ directory's configuration, a `mise.toml` you keep beside `context.json` for your
 `mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the machine's, in a content
 repository with its own `mise.toml`) works as it does in your shell. `fastagent info` lists what is declared.
 
+## Contexts
+
+A context is what several agents work with, declared once: a GitHub repository whose `context.json` declares content,
+an environment and a description, such as a team's GitHub (the repositories its agents work on, `gh`, and the variable
+holding its token). An agent lists the contexts it uses in its own `context.json`:
+
+```json
+{
+  "contexts": {
+    "acme-github": { "github": "acme/github-context" },
+    "billing": { "github": "acme/billing-context", "ref": "v2" }
+  },
+  "content": { "app": { "github": "acme/app" } }
+}
+```
+
+A context's own `context.json` holds `content`, `environment` and a `description`, one line for the people who choose
+it, shown by `fastagent context list` and `info` and never given to the model. It lists no contexts. Nothing else in
+the repository is read: a context declares what an agent works with, never how it works, so its `AGENTS.md`, skills,
+tools and prompts are not the agent's. A skill that teaches a context's CLI lives in each agent that uses it
+(`fastagent add skill`), or on the machine.
+
+**Joined, never overridden.** The agent's declarations and its contexts' are one:
+
+- Content: each entry, the agent's own or a context's, is cloned at `content/<name>`, named in the prompt with its
+  `description`, and can be bound to a checkout here in `context.local.json`. A name declared twice refuses the start,
+  naming both files.
+- Environment: the packages and apt packages are joined, and installed as the agent's own. One package at two versions
+  refuses the start, naming both.
+- Variables: a name declared twice is one variable with one value, required by each; the start, `info`, `deploy` and
+  `fastagent env list` name the file that declares each (`.contexts/acme-github/context.json` for a context's).
+
+**Followed or pinned.** `ref` is a branch or a tag, which the context follows, or a full commit, which pins it; without
+one, the default branch. A push to a followed context reaches each developer's next start and the next deploy: a
+context's packages are code every machine that runs the agent installs, and a change to it can stop the agent (a
+content name another declaration already has, a package at another version). A rollback rebuilt from an earlier commit
+uses each context as its `ref` names it then. So pin a context your team does not control; moving it is an edit of
+`context.json`, reviewed like any.
+
+**Who fetches.** Each context is fetched into `.contexts/<name>/`, never in git (`init`'s `.gitignore` keeps it out):
+
+- `dev`, `chat`, `invoke`, `tool` and `env exec` bring each context to its `ref` at start. When GitHub cannot be
+  reached they run on the copy they have and say so; a context never fetched stops the start.
+- `fastagent context add`, `fastagent context fetch` and `deploy` fetch every context, and fail when one cannot be
+  fetched.
+- `start`, a deployed box and an embedder's `createAgentService` never fetch: they run on `.contexts/` as it is, and
+  refuse to start, naming `fastagent context fetch`, when a context is missing. A deploy builds the copies into the
+  image; on a host you run by hand, run `fastagent context fetch` before `start`, as you run `npm install`.
+- `info`, `content list` and `fastagent context list` fetch nothing, and say when a context is not fetched yet.
+
+git fetches with its own configuration on this machine, as for content: a private context needs the credentials your
+own `git clone` uses, or `GITHUB_TOKEN` when git has none. A deployed box never needs one for a context.
+
+Change them with [`fastagent context`](cli.md#fastagent-context). `fastagent env` and `fastagent content` edit the
+agent's own declarations: removing a context's package or content entry is refused, naming the context.
+
 ## Harness settings: `~/.pi/agent/settings.json`
 
 Compaction, retries, prompt-cache warming and transport timeouts are pi settings. `dev`, `start` and `chat` read

@@ -49,6 +49,12 @@ export const CONTEXT_FILE = "context.json";
 export const LOCAL_CONTEXT_FILE = "context.local.json";
 
 /**
+ * Where the contexts the agent uses are fetched, `.contexts/<name>` in the agent dir: FastAgent's copies, never in git,
+ * and built into the image by a deploy (docs/design/agent-service.md §3.6).
+ */
+export const CONTEXTS_DIRNAME = ".contexts";
+
+/**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
  * author writes (`tools/`, `channels/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
@@ -159,6 +165,11 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
  */
 export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
   return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? environmentPath(dir, STATE_DIRNAME, env);
+}
+
+/** Where the context `name` the agent in `dir` uses is fetched. */
+export function contextCopyPath(dir: string, name: string): string {
+  return join(resolve(dir), CONTEXTS_DIRNAME, name);
 }
 
 /** Where fastagent clones the content entry `name` of the agent in `dir`. */

@@ -7,7 +7,6 @@
  */
 import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
 import { isDeployOwned } from "../deploy/secrets.ts";
-import { CONTEXT_FILE } from "../paths.ts";
 
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {
@@ -109,13 +108,16 @@ function declareVariables(raw: unknown): Record<string, DeclaredVariable> {
   );
 }
 
-/** The variables `environment` declares, as the declarations every serving path and `deploy` require. */
-export function declaredVariables(environment: DeclaredEnvironment | undefined): DeclaredSecret[] {
-  return Object.entries(environment?.variables ?? {}).map(([name, { description }]) => ({
-    name,
-    source: CONTEXT_FILE,
-    description,
-  }));
+/**
+ * The variables each declarer's environment declares (the agent's own `context.json`, a context's), as the declarations
+ * every serving path and `deploy` require, each attributed to its file: a name two declare is required by both.
+ */
+export function declaredVariables(
+  parts: readonly { source: string; declared: DeclaredEnvironment | undefined }[],
+): DeclaredSecret[] {
+  return parts.flatMap(({ source, declared }) =>
+    Object.entries(declared?.variables ?? {}).map(([name, { description }]) => ({ name, source, description })),
+  );
 }
 
 function declarePackages(raw: unknown): Record<string, string> {

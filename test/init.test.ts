@@ -233,6 +233,7 @@ describe("init: scaffoldAgent", () => {
     // The shared declaration names no directory of this machine, and init's .gitignore keeps this machine's file out.
     expect(await exists(join(base, "reviewer", "context.json"))).toBe(false);
     expect(await readFile(join(base, "reviewer", ".gitignore"), "utf8")).toContain("/context.local.json\n");
+    expect(await readFile(join(base, "reviewer", ".gitignore"), "utf8")).toContain("/.contexts\n");
     // There is no copy for a host: a directory stays on this machine.
     expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
       /unknown option '--copy'/,

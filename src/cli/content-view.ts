@@ -7,7 +7,10 @@ import { type ResolvedContent, absentNotice } from "../content/resolve.ts";
 function contentKind(c: ResolvedContent): string {
   if (c.kind !== "github") return `this machine only, bound in ${LOCAL_CONTEXT_FILE}`;
   const github = `github ${c.repo}${c.ref ? `@${c.ref}` : ""}`;
-  return c.clone ? `${github}, a clone brought up to date at each start` : `${github}, your checkout bound here`;
+  const from = c.context !== undefined ? `, from the context ${c.context}` : "";
+  return c.clone
+    ? `${github}, a clone brought up to date at each start${from}`
+    : `${github}, your checkout bound here${from}`;
 }
 
 /**

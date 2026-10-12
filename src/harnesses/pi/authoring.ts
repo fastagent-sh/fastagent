@@ -1,21 +1,29 @@
 /**
- * Creating an agent and editing its content, as an API: `fastagent init` and `fastagent content` are thin CLI wrappers
- * over these (and `fastagent env` writes its declaration through {@link writeEnvironment}), so the CLI and a client (a
- * desktop app) cannot disagree about the rules. Nothing here prints or exits; every refusal is thrown with the message
- * the CLI shows.
+ * Creating an agent and editing its content and the contexts it uses, as an API: `fastagent init`, `fastagent content`
+ * and `fastagent context` are thin CLI wrappers over these (and `fastagent env` writes its declaration through
+ * {@link writeEnvironment}), so the CLI and a client (a desktop app) cannot disagree about the rules. Nothing here
+ * prints or exits; every refusal is thrown with the message the CLI shows.
  */
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { GitNotInstalled, gitFor } from "../../git.ts";
-import { CONTEXT_FILE, LOCAL_CONTEXT_FILE, contentEntryPath, resolveAgentDir } from "../../paths.ts";
+import {
+  CONTEXTS_DIRNAME,
+  CONTEXT_FILE,
+  LOCAL_CONTEXT_FILE,
+  contentEntryPath,
+  contextCopyPath,
+  resolveAgentDir,
+} from "../../paths.ts";
 import { type ScaffoldOptions, initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import {
   type BoundContent,
   type ContentBinding,
   type ContentDeclaration,
   type ContentEntry,
+  type DeclaredContent,
   canonicalBinding,
   canonicalEntry,
   declareBindings,
@@ -26,12 +34,23 @@ import {
   type ContextFile,
   type LocalContextFile,
   contextFileText,
+  contextsContent,
+  contextsEnvironment,
   loadContent,
   localContextFileText,
   parseContextFile,
   parseLocalContextFile,
+  readContextFile,
 } from "../../content/file.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
+import {
+  type ContextEntry,
+  type DeclaredContext,
+  canonicalContextEntry,
+  declareContexts,
+} from "../../contexts/declare.ts";
+import { type FetchedContext, fetchContexts, fetchedContexts, withContextCopy } from "../../contexts/fetch.ts";
+import { type DeclaredPart, joinContent, joinEnvironment } from "../../contexts/join.ts";
 import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import type { ContentAddition } from "../../content/source.ts";
 import { type LockResult, withLockedFile } from "./locked-file.ts";
@@ -45,6 +64,11 @@ const CONTEXT_FILE_MODE = 0o644;
  */
 export class ContentNameError extends Error {
   override name = "ContentNameError";
+}
+
+/** A refusal about a context's NAME, as {@link ContentNameError} is about a content entry's. */
+export class ContextNameError extends Error {
+  override name = "ContextNameError";
 }
 
 export interface CreateAgentOptions extends ScaffoldOptions {
@@ -75,10 +99,14 @@ export interface CreatedAgent {
   repository: string;
 }
 
-/** The two content maps an edit rewrites, as written: `context.json`'s entries and `context.local.json`'s bindings. */
+/**
+ * The two content maps an edit rewrites, as written: `context.json`'s entries and `context.local.json`'s bindings, beside
+ * the content the agent's contexts declare, which no content edit writes and every one joins.
+ */
 interface ContentMaps {
   content: Record<string, ContentEntry>;
   bindings: Record<string, ContentBinding>;
+  contexts: DeclaredPart<DeclaredContent[]>[];
 }
 
 /**
@@ -91,7 +119,7 @@ interface ContentMaps {
 export async function createAgent(dir: string, options: CreateAgentOptions = {}): Promise<CreatedAgent> {
   const agentDir = resolve(dir);
   const additions = options.content ?? [];
-  let maps: ContentMaps = { content: {}, bindings: {} };
+  let maps: ContentMaps = { content: {}, bindings: {}, contexts: [] };
   for (const addition of additions) maps = withAddition(agentDir, maps, addition).maps;
   const { created, undo } = await scaffoldAgent(agentDir, { webAccess: options.webAccess });
   const removeAll = async (error: unknown): Promise<never> => {
@@ -144,15 +172,15 @@ export interface ContentEdit {
  */
 export async function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
-  const declaration = await editContext(dir, (shared, local) => {
-    const { maps } = withAddition(dir, mapsOf(shared, local), addition);
+  const declaration = await editContext(dir, (shared, local, contexts) => {
+    const { maps } = withAddition(dir, { content: shared.content, bindings: local.content, contexts }, addition);
     return {
       result: declarationOf(dir, maps),
       ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
       ...(addition.binding !== undefined ? { local: localContextFileText(maps.bindings) } : {}),
     };
   });
-  const notes = addition.binding !== undefined ? unignoredLocalFile(dir) : [];
+  const notes = addition.binding !== undefined ? unignored(dir, LOCAL_CONTEXT_FILE, "directories of this machine") : [];
   return { name: addition.name, content: resolveContent(dir, declaration), notes };
 }
 
@@ -163,11 +191,12 @@ export async function addContent(agentDir: string, addition: ContentAddition): P
  */
 export async function removeContent(agentDir: string, name: string): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
-  const { removed, wasDeclared, declaration } = await editContext(dir, (shared, local) => {
-    const found = entryNamed(mapsOf(shared, local), name);
+  const { removed, wasDeclared, declaration } = await editContext(dir, (shared, local, contexts) => {
+    const found = entryNamed({ content: shared.content, bindings: local.content, contexts }, name);
     const maps = {
       content: without(shared.content, found.name),
       bindings: without(local.content, found.name),
+      contexts,
     };
     const declaration = declarationOf(dir, maps);
     // What is left is resolved before it is written, so an entry that cannot be refuses the edit rather than failing
@@ -204,9 +233,17 @@ function withAddition(agentDir: string, maps: ContentMaps, addition: ContentAddi
     (key) => key.toLowerCase() === name.toLowerCase(),
   );
   if (taken) throw new ContentNameError(`this agent already has content named "${taken}"`);
+  const fromContext = contextEntry(maps, name);
+  // A binding alone under a context's entry is this machine's checkout of it, which declareBindings checks.
+  if (fromContext !== undefined && entry !== undefined) {
+    throw new ContentNameError(
+      `the context "${fromContext.context}" declares content named "${fromContext.entry.name}" (${fromContext.source})`,
+    );
+  }
   const next: ContentMaps = {
     content: entry !== undefined ? { ...maps.content, [name]: canonicalEntry(entry) } : maps.content,
     bindings: binding !== undefined ? { ...maps.bindings, [name]: canonicalBinding(binding) } : maps.bindings,
+    contexts: maps.contexts,
   };
   const declaration = declarationOf(agentDir, next);
   if (binding === undefined) {
@@ -222,14 +259,22 @@ function withAddition(agentDir: string, maps: ContentMaps, addition: ContentAddi
   return { maps: next };
 }
 
-/** `maps` declared: what every reader of the files would read from them. */
+/** `maps` declared, the agent's own content joined with its contexts': what every reader of the files would read. */
 function declarationOf(agentDir: string, maps: ContentMaps): ContentDeclaration {
-  const declared = declareContent(maps.content);
+  const declared = joinContent([{ source: CONTEXT_FILE, declared: declareContent(maps.content) }, ...maps.contexts]);
   return { declared, bound: declareBindings(maps.bindings, declared, agentDir) };
 }
 
-function mapsOf(shared: ContextFile, local: LocalContextFile): ContentMaps {
-  return { content: shared.content, bindings: local.content };
+/** The content entry a context declares under `name` (ignoring case), with the context and its file. */
+function contextEntry(
+  maps: Pick<ContentMaps, "contexts">,
+  name: string,
+): { context: string; source: string; entry: DeclaredContent } | undefined {
+  for (const { context, source, declared } of maps.contexts) {
+    const entry = declared.find((one) => one.name.toLowerCase() === name.toLowerCase());
+    if (entry !== undefined) return { context: context as string, source, entry };
+  }
+  return undefined;
 }
 
 function without<T>(map: Record<string, T>, name: string): Record<string, T> {
@@ -246,6 +291,13 @@ function entryNamed(maps: ContentMaps, name: string): { name: string; shared: bo
   const local = Object.keys(maps.bindings).find(matches);
   const found = shared ?? local;
   if (found !== undefined) return { name: found, shared: shared !== undefined, local: local !== undefined };
+  const fromContext = contextEntry(maps, name);
+  if (fromContext !== undefined) {
+    throw new Error(
+      `content "${fromContext.entry.name}" is declared by ${fromContext.source}, the context "${fromContext.context}" ` +
+        `— it goes with the context (fastagent context remove ${fromContext.context})`,
+    );
+  }
   const names = [...new Set([...Object.keys(maps.content), ...Object.keys(maps.bindings)])];
   throw new ContentNameError(`no content named "${name}" (this agent has: ${names.join(", ") || "none"})`);
 }
@@ -257,21 +309,25 @@ function entryNamed(maps: ContentMaps, name: string): { name: string; shared: bo
  */
 async function editContext<T>(
   dir: string,
-  edit: (shared: ContextFile, local: LocalContextFile) => { result: T; shared?: string; local?: string },
+  edit: (
+    shared: ContextFile,
+    local: LocalContextFile,
+    contexts: DeclaredPart<DeclaredContent[]>[],
+  ) => { result: T; shared?: string; local?: string },
 ): Promise<T> {
   const sharedPath = join(dir, CONTEXT_FILE);
   const localPath = join(dir, LOCAL_CONTEXT_FILE);
   return withLockedFile(
     sharedPath,
     async (sharedText): Promise<LockResult<T>> => {
-      const shared =
-        sharedText === undefined ? { content: {}, declared: [] } : parseContextFile(sharedText, sharedPath);
+      const shared = parseContextFile(sharedText ?? "{}", sharedPath);
+      const contexts = contextsContent(dir, shared.declaredContexts);
+      // A binding is a checkout under the name of any declared repository, the agent's own or a context's.
+      const joined = joinContent([{ source: CONTEXT_FILE, declared: shared.declared }, ...contexts]);
       const localText = textIfExists(localPath);
       const local =
-        localText === undefined
-          ? { content: {}, bound: [] }
-          : parseLocalContextFile(localText, localPath, shared.declared, dir);
-      const out = edit(shared, local);
+        localText === undefined ? { content: {}, bound: [] } : parseLocalContextFile(localText, localPath, joined, dir);
+      const out = edit(shared, local, contexts);
       if (out.local !== undefined) writeFileAtomic(localPath, out.local, fileMode(localPath));
       return { result: out.result, next: out.shared };
     },
@@ -284,20 +340,135 @@ function textIfExists(path: string): string | undefined {
 }
 
 /**
- * What to say when git would commit `context.local.json`: it names directories of this machine, so committed it would
- * point every other checkout of the agent at paths it does not have. `init` ignores it; an agent made before that may
- * not. Asked only of an agent in a git repository, and never failing an edit that has already been made.
+ * What to say when git would commit `path`, which holds `what` and belongs to this machine: `context.local.json` would
+ * point every other checkout of the agent at paths it does not have, and `.contexts/` would commit copies a deploy
+ * fetches afresh. `init` ignores both; an agent made before that may not. Asked only of an agent in a git repository,
+ * and never failing an edit that has already been made.
  */
-function unignoredLocalFile(dir: string): string[] {
-  const git = gitFor("to check that context.local.json stays out of git");
+function unignored(dir: string, path: string, what: string): string[] {
+  const git = gitFor(`to check that ${path} stays out of git`);
   try {
     if (git.answer(["rev-parse", "--is-inside-work-tree"], dir) !== "true") return [];
-    if (git.answer(["check-ignore", "-q", LOCAL_CONTEXT_FILE], dir) !== undefined) return [];
+    if (git.answer(["check-ignore", "-q", path], dir) !== undefined) return [];
   } catch (error) {
     if (error instanceof GitNotInstalled) return [];
     throw error;
   }
-  return [`${LOCAL_CONTEXT_FILE} holds directories of this machine and git does not ignore it: add it to .gitignore`];
+  return [`${path} holds ${what} and git does not ignore it: add it to .gitignore`];
+}
+
+/** A context to add: its name and the entry `context.json` gets. */
+export interface ContextAddition {
+  name: string;
+  entry: ContextEntry;
+}
+
+/** What a context edit leaves: the context it added or removed, the agent's contexts after it, and what to tell. */
+export interface ContextEdit {
+  name: string;
+  contexts: FetchedContext[];
+  notes: string[];
+}
+
+export interface AddContextOptions {
+  /**
+   * Install the environment the agent has with the context, before it is declared, so a declared context is one whose
+   * packages install: `added` names the packages the context brings that the agent did not have. The CLI installs
+   * them with the agent's own mise, as `fastagent env add` does. A rejection leaves the context undeclared.
+   */
+  install?: (environment: DeclaredEnvironment, added: string[]) => Promise<void>;
+}
+
+/**
+ * Add a context to the agent in `agentDir`: fetch it, refusing when it cannot be fetched or holds no context; check that
+ * its declarations join the agent's (a content name or a package version two declare refuses, naming both); run
+ * `install`; and declare it in `context.json`. A failure after the fetch leaves no copy and no declaration. A name that
+ * cannot be one, or that the agent already uses (ignoring case), is a {@link ContextNameError}.
+ */
+export async function addContext(
+  agentDir: string,
+  addition: ContextAddition,
+  options: AddContextOptions = {},
+): Promise<ContextEdit> {
+  const dir = resolveAgentDir(agentDir);
+  const { name } = addition;
+  const entry = canonicalContextEntry(addition.entry);
+  const path = join(dir, CONTEXT_FILE);
+  await withLockedFile(
+    path,
+    async (text) => {
+      const file = parseContextFile(text ?? "{}", path);
+      contextNameFree(file, name);
+      const [context] = declareContexts({ [name]: entry }) as [DeclaredContext];
+      const existed = existsSync(contextCopyPath(dir, name));
+      await fetchContexts(dir, [context], "fail");
+      try {
+        const contexts = [...file.declaredContexts, context];
+        const parts = contextsContent(dir, contexts);
+        const declared = joinContent([{ source: CONTEXT_FILE, declared: file.declared }, ...parts]);
+        const localPath = join(dir, LOCAL_CONTEXT_FILE);
+        const local = parseLocalContextFile(textIfExists(localPath) ?? "{}", localPath, declared, dir);
+        resolveContent(dir, { declared, bound: local.bound });
+        const own = { source: CONTEXT_FILE, declared: file.environment };
+        const had = joinEnvironment([own, ...contextsEnvironment(dir, file.declaredContexts)]);
+        const environment = joinEnvironment([own, ...contextsEnvironment(dir, contexts)]);
+        if (environment !== undefined && options.install) {
+          const added = Object.keys(environment.packages).filter((pkg) => !Object.hasOwn(had?.packages ?? {}, pkg));
+          await options.install(environment, added);
+        }
+        return {
+          result: undefined,
+          next: contextFileText({ ...file, contexts: { ...file.contexts, [name]: entry } }),
+        };
+      } catch (error) {
+        if (!existed) rmSync(contextCopyPath(dir, name), { recursive: true, force: true });
+        throw error;
+      }
+    },
+    { mode: fileMode(path), create: false },
+  );
+  return {
+    name,
+    contexts: fetchedContexts(dir, readContextFile(dir).declaredContexts),
+    notes: unignored(dir, CONTEXTS_DIRNAME, "the contexts' copies, which each deploy fetches afresh"),
+  };
+}
+
+/** Remove the cached copy and declaration under the agent's lock; content clones and installed packages are kept. */
+export async function removeContext(agentDir: string, name: string): Promise<ContextEdit> {
+  const dir = resolveAgentDir(agentDir);
+  const path = join(dir, CONTEXT_FILE);
+  const removed = await withLockedFile(
+    path,
+    async (text) => {
+      const file = parseContextFile(text ?? "{}", path);
+      const found = file.declaredContexts.find((context) => context.name.toLowerCase() === name.toLowerCase());
+      if (found === undefined) {
+        const names = file.declaredContexts.map((context) => context.name);
+        throw new ContextNameError(`no context named "${name}" (this agent uses: ${names.join(", ") || "none"})`);
+      }
+      const contexts = without(file.contexts, found.name);
+      await withContextCopy(dir, found.name, async () => {
+        rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
+      });
+      return { result: found.name, next: contextFileText({ ...file, contexts }) };
+    },
+    { mode: fileMode(path), create: false },
+  );
+  return {
+    name: removed,
+    contexts: fetchedContexts(dir, readContextFile(dir).declaredContexts),
+    notes: ["content clones and installed packages are left as they are"],
+  };
+}
+
+/** Refuse `name` as a new context's when it cannot name one or the agent already uses it (ignoring case). */
+function contextNameFree(file: ContextFile, name: string): void {
+  if (!isContentName(name)) {
+    throw new ContextNameError(`"${name}" cannot name a context (one path segment of letters, digits, "-" and "_")`);
+  }
+  const taken = file.declaredContexts.find((context) => context.name.toLowerCase() === name.toLowerCase());
+  if (taken) throw new ContextNameError(`this agent already uses a context named "${taken.name}"`);
 }
 
 /**
@@ -308,12 +479,17 @@ export async function writeEnvironment(
   agentDir: string,
   change: (current: DeclaredEnvironment | undefined) => DeclaredEnvironment,
 ): Promise<DeclaredEnvironment> {
-  const path = join(resolveAgentDir(agentDir), CONTEXT_FILE);
+  const dir = resolveAgentDir(agentDir);
+  const path = join(dir, CONTEXT_FILE);
   return withLockedFile(
     path,
     async (src) => {
       const file = parseContextFile(src ?? "{}", path);
       const environment = change(file.environment);
+      joinEnvironment([
+        { source: CONTEXT_FILE, declared: environment },
+        ...contextsEnvironment(dir, file.declaredContexts),
+      ]);
       return { result: environment, next: contextFileText({ ...file, environment }) };
     },
     { mode: fileMode(path) },

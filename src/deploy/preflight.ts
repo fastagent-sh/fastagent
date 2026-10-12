@@ -16,7 +16,8 @@ import { capSchedules, loadSchedules, MAX_SCHEDULES } from "../schedule/discover
 import { resolveAgentTools } from "../harnesses/pi/create.ts";
 import { loadAgentDefinition } from "../harnesses/pi/definition.ts";
 import type { ContentDeclaration } from "../content/declare.ts";
-import { loadContent, loadEnvironment } from "../content/file.ts";
+import { loadContent, loadContexts, loadEnvironment, loadEnvironmentParts } from "../content/file.ts";
+import { fetchContexts } from "../contexts/fetch.ts";
 import { agentModels } from "../harnesses/pi/agent-models.ts";
 import { type DeclaredSecret, allSecrets } from "../declared-secrets.ts";
 import {
@@ -234,6 +235,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `may use only letters, digits, "-" and "_"; rename it (the fastagent.config.ts inside is what ` +
         `makes it an agent, never its name)`,
     );
+  }
+
+  // The contexts first: the image carries them as they are fetched now, and everything below reads them. A context that
+  // cannot be fetched stops the deploy rather than ship an older copy than its `ref` names.
+  const fetched = await fetchContexts(agentDir, loadContexts(agentDir), "fail", true).catch((error: unknown) => {
+    throw new DeployGate(`${(error as Error).message} — the image carries each context as fetched now`);
+  });
+  for (const context of fetched) {
+    report.note(`context ${context.name}: fetched at ${context.commit.slice(0, 7)}, built into the image`);
   }
 
   const content = loadContent(agentDir);
@@ -503,7 +513,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const declaredSecrets: DeclaredSecret[] = [
     ...allSecrets(resolvedTools.toolSecrets),
     ...allSecrets(inspected.secrets),
-    ...declaredVariables(environment),
+    ...declaredVariables(loadEnvironmentParts(agentDir)),
   ];
   await checkKeptDockerfile(agentDir, model.envValue, valueFile, report);
 

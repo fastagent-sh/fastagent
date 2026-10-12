@@ -321,6 +321,7 @@ describe("the contracts depend on nothing", () => {
       "effect/Exit",
       "effect/Fiber",
       "effect/Scope",
+      "proper-lockfile", // fetched context copies are coordinated between Node processes
     ]);
     // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this
     // for core; node now carries the assembly, so it needs the same bar).

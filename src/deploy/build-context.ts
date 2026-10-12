@@ -19,6 +19,8 @@ import {
 } from "../paths.ts";
 import { isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
+import { loadContexts } from "../content/file.ts";
+import { contextSource } from "../contexts/declare.ts";
 
 /**
  * "Would docker's packer drop this path?" — built from a `.dockerignore`'s text via the `ignore` matcher (the same
@@ -65,6 +67,8 @@ export interface BuildContextPaths {
   contentShips?: string;
   /** `context.local.json`, when it exists: the directories of this machine the agent is bound to. */
   bindingsShip?: string;
+  /** The `context.json` of each context the agent uses, fetched: what the image must carry. */
+  contextCopies: string[];
   /** The agent's node_modules, when it exists. */
   depDirs: string[];
 }
@@ -97,6 +101,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const stateShips = stateRel !== undefined && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
   const contentShips = (await exists(join(agentDir, CONTENT_DIRNAME))) ? CONTENT_DIRNAME : undefined;
   const bindingsShip = (await exists(join(agentDir, LOCAL_CONTEXT_FILE))) ? LOCAL_CONTEXT_FILE : undefined;
+  const contextCopies = await present(loadContexts(agentDir).map((context) => contextSource(context.name)));
   // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
   const envFiles = (await entriesIfExists(agentDir))
     .map((entry) => entry.name)
@@ -121,7 +126,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present(["node_modules"]);
   const machineryPaths = [...secretPaths, ...(stateRel ? [stateRel] : [])];
-  return { machineryPaths, leakCandidates, stateShips, contentShips, bindingsShip, depDirs };
+  return { machineryPaths, leakCandidates, stateShips, contentShips, bindingsShip, contextCopies, depDirs };
 }
 
 /** Interrogate BOTH ignore files deploy emits, when the author kept them. */
@@ -130,7 +135,7 @@ export async function checkKeptIgnoreFiles(
   report: DeployReport,
 ): Promise<void> {
   const { agentDir, force } = ctx;
-  const { leakCandidates, stateShips, contentShips, bindingsShip, depDirs } = ctx.paths;
+  const { leakCandidates, stateShips, contentShips, bindingsShip, contextCopies, depDirs } = ctx.paths;
   for (const rel of [".dockerignore", "Dockerfile.dockerignore"]) {
     const kept = await readTextIfExists(join(agentDir, rel));
     if (kept === undefined) continue;
@@ -149,6 +154,14 @@ export async function checkKeptIgnoreFiles(
         `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
         `config (the deployed box has no agent to open and crash-loops). Remove that rule before deploying.`;
       report.issue(text);
+    }
+    // The contexts the agent uses: the deployed box runs on the copies the image carries, and refuses to start without.
+    const dropped = contextCopies.filter((path) => excluded(path));
+    if (dropped.length > 0) {
+      report.issue(
+        `your ${rel} (kept) excludes ${dropped.map((p) => `\`${p}\``).join(", ")} — the image would ship without ` +
+          `the contexts the agent uses, and the deployed box refuses to start without them. Remove that rule.`,
+      );
     }
     // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
     const leaks = leakCandidates.filter((p) => !excluded(p));

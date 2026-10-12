@@ -25,8 +25,10 @@ import { agentDirOrExit, failStartup } from "../fail.ts";
 import { contentLines } from "../content-view.ts";
 import { type ResolvedContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import type { BoundContent } from "../../content/declare.ts";
-import { loadContent, loadEnvironment } from "../../content/file.ts";
+import { loadContent, loadContexts, loadEnvironmentParts } from "../../content/file.ts";
 import { type DeclaredEnvironment, declaredVariables } from "../../environment/declare.ts";
+import { type FetchedContext, fetchedContexts } from "../../contexts/fetch.ts";
+import { joinEnvironment } from "../../contexts/join.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -38,6 +40,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   enterAgentEnv(agentDir); // skills/tools may read env — and fetch — at load time
   const { config, path: configPath } = await loadConfig(agentDir).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
+  // The contexts the agent uses as they are fetched here; info fetches nothing. Reported, not fatal, like content.
+  let contexts: FetchedContext[] = [];
+  let contextsError: string | undefined;
+  try {
+    contexts = fetchedContexts(agentDir, loadContexts(agentDir));
+  } catch (error) {
+    contextsError = (error as Error).message;
+  }
   // Reported, not fatal, like a tool that does not load: `info` is how an author finds out a content entry is missing.
   let content: ResolvedContent[] = [];
   let contentAbsent: BoundContent[] = [];
@@ -52,9 +62,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const definition = await loadAgentDefinition(agentDir).catch(failStartup);
   // Reported like content: `info` is how an author finds out context.json declares what the agent does not support.
   let environment: DeclaredEnvironment | undefined;
+  let variables: DeclaredSecret[] = [];
   let environmentError: string | undefined;
   try {
-    environment = loadEnvironment(agentDir);
+    const parts = loadEnvironmentParts(agentDir);
+    environment = joinEnvironment(parts);
+    variables = declaredVariables(parts);
   } catch (error) {
     environmentError = (error as Error).message;
   }
@@ -93,11 +106,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // (never asserts) the list `start` refuses to boot without and `deploy` requires a value for: channels are
   // imported as `start` imports them, so a Feishu/Lark channel that `dev` connects by WebSocket shows the webhook
   // values a deployment needs, and the line says so.
-  const declaredSecrets: DeclaredSecret[] = [
-    ...tools.secrets,
-    ...allSecrets(inspected.secrets),
-    ...declaredVariables(environment),
-  ];
+  const declaredSecrets: DeclaredSecret[] = [...tools.secrets, ...allSecrets(inspected.secrets), ...variables];
   const unsetSecrets = missingSecrets(declaredSecrets);
   const schedules = sched.schedules.map((s) => ({
     name: s.name,
@@ -138,6 +147,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       JSON.stringify(
         {
           agentDir,
+          contexts,
+          contextsError: contextsError ?? null,
           content,
           contentAbsent,
           contentError: contentError ?? null,
@@ -188,6 +199,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
   const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
+  for (const context of contexts) line("context", describeContext(context));
+  if (contextsError) line("context", `⚠ ${contextsError}`);
   for (const [label, value] of contentLines(content, contentAbsent)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
   line(
@@ -237,6 +250,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
 }
 
 /** The packages and apt packages an environment declares, as one line. */
+function describeContext(context: FetchedContext): string {
+  const from = `github ${context.repo}${context.ref ? `@${context.ref}` : ""}`;
+  const at = context.commit ? `fetched at ${context.commit.slice(0, 7)}` : "not fetched here";
+  const said = context.error ? ` ⚠ ${context.error}` : context.description ? ` — ${context.description}` : "";
+  return `${context.name}  ${from}, ${at}${said}`;
+}
+
 function describeEnvironment(environment: DeclaredEnvironment): string {
   const packages = Object.entries(environment.packages).map(([name, version]) => `${name} ${version}`);
   const apt = environment.aptPackages.map((name) => `apt:${name}`);

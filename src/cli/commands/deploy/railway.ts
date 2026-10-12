@@ -4,7 +4,7 @@
  */
 import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
-import { planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
+import { isGeneratedRailwayignore, planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
@@ -15,8 +15,8 @@ import { type HostDeploy, boxLoginStep, registrarsFor } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
 export const railwayHost: HostDeploy = {
-  // Railway's only artifacts are the container's, which planArtifacts owns for every host.
-  isOurs: () => false,
+  // Besides the container's, which planArtifacts owns for every host, Railway's own is its `.railwayignore`.
+  isOurs: (path, content) => path.endsWith(".railwayignore") && isGeneratedRailwayignore(content),
   shell: async (agentDir) => railwayShell(toRailwayName(basename(agentDir)), agentDir),
   async deploy(ctx) {
     const { opts, agentDir, pre, channels, write } = ctx;

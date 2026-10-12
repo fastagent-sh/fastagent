@@ -231,13 +231,23 @@ function createPiAgentFromDir(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself (one holding `fastagent.config.ts`); load config, resolve its content, model and tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` and `authPath` are read like every path override: a leading `~` is the home directory and a relative path is relative to the process's working directory. `sessionsDir` defaults to `<state root>/sessions`, and the result reports the one in use as an absolute path.
+The same opener used by `fastagent dev`, `invoke`, and `start`: `dir` must be the agent directory itself
+(one holding `fastagent.config.ts`). It loads config, joins its own and its contexts' content, resolves model and
+tools, picks session storage, and assembles the directory. Set `serving: true` only for a long-running host that
+also runs the scheduler; it mounts `wake`/`unwake`. `sessionsDir` and `authPath` are read like every path override:
+a leading `~` is the home directory and a relative path is relative to the process's working directory. `sessionsDir`
+defaults to `<state root>/sessions`, and the result reports the one in use as an absolute path.
 
 ### Content
 
 ```ts
 // From `@fastagent-sh/fastagent/node`.
-function loadContent(agentDir: string): ContentDeclaration; // context.json and context.local.json, read and checked
+function loadContexts(agentDir: string): DeclaredContext[];
+function fetchContexts(
+  agentDir: string, contexts: DeclaredContext[], onFailure: "keep" | "fail", requireListed?: boolean,
+): Promise<ContextFetch[]>;
+function fetchedContexts(agentDir: string, contexts: DeclaredContext[]): FetchedContext[];
+function loadContent(agentDir: string): ContentDeclaration; // agent + fetched contexts + local bindings, joined
 function resolveContent(agentDir: string, declaration: ContentDeclaration): ResolvedContent[];
 function contentAbsentHere(declaration: ContentDeclaration): BoundContent[]; // bound here, gone: left out
 function cloneContent(
@@ -246,12 +256,15 @@ function cloneContent(
 
 type ContentEntry = { github: string; ref?: string; readonly?: boolean; description?: string }; // in context.json
 type ContentBinding = { path: string; readonly?: boolean; description?: string }; // in context.local.json
+type ContextEntry = { github: string; ref?: string }; // in the agent's context.json `contexts`
+type DeclaredContext = { name: string; repo: string; ref?: string };
 type ContentDeclaration = { declared: DeclaredContent[]; bound: BoundContent[] };
 
 type ResolvedContent = {
   name: string;                         // unique ignoring case, one path segment
   readonly: boolean;                    // the agent knows it and does not write it
   description?: string;                 // what the declaration tells the agent about it
+  context?: string;                     // context that declared it, when one did
   location: string;                     // where the agent reaches it here, absolute
   notices: string[];                    // what to tell the user: a checkout off its ref, a clone not made yet
 } & (
@@ -260,7 +273,9 @@ type ResolvedContent = {
 );
 ```
 
-The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fastagent content list`.
+The one resolution every reader uses: the prompt, `ctx.content`, `info` and `fastagent content list`. Each fetched
+context's `context.json` joins the agent's; duplicate content names and packages at conflicting versions are refused,
+naming both files. A missing or mismatched copy refuses with `fastagent context fetch` as the remedy.
 `loadContent` refuses a file that is malformed, naming the file and the entry: an entry of `context.json` without
 `github`, a binding without `path`, or one under a declared entry's name that says more than its `path`.
 `resolveContent` refuses, naming the entry, a binding to a file, to a directory that contains the agent directory or
@@ -280,7 +295,7 @@ resolves; a caller that resolves for `createPiAgentFromDefinition` calls `cloneC
 with a `binding` to the checkout, and any other directory a `binding` alone. It also returns `notes` for the user.
 
 ```ts
-// From `@fastagent-sh/fastagent/pi`: what `fastagent init` and `fastagent content` run.
+// From `@fastagent-sh/fastagent/pi`: what `fastagent init`, `content` and `context` run.
 function createAgent(
   dir: string,
   options?: { content?: ContentAddition[]; webAccess?: boolean; install?: (dir: string) => Promise<void> },
@@ -288,8 +303,15 @@ function createAgent(
 function listContent(agentDir: string): Promise<{ content: ResolvedContent[]; absent: BoundContent[] }>;
 function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit>;
 function removeContent(agentDir: string, name: string): Promise<ContentEdit>;
+function addContext(
+  agentDir: string, addition: { name: string; entry: ContextEntry }, options?: AddContextOptions,
+): Promise<ContextEdit>;
+function removeContext(agentDir: string, name: string): Promise<ContextEdit>;
+type AddContextOptions = { install?: (environment: DeclaredEnvironment, added: string[]) => Promise<void> };
 type ContentEdit = { name: string; content: ResolvedContent[]; notes: string[] };
+type ContextEdit = { name: string; contexts: FetchedContext[]; notes: string[] };
 class ContentNameError extends Error {}
+class ContextNameError extends Error {}
 ```
 
 The commands are thin wrappers over these, so a client and the CLI apply the same rules. Nothing prints or exits:

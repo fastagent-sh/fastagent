@@ -249,8 +249,8 @@ acme-github/                  a context: a GitHub repository
   - Environment: the packages and the apt packages are joined. One package at two versions refuses the start, naming
     both, and is mended where it is declared.
   - Variables: a name declared twice is one variable with one value (§6.2), required by each declaration. The secrets
-    gate, `info` and the runbooks attribute each: `context.json` for the agent's own, `context "acme-github"` for a
-    context's.
+    gate, `info` and the runbooks attribute each: `context.json` for the agent's own,
+    `.contexts/acme-github/context.json` for a context's.
   - MCP servers, with MCP: joined by name; a name declared twice refuses the start.
 - **A context is a repository, because it is shared.** A local directory cannot be shared: a context's author tries a
   change on a branch, named by `ref`, before merging it. Other git hosts, and npm, can be added as sources the way
@@ -1246,7 +1246,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 |---|---|---|
 | Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Joined with the contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, used as its `ref` is now and built into the image by each deploy (§3.6, §8.1) |
+| Content and contexts | Shared GitHub contexts in `context.json`, joined with the agent's own content and environment; content clones in `content/<name>/` and local bindings in `context.local.json` (step 3) | MCP connectors join the same contexts when MCP is implemented (§5) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1265,11 +1265,8 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 The [agent model](agent-model.md) describes what is implemented. It took this design's vocabulary in step 3 (§12):
 the data an agent works on is its content, declared in `context.json` (repositories, cloned at `content/<name>/`) and
-bound on each machine in `context.local.json`, and *context* is the whole. What still differs:
-
-| Agent model (implemented) | This design |
-|---|---|
-| No shared contexts | A context is the unit of sharing (§3.6) |
+bound on each machine in `context.local.json`, and *context* is the whole. Shared contexts now join those
+content and environment declarations (§3.6); MCP remains step 4.
 
 ## 12. Order of work
 
@@ -1278,7 +1275,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
-| 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
+| 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise. Done |
 | 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |

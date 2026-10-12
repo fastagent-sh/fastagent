@@ -71,11 +71,16 @@ src/
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
 │   ├── declare.ts          # a shared entry and a machine's binding, read and refused in ONE place (names, keys)
-│   ├── file.ts             # `context.json` + `context.local.json` read (a reader its part, an edit the whole) and written
+│   ├── file.ts             # agent + fetched contexts + local binding read, joined for every reader; edits read whole
 │   ├── mount.ts            # content/, where the clones go: the dir with its own .gitignore
 │   ├── resolve.ts          # where each entry is for THIS instance (a clone, a bound dir): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
+├── contexts/               # shared external declarations the agent uses, fetched at a GitHub ref
+│   ├── declare.ts          # which contexts an agent uses, by name, repository and optional ref
+│   ├── copy.ts             # fetched-copy identity on hosts without git metadata
+│   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep) and reporting
+│   └── join.ts             # ONE refusal of conflicts; join content and environment with attribution
 ├── environment/            # the commands an agent runs, declared in context.json — harness-neutral
 │   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist
 │   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), packages as arguments: install, enter
