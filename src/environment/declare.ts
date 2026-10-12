@@ -9,9 +9,6 @@ import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
 import { isDeployOwned } from "../deploy/secrets.ts";
 import { CONTEXT_FILE } from "../paths.ts";
 
-/** The image's lock of the packages, committed: mise's configuration rendered from the declaration, and its lock. */
-export const ENVIRONMENT_DIR = "environment";
-
 /** An agent's environment, as declared. */
 export interface DeclaredEnvironment {
   /** Package → version: `"latest"`, a prefix (`"2"`) or an exact version. */
@@ -44,7 +41,7 @@ const LEFT_OUT: Readonly<Record<string, string>> = {
   gem: "compiles native extensions against Ruby",
   spinel: "compiles Ruby into a binary",
   asdf: "runs a plugin's shell scripts at install, and has no Windows",
-  vfox: "runs a plugin's code at install and whenever the environment is entered, and the lock does not pin it",
+  vfox: "runs a plugin's code at install and whenever the environment is entered, and the plugin is not pinned",
   dotnet: "needs the .NET SDK, which the environment does not declare yet",
   ubi: "is deprecated in mise",
 };
@@ -238,12 +235,6 @@ export function declaresTool(packages: Record<string, string>, tool: string): bo
         .split("/")
         .at(-1) === tool,
   );
-}
-
-/** Whether two declarations name the same packages at the same versions, in any order. */
-export function samePackages(a: Record<string, string>, b: Record<string, string>): boolean {
-  const names = Object.keys(a);
-  return names.length === Object.keys(b).length && names.every((name) => Object.hasOwn(b, name) && b[name] === a[name]);
 }
 
 /**

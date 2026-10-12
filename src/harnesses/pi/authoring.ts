@@ -301,17 +301,21 @@ function unignoredLocalFile(dir: string): string[] {
 }
 
 /**
- * Replace the environment `context.json` declares with `environment`, under the lock content edits take, keeping the
- * rest of the file as it is now.
+ * Replace the environment `context.json` declares with what `change` makes of it as it is now, under the lock content
+ * edits take, keeping the rest of the file as it is; and return what was written.
  */
-export async function writeEnvironment(agentDir: string, environment: DeclaredEnvironment): Promise<void> {
+export async function writeEnvironment(
+  agentDir: string,
+  change: (current: DeclaredEnvironment | undefined) => DeclaredEnvironment,
+): Promise<DeclaredEnvironment> {
   const path = join(resolveAgentDir(agentDir), CONTEXT_FILE);
-  await withLockedFile(
+  return withLockedFile(
     path,
-    async (src) => ({
-      result: undefined,
-      next: contextFileText({ ...parseContextFile(src ?? "{}", path), environment }),
-    }),
+    async (src) => {
+      const file = parseContextFile(src ?? "{}", path);
+      const environment = change(file.environment);
+      return { result: environment, next: contextFileText({ ...file, environment }) };
+    },
     { mode: fileMode(path) },
   );
 }

@@ -1,8 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTENT_DIRNAME, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { CONTENT_DIRNAME, CONTEXT_FILE, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
-import { ENVIRONMENT_DIR } from "../environment/declare.ts";
-import { isolationAt } from "../environment/mise.ts";
+import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 
 export interface Artifact {
   path: string;
@@ -92,7 +91,7 @@ export interface ContainerInput {
    * and curl for mise), then the agent's `aptPackages`.
    */
   apt?: string[];
-  /** Whether the agent declares packages: the image installs `environment/`, their lock, with the agent's own mise. */
+  /** Whether the agent declares packages: the image installs them, from `context.json`, with the agent's own mise. */
   environment?: boolean;
   /**
    * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
@@ -128,24 +127,28 @@ function aptLayer(packages?: string[]): string {
 const BUILD_MISE_DIR = "/tmp/mise";
 
 /**
- * The layer that installs the agent's packages from `environment/`, its committed lock, after its dependencies (the
- * agent's own mise among them) and before the definition, so it stays cached while the definition changes. The
- * packages go to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside
- * its own data directory, so a start installs nothing.
+ * The layer that installs the agent's packages, after its dependencies (the agent's own mise among them) and before the
+ * definition, so it stays cached while the definition changes and is built again when `context.json` is. The packages
+ * go to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside its own
+ * data directory, so a start installs nothing. The step reads them from `context.json` in the image and spells each
+ * as mise.ts's `packageSpecs` does; a list written here would make every package change a Dockerfile change.
  */
-function environmentLayer(dir: string): string {
-  const isolation = Object.entries(isolationAt(`${dir}/${ENVIRONMENT_DIR}`))
+function environmentLayer(dir: string, runtime: "node" | "bun"): string {
+  const isolation = Object.entries(MISE_ENVIRONMENT)
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   // The agent's own mise, by its package: the bin link is not reliable (mise.ts `miseBinary`).
   const mise = `${dir}/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise`;
+  const install =
+    `const packages = require("./${CONTEXT_FILE}").environment?.packages ?? {}; ` +
+    `require("node:child_process").execFileSync(process.env.MISE, ["install", "--system", ` +
+    `...Object.entries(packages).map(([name, version]) => name + "@" + version)], { stdio: "inherit" })`;
   const steps = [
-    `cd ${ENVIRONMENT_DIR}`,
     `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
-    `"$MISE" --locked install --system`,
+    `${runtime} -e '${install}'`,
     `rm -rf ${BUILD_MISE_DIR}`,
   ];
-  return `COPY ${ENVIRONMENT_DIR}/ ./${ENVIRONMENT_DIR}/
+  return `COPY ${CONTEXT_FILE} ./
 RUN ${steps.join(" \\\n && ")}
 `;
 }
@@ -171,7 +174,7 @@ COPY . .
 CMD ["fastagent", "start", "${dir}"]
 `;
   }
-  const environment = input.environment ? environmentLayer(dir) : "";
+  const environment = input.environment ? environmentLayer(dir, input.runtime === "bun" ? "bun" : "node") : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
   const note = isBun

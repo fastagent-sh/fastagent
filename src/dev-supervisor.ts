@@ -15,8 +15,6 @@ import {
   isUnderDir,
 } from "./paths.ts";
 import { dotEnvPath } from "./env.ts";
-import { ENVIRONMENT_DIR } from "./environment/declare.ts";
-import { ENVIRONMENT_LOCK } from "./environment/mise.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
 import { declaredChannels } from "./channels/discover.ts";
@@ -27,7 +25,7 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
  *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
 const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, context.local.json, ${ENVIRONMENT_LOCK}, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, context.local.json, .secrets/.env`;
 
 /**
  * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
@@ -49,8 +47,6 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker (a restart is
     // their only re-read).
     if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE || rel === LOCAL_CONTEXT_FILE) return false;
-    // The environment's lock is installed from once per worker (`fastagent env` replaces it whole, once complete).
-    if (rel === ENVIRONMENT_DIR || rel === ENVIRONMENT_LOCK) return false;
     if (rel === "package.json") return false;
     // Watched for a worker that is down ({@link revivesOnly}).
     if (revivesOnly(root, path)) return false;

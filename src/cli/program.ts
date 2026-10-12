@@ -445,14 +445,14 @@ const env: CommandSpec = {
     "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version; `aptPackages`, Debian " +
     "packages the image installs; and `variables`, the environment variables its commands read, each declared by " +
     "name with a description (its value goes in .secrets/.env, never in context.json; every one is required). " +
-    "Variables are edited in context.json by hand. environment/ is the image's lock, committed with the agent: these commands and " +
-    "`deploy` write it, and a run here installs the versions it records too. Run in the agent directory (the " +
-    "current one). The first change adds mise to the agent's package.json (one optional package per platform; npm " +
-    "installs this machine's), so nothing has to be installed first.",
+    "Variables are edited in context.json by hand. Nothing is locked: each place installs the newest release a " +
+    "version allows when it first needs a package, and the image installs every package when it is built. Run in " +
+    "the agent directory (the current one). The first change adds mise to the agent's package.json (one optional " +
+    "package per platform; npm installs this machine's), so nothing has to be installed first.",
   subcommands: [
     {
       name: "add",
-      summary: "add packages: installed and locked first, then declared",
+      summary: "add packages: installed here first, then declared",
       args: [{ name: "<packages...>", description: "name[@version] (default latest), or apt:<name> for the image" }],
       examples: [
         { cmd: "fastagent env add gh@2", note: "a CLI from mise's registry" },
@@ -470,32 +470,20 @@ const env: CommandSpec = {
       run: async (args) => (await import("./commands/env.ts")).runEnvRemove(args[0] as string[]),
     },
     {
-      name: "update",
-      summary: "lock the newest version each package's declared version allows",
-      description:
-        "A version is resolved when a package is locked and stays locked, `latest` included, until this resolves the " +
-        "named packages (every one when none is named) again and installs them here. context.json does not change; " +
-        "commit environment/.",
-      args: [{ name: "[packages...]", description: "declared packages (default: every one)" }],
-      examples: [{ cmd: "fastagent env update" }, { cmd: "fastagent env update gh jq" }],
-      run: async (args) => (await import("./commands/env.ts")).runEnvUpdate((args[0] as string[] | undefined) ?? []),
-    },
-    {
       name: "list",
-      summary: "the declared packages with their locked versions, the variables and whether each has a value",
+      summary: "the declared packages and their versions, the variables and whether each has a value",
       examples: [{ cmd: "fastagent env list" }],
       run: async () => (await import("./commands/env.ts")).runEnvList(),
     },
     {
       name: "install",
-      summary: "bring package.json, the lock and this machine in line with context.json",
+      summary: "install what context.json declares here, at the newest release each version allows",
       description:
-        "As `npm install` does: install the agent's mise (adding it to package.json when it is not there), lock the " +
-        "packages context.json declares into environment/, keeping every version already locked, and install them " +
-        "here. When that changes environment/, it says so: commit it. Not needed day to day (`add` and `remove` lock, " +
-        "`dev` installs at every start): it is for a declaration written by hand, and for committing its lock before " +
-        "a deploy that runs elsewhere.",
-      examples: [{ cmd: "fastagent env install", note: "after a clone, or an edit to context.json" }],
+        "Install the agent's mise (adding it to package.json when it is not there), then every package context.json " +
+        "declares, at the newest release its version allows: a newer one where one is out. Not needed day to day " +
+        "(`add` installs what it adds, and every start installs what is missing): it is for a newer release, and " +
+        "for a clone that has not installed its mise yet.",
+      examples: [{ cmd: "fastagent env install", note: "after a clone, or for newer releases" }],
       run: async () => (await import("./commands/env.ts")).runEnvInstall(),
     },
     {
@@ -507,10 +495,10 @@ const env: CommandSpec = {
     },
   ],
   notes:
-    "`dev`, `start`, `chat`, `invoke` and `tool` install the declared packages, at the locked versions where " +
-    "environment/ has them, and put them first on the PATH of what the agent runs; they never write environment/. " +
-    "`dev` restarts when it changes. Apt packages are installed in the image; on Debian or Ubuntu a start here " +
-    "names the missing ones.",
+    "`dev`, `start`, `chat`, `invoke` and `tool` install the declared packages that have no install here yet, and " +
+    "put them first on the PATH of what the agent runs; one already installed is kept, so a start needs no network. " +
+    "`dev` restarts when context.json changes. Apt packages are installed in the image; on Debian or Ubuntu a start " +
+    "here names the missing ones.",
 };
 
 const content: CommandSpec = {

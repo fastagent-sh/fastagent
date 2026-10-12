@@ -61,7 +61,7 @@ init → dev (locally, on the team's channels) → deploy → the team uses it
 ```
 
 - Git holds every change to the definition. That is what makes a change reviewable and revertible, and what a deploy
-  builds from. A rollback deploys an earlier commit, its environment's locked versions included (§4).
+  builds from. A rollback deploys an earlier commit.
 - The deployed definition stays writable, and what the agent writes to its live inputs takes effect where it runs.
   How such a change returns to git and comes into service is designed later, in
   [#605](https://github.com/fastagent-sh/fastagent/issues/605); until then a deploy replaces it.
@@ -234,21 +234,21 @@ platform. The author never writes mise's files.
   project's release with `github:`, or the author's own `Dockerfile`): `go`, `cargo` and `spm` build from source,
   which puts a whole toolchain in the image for one binary; `gem` compiles native extensions; `spinel` compiles Ruby
   into a binary; `asdf` runs a plugin's shell scripts at install and has no Windows; `vfox` runs a plugin's Lua at
-  install and every time the environment is entered, from a clone the lock does not pin, so an image built twice from
-  one commit can run different plugin code, and a container that cannot reach GitHub on its first start loses the
+  install and every time the environment is entered, from a clone nothing pins, so an image built twice from one
+  commit can run different plugin code, and a container that cannot reach GitHub on its first start loses the
   tool from its `PATH` with only mise's warning; `dotnet` would join the way PyPI does, with `dotnet` declared beside
   it, once an agent needs it; and a backend mise adds later is refused until it is classified. `http:` is not written
   by hand, because its package needs a URL a version string cannot hold; a registry name that resolves to it carries
   its own. In the registry of mise 2026.10.7, 1,013 of the 1,064 names resolve to an allowed backend; most of the
   others (42 on `vfox`, such as `neovim`, `eza`, `poetry` and `yarn`) have a release or a package to name instead
   (`aqua:neovim/neovim`, `aqua:eza-community/eza`, `pypi:poetry`, `npm:yarn`).
-- **What the allowlist cannot see.** The rendered configuration sets mise's `compile = false` for python, ruby, node
-  and erlang, so a runtime with no prebuilt build for a platform fails there rather than compiling: mise compiles
-  python by default when it has none (python 3.6.15 on arm64 macOS), and `all_compile`, already false, does not
-  stop it. An npm or PyPI package whose native code has no prebuilt build for a platform still compiles there: it
-  installs on a machine that has a compiler and fails in the image with the package manager's error, unless its build
-  dependencies are in `aptPackages`. The format keeps out what builds from source where the backend says so, and
-  promises no more than that.
+- **What the allowlist cannot see.** FastAgent sets mise's `compile = false` for python, ruby, node and erlang
+  (`MISE_PYTHON_COMPILE` and its peers), so a runtime with no prebuilt build for a platform fails there rather than
+  compiling: mise compiles python by default when it has none (python 3.6.15 on arm64 macOS), and `all_compile`, already
+  false, does not stop it. An npm or PyPI package whose native code has no prebuilt build for a platform still compiles
+  there: it installs on a machine that has a compiler and fails in the image with the package manager's error, unless
+  its build dependencies are in `aptPackages`. The format keeps out what builds from source where the backend says so,
+  and promises no more than that.
 - **`aptPackages`** are Debian packages the image installs, for what has no cross-platform build: a browser, fonts.
   A machine that runs the agent locally supplies its own: a start on Debian or Ubuntu names the missing ones with the
   `apt-get` command that installs them. `fastagent env add apt:chromium` writes the package without installing
@@ -260,7 +260,7 @@ platform. The author never writes mise's files.
   below. What mise then cannot install fails `fastagent env add`, which installs a package before it writes it, or
   the image build, with mise's own error.
 - **A Python package declares its runtime with it.** A PyPI package, written `pypi:` or a registry name that resolves
-  to one (`ansible`), runs on `python` and installs and locks with `uv`; mise takes both from the machine when they
+  to one (`ansible`), runs on `python` and installs with `uv`; mise takes both from the machine when they
   are not declared, and never adds them, so it would install on the author's machine and fail in the image. The same
   resolution decides it: `fastagent env add` and `fastagent env list` name what is missing with the command that adds
   it (`fastagent env add python uv`), and `deploy --run` stops on it. An `npm:` package runs on the
@@ -268,49 +268,36 @@ platform. The author never writes mise's files.
   any other; for `rust`, the image adds curl, which rustup downloads with.
 - **mise is the engine, not the interface.** The agent carries its own mise: its `package.json` lists mise's npm
   packages as optional dependencies, one per platform, of which npm and bun install only the machine's, so a machine
-  needs nothing installed first and the image's `npm ci` installs the same mise. FastAgent renders mise's
-  configuration from the declaration and runs mise on that file alone: never the machine's mise configuration, a
-  `mise.toml` the author keeps for their own work, or a cloned content repository's.
-- **`environment/` is the image's lock**, committed as `package-lock.json` is: the configuration rendered from the
-  declaration, and mise's lock (`mise lock --platform linux-x64,linux-arm64`: every package's version, with the
-  download and checksum for each image platform, and the dependency lock an npm or PyPI package keeps beside it).
-  Every image built from a commit installs those versions, two people deploying one commit get the same tools, and a
-  rollback restores the environment with the rest of the definition (§2). Railway uploads what git does not ignore,
-  so the image's build context has it there too.
-- **The author's machine follows the lock and is never refused by it.** A process that runs the agent installs the
-  declared packages from a copy of the lock outside the agent directory: the locked versions where the lock has them,
-  the newest the declared version allows where it does not yet (a package added to `context.json` by hand). It never
-  writes `environment/` and never refuses one that lags the declaration, as `npm start` never checks
-  `package-lock.json`; strict refusal is a mode for CI (`mise install --locked`, `uv run --locked`, `npm ci`), and the
-  image is built from a lock `deploy` has just made current. Refusing every run whose lock lags the declaration was
-  considered: it needs a digest to tell, makes every start depend on the lock's consistency (an interrupted edit, a
-  directory of the same name, a watcher seeing it half-written), and protects nothing the image needs.
-- **Locking keeps what is locked.** `mise lock` keeps the version a lock records for a package whose declared version
-  is unchanged, prunes what is no longer declared, and is byte for byte the same when nothing changed, so every
-  `deploy` locks again, and says so only when that changes `environment/` (the declaration edited without it).
-  `fastagent env update [packages...]` resolves locked versions again (`mise lock --bump`), since a version, `latest`
-  included, is resolved once, when its package is first locked.
-- **Two copies, then a replacement.** Every mise run happens in a working copy outside the agent directory. Locking
-  installs the packages in one copy first, which proves they install and gives a PyPI package's lock the `uv` it
-  needs, and locks in another, because an install adds this machine's platform to the lock it reads and
-  `mise lock --platform` does not take it out again. `environment/` is replaced only once the new lock is complete and
-  differs, so a failure or an interrupt leaves it as it was, and one change at a time replaces it: `fastagent env` and
-  `deploy` take the same lock, inside the function that writes it.
-- **`environment/` is FastAgent's by its content, not its name.** The rendered `mise.toml` starts with a header
-  FastAgent writes. A directory of that name without it is the author's: never read, written or removed, and a
-  command that would lock packages over it is refused; removing the last package removes FastAgent's files alone.
-- **The commands.** `fastagent env add gh@2 npm:prettier@3` checks, installs and locks the packages, then writes
-  `context.json`, under the lock content edits take. `remove`, `update` and `list` complete it; `install` locks what
-  `context.json` declares and installs it here, adding mise to `package.json` when it is missing; `exec -- <command>`
-  runs a command in the environment. For the agent's own declaration, these and `deploy` write `environment/`; how a
-  context's packages join the lock, and which context commands write it then, is open (§13). Every process that opens
-  the agent (`dev`, `start`, `chat`, `invoke`, an embedder's `createAgentService`) and `tool` install the packages and
-  put them first on the `PATH` their commands inherit. A change to `context.json` or to the lock restarts `dev`.
-- **The image installs exactly the lock.** It installs `aptPackages` in its apt layer, with what FastAgent needs there
-  (git, CA certificates, curl for rust), then copies `environment/` and runs `mise --locked install --system` in a
-  layer that changes only with the environment: the tools go to mise's system directory, which every mise reads
-  beside its own data directory, so a start on a host downloads nothing. On a host, mise's data directory is on the
-  storage (`.state/mise/`). AgentCore builds `linux/arm64`.
+  needs nothing installed first and the image's `npm ci` installs the same mise. FastAgent gives mise the packages as
+  arguments (`gh@2`) and lets it read no configuration file: never the machine's mise configuration, a `mise.toml` the
+  author keeps for their own work, or a cloned content repository's.
+- **Nothing is locked.** A package is a release the agent uses, the way a CLI on a developer's machine is: nobody pins
+  `gh` to a patch release on a laptop, and an agent that meets a tool newer than it expected reads its output and
+  adapts. Each place installs the newest release a declared version allows when it first needs a package, and keeps it.
+  A process that runs the agent asks `mise where` of each package, which answers without the network, and installs only
+  those with no install that matches, so a start needs no network once its packages are installed;
+  `fastagent env install` asks mise for each again, which installs a newer release where one is out. The image installs
+  every package when it is built. So an image may run a newer release than the author's machine, and a rollback rebuilt
+  from an earlier commit installs the releases of the day it is rebuilt.
+  - Considered: `environment/`, a committed lock (`mise lock` for linux-x64 and linux-arm64, with checksums and the
+    dependency lock of npm and PyPI packages), locked again by every deploy and followed by local runs through a
+    working copy. Every image of a commit then installs the same versions, and a rollback restores them. It costs a
+    committed derived directory, a lock to keep in step with the declaration, `fastagent env update` to move it, a
+    working copy for every mise run, and a check that a directory of that name is FastAgent's. Tools reproduced to the
+    patch release are software packaging's guarantee, which an agent does not need.
+- **The commands.** `fastagent env add gh@2 npm:prettier@3` checks and installs the packages, then writes
+  `context.json` under the lock content edits take, applying the change to it as it is by then, so two edits at once
+  keep both. `remove` and `list` complete it; `install` installs every package at its newest release, adding mise to
+  `package.json` when it is missing; `exec -- <command>` runs a command in the environment. Every process that opens
+  the agent (`dev`, `start`, `chat`, `invoke`, an embedder's `createAgentService`) and `tool` install what is missing
+  and put the packages first on the `PATH` their commands inherit. A change to `context.json` restarts `dev`.
+- **The image installs every package when it is built.** It installs `aptPackages` in its apt layer, with what
+  FastAgent needs there (git, CA certificates, curl for rust), then copies `context.json` and runs
+  `mise install --system` of its packages, read from `context.json` in the image so that a package change is no
+  Dockerfile change, in a layer rebuilt only when `context.json` or the dependencies change. The tools go to mise's
+  system directory, which every mise reads beside its own data directory and `mise where` finds, so a start on a host
+  downloads nothing. On a host, mise's data directory is on the storage (`.state/mise/`). AgentCore builds
+  `linux/arm64`.
 - **mise's behavior is probed, not assumed.** Every fact above about what mise does was first a guess that a run of
   mise overturned. The offline suite runs a stand-in; `test/live/environment.live.test.ts` runs the agent's own mise
   at its newest version, so a mise release that changes one of them is caught there.
@@ -349,7 +336,8 @@ built with colima on arm64 and x64 and with Bun's image as well:
 - `chromium` ran headless (`--dump-dom`, a screenshot, CJK text with `fonts-noto-cjk`); the Chromium layer is about
   700 MB and the CJK fonts about 300 MB, installed without apt's recommended packages. Pointing a tool at the browser
   (`PUPPETEER_EXECUTABLE_PATH` for mermaid-cli) needs an environment variable, declared in `variables` with its value in the stage's value file. A package outside the distribution's repositories, or another base image, needs the author's own
-  `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing the lock included.
+  `Dockerfile`, which `deploy` keeps byte for byte and which then owns the whole image, installing the packages
+  included.
 - A `pypi:` package built only with `python` and `uv` declared. A `cargo:` package needed `rust`, curl for rustup, and
   either `cargo-binstall` (a prebuilt binary; a 3.17 GB image) or `build-essential` (compiled; 3.54 GB): building from
   source puts a whole toolchain in the image for one binary, which is why the format leaves it out.
@@ -357,8 +345,7 @@ built with colima on arm64 and x64 and with Bun's image as well:
 - mise gives each conda tool a prefix of its own, so shared libraries are copied per tool: the sixteen tools added
   about 1.65 GB (compressed) to the image, and fourteen of them in one pixi environment about 0.8 GB. A larger image
   starts slower on AgentCore, so declare only the native tools the agent uses.
-- mise publishes no npm package for Windows, so an agent with an environment does not run there yet. The lock resolves
-  for Windows except awscli, which AWS ships as an installer there.
+- mise publishes no npm package for Windows, so an agent with an environment does not run there yet.
 
 Why FastAgent's own format, with mise underneath:
 
@@ -860,8 +847,6 @@ my-agent/
                                               or an image
   content/<name>/                             the clone of each declared repository with no checkout bound
                                               here, or a mount; never in git
-  environment/                                the image's lock: mise's configuration rendered from the
-                                              declaration, and its lock; committed
   .contexts/<name>/                           the contexts it uses, fetched at their pinned versions; never in git
   .secrets/                                   values and grants, never in git
   .state/                                     the service's state, never in git; where it lives is the deployment's
@@ -939,7 +924,7 @@ export default {
 |---|---|---|
 | Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image; it already locks the environment and installs the lock there (§4) |
+| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image; the image already installs the environment (§4) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 Channels, schedules and wake-ups
@@ -1193,7 +1178,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), the packages locked in the committed `environment/` and installed by the agent's own mise (step 3) | Joined with the contexts' (§3.6, §4) |
+| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Joined with the contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
 | Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
@@ -1238,8 +1223,8 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 Each is settled when the step that needs it is built (§12).
 
 1. How `context.json` names a content entry's credential (its shape for content is settled: entries by name, with
-   `github`, `ref`, `readonly` and `description`, and no machine's path); how the environments of an agent and its
-   contexts are locked as one; where an MCP server's OAuth tokens live for a deployed agent.
+   `github`, `ref`, `readonly` and `description`, and no machine's path); where an MCP server's OAuth tokens live for
+   a deployed agent.
 2. The final error codes, the cap on runs in flight, and the page limits of `read`.
 3. Scaling out on AgentCore: routing each message to its conversation's runtime session, an invoke by its body; a
    fork, which reads one session and creates another; a lease that holds across processes; how state is split by
@@ -1273,19 +1258,17 @@ The product and the model:
   context is referenced as a pi package is (git with a ref, npm with a version, a local path), pinned, and moved only
   by `fastagent context update`; a name two contexts declare refuses the start; contexts do not nest (§3.6).
 - The environment is declared in FastAgent's own format, under `environment` in `context.json`: `packages` by mise's
-  names, `aptPackages` for the image, and `variables`, the names of the variables its commands read, whose values
-  come from the environment as a tool's secrets do. mise, the agent's own (an optional npm dependency per
-  platform), installs it, from `environment/` in the image: the image's lock, mise's configuration rendered from the
-  declaration and its lock, committed, so every image built from a commit gets the same versions and a rollback
-  restores them. A process that runs the agent follows the lock and never writes or refuses it; `fastagent env` and
-  every `deploy` lock it. The author never writes mise's files, so no part of a
-  familiar format is silently unsupported. A package is installed from a release, a conda-forge build, a runtime, or
-  an npm or PyPI package, checked against an allowlist by the backend mise resolves; backends that build from source
-  or run a plugin's code (`vfox`, `asdf`) are refused by name, runtimes are prebuilt only, and the native code an npm
-  or PyPI package compiles is caught only by the image build. A PyPI package's `python` and `uv` are declared with
-  it, and a missing one is named. The config has no `environment`. A system package outside the distribution needs
-  the author's own `Dockerfile`. A skill script declares its Python libraries inline (PEP 723) and runs with
-  `uv run` (§4).
+  names, `aptPackages` for the image, and `variables`, the names of the variables its commands read, whose values come
+  from the environment as a tool's secrets do. mise, the agent's own (an optional npm dependency per platform), installs
+  it, with the packages as arguments: nothing is locked, each place installs the newest release a version allows when it
+  first needs a package and keeps it, and the image installs every package when it is built. The author never writes
+  mise's files, so no part of a familiar format is silently unsupported. A package is installed from a release, a
+  conda-forge build, a runtime, or an npm or PyPI package, checked against an allowlist by the backend mise resolves;
+  backends that build from source or run a plugin's code (`vfox`, `asdf`) are refused by name, runtimes are prebuilt
+  only, and the native code an npm or PyPI package compiles is caught only by the image build. A PyPI package's `python`
+  and `uv` are declared with it, and a missing one is named. The config has no `environment`. A system package outside
+  the distribution needs the author's own `Dockerfile`. A skill script declares its Python libraries inline (PEP 723)
+  and runs with `uv run` (§4).
 - Credentials are declared by the code or configuration that uses them and stored by how they are obtained (§6). The
   shell keeps inheriting the process environment; isolation waits for a sandboxed environment (§6.4).
 - A declaration that has a standard format, or that the agent or a tool writes, is a file of its own (contexts and

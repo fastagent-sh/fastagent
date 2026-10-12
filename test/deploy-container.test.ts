@@ -50,24 +50,31 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
-  it("installs environment/, the committed lock, after the dependencies and before the definition", () => {
+  it("installs the packages context.json declares after the dependencies and before the definition", () => {
     const dockerfile = (i: Parameters<typeof containerArtifacts>[0]) =>
       containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(dockerfile(input)).not.toMatch(/mise/);
     for (const runtime of ["node", "bun"] as const) {
       const text = dockerfile({ ...input, runtime, environment: true });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
-      // Cached while the definition changes: the layer sits between the install and `COPY . .`.
-      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY environment/ ./environment/\nRUN cd environment"));
-      expect(text.indexOf("COPY environment/ ./environment/")).toBeLessThan(text.indexOf("COPY . ."));
+      // Cached while the definition changes: the layer sits between the install and `COPY . .`, built again when
+      // context.json is.
+      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY context.json ./\nRUN export "));
+      expect(text.indexOf("COPY context.json ./")).toBeLessThan(text.indexOf("COPY . ."));
       // In mise's system directory; the build's own mise directories are thrown away with the layer.
       expect(text).not.toContain("ENV MISE_DATA_DIR");
       expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
-      expect(text).toMatch(/"\$MISE" --locked install --system \\\n && rm -rf \/tmp\/mise\n/);
-      // The same isolation every run here has, for the directory the image holds the agent in.
+      // The packages are read from context.json in the image, so a package change is no Dockerfile change.
       expect(text).toContain(
-        "MISE_TRUSTED_CONFIG_PATHS=/app/definition/environment/mise.toml MISE_CEILING_PATHS=/app/definition " +
-          "MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
+        `${runtime} -e 'const packages = require("./context.json").environment?.packages ?? {}; ` +
+          `require("node:child_process").execFileSync(process.env.MISE, ["install", "--system", ` +
+          `...Object.entries(packages).map(([name, version]) => name + "@" + version)], { stdio: "inherit" })' \\\n` +
+          " && rm -rf /tmp/mise\n",
+      );
+      // The same isolation every run here has.
+      expect(text).toContain(
+        "MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml MISE_SYSTEM_CONFIG_FILE=/dev/null/none.toml " +
+          "MISE_OVERRIDE_CONFIG_FILENAMES=none MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES=none MISE_PYTHON_COMPILE=false",
       );
       expect(text).toContain(
         'MISE="/app/definition/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',

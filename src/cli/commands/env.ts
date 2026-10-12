@@ -1,6 +1,6 @@
 /**
- * `fastagent env add|remove|update|list|install|exec`: the agent's environment, declared under `environment` in
- * context.json and locked in environment/ (docs/design/agent-service.md §4), in the agent directory, the current one.
+ * `fastagent env add|remove|list|install|exec`: the agent's environment, declared under `environment` in context.json
+ * and installed by the agent's own mise (docs/design/agent-service.md §4), in the agent directory, the current one.
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
@@ -8,22 +8,12 @@ import { loadEnvironment, readContextFile } from "../../content/file.ts";
 import { aptAdvice, missingAptPackages } from "../../environment/apt.ts";
 import {
   type DeclaredEnvironment,
-  ENVIRONMENT_DIR,
   declareEnvironment,
   declaredVariables,
   parsePackageArgument,
   runtimeAdvice,
-  samePackages,
 } from "../../environment/declare.ts";
-import {
-  checkPackages,
-  ensureMise,
-  enterEnvironment,
-  lockEnvironment,
-  lockedVersions,
-  miseBinary,
-  withEnvironmentLock,
-} from "../../environment/mise.ts";
+import { checkPackages, ensureMise, enterEnvironment, installPackages, miseBinary } from "../../environment/mise.ts";
 import { writeEnvironment } from "../../harnesses/pi/authoring.ts";
 import { log } from "../../log.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
@@ -80,41 +70,11 @@ export async function runEnvRemove(args: string[]): Promise<void> {
   }).catch(failStartup);
 }
 
-export async function runEnvUpdate(names: string[]): Promise<void> {
-  const agentDir = enterAgentHere();
-  const changes = await withEnvironmentLock(agentDir, async () => {
-    const declared = loadEnvironment(agentDir) ?? NONE;
-    for (const name of names) {
-      if (name.startsWith("apt:")) {
-        throw new Error(`${name} is not locked: the image installs the version its Debian release has`);
-      }
-      if (!Object.hasOwn(declared.packages, name)) throw noPackage(declared, name);
-    }
-    if (Object.keys(declared.packages).length === 0) throw new Error("the environment declares no packages to update");
-    const before = lockedVersions(agentDir);
-    await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages), names);
-    const after = lockedVersions(agentDir);
-    return (names.length > 0 ? names : Object.keys(declared.packages)).map(
-      (name) => [name, before.get(name), after.get(name)] as const,
-    );
-  }).catch(failStartup);
-  const width = Math.max(...changes.map(([name]) => name.length));
-  for (const [name, before, after] of changes) {
-    console.log(
-      `${name.padEnd(width)}  ${before === after ? `${after} (the newest it allows)` : `${before ?? "(not locked)"} → ${after}`}`,
-    );
-  }
-  if (changes.some(([, before, after]) => before !== after)) {
-    log.info(`[fastagent] commit ${ENVIRONMENT_DIR}/; a running \`fastagent dev\` restarts on it`);
-  }
-}
-
 export async function runEnvList(): Promise<void> {
   const agentDir = enterAgentHere();
   const declared = await Promise.resolve()
     .then(() => loadEnvironment(agentDir) ?? NONE)
     .catch(failStartup);
-  const locked = lockedVersions(agentDir);
   const variables = declaredVariables(declared);
   const names = [
     ...Object.keys(declared.packages),
@@ -124,7 +84,7 @@ export async function runEnvList(): Promise<void> {
   if (names.length === 0) console.log("(none: the agent runs this machine's commands)");
   const width = Math.max(0, ...names.map((name) => name.length));
   for (const [name, version] of Object.entries(declared.packages)) {
-    console.log(`${name.padEnd(width)}  ${version.padEnd(8)}  ${locked.get(name) ?? "(not locked)"}`);
+    console.log(`${name.padEnd(width)}  ${version}`);
   }
   for (const name of declared.aptPackages) console.log(`${`apt:${name}`.padEnd(width)}  (installed by the image)`);
   // Whether each has a value here, never the value.
@@ -155,19 +115,23 @@ export async function runEnvList(): Promise<void> {
   }
 }
 
+/**
+ * Install what context.json declares here, mise first when the agent has none (into its package.json): every package at
+ * the newest release its version allows, a newer one where one is out. Apt packages are the image's: one missing here
+ * is said, with how.
+ */
 export async function runEnvInstall(): Promise<void> {
   const agentDir = enterAgentHere();
-  await withEnvironmentLock(agentDir, async () => {
-    const declared = loadEnvironment(agentDir) ?? NONE;
-    if (await lockEnvironment(agentDir, declared.packages, () => checkedMise(agentDir, declared.packages))) {
-      log.info(
-        Object.keys(declared.packages).length > 0
-          ? `[fastagent] ${ENVIRONMENT_DIR}/ is locked again from context.json — commit it`
-          : `[fastagent] removed ${ENVIRONMENT_DIR}/, which context.json no longer declares — commit the removal`,
-      );
-    }
-    await enterEnvironment(agentDir);
-  }).catch(failStartup);
+  await Promise.resolve()
+    .then(async () => {
+      const declared = loadEnvironment(agentDir) ?? NONE;
+      if (Object.keys(declared.packages).length > 0) {
+        await installPackages(agentDir, await checkedMise(agentDir, declared.packages), declared.packages, "all");
+      }
+      const missing = missingAptPackages(declared.aptPackages);
+      if (missing && missing.length > 0) log.warn(`[fastagent] ${aptAdvice(missing)}`);
+    })
+    .catch(failStartup);
 }
 
 export async function runEnvExec(command: string[]): Promise<void> {
@@ -185,23 +149,24 @@ export async function runEnvExec(command: string[]): Promise<void> {
 }
 
 /**
- * Change the declaration with `change`, checked as a whole. When its packages change, they are checked, installed here
- * and locked into `environment/` first; the declaration is written last.
+ * Change the declaration with `change`, checked as a whole. A package it adds, or declares at another version, is
+ * checked and installed here first, so a declared package is one that installs; the declaration is then written under
+ * context.json's lock, `change` applied to it as it is by then, so two edits at once keep both.
  */
 async function edit(
   agentDir: string,
   change: (current: DeclaredEnvironment) => DeclaredEnvironment,
 ): Promise<DeclaredEnvironment> {
-  return withEnvironmentLock(agentDir, async () => {
-    // Read whole, as the write that follows is: a refused content entry stops the edit before anything is locked.
-    const current = readContextFile(agentDir).environment ?? NONE;
-    const next = declareEnvironment(change(current)) ?? NONE;
-    if (!samePackages(current.packages, next.packages)) {
-      await lockEnvironment(agentDir, next.packages, () => checkedMise(agentDir, next.packages));
-    }
-    await writeEnvironment(agentDir, next);
-    return next;
-  });
+  // Read whole, as the write that follows is: a refused content entry stops the edit before anything is installed.
+  const current = readContextFile(agentDir).environment ?? NONE;
+  const next = declareEnvironment(change(current)) ?? NONE;
+  const changed = Object.fromEntries(
+    Object.entries(next.packages).filter(([name, version]) => current.packages[name] !== version),
+  );
+  if (Object.keys(changed).length > 0) {
+    await installPackages(agentDir, await checkedMise(agentDir, next.packages), changed, "all");
+  }
+  return writeEnvironment(agentDir, (now) => declareEnvironment(change(now ?? NONE)) ?? NONE);
 }
 
 /** The refusal for a package `environment` does not declare, with what it does. */

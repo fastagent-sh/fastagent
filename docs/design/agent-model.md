@@ -44,9 +44,9 @@ A context has three kinds of parts, each reaching the agent its own way ([agent 
 - **Connectors** are the systems that are not files the agent reaches: an API, a service, and their credentials. The
   code tools and pi extensions that reach them are part of the definition; the system each one reaches is the
   connector (agent service §3.3). MCP servers are not supported yet (#678).
-- **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`,
-  locked in `environment/` and the same on every instance ([agent service](agent-service.md) §4). An agent with none
-  borrows the machine's (below).
+- **The environment** is the commands and runtimes the agent runs, declared under `environment` in its `context.json`
+  and installed on every instance, each at the newest release its version allows there
+  ([agent service](agent-service.md) §4). An agent with none borrows the machine's (below).
 
 Relations:
 
