@@ -88,13 +88,13 @@ another branch than declared, or commits no branch or tag holds keep it as it is
 warning. No directory is ever replaced or deleted, so a running agent's writes, branches and stashes are never at
 stake. A clone of another repository under the entry's name stops the start, named. `info`, `content list` and `fastagent tool` resolve without
 cloning. `source.ts` reads a command's `<source>` (`github:owner/repo`, a GitHub checkout's root, any other
-directory); `authoring.ts` (pi) edits each file under its own lock, `context.json` first, and only the files an edit
-writes, so a refusal leaves both as they were. A deployed host links each release's `content/` to its storage's
-(`workspace.ts`), so a `github` entry is a clone there that outlives releases. `context.local.json` never reaches a
-host (`init`'s `.gitignore`, the generated `.dockerignore`), so a `local` entry is only ever this machine's; one whose
-directory is gone is left out of the resolution (`contentAbsentHere`): the agent is not told of it, and the opener
-warns. The deploy preflight names each `local` entry the host will not have, a warning for one the agent works on
-(agent model §3).
+directory); `authoring.ts` (pi) edits both files under one lock, `context.json`'s, since whether a name is taken is
+asked of both, and writes only the files an edit changes, so a refusal leaves both as they were. A deployed host links
+each release's `content/` to its storage's (`workspace.ts`), so a `github` entry is a clone there that outlives
+releases. `context.local.json` never reaches a host (`init`'s `.gitignore`, the generated `.dockerignore`), so a `local`
+entry is only ever this machine's; one whose directory is gone is left out of the resolution (`contentAbsentHere`): the
+agent is not told of it, and the opener warns. The deploy preflight names each `local` entry the host will not have, a
+warning for one the agent works on (agent model §3).
 Every clone of fastagent's names a credential helper in its config that answers with `GITHUB_TOKEN` when git has
 no credential of its own, so the token reaches git, and the agent's push, without being stored.
 

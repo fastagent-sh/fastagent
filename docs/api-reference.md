@@ -302,8 +302,8 @@ the scaffold and is thrown, like a failed content write. The agent is then a git
 scaffold, as with `init`; `repository` says so, or why not (already inside a repository that tracks it, git missing,
 no commit identity), as a sentence to show.
 
-`addContent` writes the addition's `entry` into `context.json` and its `binding` into `context.local.json`, each
-under that file's lock, so concurrent edits apply one after the other; its `notes` say when git would commit
+`addContent` writes the addition's `entry` into `context.json` and its `binding` into `context.local.json`, under one
+lock for both, so concurrent edits apply one after the other; its `notes` say when git would commit
 `context.local.json`. `removeContent` matches the name ignoring case, drops the entry from both files, and leaves a
 clone at `content/<name>` as it is, saying so in `notes`. Each returns the name it acted on with the content after the
 edit. A name that cannot name an entry, is taken in either file (ignoring case, including by another entry

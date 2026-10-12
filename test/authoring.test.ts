@@ -164,6 +164,21 @@ describe("authoring API", () => {
     }
   });
 
+  it("two edits of one name that write different files queue: one is added, the other refused", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-race-")));
+    const agentDir = join(base, "agent");
+    await createAgent(agentDir);
+    await mkdir(join(base, "notes"));
+    const results = await Promise.allSettled([
+      addContent(agentDir, readContentSource("github:me/notes", base).addition),
+      addContent(agentDir, directory(join(base, "notes"))),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const refused = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(ContentNameError);
+    expect((await listContent(agentDir)).content.map((entry) => entry.name)).toEqual(["notes"]);
+  });
+
   it("says when git would commit this machine's bindings", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-ignored-")));
     const agentDir = join(base, "agent");

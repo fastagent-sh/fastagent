@@ -124,9 +124,10 @@ already at `content/<name>`. `add` says when git would commit `context.local.jso
 ignored it). `remove` drops the entry from both files; the directory it was bound to is untouched, and so is a
 clone, which may hold the agent's work: `remove` says it is left, for you to delete.
 
-Each edit locks the files it writes, so two at once apply one after the other, and a refusal leaves both files as they
-were. `list` names a directory bound here that is gone; `list --json` prints each entry as every command resolves it,
-with its `notices`: a checkout off its `ref`, a clone not made yet.
+Edits take one lock, `context.json`'s (which `fastagent env` edits take too), so two at once apply one after the other
+whichever files they write, and a refusal leaves both files as they were. `list` names a directory bound here that is
+gone; `list --json` prints `{ content, absent }`: each entry as every command resolves it, with its `notices` (a
+checkout off its `ref`, a clone not made yet), and each binding whose directory is gone.
 
 ## `fastagent env`
 

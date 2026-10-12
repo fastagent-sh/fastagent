@@ -19,7 +19,7 @@ export function failEdit(hint: string) {
 export async function runContentList(dirArg: string, json: boolean): Promise<void> {
   const { content, absent } = await listContent(resolve(dirArg)).catch(failStartup);
   if (json) {
-    console.log(JSON.stringify(content, null, 2));
+    console.log(JSON.stringify({ content, absent }, null, 2));
     return;
   }
   for (const [label, value] of contentLines(content, absent)) console.log(`${`${label}:`.padEnd(10)} ${value}`);

@@ -30,8 +30,6 @@ import {
   localContextFileText,
   parseContextFile,
   parseLocalContextFile,
-  readContextFile,
-  readLocalContextFile,
 } from "../../content/file.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
@@ -146,21 +144,14 @@ export interface ContentEdit {
  */
 export async function addContent(agentDir: string, addition: ContentAddition): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
-  // Asked before the locks as well, so a refusal leaves no file behind: a lock creates the file it locks.
-  const before = readContextFile(dir);
-  withAddition(dir, mapsOf(before, readLocalContextFile(dir, before.declared)), addition);
-  const declaration = await editContext(
-    dir,
-    { shared: addition.entry !== undefined, local: addition.binding !== undefined },
-    (shared, local) => {
-      const { maps } = withAddition(dir, mapsOf(shared, local), addition);
-      return {
-        result: declarationOf(dir, maps),
-        ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
-        ...(addition.binding !== undefined ? { local: localContextFileText(maps.bindings) } : {}),
-      };
-    },
-  );
+  const declaration = await editContext(dir, (shared, local) => {
+    const { maps } = withAddition(dir, mapsOf(shared, local), addition);
+    return {
+      result: declarationOf(dir, maps),
+      ...(addition.entry !== undefined ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
+      ...(addition.binding !== undefined ? { local: localContextFileText(maps.bindings) } : {}),
+    };
+  });
   const notes = addition.binding !== undefined ? unignoredLocalFile(dir) : [];
   return { name: addition.name, content: resolveContent(dir, declaration), notes };
 }
@@ -172,10 +163,7 @@ export async function addContent(agentDir: string, addition: ContentAddition): P
  */
 export async function removeContent(agentDir: string, name: string): Promise<ContentEdit> {
   const dir = resolveAgentDir(agentDir);
-  // Asked before the locks too, for the same reason as in addContent.
-  const before = readContextFile(dir);
-  const where = entryNamed(mapsOf(before, readLocalContextFile(dir, before.declared)), name);
-  const { removed, declaration } = await editContext(dir, where, (shared, local) => {
+  const { removed, wasDeclared, declaration } = await editContext(dir, (shared, local) => {
     const found = entryNamed(mapsOf(shared, local), name);
     const maps = {
       content: without(shared.content, found.name),
@@ -186,13 +174,13 @@ export async function removeContent(agentDir: string, name: string): Promise<Con
     // it once it is made. The removed one is not asked: removing a broken entry is how it is mended.
     resolveContent(dir, declaration);
     return {
-      result: { removed: found.name, declaration },
+      result: { removed: found.name, wasDeclared: found.shared, declaration },
       ...(found.shared ? { shared: contextFileText({ ...shared, content: maps.content }) } : {}),
       ...(found.local ? { local: localContextFileText(maps.bindings) } : {}),
     };
   });
   const notes: string[] = [];
-  if (where.shared && lstatSync(contentEntryPath(dir, removed), { throwIfNoEntry: false })) {
+  if (wasDeclared && lstatSync(contentEntryPath(dir, removed), { throwIfNoEntry: false })) {
     notes.push(
       `content/${removed} is left as it is: it may hold the agent's work — delete it once nothing in it is needed`,
     );
@@ -263,40 +251,32 @@ function entryNamed(maps: ContentMaps, name: string): { name: string; shared: bo
 }
 
 /**
- * Run `edit` over both context files with the ones it writes locked, `context.json` first, so two edits queue in one
- * order; what it returns for a file is written under that file's lock, `context.local.json` first. A file `edit` does
- * not write is read without a lock, as every reader reads it.
+ * Run `edit` over both context files under ONE lock, `context.json`'s, which env edits take too: whether a name is
+ * taken is asked of both files, so two edits that write different files must still queue behind each other. The lock
+ * creates neither file; what `edit` returns for a file is written under it, `context.local.json` first.
  */
 async function editContext<T>(
   dir: string,
-  writes: { shared: boolean; local: boolean },
   edit: (shared: ContextFile, local: LocalContextFile) => { result: T; shared?: string; local?: string },
 ): Promise<T> {
   const sharedPath = join(dir, CONTEXT_FILE);
   const localPath = join(dir, LOCAL_CONTEXT_FILE);
-  const withShared = async (sharedText: string | undefined): Promise<LockResult<T>> => {
-    const shared = sharedText === undefined ? { content: {}, declared: [] } : parseContextFile(sharedText, sharedPath);
-    let sharedNext: string | undefined;
-    const withLocal = async (localText: string | undefined): Promise<LockResult<T>> => {
+  return withLockedFile(
+    sharedPath,
+    async (sharedText): Promise<LockResult<T>> => {
+      const shared =
+        sharedText === undefined ? { content: {}, declared: [] } : parseContextFile(sharedText, sharedPath);
+      const localText = textIfExists(localPath);
       const local =
         localText === undefined
           ? { content: {}, bound: [] }
           : parseLocalContextFile(localText, localPath, shared.declared, dir);
       const out = edit(shared, local);
-      if ((out.shared !== undefined && !writes.shared) || (out.local !== undefined && !writes.local)) {
-        throw new Error("editContext: an edit wrote a context file it did not lock");
-      }
-      sharedNext = out.shared;
-      return { result: out.result, next: out.local };
-    };
-    const result = writes.local
-      ? await withLockedFile(localPath, withLocal, { mode: fileMode(localPath) })
-      : (await withLocal(textIfExists(localPath))).result;
-    return { result, next: sharedNext };
-  };
-  return writes.shared
-    ? withLockedFile(sharedPath, withShared, { mode: fileMode(sharedPath) })
-    : (await withShared(textIfExists(sharedPath))).result;
+      if (out.local !== undefined) writeFileAtomic(localPath, out.local, fileMode(localPath));
+      return { result: out.result, next: out.shared };
+    },
+    { mode: fileMode(sharedPath), create: false },
+  );
 }
 
 function textIfExists(path: string): string | undefined {

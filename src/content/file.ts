@@ -107,7 +107,7 @@ export function readContextFile(agentDir: string): ContextFile {
 }
 
 /** This machine's `context.local.json` for the agent in `agentDir`, read whole, beside what it `declared`. */
-export function readLocalContextFile(agentDir: string, declared: readonly DeclaredContent[]): LocalContextFile {
+function readLocalContextFile(agentDir: string, declared: readonly DeclaredContent[]): LocalContextFile {
   const { path, text } = contextFileAt(agentDir, LOCAL_CONTEXT_FILE);
   return text === undefined ? { content: {}, bound: [] } : parseLocalContextFile(text, path, declared, agentDir);
 }

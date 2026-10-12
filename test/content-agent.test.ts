@@ -165,7 +165,7 @@ describe("one resolution", () => {
       const opened = await createPiAgentFromDir(agentDir);
       const info = JSON.parse((await cli(["info", "--json"], agentDir)).stdout);
       const list = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
-      return [opened.content, info.content, list];
+      return [opened.content, info.content, list.content];
     };
     const entry = (name: string, location: string, readonly = false) => ({
       name,
@@ -194,6 +194,14 @@ describe("one resolution", () => {
     expect(await readers()).toEqual([third, third, third]);
     // The directory it was bound to stays.
     expect((await lstat(app)).isDirectory()).toBe(true);
+
+    // A bound directory that is gone is no reader's content, and `content list --json` names it.
+    await bind(agentDir, { gone: { path: join(root, "gone") } });
+    const listed = JSON.parse((await cli(["content", "list", "--json"], agentDir)).stdout);
+    expect(listed).toEqual({
+      content: [],
+      absent: [{ name: "gone", path: join(root, "gone"), kind: "local", readonly: false }],
+    });
   });
 
   it("`content add` asks for a name it cannot take, and refuses content around the agent", async () => {
