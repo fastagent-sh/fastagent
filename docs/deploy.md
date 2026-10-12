@@ -363,7 +363,8 @@ excludes. Each start publishes it onto persistent storage:
   so an interrupted fetch cannot leave source files for `COPY . .` to ship. The contexts' declarations are checked
   with the agent's own, and `.contexts/` is built into the image. The deployed box never fetches contexts;
   content repositories are still cloned on the box at start. Each copy's `.fastagent-context.json` is the authoritative
-  snapshot: source, commit and declaration, atomically replaced as one file. `context.json` is a mirror for inspection; the image carries both.
+  snapshot: source, commit and declaration, atomically replaced as one file. `context.json` is a mirror for inspection;
+  the image carries both.
 - Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
   installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
   release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
