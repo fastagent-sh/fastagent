@@ -197,61 +197,63 @@ into `models-store.json` next to its `models.json`. Nothing refreshes it on its 
 ## Content
 
 An agent's directory is its own: its definition, its working directory, and its local instance's `.state/` and
-`.secrets/`. What it works on and knows, its content, is declared in `context.json` beside the config, never
-inferred from where the directory sits:
+`.secrets/`. What it works on and knows, its content, is declared beside the config, never inferred from where the
+directory sits, in two files:
+
+- **`context.json`** is part of the definition: committed and shared with everyone who has the agent, so it declares
+  only what every instance reaches, a GitHub repository.
+- **`context.local.json`** is this machine's: the directories of it the agent is bound to. `init` ignores it in git
+  and `deploy` keeps it out of the image, so it never reaches another machine.
 
 ```json
 {
   "content": {
-    "notes": {},
-    "handbook": { "readonly": true, "description": "The team's style rules. Follow them." },
     "app": { "github": "acme/app", "description": "The product. Open pull requests against main." },
     "docs": { "github": "acme/docs", "ref": "main", "readonly": true }
   }
 }
 ```
 
-Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case.
+```json
+{
+  "content": {
+    "app": { "path": "/Users/me/code/app" },
+    "notes": { "path": "~/Documents/notes", "readonly": true, "description": "My notes. Cite them." }
+  }
+}
+```
 
-| Key | Meaning |
-|---|---|
-| `github` | A repository, `owner/repo`. Without it, the entry is a directory each machine links (below) |
-| `ref` | With `github`: the branch, tag or full commit to clone. Defaults to the repository's default branch |
-| `readonly` | The agent knows it and does not write it. An instruction to the agent, not a permission |
-| `description` | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
+Each entry is named by its key: one segment of letters, digits, `-` and `_`, unique ignoring case across both files.
 
-No path of any machine is declared. On every instance the agent reaches an entry at `content/<name>` in its own
-directory, and what is there is that machine's:
+| Key | In | Meaning |
+|---|---|---|
+| `github` | `context.json` | A repository, `owner/repo`. Required: an entry every instance reaches is a repository |
+| `ref` | `context.json` | The branch, tag or full commit to clone. Defaults to the repository's default branch |
+| `path` | `context.local.json` | A directory of this machine: absolute, `~/`, or relative to the agent directory |
+| `readonly` | both | The agent knows it and does not write it. An instruction to the agent, not a permission |
+| `description` | both | One sentence for the agent: what it is, and how to treat it. The prompt gives it beside the entry |
 
-- **A link to a directory of this machine.** `fastagent content add <dir>` declares the entry and links
-  `content/<name>` to the directory. For a `github` entry the directory is the root of a checkout of that
-  repository, used as it is: never fetched, never switched to `ref`. When it is not at `ref`, startup and `info` say
-  so. A link to nothing, to a file, or to a checkout of another repository is refused at start, naming it.
+Where the agent reaches each one on this machine:
 
-  A teammate, or another machine of yours, links its own for an entry the agent already declares (`content add`
-  would declare a second one). Move away a clone fastagent made there first, or `ln` creates the link inside it:
-
-  ```bash
-  mkdir -p content && printf '*\n' > content/.gitignore   # when content/ does not exist yet
-  ln -s ~/code/app content/app
-  ```
-- **A clone**, for a `github` entry with nothing linked: shallow, at `ref`, made in `content/<name>` the first time
-  the agent starts (`dev`, `start`, `chat`, `invoke`). At each later start it is brought up to date in place, by
-  git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or commit it
-  is pinned to). git refuses whatever would overwrite the agent's work: a changed file the update touches, an
-  untracked file it would replace, commits the remote does not have. Then, and when the fetch fails, when the clone
-  is on another branch than declared, or when it holds commits no branch or tag does, it is kept as it is and
+- **A repository** is a clone fastagent makes at `content/<name>` in the agent directory: shallow, at `ref`, the
+  first time the agent starts (`dev`, `start`, `chat`, `invoke`). At each later start it is brought up to date in
+  place, by git's own rules: a `git fetch`, then a fast-forward of the branch it is on (or a checkout of the tag or
+  commit it is pinned to). git refuses whatever would overwrite the agent's work: a changed file the update touches,
+  an untracked file it would replace, commits the remote does not have. Then, and when the fetch fails, when the
+  clone is on another branch than declared, or when it holds commits no branch or tag does, it is kept as it is and
   startup warns with the reason. Nothing is deleted: the agent's branches, stashes and the changes an update does
   not touch stay.
 
   `info`, `content list` and `fastagent tool` report it without cloning. A first clone that fails stops the start,
   with git's reason. A clone of another repository under the entry's name (it was renamed or redeclared) stops
-  the start and is named, never removed: move it away yourself.
-- **Nothing**, for an entry without `github` on a machine that links no directory (a host, a teammate's laptop):
-  the agent works without it, is not told of it, and the start says so by name.
-
-`content/` carries its own `.gitignore` (`*`), so what a machine keeps there never enters the agent's repository,
-and `deploy` keeps it out of the image.
+  the start and is named, never removed: move it away yourself. `content/` carries its own `.gitignore` (`*`) and
+  holds only clones: a link there is refused.
+- **A repository this machine has a checkout of** is that checkout, when `context.local.json` binds it under the
+  entry's name with only `path` (`fastagent content add <checkout>` writes both files). It is used as it is: never
+  fetched, never switched to `ref`, and startup and `info` say when it is not at `ref`. A binding to anything but the
+  root of a checkout of that repository is refused; one to a directory that is gone is said, and the clone is used.
+- **A directory only this machine has** is where its binding says. One that is gone is left out with a warning, and
+  the agent is not told of it.
 
 git clones with its own configuration on this machine: a private repository needs the credentials your own
 `git clone` uses (a credential helper, or `url.<base>.insteadOf` to reach GitHub over SSH). When git has none of its
@@ -259,10 +261,10 @@ own, it uses `GITHUB_TOKEN` from the environment, read each time git asks (the c
 reads it, never the token itself), and so does the agent's own `git push` in the clone. git never prompts: a
 missing credential fails the start instead of waiting.
 
-`fastagent init <dir> --content <source>` and `fastagent content add/remove` edit `context.json` and the links
-([CLI](cli.md#fastagent-content)); it can be edited by hand too. The entries' order means nothing. A linked directory
-may not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on, never in
-one.
+`fastagent init <dir> --content <source>` and `fastagent content add/remove` edit both files
+([CLI](cli.md#fastagent-content)); they can be edited by hand too. The entries' order means nothing. A bound
+directory may not contain the agent directory, nor sit inside it: an agent lives beside the projects it works on,
+never in one.
 
 What each entry gives the agent:
 
@@ -275,12 +277,12 @@ there, like any other file; none of them is added to the agent's prompt, whose i
 agent directory alone. To have the agent read the project's `AGENTS.md` before it changes anything, say so in the
 entry's `description`.
 
-The locations are resolved when a process starts; editing `context.json` restarts `dev`. A deployed host links its
-`content/` to its storage, so a `github` entry is a clone there, made and kept up to date the same way, and outlives
-each release ([deploy](deploy.md#before-you-deploy)). An entry without `github` is a directory of this machine,
-which a host does not have: the deployed agent works without it, and `deploy` and the host's startup say so by name.
-To give a host what the agent only reads there, copy it into the agent directory outside `content/`, which every
-release ships; to have the agent work on it from a host, move it to a repository and declare it as `github`.
+The locations are resolved when a process starts; editing either file restarts `dev`. A deployed host links its
+`content/` to its storage, so each repository is a clone there, made and kept up to date the same way, and outlives
+each release ([deploy](deploy.md#before-you-deploy)). A directory only this machine binds stays here: the deployed
+agent works without it, and `deploy` says so by name. To give a host what the agent only reads there, copy it into
+the agent directory, which every release ships; to have the agent work on it from a host, move it to a repository
+and add it as `github:owner/repo`.
 
 ## The system prompt
 
@@ -521,7 +523,7 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 ```txt
 state root: FASTAGENT_STATE_DIR    > <agent dir>/.state (production: .state/production)
 secrets:    FASTAGENT_SECRETS_DIR  > <agent dir>/.secrets (production: .secrets/production)
-content:    <agent dir>/content/<name>
+content:    <agent dir>/content/<name> (a clone), or the directory context.local.json binds
 sessions:   <state root>/sessions
 auth:       FASTAGENT_AUTH_PATH    > <secrets>/auth.json
 endpoints:  FASTAGENT_MODELS_PATH  > ~/.fastagent/models.json (under the agent's own models.json)

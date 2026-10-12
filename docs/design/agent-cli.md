@@ -73,15 +73,15 @@ fastagent init <dir> [--content <source>]...
 `--content`. Without `--content` the agent has none and only talks. Content it only knows is added afterwards
 with `fastagent content add --readonly`.
 
-| `<source>` | Declared in `context.json` | `content/<name>` |
-|---|---|---|
-| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | A link to the checkout |
-| Any other directory, a subdirectory of such a checkout included | `{}`; for a subdirectory, a note names the `github:` form, which is the whole repository | A link to the directory |
-| `github:owner/repo` | `{ "github": "owner/repo" }` | A clone, made when the agent starts |
+| `<source>` | Declared in `context.json` | Bound in `context.local.json` | Here |
+|---|---|---|---|
+| The root of a checkout whose remote is on GitHub | `{ "github": "owner/repo" }` | `{ "path": "<checkout>" }` | The checkout |
+| Any other directory, a subdirectory of such a checkout included | Nothing; for a subdirectory, a note names the `github:` form, which is the whole repository | `{ "path": "<dir>" }` | The directory |
+| `github:owner/repo` | `{ "github": "owner/repo" }` | Nothing | A clone at `content/<name>`, made when the agent starts |
 
-- **No path is declared; a link is written absolute.** The declaration is shared with the definition and a path
-  describes one machine, so the path lives only in the link, and an absolute link keeps meaning the same directory
-  when the agent directory moves.
+- **No path is declared; a binding is written absolute.** The declaration is shared with the definition and a path
+  describes one machine, so the path lives only in `context.local.json`, which `init` ignores in git, and an
+  absolute path keeps meaning the same directory when the agent directory moves.
 - **A directory is never widened to its repository.** A subdirectory of a checkout is declared as itself, so an
   agent kept in that checkout can still work on one directory of it; the note says how to declare the repository.
 - **Content may not contain the agent, or sit inside it.** `init ~/code/app/agent --content ~/code/app` is
@@ -107,10 +107,11 @@ works on app  ~/code/app (github acme/app); a host clones it
 
 ## 4. Editing content: `fastagent content`
 
-People edit `context.json` by hand, and so can a client such as duang: it is JSON. Content belongs in the
-definition, not in the client, or a deployment from that directory would lose it. The links are this machine's, and
-`content add` makes the one an entry needs here. Both use one implementation: the command, or the API under it
-(`createAgent`, `addContent`, `removeContent`, `listContent` in `/pi`; [API reference](../api-reference.md#content)).
+People edit `context.json` and `context.local.json` by hand, and so can a client such as duang: they are JSON. Content
+belongs in the agent directory, not in the client, or a deployment from that directory would lose what it declares. The
+bindings are this machine's, and `content add` writes the one an entry needs here. Both use one implementation: the
+command, or the API under it (`createAgent`, `addContent`, `removeContent`, `listContent` in `/pi`; [API
+reference](../api-reference.md#content)).
 The command:
 
 ```bash
@@ -123,15 +124,16 @@ fastagent content remove <name> [agent]
   knows rather than works on.
 - `add` refuses a directory that contains the agent directory or sits inside it, and asks for `--name` when the
   default name is already taken (ignoring case) or is not one segment of letters, digits, `-` and `_`.
-- `remove` drops the entry and its link. A clone at `content/<name>` is left, and said to be: it may hold the
+- `remove` drops the entry from both files. A clone at `content/<name>` is left, and said to be: it may hold the
   agent's work.
 - An edit is checked against the content it would leave before anything is written: while another entry does not
-  resolve (its link points to a directory that moved), `add` and `remove` are refused with that entry's error.
-  Removing the broken entry itself always works.
+  resolve (a file where its directory was), `add` and `remove` are refused with that entry's error. Removing the
+  broken entry itself always works. A bound directory that is gone does not refuse an edit: it is left out, and said.
 - `list` groups them the way an author thinks: what the agent works on, what it knows.
-- On another machine, an entry the agent already declares is linked by hand (`ln -s <dir> content/<name>`, after
-  `mkdir -p content` and with any clone there moved away; [configuration](../configuration.md#content)); a `github`
-  entry with nothing linked is cloned.
+- On another machine, a declared repository is cloned; a checkout of it there is bound by adding the checkout
+  (`content add <checkout>` on an agent that already declares the repository asks for another name, so the binding
+  is written by hand: `{ "content": { "<name>": { "path": "<checkout>" } } }` in `context.local.json`;
+  [configuration](../configuration.md#content)).
 
 ## 5. Running: `dev`, `start`, `chat`, `invoke`
 
@@ -148,12 +150,12 @@ What is said rather than handled quietly:
 
 | Situation | Output |
 |---|---|
-| A `github` entry has nothing linked here | `github acme/app: cloned in …/content/app`, or `already up to date`; a warning when the clone has the agent's changes or GitHub cannot be reached |
-| A link points to nothing, to a file, or (for a `github` entry) to anything but a checkout of that repository | Refused, naming the link and what it points to |
-| A `local` entry has nothing linked here | Said; the agent is not told of it |
-| A linked directory contains the agent directory or sits inside it | Refused, naming both and the way out |
+| A `github` entry has no checkout bound here | `github acme/app: cloned in …/content/app`, or `already up to date`; a warning when the clone has the agent's changes or GitHub cannot be reached |
+| A binding points to a file, or (for a `github` entry) to anything but the root of a checkout of that repository; a link sits where a clone belongs | Refused, naming the entry and what it points to |
+| A bound directory is gone | Said; a `local` entry is left out and the agent is not told of it, a `github` entry uses its clone |
+| A bound directory contains the agent directory or sits inside it | Refused, naming both and the way out |
 | Two entries' names are equal ignoring case, or a name is not one segment of letters, digits, `-` and `_` | Refused, naming them |
-| A linked checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
+| A bound checkout is not at the declared `ref` | Said, with both; the checkout is left as it is |
 | A changed definition does not load when `dev` restarts on an edit | The worker exits with the reason, and the next save retries |
 | The definition on disk does not load at a fresh start | Refused, with the error and the way back: revert the change with version control, or deploy again |
 | A `github` entry cannot be reached for lack of a credential | Refused: on this machine git's own credentials, on a host a secret in its store |
@@ -173,15 +175,15 @@ knows     handbook  github acme/handbook@main     cloned; kept up to date
 works on  draft     a directory of this machine   stays here; the deployed agent works without it
           → to work on it from a host, move it to a GitHub repository (warning)
 knows     papers    a directory of this machine   stays here; the deployed agent works without it
-          → to ship what the agent reads there, copy it into the agent directory outside content/ (note)
+          → to ship what the agent reads there, copy it into the agent directory (note)
 ```
 
 - **A repository is a clone the instance makes and brings up to date in place at each start**, on a host as on
   this machine ([agent model](agent-model.md) §3). Where a deployment resets the host's storage (AgentCore), the
   clone goes with it, and preflight says what of the agent's work is lost.
 - **A local directory does not reach a host, and the deploy goes ahead without it** ([agent model](agent-model.md)
-  §3): preflight names it, a warning for one the agent works on, and the host's start names it again. The agent
-  directory does reach a host, as the definition each release replaces.
+  §3): preflight names it, a warning for one the agent works on. `context.local.json` stays out of the image, so the
+  host is never told of it. The agent directory does reach a host, as the definition each release replaces.
 - **A `github` entry's credential is `GITHUB_TOKEN` in `.secrets/.env`**, which travels with the other values;
   only a private repository, or an agent that pushes, needs it.
 

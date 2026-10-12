@@ -40,7 +40,13 @@ import type { ToolCollision, MountedTool } from "./tool.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { gateSecrets } from "../../secrets-gate.ts";
 import type { HttpSurface } from "../../service.ts";
-import { type ResolvedContent, cloneContent, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
+import {
+  type ResolvedContent,
+  absentNotice,
+  cloneContent,
+  contentAbsentHere,
+  resolveContent,
+} from "../../content/resolve.ts";
 import { loadContent } from "../../content/file.ts";
 
 /**
@@ -170,8 +176,8 @@ export async function resolveAgentAssembly(
   // Once per process, before the assembly: the locations are fixed until a restart, their content is re-read per turn.
   // This process runs the agent, so a repository with no checkout here is cloned, or its clone brought up to date in
   // place where git can do so without touching the agent's work, first; then resolved again as what is now on disk.
-  const declared = loadContent(agentDir);
-  for (const entry of resolveContent(agentDir, declared)) {
+  const declaration = loadContent(agentDir);
+  for (const entry of resolveContent(agentDir, declaration)) {
     if (entry.kind !== "github" || !entry.clone) continue;
     const at = `github ${entry.repo}${entry.ref ? ` at ${entry.ref}` : ""}`;
     const done = await cloneContent(entry);
@@ -182,13 +188,8 @@ export async function resolveAgentAssembly(
       log.info(`[fastagent] ${at}: ${said} in ${entry.location}`);
     }
   }
-  const content = resolveContent(agentDir, declared);
-  for (const absent of contentAbsentHere(agentDir, declared)) {
-    log.info(
-      `[fastagent] content "${absent.name}" is a directory of the machines that link one, and none is linked at ` +
-        `content/${absent.name} here: the agent is not told of it`,
-    );
-  }
+  const content = resolveContent(agentDir, declaration);
+  for (const absent of contentAbsentHere(declaration)) log.warn(`[fastagent] content ${absentNotice(absent)}`);
   const modelSpec = resolveModelSpec(options.model, config);
   const { tools, toolNames, toolSources, indirectTools, toolCollisions, toolFailures, toolSecrets } =
     await resolveAgentTools(config, agentDir);

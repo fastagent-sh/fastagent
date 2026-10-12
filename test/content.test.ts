@@ -1,13 +1,13 @@
 /**
- * Content (src/content/): what an author declares an agent works on or knows in `context.json`, what a command's
- * `<source>` adds, and where each entry is for this instance (`content/<name>`). Each refusal is tested once, here,
- * where its rule lives; callers test only their wiring.
+ * Content (src/content/): what an author declares an agent works on or knows in `context.json`, what this machine binds
+ * in `context.local.json`, what a command's `<source>` adds, and where each entry is for this instance. Each refusal is
+ * tested once, here, where its rule lives; callers test only their wiring.
  */
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type DeclaredContent, declareContent } from "../src/content/declare.ts";
+import { type ContentDeclaration, declareBindings, declareContent } from "../src/content/declare.ts";
 import {
   contextFileText,
   loadContent,
@@ -16,20 +16,18 @@ import {
   readContextFile,
 } from "../src/content/file.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { checkLinkTarget, contentAbsentHere, resolveContent } from "../src/content/resolve.ts";
+import { checkBinding, contentAbsentHere, resolveContent } from "../src/content/resolve.ts";
 
 describe("content: the declaration", () => {
-  it("reads each kind by name", () => {
+  it("reads each repository by name", () => {
     expect(
       declareContent({
-        notes: {},
-        handbook: { readonly: true, description: "The team's rules." },
-        rules: { github: "acme/handbook", ref: "main" },
+        handbook: { github: "acme/handbook", readonly: true, description: "The team's rules." },
+        app: { github: "acme/app", ref: "main" },
       }),
     ).toEqual([
-      { name: "notes", readonly: false, kind: "local" },
-      { name: "handbook", readonly: true, description: "The team's rules.", kind: "local" },
-      { name: "rules", readonly: false, kind: "github", repo: "acme/handbook", ref: "main" },
+      { name: "handbook", repo: "acme/handbook", readonly: true, description: "The team's rules." },
+      { name: "app", repo: "acme/app", ref: "main", readonly: false },
     ]);
     expect(declareContent(undefined)).toEqual([]);
   });
@@ -37,26 +35,69 @@ describe("content: the declaration", () => {
   it.each([
     ["not a map", [{ github: "a/b" }], /"content" must be an object of entries by name/],
     ["an entry that is not an object", { app: "a/b" }, /content "app" must be an object/],
-    ["an unknown key", { app: { readonnly: true } }, /content "app": unknown key "readonnly"/],
-    // A machine's path is never declared: content/<name> links to it on that machine.
-    ["a path", { app: { local: "/x" } }, /content "app": unknown key "local"/],
-    ["ref on a directory", { app: { ref: "main" } }, /"ref" applies to a github entry/],
+    ["an unknown key", { app: { github: "a/b", readonnly: true } }, /content "app": unknown key "readonnly"/],
+    // A machine's path is never declared in the shared file: context.local.json binds it on that machine.
+    ["a path", { app: { github: "a/b", path: "/x" } }, /content "app": unknown key "path"/],
+    [
+      "an entry no instance but this one reaches",
+      { notes: { readonly: true } },
+      /content "notes" needs "github": context\.json is shared, .* bind a directory of this machine in context\.local\.json/,
+    ],
     ["a repository not owner/repo", { app: { github: "acme" } }, /"github" must be "owner\/repo"/],
     ["a ref git would read as an option", { app: { github: "a/b", ref: "--upload-pack=x" } }, /"ref" must name/],
-    ["a non-boolean flag", { app: { readonly: "yes" } }, /"readonly" must be a boolean/],
-    ["an empty description", { app: { description: "" } }, /"description" must be a non-empty string/],
-    ["a name that is not one path segment", { "my notes": {} }, /content "my notes": a name is one path segment/],
-    ["two names equal ignoring case", { App: {}, app: {} }, /two content entries are named "App" and "app"/],
+    ["a non-boolean flag", { app: { github: "a/b", readonly: "yes" } }, /"readonly" must be a boolean/],
+    ["an empty description", { app: { github: "a/b", description: "" } }, /"description" must be a non-empty/],
+    ["a name that is not one path segment", { "my notes": { github: "a/b" } }, /a name is one path segment/],
+    [
+      "two names equal ignoring case",
+      { App: { github: "a/b" }, app: { github: "a/c" } },
+      /two content entries are named "App" and "app"/,
+    ],
   ])("refuses %s, naming it", (_what, raw, message) => {
     expect(() => declareContent(raw)).toThrow(message);
   });
 });
 
-describe("content: context.json", () => {
+describe("content: this machine's bindings", () => {
+  const declared = declareContent({ app: { github: "acme/app" } });
+
+  it("binds a declared repository to its checkout here, and any other name to a directory only this machine has", () => {
+    expect(
+      declareBindings(
+        {
+          app: { path: "/code/app" },
+          notes: { path: "~/notes", readonly: true, description: "My notes." },
+          drafts: { path: "../drafts" },
+        },
+        declared,
+        "/agents/me",
+      ),
+    ).toEqual([
+      { name: "app", path: "/code/app", kind: "checkout" },
+      { name: "notes", path: join(homedir(), "notes"), kind: "local", readonly: true, description: "My notes." },
+      { name: "drafts", path: "/agents/drafts", kind: "local", readonly: false },
+    ]);
+  });
+
+  it.each([
+    ["a binding without a path", { notes: { readonly: true } }, /content "notes": "path" must be a non-empty string/],
+    ["an unknown key", { notes: { path: "/x", github: "a/b" } }, /content "notes": unknown key "github"/],
+    [
+      "a treatment of the shared entry it binds",
+      { app: { path: "/x", readonly: true } },
+      /content "app" binds this machine's checkout .* says "readonly" for every instance: give it only "path"/,
+    ],
+    ["the shared entry's name spelled otherwise", { App: { path: "/x" } }, /binds the entry context\.json names "app"/],
+  ])("refuses %s, naming it", (_what, raw, message) => {
+    expect(() => declareBindings(raw, declared, "/agents/me")).toThrow(message);
+  });
+});
+
+describe("content: context.json and context.local.json", () => {
   it("is read whole, every refusal naming the file; an agent without one declares nothing", async () => {
     const path = "/a/context.json";
     const file = parseContextFile(`{ "$schema": "x", "content": { "app": { "github": "acme/app" } } }`, path);
-    expect(file.declared).toEqual([{ name: "app", readonly: false, kind: "github", repo: "acme/app" }]);
+    expect(file.declared).toEqual([{ name: "app", repo: "acme/app", readonly: false }]);
     expect(parseContextFile(contextFileText(file), path)).toEqual(file);
     expect(() => parseContextFile("{ content: {} }", path)).toThrow(/^\/a\/context\.json is not valid JSON/);
     expect(() => parseContextFile("[]", path)).toThrow("/a/context.json must hold a JSON object");
@@ -64,8 +105,8 @@ describe("content: context.json", () => {
     expect(() => parseContextFile(`{ "contexts": {} }`, path)).toThrow(
       '/a/context.json: unknown key "contexts" (valid keys: $schema, content, environment)',
     );
-    expect(() => parseContextFile(`{ "content": { "a": { "ref": "x" } } }`, path)).toThrow(
-      /^\/a\/context\.json: content "a": "ref" applies/,
+    expect(() => parseContextFile(`{ "content": { "a": { "github": "a/b", "ref": "" } } }`, path)).toThrow(
+      /^\/a\/context\.json: content "a": "ref" must be/,
     );
     expect(readContextFile(await mkdtemp(join(tmpdir(), "fa-context-file-")))).toEqual({ content: {}, declared: [] });
   });
@@ -73,30 +114,50 @@ describe("content: context.json", () => {
   it("a reader declares the part it uses, so a refused part stops only what uses it; the file itself stops both", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-context-parts-"));
     const path = join(dir, "context.json");
-    await writeFile(path, `{ "content": { "notes": {} }, "environment": { "packages": { "cargo:x": "1" } } }`);
-    expect(loadContent(dir)).toEqual([{ name: "notes", readonly: false, kind: "local" }]);
+    await writeFile(
+      path,
+      `{ "content": { "app": { "github": "acme/app" } }, "environment": { "packages": { "cargo:x": "1" } } }`,
+    );
+    expect(loadContent(dir)).toEqual({ declared: [{ name: "app", repo: "acme/app", readonly: false }], bound: [] });
     expect(() => loadEnvironment(dir)).toThrow(`${path}: environment: package "cargo:x" installs with cargo:`);
     // An edit writes the whole, so it reads the whole.
     expect(() => readContextFile(dir)).toThrow(`${path}: environment: package "cargo:x"`);
-    await writeFile(path, `{ "content": { "a": { "ref": "x" } }, "environment": { "packages": { "gh": "2" } } }`);
+    await writeFile(path, `{ "content": { "a": {} }, "environment": { "packages": { "gh": "2" } } }`);
     expect(loadEnvironment(dir)).toEqual({ packages: { gh: "2" }, aptPackages: [], variables: {} });
-    expect(() => loadContent(dir)).toThrow(`${path}: content "a": "ref" applies`);
+    expect(() => loadContent(dir)).toThrow(`${path}: content "a" needs "github"`);
     await writeFile(path, `{ "contexts": {} }`);
     for (const read of [loadContent, loadEnvironment])
       expect(() => read(dir)).toThrow(`${path}: unknown key "contexts"`);
   });
+
+  it("content is read from both, and a refused binding names this machine's file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-context-local-"));
+    await writeFile(join(dir, "context.json"), `{ "content": { "app": { "github": "acme/app" } } }`);
+    const local = join(dir, "context.local.json");
+    await writeFile(local, `{ "content": { "app": { "path": "/code/app" }, "notes": { "path": "notes" } } }`);
+    expect(loadContent(dir)).toEqual({
+      declared: [{ name: "app", repo: "acme/app", readonly: false }],
+      bound: [
+        { name: "app", path: "/code/app", kind: "checkout" },
+        { name: "notes", path: join(dir, "notes"), kind: "local", readonly: false },
+      ],
+    });
+    // The environment is the shared file's alone.
+    await writeFile(local, `{ "environment": {} }`);
+    expect(() => loadContent(dir)).toThrow(`${local}: unknown key "environment" (valid keys: content)`);
+    expect(loadEnvironment(dir)).toBeUndefined();
+  });
 });
 
 describe("content: what a command's <source> adds", () => {
-  it("a directory is a local entry linked to it, named after it; github:owner/repo is a clone", () => {
-    expect(readContentSource("app", "/home/me/code")).toEqual({
-      addition: { name: "app", entry: {}, link: "/home/me/code/app" },
+  it("a directory is bound on this machine, named after it; github:owner/repo is declared, and cloned", () => {
+    expect(readContentSource("notes", "/home/me")).toEqual({
+      addition: { name: "notes", binding: { path: "/home/me/notes" } },
       notes: [],
     });
     expect(readContentSource("/x", "/", { readonly: true, name: "n", description: "Notes." }).addition).toEqual({
       name: "n",
-      entry: { readonly: true, description: "Notes." },
-      link: "/x",
+      binding: { path: "/x", readonly: true, description: "Notes." },
     });
     expect(readContentSource("github:acme/app", "/", { ref: "main" }).addition).toEqual({
       name: "app",
@@ -107,43 +168,42 @@ describe("content: what a command's <source> adds", () => {
   });
 });
 
-describe("content: resolved for this instance, at content/<name>", () => {
+describe("content: resolved for this instance", () => {
   async function layout() {
     const root = await realpath(await mkdtemp(join(tmpdir(), "fa-content-")));
     const agentDir = join(root, "agent");
     await mkdir(join(agentDir, "content"), { recursive: true });
-    await mkdir(join(root, "app"));
+    await mkdir(join(root, "notes"));
     return { root, agentDir };
   }
+  const local = (agentDir: string, bindings: Record<string, unknown>): ContentDeclaration => ({
+    declared: [],
+    bound: declareBindings(bindings, [], agentDir),
+  });
 
-  it("a local entry is the directory content/<name> links to; with nothing there it is absent, and said to be", async () => {
+  it("a directory this machine binds is where it is; one that is gone is left out, and said to be", async () => {
     const { root, agentDir } = await layout();
-    await symlink(join(root, "app"), join(agentDir, "content", "app"));
-    const declared = declareContent({ app: { readonly: true, description: "The app." }, notes: {} });
-    expect(resolveContent(agentDir, declared)).toEqual([
+    const declaration = local(agentDir, {
+      notes: { path: "../notes", readonly: true, description: "My notes." },
+      gone: { path: join(root, "gone") },
+    });
+    expect(resolveContent(agentDir, declaration)).toEqual([
       {
-        name: "app",
+        name: "notes",
         kind: "local",
         readonly: true,
-        description: "The app.",
-        location: join(agentDir, "content", "app"),
-        linkedTo: join(root, "app"),
+        description: "My notes.",
+        location: join(root, "notes"),
         notices: [],
       },
     ]);
-    // Not linked on this machine (a host, a teammate's laptop): not resolved, not refused, and named for whoever opens it.
-    expect(contentAbsentHere(agentDir, declared)).toEqual([expect.objectContaining({ name: "notes" })]);
-    // A directory this place put there itself is the entry.
-    await mkdir(join(agentDir, "content", "notes"));
-    expect(resolveContent(agentDir, declared).map((entry) => [entry.name, entry.linkedTo])).toEqual([
-      ["app", join(root, "app")],
-      ["notes", undefined],
-    ]);
+    expect(contentAbsentHere(declaration)).toEqual([expect.objectContaining({ name: "gone" })]);
   });
 
-  it("a github entry with nothing linked is a clone fastagent makes there", async () => {
-    const { agentDir } = await layout();
-    expect(resolveContent(agentDir, declareContent({ app: { github: "acme/app" } }))).toEqual([
+  it("a repository is a clone fastagent makes at content/<name>, also where the checkout bound here is gone", async () => {
+    const { root, agentDir } = await layout();
+    const declared = declareContent({ app: { github: "acme/app" } });
+    expect(resolveContent(agentDir, { declared, bound: [] })).toEqual([
       expect.objectContaining({
         kind: "github",
         clone: true,
@@ -151,35 +211,44 @@ describe("content: resolved for this instance, at content/<name>", () => {
         notices: [expect.stringMatching(/^not cloned yet/)],
       }),
     ]);
+    const bound = declareBindings({ app: { path: join(root, "gone") } }, declared, agentDir);
+    expect(resolveContent(agentDir, { declared, bound })).toEqual([
+      expect.objectContaining({
+        clone: true,
+        notices: [
+          `bound in context.local.json to ${join(root, "gone")}, which does not exist here: the clone is used`,
+          expect.stringMatching(/^not cloned yet/),
+        ],
+      }),
+    ]);
+    expect(contentAbsentHere({ declared, bound })).toEqual([]);
   });
 
-  it("refuses a link to nothing, to a file, or a file in its place", async () => {
+  it("refuses a link where a clone belongs, a file in its place, and a binding to a file", async () => {
     const { root, agentDir } = await layout();
     await writeFile(join(root, "file"), "");
-    await symlink(join(root, "missing"), join(agentDir, "content", "gone"));
-    await symlink(join(root, "file"), join(agentDir, "content", "file"));
+    await symlink(join(root, "notes"), join(agentDir, "content", "linked"));
     await writeFile(join(agentDir, "content", "plain"), "");
-    const one = (name: string) => () => resolveContent(agentDir, declareContent({ [name]: {} }));
-    expect(one("gone")).toThrow(
-      `content "gone": content/gone links to ${join(root, "missing")}, which does not exist — link it again`,
+    const repository = (name: string) => () =>
+      resolveContent(agentDir, { declared: declareContent({ [name]: { github: "a/b" } }), bound: [] });
+    expect(repository("linked")).toThrow(
+      `content "linked": content/linked is a link, and content/ holds only the clones fastagent makes`,
     );
-    expect(one("file")).toThrow(
-      `content "file": content/file links to ${join(root, "file")}, which is not a directory`,
+    expect(repository("plain")).toThrow(`content "plain": ${join(agentDir, "content", "plain")} is not a directory`);
+    expect(() => resolveContent(agentDir, local(agentDir, { file: { path: join(root, "file") } }))).toThrow(
+      `content "file": ${join(root, "file")} is not a directory`,
     );
-    expect(one("plain")).toThrow(`content "plain": ${join(agentDir, "content", "plain")} is not a directory`);
   });
 
-  it("refuses a link to a directory around the agent or inside it, asked of the real paths", async () => {
+  it("refuses a binding to a directory around the agent or inside it, asked of the real paths", async () => {
     const { root, agentDir } = await layout();
     // As written, `link` is beside the agent; really, it is the directory around it.
     await symlink(root, `${root}-link`);
-    await symlink(`${root}-link`, join(agentDir, "content", "around"));
-    expect(() => resolveContent(agentDir, declareContent({ around: {} }))).toThrow(
+    expect(() => resolveContent(agentDir, local(agentDir, { around: { path: `${root}-link` } }))).toThrow(
       /content "around" .* contains the agent directory/,
     );
     await mkdir(join(agentDir, "notes"));
-    await symlink(join(agentDir, "notes"), join(agentDir, "content", "inside"));
-    expect(() => resolveContent(agentDir, declareContent({ inside: {} }))).toThrow(
+    expect(() => resolveContent(agentDir, local(agentDir, { inside: { path: "notes" } }))).toThrow(
       /content "inside" .* is inside the agent directory/,
     );
   });
@@ -190,8 +259,7 @@ describe("content: resolved for this instance, at content/<name>", () => {
     const { root } = await layout();
     await mkdir(join(root, "real"));
     await symlink(join(root, "real"), join(root, "link"));
-    const entry = declareContent({ real: {} })[0] as DeclaredContent;
-    expect(() => checkLinkTarget(join(root, "link", "agent", "deeper"), entry, join(root, "real"))).toThrow(
+    expect(() => checkBinding(join(root, "link", "agent", "deeper"), "real", join(root, "real"))).toThrow(
       /content "real" .* contains the agent directory/,
     );
   });

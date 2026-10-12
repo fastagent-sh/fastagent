@@ -8,6 +8,7 @@ import { watch as watchTree } from "chokidar";
 import {
   AGENT_CONFIG_FILE,
   CONTEXT_FILE,
+  LOCAL_CONTEXT_FILE,
   AGENT_MODEL_CATALOG_FILE,
   AGENT_MODELS_FILE,
   resolveStateRoot,
@@ -26,7 +27,7 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
  *  next session after an edit, and `schedules/` is re-read by the running clock itself.) */
 const CODE_INPUT_DIRS = ["tools", "channels"] as const;
 
-const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, ${ENVIRONMENT_LOCK}, .secrets/.env`;
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.ts, context.json, context.local.json, ${ENVIRONMENT_LOCK}, .secrets/.env`;
 
 /**
  * Files a serving worker reads LIVE (agent-models.ts keeps the last ones that loaded) but a worker cannot START
@@ -47,7 +48,7 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     const rel = relative(root, path);
     // Code inputs at the agent dir root: config, package.json, and the dirs loaded once per worker (a restart is
     // their only re-read).
-    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE) return false;
+    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE || rel === LOCAL_CONTEXT_FILE) return false;
     // The environment's lock is installed from once per worker (`fastagent env` replaces it whole, once complete).
     if (rel === ENVIRONMENT_DIR || rel === ENVIRONMENT_LOCK) return false;
     if (rel === "package.json") return false;

@@ -220,17 +220,19 @@ describe("init: scaffoldAgent", () => {
     }
   });
 
-  it("--content declares what the agent works on in context.json and links it; a nested one is refused before any write", async () => {
+  it("--content binds a directory of this machine in context.local.json; a nested one is refused before any write", async () => {
     const base = await realpath(await freshDir());
     const app = join(base, "app");
     await mkdir(app);
     const out = await cliInit(["init", "reviewer", "--content", "app", "--no-install"], base);
     expect(out).toMatch(/created .*reviewer/);
-    expect(out).toContain(`works on app  ${app} (local, this machine only)`);
-    expect(JSON.parse(await readFile(join(base, "reviewer", "context.json"), "utf8"))).toEqual({
-      content: { app: {} },
+    expect(out).toContain(`works on app  ${app} (this machine only, bound in context.local.json)`);
+    expect(JSON.parse(await readFile(join(base, "reviewer", "context.local.json"), "utf8"))).toEqual({
+      content: { app: { path: app } },
     });
-    expect(await realpath(join(base, "reviewer", "content", "app"))).toBe(app);
+    // The shared declaration names no directory of this machine, and init's .gitignore keeps this machine's file out.
+    expect(await exists(join(base, "reviewer", "context.json"))).toBe(false);
+    expect(await readFile(join(base, "reviewer", ".gitignore"), "utf8")).toContain("/context.local.json\n");
     // There is no copy for a host: a directory stays on this machine.
     expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
       /unknown option '--copy'/,

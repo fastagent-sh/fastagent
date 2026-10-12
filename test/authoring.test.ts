@@ -1,16 +1,17 @@
 /**
  * Creating an agent and editing its content as an API (what `init` and `content` wrap). The rules themselves (names,
- * nesting, what can be linked) are tested where they live and through the CLI; this file owns what only the API
- * promises: an agent it creates runs as created, an edit writes `context.json` and the link together or neither, and
- * its refusals are thrown, a name problem as its own class.
+ * nesting, what can be bound) are tested where they live and through the CLI; this file owns what only the API
+ * promises: an agent it creates runs as created, an edit writes the shared declaration and this machine's binding
+ * each where it belongs, and its refusals are thrown, a name problem as its own class.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
+import { git, githubStandIn } from "./github-standin.ts";
 import {
   ContentNameError,
   addContent,
@@ -104,8 +105,11 @@ describe("authoring API", () => {
     // A created agent is a repository of its own, whatever created it: the CLI's tests cover the cases it is not.
     expect(created.repository).toBe("created a git repository, with the scaffold as its first commit");
     await access(join(agentDir, ".git"));
-    expect(created.content.map((c) => [c.name, c.linkedTo])).toEqual([["app", app]]);
-    expect(await readFile(join(agentDir, "context.json"), "utf8")).toBe(`{\n  "content": {\n    "app": {}\n  }\n}\n`);
+    // A directory of this machine is bound in this machine's file; the shared one is not written for it.
+    expect(created.content.map((c) => [c.name, c.location])).toEqual([["app", app]]);
+    const bindings = () => readFile(join(agentDir, "context.local.json"), "utf8");
+    expect(await bindings()).toBe(`{\n  "content": {\n    "app": {\n      "path": "${app}"\n    }\n  }\n}\n`);
+    await expect(access(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
 
     const added = await addContent(agentDir, directory(docs, { readonly: true }));
     expect(added.name).toBe("docs");
@@ -116,33 +120,85 @@ describe("authoring API", () => {
     await expect(addContent(agentDir, directory(other))).rejects.toThrow(ContentNameError);
     await expect(addContent(agentDir, directory(other, { name: "a b" }))).rejects.toThrow(ContentNameError);
     await expect(removeContent(agentDir, "nope")).rejects.toThrow(ContentNameError);
-    // Not a name problem: a plain Error, as the CLI reports it. Nothing is written or linked.
-    const before = await readFile(join(agentDir, "context.json"), "utf8");
+    // Not a name problem: a plain Error, as the CLI reports it. Nothing is written.
+    const before = await bindings();
     const around: unknown = await addContent(agentDir, directory(base, { name: "around" })).catch((e: unknown) => e);
     expect(around).not.toBeInstanceOf(ContentNameError);
     expect((around as Error).message).toMatch(/contains the agent directory/);
-    await expect(lstat(join(agentDir, "content", "around"))).rejects.toThrow(/ENOENT/);
-    expect(await readFile(join(agentDir, "context.json"), "utf8")).toBe(before);
+    expect(await bindings()).toBe(before);
 
     // Concurrent edits apply one after the other: neither is lost, neither is refused.
     const [x, y] = [join(base, "x"), join(base, "y")];
     for (const dir of [x, y]) await mkdir(dir);
     await Promise.all([addContent(agentDir, directory(x)), addContent(agentDir, directory(y))]);
-    expect((await listContent(agentDir)).map((c) => c.name).sort()).toEqual(["app", "docs", "x", "y"]);
+    expect((await listContent(agentDir)).content.map((c) => c.name).sort()).toEqual(["app", "docs", "x", "y"]);
     await Promise.all([removeContent(agentDir, "x"), removeContent(agentDir, "y")]);
 
     const removed = await removeContent(agentDir, "APP");
-    expect(removed).toEqual({ name: "app", content: await listContent(agentDir), notes: [] });
+    expect(removed).toEqual({ name: "app", content: (await listContent(agentDir)).content, notes: [] });
     expect(removed.content.map((c) => c.name)).toEqual(["docs"]);
-    await expect(lstat(join(agentDir, "content", "app"))).rejects.toThrow(/ENOENT/);
     await access(app);
   });
 
-  it("a clone in content/ outlives its entry, and is said to; nothing there is added over", async () => {
+  it("a checkout is its repository, declared for every instance and bound here; removing it removes both", async () => {
+    const github = githubStandIn();
+    github.repo("acme/app").commit({ "README.md": "app\n" });
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-checkout-")));
+    const checkout = join(base, "app");
+    git(base, "clone", "-q", "https://github.com/acme/app.git", checkout);
+    const agentDir = join(base, "agent");
+    await createAgent(agentDir);
+    const added = await addContent(agentDir, readContentSource(checkout, base, { readonly: true }).addition);
+    expect(added.content).toEqual([
+      expect.objectContaining({ name: "app", kind: "github", clone: false, location: checkout, readonly: true }),
+    ]);
+    expect(JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"))).toEqual({
+      content: { app: { github: "acme/app", readonly: true } },
+    });
+    expect(JSON.parse(await readFile(join(agentDir, "context.local.json"), "utf8"))).toEqual({
+      content: { app: { path: checkout } },
+    });
+    await removeContent(agentDir, "app");
+    for (const file of ["context.json", "context.local.json"]) {
+      expect(JSON.parse(await readFile(join(agentDir, file), "utf8"))).toEqual({ content: {} });
+    }
+  });
+
+  it("two edits of one name that write different files queue: one is added, the other refused", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-race-")));
+    const agentDir = join(base, "agent");
+    await createAgent(agentDir);
+    await mkdir(join(base, "notes"));
+    const results = await Promise.allSettled([
+      addContent(agentDir, readContentSource("github:me/notes", base).addition),
+      addContent(agentDir, directory(join(base, "notes"))),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const refused = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(ContentNameError);
+    expect((await listContent(agentDir)).content.map((entry) => entry.name)).toEqual(["notes"]);
+  });
+
+  it("says when git would commit this machine's bindings", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-ignored-")));
+    const agentDir = join(base, "agent");
+    for (const dir of ["a", "b"]) await mkdir(join(base, dir));
+    await createAgent(agentDir);
+    // init's .gitignore keeps it out; an agent made before it was there does not.
+    expect((await addContent(agentDir, directory(join(base, "a")))).notes).toEqual([]);
+    const ignore = join(agentDir, ".gitignore");
+    await writeFile(ignore, (await readFile(ignore, "utf8")).replace("/context.local.json\n", ""));
+    expect((await addContent(agentDir, directory(join(base, "b")))).notes).toEqual([
+      "context.local.json holds directories of this machine and git does not ignore it: add it to .gitignore",
+    ]);
+  });
+
+  it("a clone in content/ outlives its entry, and is said to; nothing is cloned over it", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-clone-")));
     const agentDir = join(base, "agent");
     await createAgent(agentDir);
-    await addContent(agentDir, readContentSource("github:acme/app", base).addition);
+    const repository = readContentSource("github:acme/app", base).addition;
+    await addContent(agentDir, repository);
     // What the first start makes there; the agent may have worked in it since.
     await mkdir(join(agentDir, "content", "app"), { recursive: true });
     await writeFile(join(agentDir, "content", "app", "work.md"), "unpushed\n");
@@ -151,50 +207,42 @@ describe("authoring API", () => {
       "content/app is left as it is: it may hold the agent's work — delete it once nothing in it is needed",
     ]);
     expect(await readFile(join(agentDir, "content", "app", "work.md"), "utf8")).toBe("unpushed\n");
-    // Added again while it is there: refused, rather than linked or cloned over.
-    await mkdir(join(base, "app"));
-    await expect(addContent(agentDir, directory(join(base, "app")))).rejects.toThrow(
+    // Added again while it is there: refused, rather than cloned over.
+    await expect(addContent(agentDir, repository)).rejects.toThrow(
       `content/app already exists in ${agentDir}: move it away first`,
     );
   });
 
-  it("an entry that no longer resolves refuses an edit before it is made; removing that entry mends it", async () => {
+  it("a directory bound here that is gone is left out; an entry that does not resolve refuses an edit until removed", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-broken-")));
     const agentDir = join(base, "agent");
     for (const dir of ["moved", "b", "c"]) await mkdir(join(base, dir));
     await createAgent(agentDir, { content: [directory(join(base, "moved")), directory(join(base, "c"))] });
     await rm(join(base, "moved"), { recursive: true });
-    const before = await readFile(join(agentDir, "context.json"), "utf8");
-    // The refusal is the broken entry's, and nothing of the edit is left: not the entry, not its link.
-    await expect(addContent(agentDir, directory(join(base, "b")))).rejects.toThrow(
-      /content "moved": .* does not exist/,
-    );
-    await expect(lstat(join(agentDir, "content", "b"))).rejects.toThrow(/ENOENT/);
-    await expect(removeContent(agentDir, "c")).rejects.toThrow(/content "moved": .* does not exist/);
-    expect(await readFile(join(agentDir, "context.json"), "utf8")).toBe(before);
-    expect(await realpath(join(agentDir, "content", "c"))).toBe(join(base, "c"));
+    // Gone: this machine's own binding, so nothing is refused, and it is named as absent.
+    await addContent(agentDir, directory(join(base, "b")));
+    expect(await listContent(agentDir)).toEqual({
+      content: [expect.objectContaining({ name: "c" }), expect.objectContaining({ name: "b" })],
+      absent: [expect.objectContaining({ name: "moved", path: join(base, "moved") })],
+    });
+    // Something else in its place does not resolve: an edit is refused with that entry's reason, and nothing written.
+    await writeFile(join(base, "moved"), "");
+    const before = await readFile(join(agentDir, "context.local.json"), "utf8");
+    await expect(removeContent(agentDir, "c")).rejects.toThrow(/content "moved": .* is not a directory/);
+    expect(await readFile(join(agentDir, "context.local.json"), "utf8")).toBe(before);
     const mended = await removeContent(agentDir, "moved");
-    expect(mended.content.map((c) => c.name)).toEqual(["c"]);
+    expect(mended.content.map((c) => c.name)).toEqual(["c", "b"]);
   });
 
-  it("a link goes with a declaration that could not be written", async () => {
-    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-unwritten-")));
-    const agentDir = join(base, "agent");
-    await mkdir(join(base, "app"));
-    await createAgent(agentDir);
-    // The temp the write renames into place is taken by a directory, so the write fails after the link was made.
-    await mkdir(join(agentDir, "context.json.tmp"));
-    await expect(addContent(agentDir, directory(join(base, "app")))).rejects.toThrow(/context\.json\.tmp/);
-    await expect(lstat(join(agentDir, "content", "app"))).rejects.toThrow(/ENOENT/);
-  });
-
-  it("a refused edit on an agent without context.json leaves none", async () => {
+  it("a refused edit on an agent without context files leaves none", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-none-")));
     const agentDir = join(base, "agent");
     await createAgent(agentDir);
     await expect(removeContent(agentDir, "app")).rejects.toThrow('no content named "app" (this agent has: none)');
     await expect(addContent(agentDir, directory(join(base, "missing")))).rejects.toThrow(/does not exist/);
-    await expect(access(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
+    for (const file of ["context.json", "context.local.json"]) {
+      await expect(access(join(agentDir, file))).rejects.toThrow(/ENOENT/);
+    }
   });
 
   it("createAgent refuses a name problem as ContentNameError, before it writes anything", async () => {

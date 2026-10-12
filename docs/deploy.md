@@ -388,7 +388,7 @@ rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.y
   never touched.
 - A generated artifact that no longer matches the definition is kept and reported, and gates `--run`.
 - A kept ignore file that drops `fastagent.config.ts`, or does not exclude `.secrets/auth.json` or `content`, gates
-  `--run`; an unexcluded `.state` or `node_modules` warns.
+  `--run`; an unexcluded `.state`, `node_modules` or `context.local.json` warns.
 
 **Git**: when the agent directory is a repository, `git` is installed and its `.git` ships with the definition. Some
 host CLIs strip `.git` (`railway up` does). An agent that needs git without that declares it:

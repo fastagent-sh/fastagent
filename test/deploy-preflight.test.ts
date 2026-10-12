@@ -197,7 +197,8 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const agentDir = await agent({ "package.json": `{"type":"module"}` });
     await mkdir(join(agentDir, "node_modules")); // installed deps exist → they could actually be uploaded
     await mkdir(join(agentDir, ".state")); // …as does machine state: only what is THERE gets warned about
-    await mkdir(join(agentDir, "content")); // …and this machine's links and clones of the agent's content
+    await mkdir(join(agentDir, "content")); // …and this machine's clones of the agent's content
+    await writeFile(join(agentDir, "context.local.json"), `{ "content": {} }`); // …and its bindings
     await writeFile(join(agentDir, ".dockerignore"), ".git\n"); // the author's own — kept, not ours
 
     const pre = await call(agentDir, { model: "openai/gpt-4o-mini" });
@@ -206,7 +207,13 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       const text = JSON.stringify(pre.messages);
       expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
       expect(text).toMatch(/does not exclude .{0,12}\.state/); // machine state would ship
-      expect(text).toMatch(/does not exclude .{0,12}content.{0,12} — this machine's links and clones/); // an issue: --run gates on it
+      expect(text).toMatch(/does not exclude .{0,12}content.{0,12} — this machine's clones/); // an issue: --run gates on it
+      expect(pre.messages).toContainEqual({
+        level: "warn",
+        text: expect.stringMatching(
+          /does not exclude `context\.local\.json` — the directories of this machine the agent is bound to would ship/,
+        ),
+      });
       expect(text).toMatch(/does not exclude .{0,30}node_modules/); // the native-binary clobber hazard — named
       expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
@@ -391,10 +398,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (clean.ok) expect(JSON.stringify(clean.messages)).not.toMatch(/BAKE SECRETS|node_modules|\.state/);
   });
 
-  it("deploys without a directory context, saying so: a warning for one it works on, a note for one it knows", async () => {
+  it("deploys without a directory bound only here, saying so: a warning for one it works on, a note for one it knows", async () => {
     const dir = await agent({
-      "context.json": JSON.stringify({
-        content: { app: {}, docs: { readonly: true }, handbook: { github: "acme/handbook" } },
+      "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
+      // A checkout of a declared repository is this machine's way to it; the host clones that one.
+      "context.local.json": JSON.stringify({
+        content: {
+          handbook: { path: "/code/handbook" },
+          app: { path: "/code/app" },
+          docs: { path: "/docs", readonly: true },
+        },
       }),
     });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
@@ -403,16 +416,20 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.messages).toContainEqual({
       level: "warn",
       text:
-        "works on app: a directory of this machine (content/app), stays here, and the deployed agent works " +
-        "without it; to work on it from a host, move it to a GitHub repository and declare it as github",
+        "works on app: a directory of this machine (/code/app, bound in context.local.json), stays here, and the " +
+        "deployed agent works without it; to work on it from a host, move it to a GitHub repository and add it as " +
+        "github:owner/repo",
     });
     expect(pre.messages).toContainEqual({
       level: "note",
       text:
-        "knows docs: a directory of this machine (content/docs), stays here, and the deployed agent works " +
-        "without it; to ship what the agent reads there, copy it into the agent directory outside content/, which " +
-        "every release carries",
+        "knows docs: a directory of this machine (/docs, bound in context.local.json), stays here, and the deployed " +
+        "agent works without it; to ship what the agent reads there, copy it into the agent directory, which every " +
+        "release carries",
     });
+    expect(pre.messages.filter((m) => m.text.includes("handbook")).map((m) => m.text)).toEqual([
+      "works on handbook: github acme/handbook, cloned on the host, and brought up to date in place at each start",
+    ]);
   });
 
   it("says what each repository context becomes on the host, bakes git, and names the token it clones with", async () => {

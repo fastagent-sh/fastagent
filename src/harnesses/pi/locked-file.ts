@@ -38,11 +38,15 @@ function writeTarget(path: string): string {
 export async function withLockedFile<T>(
   path: string,
   fn: (current: string | undefined) => Promise<LockResult<T>>,
-  /** `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for the credential and catalog files. */
-  options: { signal?: AbortSignal; mode?: number } = {},
+  /**
+   * `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for the credential and catalog files.
+   * `create: false` locks a file that may not exist without creating it (the lock is `<file>.lock` either way), for a
+   * lock that guards more than the file it is named after.
+   */
+  options: { signal?: AbortSignal; mode?: number; create?: boolean } = {},
 ): Promise<T> {
   mkdirSync(dirname(path), { recursive: true });
-  if (!existsSync(path)) {
+  if (options.create !== false && !existsSync(path)) {
     try {
       // `wx` makes this an exclusive CREATE, which is the one case `writeFileSync` honours `mode` in — so no chmod
       // after it (unlike writeFileAtomic, whose temp may already exist from a crashed writer).

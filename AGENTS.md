@@ -70,10 +70,10 @@ src/
 ├── paths.ts                # ADDRESSING (which directory is the agent: the one named, never searched for) + the
 │                           # shared path predicates and the machinery paths that follow (.secrets/.state/content)
 ├── content/                # what an agent works on and knows — harness-neutral
-│   ├── declare.ts          # a content entry read and refused in ONE place (names, keys, nesting)
-│   ├── file.ts             # `context.json` read (a reader its part, an edit the whole; refusals name it) and written
-│   ├── mount.ts            # the writes into content/: the dir with its own .gitignore, and the links
-│   ├── resolve.ts          # where each entry is for THIS instance (content/<name>): the one answer every reader uses
+│   ├── declare.ts          # a shared entry and a machine's binding, read and refused in ONE place (names, keys)
+│   ├── file.ts             # `context.json` + `context.local.json` read (a reader its part, an edit the whole) and written
+│   ├── mount.ts            # content/, where the clones go: the dir with its own .gitignore
+│   ├── resolve.ts          # where each entry is for THIS instance (a clone, a bound dir): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── environment/            # the commands an agent runs, declared in context.json, the image's lock in environment/
