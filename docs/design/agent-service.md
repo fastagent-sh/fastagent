@@ -74,7 +74,7 @@ Agent = model + harness + context, composed by a definition
   harness        the loop that runs it: pi (§9.1)
   context        everything it works with from outside, in three kinds:
     content        data it reads and writes as files, synced to where it runs: repositories, directories
-    connectors     the other systems it reaches: MCP servers, APIs and their credentials (mcp.json, tools/)
+    connectors     the other systems it reaches: MCP servers, APIs and their credentials (mcp.json)
     environment    what it runs in: the commands and runtimes it needs, on every platform (context.json)
   definition     its own directory: who it is and how it works, and which model and contexts it uses
   remembers in   sessions: conversations
@@ -145,7 +145,7 @@ They are uses of the three, not further categories.
 |---|---|
 | Knowledge | Reading content, and querying connectors (a search) |
 | Memory | Long-term: writing to writable content. A conversation's: its session (§3.5) |
-| Skill | Know-how stored in the definition or a context (§3.6), executed in the environment, possibly calling connectors |
+| Skill | Know-how stored in the definition, executed in the environment, possibly calling connectors. A context carries none (§3.6) |
 | Tool | How an action is presented to the model. `read`, `write` and `bash` act on the environment and content. A code tool is part of the definition, and the system it reaches is a connector; an MCP tool is a connector's |
 
 ### 3.4 The agent's own directory
@@ -173,31 +173,70 @@ system: messages arrive through it, and the agent's send tool posts through it.
 
 ### 3.6 Contexts: the unit of sharing
 
-A **context** is a named unit of what agents work with, shared on its own. It holds content, connectors and
-environment that belong together, with the skills that teach the agent to use them and the code tools that reach them.
-A CLI without the skill that teaches it is half a connector, so they travel together. An agent is shared as its
+A **context** is a named unit of what agents work with, shared on its own: content, connectors and environment that
+belong together, declared once for every agent that uses it. A team's GitHub, for example: the repositories its agents
+work on, `gh` and the variable holding its token, and, with MCP (§5), the GitHub MCP server. An agent is shared as its
 definition; what it works with is shared a context at a time.
 
 ```text
-acme-github/                  a context: a directory, a git repository or an npm package
-  context.json                its content, its environment (gh), and a description
-  mcp.json · tools/           its connectors
-  skills/                     how to use them: open a pull request the team's way
+acme-github/                  a context: a GitHub repository
+  context.json                its content, its environment (gh, GITHUB_TOKEN), and a description
+  mcp.json                    its MCP servers, with MCP (§5)
 ```
 
-- An agent lists the contexts it uses in its own `context.json` (§8.1). Its own declarations (the content and
-  environment in that file, `mcp.json`, `tools/`, `skills/`) are its own context, which needs no name.
-- A context is referenced the way a pi package is: `git:github.com/acme/github-context@v1.4.0`,
-  `npm:@acme/github-context@1.4.0`, or a local path. A git tag or commit, or an npm version, pins it;
-  `fastagent context update <name>` moves it, and nothing moves it implicitly. A local path is read in place, for the
-  context's own author, and a deploy copies it into the image.
-- A context declares the names of the credentials it needs, as any code or configuration does (§6.1), never their
-  values: each agent supplies its own.
-- When two contexts declare a tool, an MCP server or a content entry under the same name, the start is
-  refused, and the error names both. The same happens when they declare one package at different versions. Nothing
-  is overridden silently.
-- A context does not use other contexts. Nesting would make an agent's world a dependency graph, which nothing needs
-  yet.
+- **A context declares what an agent works with, never how it works.** Its `context.json` is an agent's format, with
+  `content`, `environment` and a `description`: one line for the people who choose it, shown by `context list` and
+  `info` and never given to the model. `description` is a context's alone and `contexts` an agent's alone, each
+  refused where it means nothing. Nothing else in the repository is read: not its `AGENTS.md`, skills, tools,
+  prompts, extensions, channels or schedules. What the agent is told and what it knows how to do come from its own
+  directory, as with content (agent model §2). A skill that teaches a context's CLI therefore lives in each agent that
+  uses it (`fastagent add skill` vendors one from a repository), or on the machine.
+  - Considered: a context that brings skills and code tools, as Claude Code plugins, Gemini CLI extensions and Codex
+    plugins bundle skills with MCP servers. A context would then be part of every agent's definition, written
+    elsewhere: a change to it would change how agents behave, from a repository their authors do not hold.
+- **An agent lists the contexts it uses** in its own `context.json` (§8.1), each by name with its GitHub repository
+  and an optional `ref` (a branch, tag or commit; the default branch without one), the way a content entry names its
+  repository. A context lists none: nesting would make an agent's world a dependency graph, which nothing needs.
+- **A context is used as its `ref` is now, and nothing is locked**, as the environment's packages are not (§4). Where
+  the agent is developed, a process that runs it fetches each context into `.contexts/<name>/`, never in git, at each
+  start: the commit `ref` names then. When GitHub cannot be reached, it runs on the copy it has and says so; a first
+  fetch that fails stops the start. The copy is FastAgent's, and nothing writes in it. `fastagent context add`
+  fetches a context and checks it before declaring it.
+  - Considered: pinning each context to a commit in a committed lock that `fastagent context update` moves, as GitHub
+    recommends pinning a third-party action to its full commit because a tag can be moved (the
+    `tj-actions/changed-files` compromise). A context is declarations, not code that runs; reproducing an agent's world
+    to the commit is software packaging's guarantee, which an agent does not need (§4); and every change to a context
+    reaches a deployed agent only through a deploy, which checks it (below).
+- **A deploy builds each context into the image, and a deployed box never fetches one.** `deploy` fetches every
+  context on the machine that runs it, with that machine's git credentials, checks the joined declarations as it
+  checks the agent's own (a variable with no value, a package FastAgent refuses), and ships `.contexts/` in the build
+  context. A box reads its copy there. Railway uploads what git does not ignore, so a Railway deploy uploads with
+  `railway up --no-gitignore` and a generated `.railwayignore` that holds the `.dockerignore`'s rules.
+  - Considered: fetching on the box at each start, as content is cloned there. A change its author makes would reach
+    every deployed agent at its next cold start without a deploy's checks, and stop it: a new variable with no value
+    there, a private repository the host's token cannot read. Every cold start would also need the network and a
+    credential that reads the context. Fetching in the image build, with a build secret, as an image installs a private
+    npm package, was considered too: `deploy` fetches the contexts anyway to check them, and each host takes build
+    secrets its own way.
+- **The agent's declarations and its contexts' are joined, and nothing is overridden.**
+  - Content: each entry, the agent's own or a context's, is cloned at `content/<name>/`, and `context.local.json`
+    binds a checkout to any of them by name. A name declared twice, by the agent and a context or by two contexts,
+    refuses the start, and the error names both.
+  - Environment: the packages and the apt packages are joined. One package at two versions refuses the start, naming
+    both, and is mended where it is declared.
+  - Variables: a name declared twice is one variable with one value (§6.2), required by each declaration. The secrets
+    gate, `info` and the runbooks attribute each: `context.json` for the agent's own, `context "acme-github"` for a
+    context's.
+  - MCP servers, with MCP: joined by name; a name declared twice refuses the start.
+- **A context is a repository, because it is shared.** A local directory cannot be shared: a context's author tries a
+  change on a branch, named by `ref`, before merging it. Other git hosts, and npm, can be added as sources the way
+  content kinds are (§13).
+- **The commands.** `fastagent context add github:owner/repo [--name <name>] [--ref <ref>]` fetches the context,
+  checks that it joins the agent's declarations, installs its packages here as `fastagent env add` does, and declares
+  it. `context list` shows each context with its description, repository, `ref`, the commit fetched and what it brings.
+  `context remove <name>` drops it and its copy. `fastagent env` and `fastagent content` edit the agent's own
+  declarations: `env remove gh` for a context's `gh` is refused, naming the context. `fastagent info` lists every
+  entry with the context it comes from.
 
 ## 4. The environment is declared, for every platform
 
@@ -302,10 +341,10 @@ platform. The author never writes mise's files.
 - **mise's behavior is probed, not assumed.** Every fact above about what mise does was first a guess that a run of
   mise overturned. The offline suite runs a stand-in; `test/live/environment.live.test.ts` runs the agent's own mise
   at its newest version, so a mise release that changes one of them is caught there.
-- An agent's environment is its own and those of the contexts it uses, together (§3.6): the packages and the apt
-  packages are joined, and one package at two versions refuses the start.
+- An agent's environment is its own and those of the contexts it uses, together (§3.6): the packages, the apt packages
+  and the variables are joined, and one package at two versions refuses the start.
 - A skill script's Python libraries are not part of the environment: the script declares them inline (PEP 723) and
-  runs with `uv run`, so a skill carries its own dependencies wherever its context goes.
+  runs with `uv run`, so a skill carries its own dependencies wherever it goes.
 - `deploy.apt` is gone, and the config has no `environment`.
 - **`variables` declares the environment variables the agent's commands read, by name; values come from the
   environment.** A declaration is a name and a sentence saying what it is for
@@ -376,7 +415,7 @@ OpenAI's Codex base image installs its runtimes with mise.
 
 Today a connector is a code tool in `tools/` or a channel's send tool. Pi's MCP extension is not loaded when serving,
 because its server connections live as long as a session and a served session lives one turn
-([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed, on pi 1.1.0 (§12):
+([#678](https://github.com/fastagent-sh/fastagent/issues/678)). Proposed, with the serving protocol (§12):
 
 - **A service that speaks MCP** is declared in `mcp.json` at the agent's root, in pi's format, which Claude Code,
   Cursor and VS Code share (`mcpServers`: a `command` or a `url`, `headers` or `env` that name values as `${VAR}`, and
@@ -392,7 +431,8 @@ because its server connections live as long as a session and a served session li
   | An OpenAPI or Smithy description, or a Lambda function, on AWS | AgentCore Gateway, which turns it into an MCP server and handles the outbound authorization | `mcp.json` (`url`) | The Gateway's own |
   | A REST call or two | A skill with a script (`curl`, Python) | `skills/` | The variable the script reads |
 
-- A context can carry any of these, so a team declares a service once and its agents use it (§3.6).
+- A context carries the declared ones, the environment a CLI needs and MCP servers, so a team declares a service once
+  and its agents use it; a skill or a code tool stays in each agent's definition (§3.6).
 - `fastagent info` lists every connector in one place, with the context it comes from: the MCP servers, the code tools
   with the secrets they declare, and what the environment installs.
 - An MCP connection lives as long as the process or the conversation, not one turn, which is #678.
@@ -848,7 +888,8 @@ my-agent/
                                               or an image
   content/<name>/                             the clone of each declared repository with no checkout bound
                                               here, or a mount; never in git
-  .contexts/<name>/                           the contexts it uses, fetched at their pinned versions; never in git
+  .contexts/<name>/                           the contexts it uses, fetched at their ref; never in git, built
+                                              into the image
   .secrets/                                   values and grants, never in git
   .state/                                     the service's state, never in git; where it lives is the deployment's
     sessions/<time>_<id>.jsonl                  each session's record: an append-only log of entries (§3.5)
@@ -880,18 +921,18 @@ code tools defined in code beside `tools/`. Code stays code (`tools/`, `channels
   export a tool that does not is no longer refused: the tool is missing from the startup report and `fastagent info`,
   which list every tool with its file.
 
-`context.json` is JSON, like `mcp.json`, `models.json` and `package.json`, with a JSON Schema for editors. It holds
-the contexts the agent uses, by source (§3.6), its own content, by name, and its environment (§4). A content entry is
-a few fields and one sentence for the agent, the size the ecosystem keeps in a manifest (`.gitmodules`, west's
+`context.json` is JSON, like `mcp.json`, `models.json` and `package.json`, with a JSON Schema for editors. It holds the
+contexts the agent uses, by name and repository (§3.6), its own content, by name, and its environment (§4). A content
+entry is a few fields and one sentence for the agent, the size the ecosystem keeps in a manifest (`.gitmodules`, west's
 `west.yml`, `mcp.json`); and JSON reads `ref: 1.10` as the string it is, where YAML reads the number 1.1. A context's
-own `context.json` holds its content, its environment and a description.
+own `context.json` holds its content, its environment and a description, and no contexts.
 
 ```json
 {
   "$schema": "https://fastagent.sh/schema/context.json",
   "contexts": {
-    "acme-github": "git:github.com/acme/github-context@v1.4.0",
-    "billing": "npm:@acme/billing-context@2.0.1"
+    "acme-github": { "github": "acme/github-context" },
+    "billing": { "github": "acme/billing-context", "ref": "main" }
   },
   "content": {
     "app": { "github": "acme/app", "ref": "main", "description": "The product's repository. Open pull requests against main." },
@@ -923,9 +964,9 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/update/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` builds the contexts the agent uses into the image; the image already installs the environment (§4) |
+| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` fetches the contexts the agent uses and builds them into the image (§3.6); the image already installs the environment (§4) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 Channels, schedules and wake-ups
@@ -1114,7 +1155,7 @@ router in front (§7.8).
 | `.state/` | The service's state: session records, schedule claims, wake-ups, channel state | Not in git; where the deployment puts it (§10.2) |
 | `context.local.json` | This machine's directories the agent is bound to: its checkouts, and directories only it has | Not in git; never in an image |
 | `content/<name>/` | The clone of each declared repository, or a mount | Not in git; on a host, a link into the host's storage |
-| `.contexts/<name>/` | The contexts the agent uses, fetched at their pinned versions | Not in git; built into the image |
+| `.contexts/<name>/` | The contexts the agent uses, fetched at their `ref` | Not in git; fetched by each deploy and built into the image |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
@@ -1135,7 +1176,7 @@ trigger. No further concept is needed.
 
 ### 10.1 What a deploy builds
 
-An image holds the base runtime, the environment (§4), the definition, the contexts it uses at their pinned versions
+An image holds the base runtime, the environment (§4), the definition, the contexts it uses as the deploy fetched them
 (§3.6), and a release manifest; the agent's dependencies are installed on the host's storage. It holds no credential,
 no state and no content: values reach the box through the host's secret store, grants are made on the box
 (`login --deployment`), and content is cloned there at start, which preflight checks.
@@ -1181,7 +1222,7 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 |---|---|---|
 | Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Joined with the contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a shared unit of content, connectors, environment, skills and code tools, referenced by source and pinned (§3.6, §8.1) |
+| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, used as its `ref` is now and built into the image by each deploy (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1213,8 +1254,8 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
-| 3 | Declarations as files: `mcp.json` (#678); `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
-| 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it |
+| 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
+| 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |
@@ -1237,7 +1278,8 @@ Each is settled when the step that needs it is built (§12).
    the mapping only); which missing features it gains (skills, prompt templates, images in `read`) and which stay
    pi-coding-agent's (extensions, MCP, codemode, `chat`).
 5. What the port adds for a harness whose runs continue after a restart (`durableRuns`); harnesses may differ.
-6. Content kinds beyond git repositories and directories, such as an S3 bucket synced to files.
+6. Content kinds, and context sources, beyond GitHub repositories and this machine's directories: another git host,
+   npm for a context, an S3 bucket synced to files.
 7. Acting as the member who asked (§6.3), with permissions.
 
 ## 14. Decisions made in review
@@ -1254,10 +1296,12 @@ The product and the model:
   runs), connectors (the other systems it reaches, through MCP, APIs and their credentials) and environment (what it
   runs in). The data kind is called content, so that *context* means only the whole. The test in §3.2 separates
   content from connectors.
-- A context is the unit of sharing: a named unit of content, connectors and environment, with the skills and code
-  tools that go with them. An agent is shared as its definition, and what it works with a context at a time. A
-  context is referenced as a pi package is (git with a ref, npm with a version, a local path), pinned, and moved only
-  by `fastagent context update`; a name two contexts declare refuses the start; contexts do not nest (§3.6).
+- A context is the unit of sharing: a GitHub repository whose `context.json` declares content, environment and, with
+  MCP, connectors, never skills, tools or instructions, which are each agent's definition. An agent is shared as its
+  definition, and what it works with a context at a time. An agent names each context's repository and `ref`; nothing
+  is locked: where the agent is developed each start fetches the context as its `ref` is then, and each deploy fetches
+  it and builds it into the image, so a box never fetches one. The declarations are joined, a name declared twice
+  refuses the start, and contexts do not nest (§3.6).
 - The environment is declared in FastAgent's own format, under `environment` in `context.json`: `packages` by mise's
   names, `aptPackages` for the image, and `variables`, the names of the variables its commands read, whose values come
   from the environment as a tool's secrets do. mise, the agent's own (an optional npm dependency per platform), installs
@@ -1357,7 +1401,8 @@ The architecture and deployment:
   the session storage until scaling out moves it to API storage; no EFS stopgap (§10.2).
 - Evaluation comes later.
 - The order: finish this design; rename engine to harness, in a refactor of its own; upgrade to pi 1.1.0; then
-  declarations as files, with MCP (#678); then the serving protocol. The update loop and evaluation come later (§12).
+  declarations as files; then the serving protocol, with MCP, whose connections must outlive one turn (#678). The
+  update loop and evaluation come later (§12).
 - Removed or deferred after a first-principles review, because nothing needs them yet: a ledger of invocations; a
   structured `result`, with which `completed.data`, which no harness produces, goes too; the environment's secrets
   and content's needs; the host-identity credential, and commands to add or remove connectors.
