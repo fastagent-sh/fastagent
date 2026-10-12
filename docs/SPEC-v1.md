@@ -89,8 +89,11 @@ interface ModelDescriptor { spec: string; name?: string; thinkingLevels: string[
 interface AgentCommand { name: string; description?: string; source: string }
 ```
 
-Every operation that returns a `Promise` resolves, and failures are values, not rejections; the one exception is
-`sessions.list` (§5). Every event, entry and result MUST be JSON-serializable.
+Every operation that returns a `Promise` resolves, and failures are values, not rejections. The exception is the reads
+whose answer has no failure branch: `sessions.list`, `runs.get`, `attachment`, `models` and `commands` MAY reject with
+an `AgentError` of code `unavailable` when the Agent's storage cannot answer, because an empty list or `undefined`
+would be a false answer (`runs.get` answering `undefined` says the run was never accepted). Over HTTP the rejection is
+`503` with `{ "error": AgentError }`. Every event, entry and result MUST be JSON-serializable.
 
 ## 3. Invoke
 
@@ -249,10 +252,11 @@ type AbortResult =
   starts with the source's history up to `entryId`, or all of it. A fork copies history, not runs, and copies only
   recorded entries when the source is running. An existing `sessionId` answers `conflict`, an unknown fork source
   `not_found`, and a fork without `capabilities.fork` `unsupported`.
-- **`sessions.list`** returns every session the Agent holds. It MAY reject, with an `AgentError` of code
-  `unavailable`, because an empty list would claim there are none.
-- **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first. `next` and
-  `prev` are the cursors of the adjacent pages, absent at either end. `limit: 0` returns the state alone.
+- **`sessions.list`** returns every session the Agent holds, or rejects with `unavailable` (§2).
+- **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first within the page.
+  Without a cursor it returns the newest page, so a client opening a session reads the latest entries and then follows
+  from the last one. `next` and `prev` are the cursors of the adjacent pages, absent at either end. `limit: 0` returns
+  the state alone.
 - **`follow`** returns the entries after the cursor (from the beginning without one), then live events, without a gap
   or a duplicate between the two.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
@@ -424,7 +428,7 @@ One executable suite, run against every harness in process and through the HTTP 
 | Idempotency | A key seen while queued, running and done returns the same run, `duplicate`, and no second `user_message`; concurrent invokes with one key make one run; an `interrupted` run's key starts a new run, and `runs.get` by key returns it |
 | Runs | A detached run completes; `runs.follow` resumes from a cursor; `runs.cancel` stops a running run and withdraws a queued one while the rest run; `abort` stops all and reports it, and reports nothing on an idle session; the queue continues after a failed run |
 | Restart | A run accepted just before a restart is found by `runs.get`; a running run continues or is `interrupted` per `durableRuns`; queued runs survive or are `interrupted` per `durableQueue`; after a restart, `runs.follow` of an `interrupted` run ends with its `run_ended` without another invoke; no run is rerun (a tool's effect count does not grow) |
-| Reading | `read` pages by `after`, `before` and `limit`, and `limit: 0` returns the state; a run's entries carry its `runId` between its `run_started` and `run_ended`; `follow` and a reconnect from the last entry deliver each entry exactly once; an unknown session or cursor is `not_found`, a single `rejected` for a follow; state moves idle → running → idle |
+| Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a run's entries carry its `runId` between its `run_started` and `run_ended`; `follow` and a reconnect from the last entry deliver each entry exactly once; an unknown session or cursor is `not_found`, a single `rejected` for a follow; state moves idle → running → idle |
 | Sessions | `create` of an existing id is `conflict`; a fork holds the history up to its entry and none of the runs, and leaves the source unchanged; `rewind` keeps the earlier branch and is `busy` while running; `compact` on an empty history is `nothing_to_compact`; `update`, `delete` and `list` |
 | Portable | Two instances over one storage: the second sees the first's history of an idle session |
 
@@ -462,7 +466,10 @@ async function collect(events: AsyncIterable<InvokeEvent>): Promise<{ sessionId:
   let text = "";
   for await (const e of events) {
     if (e.type === "rejected") throw new AgentRejected(e.error);
-    if (e.type === "accepted") receipt = { sessionId: e.sessionId, runId: e.run.runId };
+    if (e.type === "accepted") {
+      receipt = { sessionId: e.sessionId, runId: e.run.runId };
+      if (e.run.status === "done") text = e.run.answer?.text ?? "";   // a duplicate of an ended run
+    }
     if (e.type !== "entry" || e.entry.runId !== receipt?.runId) continue;
     if (e.entry.kind === "assistant_message") text = (e.entry.data as { text: string }).text;
     if (e.entry.kind === "run_ended") {

@@ -651,7 +651,7 @@ type RunOutcome =
   | { status: "completed" }
   | { status: "max_tokens" }
   | { status: "intercepted" }    // a command or an extension took the message; no model was called
-  | { status: "interrupted" }    // the process stopped before it ended, running or queued; derived when read
+  | { status: "interrupted" }    // the process stopped before it ended, running or queued; written once on reopen (§9.3)
   | { status: "canceled"; by: "cancel" | "abort" | "delete" }   // includes a queued run withdrawn before it started
   | { status: "failed"; error: AgentError };
 
@@ -1175,6 +1175,7 @@ its current run, are held in memory: a queued run lost with them is still known,
 | The caller stops reading | Continues | Stays queued, and runs in its turn |
 | `runs.cancel` | Stops: `canceled` by `cancel` | Withdrawn: `canceled` by `cancel` |
 | `abort` | Stops: `canceled` by `abort` | Withdrawn: `canceled` by `abort` |
+| `delete` | Stops: `canceled` by `delete` | Withdrawn: `canceled` by `delete` |
 | The process stops: a restart or a deploy | Continues with `durableRuns`; otherwise ends `interrupted`, and what it recorded stays | Stays queued with `durableQueue`; otherwise ends `interrupted` without starting |
 
 The service never reruns a run on its own: its tools may already have had effects (§3.1, invariant 3). A caller that
@@ -1406,7 +1407,7 @@ The serving protocol:
 - `update` changes a session's name, model and thinking level, on the control plane, and creates nothing; moving the
   active branch is `rewind` (§7.4).
 - Run boundaries are entries in the session's log, so a run's status after the fact is read from the log, and
-  `interrupted` is derived when read (§7.3, §9.3).
+  an `interrupted` run's `run_ended` is written once, when the session is first opened after it stopped (§7.3, §9.3).
 - A thread forks at the answer of the run named by the nearest message of its reply chain: a message the channel
   posted for a run, which it records, or a user's message, by its idempotency key. When nothing names a run,
   including a post the agent made through a send tool, it forks at the chat's present; a post is never followed back
