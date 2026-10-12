@@ -793,10 +793,11 @@ says what each content entry becomes on the host: a `github` one is cloned there
 AgentCore, whose storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only
 reads (the agent directory) or work on it from a host (a repository). Git history ships when the host
 packer permits it, and the image installs Git when the agent directory contains `.git` or a content entry is `github`.
-The agent's `aptPackages` join the image's apt layer. With packages declared, the generated Dockerfile copies
-`context.json` and installs its packages with the agent's own mise (`install --system`, the packages read from
-`context.json` in the image, so a package change is no Dockerfile change), between the dependency install and
-`COPY . .`, so the layer is rebuilt only when `context.json` or the dependencies change. The packages go to mise's
+The agent's `aptPackages` join the image's apt layer. With packages declared, deploy writes `fastagent.packages`
+(build output beside the release manifest, `BUILD_OUTPUTS`: rewritten every deploy, never kept or stale), one package
+per line as mise is given it (`packageSpecs`), and the generated Dockerfile copies it and installs what it lists with
+the agent's own mise (`install --system`), between the dependency install and `COPY . .`, so the layer is rebuilt only
+when the packages or the dependencies change, and a package change is no Dockerfile change. The packages go to mise's
 system directory, which `mise where` finds, so a deployed start installs nothing; it points `MISE_DATA_DIR` at
 `.state/mise/` on the storage (`prepareStartWorkspace`). Preflight (`deploy/preflight.ts` `checkEnvironment`) checks
 the packages as `fastagent env` does, installs nothing here, and gates `--run` when

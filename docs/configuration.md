@@ -391,8 +391,8 @@ installed is kept, so a start needs no network. `fastagent env install` installs
 A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
 
-The image installs every declared package when it is built, at the newest release then, in a layer cached while
-`context.json` does not change; a deployed agent runs on those and installs nothing at start. So the image may run a
+The image installs every declared package when it is built, at the newest release then, in a layer cached while the
+packages do not change; a deployed agent runs on those and installs nothing at start. So the image may run a
 newer release than your machine, and a rollback installs the releases of the day it is built again, not those of the
 image it replaces.
 

@@ -657,7 +657,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const checked = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
     expect(checked.ok).toBe(true);
     if (checked.ok) {
-      expect(checked.container.environment).toBe(true);
+      expect(checked.container.packages).toEqual(["jq@1.8.1"]);
       // mise downloads over TLS (the slim image has no CAs); the agent's own apt packages join the one layer.
       expect(checked.container.apt).toEqual(["ca-certificates", "chromium", "git"]);
     }
@@ -665,7 +665,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(await runs()).toBe("tool jq --json\n");
     await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { aptPackages: ["chromium"] } }));
     const none = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(none.ok && none.container.environment).toBeUndefined();
+    expect(none.ok && none.container.packages).toBeUndefined();
   });
 
   it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {

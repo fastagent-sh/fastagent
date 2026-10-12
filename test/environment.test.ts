@@ -292,7 +292,7 @@ describe("environment: installed by the agent's own mise", () => {
   it("is given no configuration file, the packages as arguments, and prebuilt runtimes only, in the agent directory", async () => {
     const dir = await agentDir();
     const { bin, calls } = await fakeMise(dir);
-    await installPackages(dir, bin, { gh: "2", "npm:prettier": "3" }, "missing");
+    await installPackages(dir, bin, { gh: "2", "npm:prettier": "3" });
     const runs = await calls();
     expect(runs.map((call) => call.args).sort()).toEqual([
       "install gh@2 npm:prettier@3",
@@ -309,9 +309,9 @@ describe("environment: installed by the agent's own mise", () => {
     const dir = await agentDir();
     const { bin, calls } = await fakeMise(dir);
     vi.spyOn(log, "info").mockImplementation(() => {});
-    await installPackages(dir, bin, { gh: "2" }, "missing");
-    await installPackages(dir, bin, { gh: "2", jq: "1" }, "missing");
-    await installPackages(dir, bin, { gh: "2" }, "missing");
+    await installPackages(dir, bin, { gh: "2" });
+    await installPackages(dir, bin, { gh: "2", jq: "1" });
+    await installPackages(dir, bin, { gh: "2" });
     const installs = (await calls()).filter((call) => call.args.startsWith("install"));
     expect(installs.map((call) => call.args)).toEqual(["install gh@2", "install jq@1"]);
     // What is installed goes on the install's PATH, as a PyPI package needs its uv there; never as a package, which
@@ -321,8 +321,16 @@ describe("environment: installed by the agent's own mise", () => {
     // `all` asks mise for each again: a newer release where one is out.
     await installPackages(dir, bin, { gh: "2", jq: "1" }, "all");
     expect((await calls()).at(-1)?.args).toBe("install gh@2 jq@1");
+    // So does naming them, as `env add` does with what it adds: an install that matches may be another project's,
+    // older than the newest the version allows. What is installed and not named goes on the PATH.
+    await installPackages(dir, bin, { gh: "2", jq: "1" }, ["jq"]);
+    expect((await calls()).slice(-3).map((call) => call.args)).toEqual([
+      "where gh@2",
+      "env --json gh@2",
+      "install jq@1",
+    ]);
     process.env.FAKE_FAIL_INSTALL = "1";
-    await expect(installPackages(dir, bin, { jq: "99" }, "missing")).rejects.toThrow(
+    await expect(installPackages(dir, bin, { jq: "99" })).rejects.toThrow(
       "mise install jq@99 failed (exit 1): no version of jq matches 99",
     );
   });
@@ -336,10 +344,10 @@ describe("environment: installed by the agent's own mise", () => {
       written.push(String(chunk));
       return true;
     });
-    await installPackages(dir, bin, { gh: "2" }, "missing");
+    await installPackages(dir, bin, { gh: "2" });
     expect(written.join("")).toBe("mise gh@2 ✓ installed\n");
     process.env.FAKE_FAIL_INSTALL = "many";
-    await expect(installPackages(dir, bin, { jq: "99", yq: "0" }, "missing")).rejects.toThrow(
+    await expect(installPackages(dir, bin, { jq: "99", yq: "0" })).rejects.toThrow(
       "mise install jq@99 yq@0 failed (exit 1): Failed to install tools: jq@99 yq@0; " +
         "GET https://example.com/jq: 404 Not Found",
     );
@@ -505,9 +513,11 @@ describe("environment: `fastagent env`", () => {
     expect(apt.code, apt.stderr).toBe(0);
     expect(await declared(dir)).toEqual({ packages: { gh: "2", "npm:prettier": "3" }, aptPackages: ["chromium"] });
     expect((await calls()).length).toBe(before);
-    // Only what it adds, or declares at another version, is installed.
+    // What it adds, or declares at another version, is installed at the newest release, whatever matches here.
     expect((await cli(["env", "add", "gh@2", "jq@1"], dir)).code).toBe(0);
     expect((await calls()).at(-1)?.args).toBe("install jq@1");
+    expect((await cli(["env", "add", "jq@1", "gh@latest"], dir)).code).toBe(0);
+    expect((await calls()).at(-1)?.args).toBe("install gh@latest");
   });
 
   it("keeps the variables when it changes the packages", async () => {

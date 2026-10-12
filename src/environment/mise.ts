@@ -78,9 +78,14 @@ export const MISE_ENVIRONMENT: Readonly<Record<string, string>> = {
   MISE_ERLANG_COMPILE: "false",
 };
 
-/** What mise is given for `packages`: each as `name@version`. The image's layer spells it the same (container.ts). */
-function packageSpecs(packages: Record<string, string>): string[] {
-  return Object.entries(packages).map(([name, version]) => `${name}@${version}`);
+/** What mise is given for `packages`: each as `name@version`, here and in the image (container.ts). */
+export function packageSpecs(packages: Record<string, string>): string[] {
+  return Object.keys(packages).map((name) => specOf(name, packages));
+}
+
+/** How mise is given the package `name` of `packages`. */
+function specOf(name: string, packages: Record<string, string>): string {
+  return `${name}@${packages[name]}`;
 }
 
 /**
@@ -194,35 +199,43 @@ export async function checkPackages(
 }
 
 /**
- * Install `packages` here: the newest release each declared version allows. `"missing"` installs only those with no
- * install that matches yet, which `mise where` answers without the network: what a start runs, so an agent whose
- * packages are installed starts offline, and keeps the versions it has. `"all"` asks mise for each, which installs a
- * newer release where one is out (`fastagent env install`).
+ * Install `packages` here, each at the newest release its declared version allows. Those `newest` names (every one
+ * when it is `"all"`: `fastagent env install`) are given to mise whatever is installed, which installs a newer release
+ * where one is out; the rest only when nothing installed matches them, which `mise where` answers without the network,
+ * so a start whose packages are installed needs no network and keeps the versions it has. An install that matches may
+ * be another project's: mise's data directory is the machine's.
  */
 export async function installPackages(
   agentDir: string,
   bin: string,
   packages: Record<string, string>,
-  which: "missing" | "all",
+  newest: readonly string[] | "all" = [],
 ): Promise<void> {
-  const specs = packageSpecs(packages);
-  if (which === "all") return runInstall(agentDir, bin, specs, {});
+  const names = Object.keys(packages);
+  const asked = names.filter((name) => newest === "all" || newest.includes(name));
+  const others = names.filter((name) => !asked.includes(name));
   const installed = await Promise.all(
     // A failed `where` is what mise says of a package with no install here; the install that follows reports any other
     // reason it cannot be had.
-    specs.map((spec) =>
-      runMise(agentDir, bin, ["where", spec], { capture: true, quiet: true }).then(
+    others.map((name) =>
+      runMise(agentDir, bin, ["where", specOf(name, packages)], { capture: true, quiet: true }).then(
         () => true,
         () => false,
       ),
     ),
   );
-  const missing = specs.filter((_, i) => !installed[i]);
-  if (missing.length === 0) return;
-  const present = specs.filter((_, i) => installed[i]);
+  const present = new Set(others.filter((_, i) => installed[i]));
+  const wanted = names.filter((name) => !present.has(name)).map((name) => specOf(name, packages));
+  if (wanted.length === 0) return;
+  const installedSpecs = [...present].map((name) => specOf(name, packages));
   // A package installs with the ones it needs (a PyPI one runs uv), which mise finds in the packages it is given or on
   // the PATH. The installed ones go on the PATH: given as packages, mise would install a newer release of them.
-  await runInstall(agentDir, bin, missing, present.length > 0 ? await packagesEnvironment(agentDir, bin, present) : {});
+  await runInstall(
+    agentDir,
+    bin,
+    wanted,
+    installedSpecs.length > 0 ? await packagesEnvironment(agentDir, bin, installedSpecs) : {},
+  );
 }
 
 /** What `mise env` puts in a process's environment for `specs`: the PATH their commands are on. */
@@ -307,7 +320,7 @@ export async function enterEnvironment(agentDir: string): Promise<DeclaredEnviro
   if (Object.keys(packages).length === 0) return declared;
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
-  await installPackages(agentDir, bin, packages, "missing");
+  await installPackages(agentDir, bin, packages);
   Object.assign(process.env, await packagesEnvironment(agentDir, bin, packageSpecs(packages)));
   return declared;
 }

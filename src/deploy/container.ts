@@ -1,7 +1,16 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import { CONTENT_DIRNAME, CONTEXT_FILE, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
+import { CONTENT_DIRNAME, LOCAL_CONTEXT_FILE, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { DEPLOYED_DEFINITION_DIR, RELEASE_FILE, parseDeploymentRelease, type DeploymentRelease } from "./workspace.ts";
 import { MISE_ENVIRONMENT } from "../environment/mise.ts";
+
+/**
+ * The packages the image installs, one per line as mise is given them: build output every deploy writes beside the
+ * release manifest, so the layer that installs them is built again when they change and not when anything else does.
+ */
+const PACKAGES_FILE = "fastagent.packages";
+
+/** What every deploy writes whoever wrote it before: build output, by its file name, never kept or reported stale. */
+export const BUILD_OUTPUTS: readonly string[] = [RELEASE_FILE, PACKAGES_FILE];
 
 export interface Artifact {
   path: string;
@@ -91,8 +100,8 @@ export interface ContainerInput {
    * and curl for mise), then the agent's `aptPackages`.
    */
   apt?: string[];
-  /** Whether the agent declares packages: the image installs them, from `context.json`, with the agent's own mise. */
-  environment?: boolean;
+  /** The packages the agent declares, as mise is given them (`gh@2`): the image installs them with the agent's own mise. */
+  packages?: string[];
   /**
    * The model this deployment resolved, recorded in the release manifest — set only when the deployed environment's
    * VALUE FILE named it (a `config.model` needs nothing: the config ships too). The manifest is the carrier because
@@ -128,27 +137,24 @@ const BUILD_MISE_DIR = "/tmp/mise";
 
 /**
  * The layer that installs the agent's packages, after its dependencies (the agent's own mise among them) and before the
- * definition, so it stays cached while the definition changes and is built again when `context.json` is. The packages
- * go to mise's system directory (`--system`, /usr/local/share/mise/installs), which every mise reads beside its own
- * data directory, so a start installs nothing. The step reads them from `context.json` in the image and spells each
- * as mise.ts's `packageSpecs` does; a list written here would make every package change a Dockerfile change.
+ * definition, so it stays cached while the definition changes. It reads them from {@link PACKAGES_FILE}, which deploy
+ * writes, rather than listing them: the Dockerfile is kept once written, and a list here would make every package
+ * change one that `--run` stops on. The packages go to mise's system directory (`--system`,
+ * /usr/local/share/mise/installs), which every mise reads beside its own data directory, so a start installs nothing.
  */
-function environmentLayer(dir: string, runtime: "node" | "bun"): string {
+function environmentLayer(dir: string): string {
   const isolation = Object.entries(MISE_ENVIRONMENT)
     .map(([key, value]) => `${key}=${value}`)
     .join(" ");
   // The agent's own mise, by its package: the bin link is not reliable (mise.ts `miseBinary`).
   const mise = `${dir}/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise`;
-  const install =
-    `const packages = require("./${CONTEXT_FILE}").environment?.packages ?? {}; ` +
-    `require("node:child_process").execFileSync(process.env.MISE, ["install", "--system", ` +
-    `...Object.entries(packages).map(([name, version]) => name + "@" + version)], { stdio: "inherit" })`;
   const steps = [
     `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
-    `${runtime} -e '${install}'`,
+    // One argument per line, read as it is: no quote or backslash in a package means anything to xargs.
+    `xargs -d '\\n' -a ${PACKAGES_FILE} "$MISE" install --system`,
     `rm -rf ${BUILD_MISE_DIR}`,
   ];
-  return `COPY ${CONTEXT_FILE} ./
+  return `COPY ${PACKAGES_FILE} ./
 RUN ${steps.join(" \\\n && ")}
 `;
 }
@@ -174,7 +180,7 @@ COPY . .
 CMD ["fastagent", "start", "${dir}"]
 `;
   }
-  const environment = input.environment ? environmentLayer(dir, input.runtime === "bun" ? "bun" : "node") : "";
+  const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
   const note = isBun
@@ -250,6 +256,9 @@ export function containerArtifacts(input: ContainerInput): Artifact[] {
   parseDeploymentRelease(JSON.stringify(release));
   return [
     { path: RELEASE_FILE, content: `${JSON.stringify(release, null, 2)}\n` },
+    ...(input.packages && input.packages.length > 0
+      ? [{ path: PACKAGES_FILE, content: `${input.packages.join("\n")}\n` }]
+      : []),
     { path: "Dockerfile", content: dockerfile(input) },
     // Both names: BuildKit prefers the one beside the Dockerfile, the classic builder reads the context root's.
     { path: ".dockerignore", content: ignore },

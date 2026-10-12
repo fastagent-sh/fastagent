@@ -41,7 +41,7 @@ import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts
 import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
 import { CONTROL_PREFIX } from "../channels/control.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
-import { checkPackages, MISE_PACKAGE_NAMES, miseBinary } from "../environment/mise.ts";
+import { checkPackages, MISE_PACKAGE_NAMES, miseBinary, packageSpecs } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -468,7 +468,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     hasLockfile,
     version: await fastagentVersion(),
     apt,
-    ...(installsPackages ? { environment: true } : {}),
+    ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
     ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
     shipsGit,
   };

@@ -148,10 +148,11 @@ export async function runEnvExec(command: string[]): Promise<void> {
 }
 
 /**
- * Change the declaration with `change`, checked as a whole. What it declares that has no install here yet, a package it
- * adds or declares at another version among them, is checked and installed first, so a declared package is one that
- * installs; the declaration is then written under context.json's lock, `change` applied to it as it is by then, so
- * two edits at once keep both. `change` is therefore called twice, and computes alone.
+ * Change the declaration with `change`, checked as a whole. A package it adds or declares at another version is checked
+ * and installed first at the newest release its version allows, whatever older one this machine has, so a declared
+ * package is one that installs; what else it declares is installed when nothing here matches it. The declaration is
+ * then written under context.json's lock, `change` applied to it as it is by then, so two edits at once keep both.
+ * `change` is therefore called twice, and computes alone.
  */
 async function edit(
   agentDir: string,
@@ -160,8 +161,10 @@ async function edit(
   // Read whole, as the write that follows is: a refused content entry stops the edit before anything is installed.
   const current = readContextFile(agentDir).environment ?? NONE;
   const next = declareEnvironment(change(current)) ?? NONE;
-  const added = Object.keys(next.packages).some((name) => current.packages[name] !== next.packages[name]);
-  if (added) await installPackages(agentDir, await checkedMise(agentDir, next.packages), next.packages, "missing");
+  const added = Object.keys(next.packages).filter((name) => current.packages[name] !== next.packages[name]);
+  if (added.length > 0) {
+    await installPackages(agentDir, await checkedMise(agentDir, next.packages), next.packages, added);
+  }
   return writeEnvironment(agentDir, (now) => declareEnvironment(change(now ?? NONE)) ?? NONE);
 }
 

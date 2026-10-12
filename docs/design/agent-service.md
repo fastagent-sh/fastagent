@@ -292,9 +292,10 @@ platform. The author never writes mise's files.
   the agent (`dev`, `start`, `chat`, `invoke`, an embedder's `createAgentService`) and `tool` install what is missing
   and put the packages first on the `PATH` their commands inherit. A change to `context.json` restarts `dev`.
 - **The image installs every package when it is built.** It installs `aptPackages` in its apt layer, with what
-  FastAgent needs there (git, CA certificates, curl for rust), then copies `context.json` and runs
-  `mise install --system` of its packages, read from `context.json` in the image so that a package change is no
-  Dockerfile change, in a layer rebuilt only when `context.json` or the dependencies change. The tools go to mise's
+  FastAgent needs there (git, CA certificates, curl for rust), then copies `fastagent.packages`, the list every
+  deploy writes, and runs `mise install --system` of what it lists, in a layer rebuilt only when the packages or the
+  dependencies change. The Dockerfile reads the list rather than holding it, since a generated Dockerfile is kept once
+  written and a changed one stops `deploy --run`. The tools go to mise's
   system directory, which every mise reads beside its own data directory and `mise where` finds, so a start on a host
   downloads nothing. On a host, mise's data directory is on the storage (`.state/mise/`). AgentCore builds
   `linux/arm64`.

@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { containerArtifacts, imageHasGit } from "../src/deploy/container.ts";
@@ -54,22 +50,30 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
-  it("installs the packages context.json declares after the dependencies and before the definition", () => {
+  it("installs the packages deploy lists after the dependencies and before the definition", () => {
+    const artifacts = (i: Parameters<typeof containerArtifacts>[0]) => containerArtifacts(i);
     const dockerfile = (i: Parameters<typeof containerArtifacts>[0]) =>
-      containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
+      artifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(dockerfile(input)).not.toMatch(/mise/);
+    expect(artifacts(input).map((a) => a.path)).not.toContain("fastagent.packages");
+    const packages = ["gh@2", "npm:@biomejs/biome@latest"];
+    // The list is build output, one per line; the Dockerfile reads it, so a package change is no Dockerfile change.
+    expect(artifacts({ ...input, packages }).find((a) => a.path === "fastagent.packages")?.content).toBe(
+      "gh@2\nnpm:@biomejs/biome@latest\n",
+    );
+    expect(dockerfile({ ...input, packages })).toBe(dockerfile({ ...input, packages: ["jq@1"] }));
     for (const runtime of ["node", "bun"] as const) {
-      const text = dockerfile({ ...input, runtime, environment: true });
+      const text = dockerfile({ ...input, runtime, packages });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
-      // Cached while the definition changes: the layer sits between the install and `COPY . .`, built again when
-      // context.json is.
-      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY context.json ./\nRUN export "));
-      expect(text.indexOf("COPY context.json ./")).toBeLessThan(text.indexOf("COPY . ."));
+      // Cached while the definition changes, and built again when the packages do.
+      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY fastagent.packages ./\nRUN export "));
+      expect(text.indexOf("COPY fastagent.packages ./")).toBeLessThan(text.indexOf("COPY . ."));
       // In mise's system directory; the build's own mise directories are thrown away with the layer.
       expect(text).not.toContain("ENV MISE_DATA_DIR");
       expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
-      // The packages are read from context.json in the image, so a package change is no Dockerfile change.
-      expect(text).toMatch(new RegExp(`\\n && ${runtime} -e '[^']+' \\\\\\n && rm -rf /tmp/mise\\n`));
+      expect(text).toContain(
+        ` && xargs -d '\\n' -a fastagent.packages "$MISE" install --system \\\n && rm -rf /tmp/mise\n`,
+      );
       // The same isolation every run here has.
       expect(text).toContain(
         "MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml MISE_SYSTEM_CONFIG_FILE=/dev/null/none.toml " +
@@ -80,29 +84,6 @@ describe("deploy/container: shared Docker context", () => {
         'MISE="/app/definition/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',
       );
     }
-  });
-
-  it("the image's install step gives mise each package context.json declares, as name@version", async () => {
-    // Run as the image runs it: the step's script, in a directory holding context.json, with MISE a stand-in that
-    // records what it is given.
-    const text = containerArtifacts({ ...input, environment: true }).find((a) => a.path === "Dockerfile")!.content;
-    const script = text.match(/ && node -e '([^']+)'/)?.[1] as string;
-    const dir = await mkdtemp(join(tmpdir(), "fa-image-install-"));
-    await writeFile(
-      join(dir, "context.json"),
-      JSON.stringify({ environment: { packages: { gh: "2", "npm:@biomejs/biome": "latest" } } }),
-    );
-    const mise = join(dir, "mise");
-    await writeFile(mise, `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(dir, "argv")}"\n`);
-    await chmod(mise, 0o755);
-    execFileSync(process.execPath, ["-e", script], { cwd: dir, env: { ...process.env, MISE: mise } });
-    expect((await readFile(join(dir, "argv"), "utf8")).split("\n")).toEqual([
-      "install",
-      "--system",
-      "gh@2",
-      "npm:@biomejs/biome@latest",
-      "",
-    ]);
   });
 
   it("has git when FastAgent installs it or the agent declares it in aptPackages, both in the apt layer", () => {
