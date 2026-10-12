@@ -122,10 +122,11 @@ The first event is `accepted` or `rejected`.
 
 - **`rejected`** is the only event of an invoke that was not accepted. Nothing ran and nothing was recorded, so the
   same request MAY be sent again.
-- **`accepted`** names the session and the run. The events that follow are those of that run (every `SessionEvent`
-  whose `runId`, or whose entry's `runId`, is the run's), and MAY include `state` and `serving_error` events. The
-  stream ends after the run's `run_ended` entry. When the run had already ended (a duplicate, §3.3), that entry
-  follows the receipt directly.
+- **`accepted`** names the session and the run. What follows is `runs.follow(runId)` without a cursor: the entries
+  the run has recorded so far, from its `run_started`, then its live events (every `SessionEvent` whose `runId`, or
+  whose entry's `runId`, is the run's), and MAY include `state` and `serving_error` events. The stream ends after the
+  run's `run_ended` entry. So a duplicate or a steered message (§3.2, §3.3) sees the whole run, whether it is
+  queued, running or has ended.
 - A Caller that stops reading **detaches**: the run goes on, and the Caller can come back to it with `runs.get` and
   `runs.follow`. Stopping work is `runs.cancel`, `abort` or `delete` (§4.2).
 
@@ -220,8 +221,8 @@ invoke again with the message's key (§3.3).
 ### 4.2 Operations
 
 - **`runs.get`** returns a run by id or by key, or `undefined` (§3.4).
-- **`runs.follow`** is the session's events for one run, after an entry cursor: a Caller that lost its invoke stream
-  reattaches without following the whole session. It ends after the run's `run_ended` entry.
+- **`runs.follow`** is the session's events for one run, after an entry cursor, or from the run's first entry without
+  one: a Caller that lost its invoke stream reattaches without following the whole session. It ends after the run's `run_ended` entry.
 - **`runs.cancel`** withdraws a queued run or stops a running one; runs queued after it start as usual. A run that has
   ended answers `conflict`.
 
@@ -347,7 +348,7 @@ interface AgentInfo {
 | `conflict` | `sessions.create` of an existing id; `runs.cancel` of an ended run | 409 | false |
 | `busy` | Admission refused (`details.reason`: `running` with `runId`, `queue_full`, `capacity`); `rewind` or `compact` on a running session | 429 | true |
 | `missing_model` | Neither the session nor the agent sets a model | 422 | false |
-| `auth_required` | The model provider has no credential | 503 | false |
+| `auth_required` | The model provider has no credential | 422 | false |
 | `model_error` | The model call failed | 502 | by the provider's answer |
 | `nothing_to_compact` | `compact` with nothing to summarize | 409 | false |
 | `partial_update` | `update` wrote some fields, then failed; the only `ok: false` behind which durable work landed | 500 | false |
@@ -425,7 +426,7 @@ One executable suite, run against every harness in process and through the HTTP 
 |---|---|
 | Invoke | `accepted` first; the stream ends after the run's `run_ended` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session; iteration never throws; every event is JSON |
 | Busy | `queue` runs in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` joins the running run (or `unsupported`); an idle session starts a run for every mode; the 21st queued run is `queue_full`; the process cap is `capacity` |
-| Idempotency | A key seen while queued, running and done returns the same run, `duplicate`, and no second `user_message`; concurrent invokes with one key make one run; an `interrupted` run's key starts a new run, and `runs.get` by key returns it |
+| Idempotency | A key seen while queued, running and done returns the same run, `duplicate`, and no second `user_message`; a duplicate's stream replays the run from its `run_started`, so `collect` over it returns the same answer as over the first; concurrent invokes with one key make one run; an `interrupted` run's key starts a new run, and `runs.get` by key returns it |
 | Runs | A detached run completes; `runs.follow` resumes from a cursor; `runs.cancel` stops a running run and withdraws a queued one while the rest run; `abort` stops all and reports it, and reports nothing on an idle session; the queue continues after a failed run |
 | Restart | A run accepted just before a restart is found by `runs.get`; a running run continues or is `interrupted` per `durableRuns`; queued runs survive or are `interrupted` per `durableQueue`; after a restart, `runs.follow` of an `interrupted` run ends with its `run_ended` without another invoke; no run is rerun (a tool's effect count does not grow) |
 | Reading | `read` pages by `after`, `before` and `limit`, returns the newest page without a cursor, and `limit: 0` returns the state; a run's entries carry its `runId` between its `run_started` and `run_ended`; `follow` and a reconnect from the last entry deliver each entry exactly once; an unknown session or cursor is `not_found`, a single `rejected` for a follow; state moves idle → running → idle |
@@ -452,8 +453,10 @@ The operations are grouped by audience into planes, served separately so a gatew
 | `info`, `models`, `commands` | `GET /agent`, `GET /agent/models`, `GET /agent/commands` |
 | `update`, `delete` | `PATCH /control/sessions/{s}`, `DELETE /control/sessions/{s}` |
 
-A failed `Result` is answered with its code's status (§7.1) and `{ "error": AgentError }`. Authentication is not part
-of the protocol: it belongs to a gateway in front, or to middleware per plane.
+A failed `Result` is answered with its code's status (§7.1) and `{ "error": AgentError }`. `runs.get` answering
+`undefined` is `200` with the body `null`, because a `404` is also what any router answers for a path it does not
+know, and this answer decides whether a Caller sends again; `attachment` answering `undefined` is `404` with no body.
+Authentication is not part of the protocol: it belongs to a gateway in front, or to middleware per plane.
 
 ## 10. Consumption: streaming and buffered
 
@@ -466,10 +469,7 @@ async function collect(events: AsyncIterable<InvokeEvent>): Promise<{ sessionId:
   let text = "";
   for await (const e of events) {
     if (e.type === "rejected") throw new AgentRejected(e.error);
-    if (e.type === "accepted") {
-      receipt = { sessionId: e.sessionId, runId: e.run.runId };
-      if (e.run.status === "done") text = e.run.answer?.text ?? "";   // a duplicate of an ended run
-    }
+    if (e.type === "accepted") receipt = { sessionId: e.sessionId, runId: e.run.runId };
     if (e.type !== "entry" || e.entry.runId !== receipt?.runId) continue;
     if (e.entry.kind === "assistant_message") text = (e.entry.data as { text: string }).text;
     if (e.entry.kind === "run_ended") {

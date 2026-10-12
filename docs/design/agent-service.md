@@ -594,7 +594,8 @@ type InvokeEvent =
 ```
 
 - **Accepted.** The first event names the session and the run. `joined` says the message was steered into the
-  running run; `duplicate` says the key had been seen, and `run` is that run as it is now. The run's events follow
+  running run; `duplicate` says the key had been seen, and `run` is that run as it is now. The run follows from
+  its first entry, so a duplicate or a steered message sees the whole run and `collect` over it gets the same answer
   (§7.5), and the stream ends after the run's `run_ended` entry. A caller that stops reading detaches: the run goes
   on, and the caller can come back to it (§7.3).
 - **Rejected.** The only event of an invoke that was not accepted: nothing ran and nothing was recorded, so it is safe
