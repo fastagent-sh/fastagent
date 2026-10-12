@@ -184,34 +184,58 @@ acme-github/                  a context: a GitHub repository
   mcp.json                    its MCP servers, with MCP (§5)
 ```
 
-- **A context declares what an agent works with, never how it works.** Its `context.json` is an agent's format, with
-  `content`, `environment` and a `description`: one line for the people who choose it, shown by `context list` and
-  `info` and never given to the model. `description` is a context's alone and `contexts` an agent's alone, each
-  refused where it means nothing. Nothing else in the repository is read: not its `AGENTS.md`, skills, tools,
-  prompts, extensions, channels or schedules. What the agent is told and what it knows how to do come from its own
+- **A context declares what an agent works with; it carries no prompt and no code the harness loads.** Its
+  `context.json` is an agent's format, with `content`, `environment` and a `description`: one line for the people who
+  choose it, shown by `context list` and `info` and never given to the model. `description` is a context's alone and
+  `contexts` an agent's alone, each refused where it means nothing. Besides `context.json` and, with MCP, `mcp.json`,
+  nothing in the repository is read: not its `AGENTS.md` or `SYSTEM.md`, skills, tools, prompts, extensions, channels
+  or schedules. A context still changes what the model sees, as any content and connector does: its content entries
+  are named in the prompt with their `description`, and its MCP servers bring tools with theirs. What it cannot do is
+  tell the agent who it is, teach it a method, or run code inside its harness: those come from the agent's own
   directory, as with content (agent model §2). A skill that teaches a context's CLI therefore lives in each agent that
   uses it (`fastagent add skill` vendors one from a repository), or on the machine.
   - Considered: a context that brings skills and code tools, as Claude Code plugins, Gemini CLI extensions and Codex
     plugins bundle skills with MCP servers. A context would then be part of every agent's definition, written
-    elsewhere: a change to it would change how agents behave, from a repository their authors do not hold.
+    elsewhere: its instructions and its code would run as the agent's own, from a repository the agent's author does
+    not hold.
 - **An agent lists the contexts it uses** in its own `context.json` (§8.1), each by name with its GitHub repository
-  and an optional `ref` (a branch, tag or commit; the default branch without one), the way a content entry names its
-  repository. A context lists none: nesting would make an agent's world a dependency graph, which nothing needs.
-- **A context is used as its `ref` is now, and nothing is locked**, as the environment's packages are not (§4). Where
-  the agent is developed, a process that runs it fetches each context into `.contexts/<name>/`, never in git, at each
-  start: the commit `ref` names then. When GitHub cannot be reached, it runs on the copy it has and says so; a first
-  fetch that fails stops the start. The copy is FastAgent's, and nothing writes in it. `fastagent context add`
-  fetches a context and checks it before declaring it.
-  - Considered: pinning each context to a commit in a committed lock that `fastagent context update` moves, as GitHub
+  and an optional `ref`, the way a content entry names its repository. A context lists none: nesting would make an
+  agent's world a dependency graph, which nothing needs.
+- **A context is used as its `ref` names it, and is locked only when its `ref` is a commit.** `ref` is a branch, a tag
+  or a full commit; without one, the default branch. A branch or a tag follows the context, as the environment's
+  packages follow their versions (§4); a full commit pins it, and moving it is an edit of `context.json`, reviewed like
+  any. Each context is fetched into `.contexts/<name>/`, never in git; the copy is FastAgent's, and nothing writes in
+  it.
+  - The commands that develop the agent (`dev`, `chat`, `invoke`, `tool`, `env exec`) bring each context to its `ref`
+    at start. When GitHub cannot be reached they run on the copy they have and say so; a context never fetched stops
+    the start.
+  - `fastagent context add`, `fastagent context fetch` and `deploy` fetch every context they need, and fail when one
+    cannot be fetched: none goes on with an older copy.
+  - What serves the agent in production never fetches: `start`, a deployed box, an embedder's `createAgentService`.
+    Each runs on `.contexts/` as it is, and refuses to start, naming the context and `fastagent context fetch`, when
+    one is missing. A host started by hand runs `fastagent context fetch` before `start`, as it runs `npm install`.
+  - What only reports (`info`, `context list`, `env list`) fetches nothing, and says when a context is not fetched
+    yet.
+- **Following a context has costs, and pinning is how an agent avoids them.** A context's packages and, with MCP, a
+  local server's command are code it makes every machine run. A push to a followed context's `ref` reaches each
+  developer's next start and the next deploy, which checks that the joined declarations hold (a value for each
+  variable, packages FastAgent installs) and reviews nothing. A change can stop every agent that follows the context:
+  a content name another declaration already has, a package at another version than the agent's. A rollback rebuilt
+  from an earlier commit uses each context as its `ref` names it then: a pinned one comes back, a followed one does
+  not, as with packages (§4). So an agent pins a context its team does not control.
+  - Considered: a lock for every context, a committed file that `fastagent context update` moves, as GitHub
     recommends pinning a third-party action to its full commit because a tag can be moved (the
-    `tj-actions/changed-files` compromise). A context is declarations, not code that runs; reproducing an agent's world
-    to the commit is software packaging's guarantee, which an agent does not need (§4); and every change to a context
-    reaches a deployed agent only through a deploy, which checks it (below).
+    `tj-actions/changed-files` compromise). A full commit in `ref` is that lock, for the contexts that need one,
+    without a second file or command. Reproducing every context to the commit by default is software packaging's
+    guarantee, which an agent does not need (§4).
 - **A deploy builds each context into the image, and a deployed box never fetches one.** `deploy` fetches every
-  context on the machine that runs it, with that machine's git credentials, checks the joined declarations as it
-  checks the agent's own (a variable with no value, a package FastAgent refuses), and ships `.contexts/` in the build
-  context. A box reads its copy there. Railway uploads what git does not ignore, so a Railway deploy uploads with
-  `railway up --no-gitignore` and a generated `.railwayignore` that holds the `.dockerignore`'s rules.
+  context on the machine that runs it, with that machine's git credentials, and stops when one cannot be fetched. It
+  checks the joined declarations as it checks the agent's own and ships `.contexts/` in the build context, which the
+  generated `.dockerignore` leaves in. A box reads its copy there. `init`'s `.gitignore` keeps `.contexts/` out of
+  git, and Railway uploads only what git does not ignore, so a Railway deploy also writes a `.railwayignore` that
+  re-includes it (`!/.contexts/`). The Railway CLI reads that file over the `.gitignore` (its upload walker takes
+  `.railwayignore` as a custom ignore file, which outranks `.gitignore`, and skips every `.git` directory), so
+  nothing else it uploads changes.
   - Considered: fetching on the box at each start, as content is cloned there. A change its author makes would reach
     every deployed agent at its next cold start without a deploy's checks, and stop it: a new variable with no value
     there, a private repository the host's token cannot read. Every cold start would also need the network and a
@@ -231,12 +255,12 @@ acme-github/                  a context: a GitHub repository
 - **A context is a repository, because it is shared.** A local directory cannot be shared: a context's author tries a
   change on a branch, named by `ref`, before merging it. Other git hosts, and npm, can be added as sources the way
   content kinds are (§13).
-- **The commands.** `fastagent context add github:owner/repo [--name <name>] [--ref <ref>]` fetches the context,
-  checks that it joins the agent's declarations, installs its packages here as `fastagent env add` does, and declares
-  it. `context list` shows each context with its description, repository, `ref`, the commit fetched and what it brings.
-  `context remove <name>` drops it and its copy. `fastagent env` and `fastagent content` edit the agent's own
-  declarations: `env remove gh` for a context's `gh` is refused, naming the context. `fastagent info` lists every
-  entry with the context it comes from.
+- **The commands.** `fastagent context add github:owner/repo [--name <name>] [--ref <ref>]` fetches the context, checks
+  that it joins the agent's declarations, installs its packages here as `fastagent env add` does, and declares it.
+  `context list` shows each context with its description, repository, `ref`, the commit fetched and what it brings.
+  `context fetch` brings every context to its `ref` here. `context remove <name>` drops it and its copy. `fastagent env`
+  and `fastagent content` edit the agent's own declarations: `env remove gh` for a context's `gh` is refused, naming the
+  context. `fastagent info` lists every entry with the context it comes from.
 
 ## 4. The environment is declared, for every platform
 
@@ -964,7 +988,7 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/remove` edit the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
+| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/fetch/remove` edit and fetch the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
 | Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` fetches the contexts the agent uses and builds them into the image (§3.6); the image already installs the environment (§4) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
@@ -1297,11 +1321,12 @@ The product and the model:
   runs in). The data kind is called content, so that *context* means only the whole. The test in §3.2 separates
   content from connectors.
 - A context is the unit of sharing: a GitHub repository whose `context.json` declares content, environment and, with
-  MCP, connectors, never skills, tools or instructions, which are each agent's definition. An agent is shared as its
-  definition, and what it works with a context at a time. An agent names each context's repository and `ref`; nothing
-  is locked: where the agent is developed each start fetches the context as its `ref` is then, and each deploy fetches
-  it and builds it into the image, so a box never fetches one. The declarations are joined, a name declared twice
-  refuses the start, and contexts do not nest (§3.6).
+  MCP, connectors, and carries no prompt and no code the harness loads, which are each agent's definition. An agent is
+  shared as its definition, and what it works with a context at a time. An agent names each context's repository and
+  `ref`: a branch or a tag follows the context, a full commit pins it, and there is no other lock. The commands that
+  develop the agent fetch each context at start, `context fetch` and each deploy fetch it and fail when they cannot,
+  and production (`start`, a deployed box, an embedder) never fetches: a deploy builds the contexts into the image.
+  The declarations are joined, a name declared twice refuses the start, and contexts do not nest (§3.6).
 - The environment is declared in FastAgent's own format, under `environment` in `context.json`: `packages` by mise's
   names, `aptPackages` for the image, and `variables`, the names of the variables its commands read, whose values come
   from the environment as a tool's secrets do. mise, the agent's own (an optional npm dependency per platform), installs
