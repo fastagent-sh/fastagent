@@ -324,4 +324,4 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 The reader is a senior engineer with full project context. Lead with the conclusion, use tables for structured comparisons, skip obvious reasoning, do not restate, and do not add decorative formatting or meta-narration. Density check: if cutting half the text loses no information, cut it.
 
-Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes.
+Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes. The one exception is `docs/cn/`: Simplified Chinese explanations of English documents for maintainers. They are never normative; where one differs from its English source, the source wins, so a change to the source updates or deletes its explanation.
