@@ -538,6 +538,9 @@ same model independently. ACP is validated as a compatibility target in both dir
 the contract: its center is a person in an editor driving a local coding agent, and the parts this design needs most
 are still drafts.
 
+The normative text is [SPEC v1](../SPEC-v1.md) (§7.8); this section keeps the reasoning, and where the two differ the
+SPEC wins.
+
 ### 7.1 Concepts
 
 | Concept | Is | A user uses it to | Exposed as |
@@ -613,7 +616,9 @@ type InvokeEvent =
   layer and never reach a caller.
 - **Idempotency.** A key is unique within its session and requires `sessionId`: without one, every invoke creates a
   new session, and a retry could never match. A channel uses the platform's message id, a schedule its occurrence id.
-  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message. The one exception
+  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message. The key alone
+  identifies the message: a second invoke with it is not compared with the first, as pi-durable does not compare
+  its `requestId`'s submissions, and storing a hash to compare would buy a `conflict` no caller has needed. The one exception
   to "the same key returns the same run" is a run that ended `interrupted` (§7.3): an invoke with its key starts a new
   run for the message, which the key names from then on, and the receipt says `duplicate: false`.
 - **Source.** Channels, schedules and wake-ups name themselves in `source`, and the run records it. A remote caller
@@ -655,7 +660,7 @@ interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: n
 interface Session {
   runs: {
     get(key: { runId: string } | { idempotencyKey: string }): Promise<RunStatus | undefined>;
-    follow(runId: string, options?: { after?: string }): AsyncIterable<SessionEvent>;
+    follow(runId: string, options?: { after?: string }): AsyncIterable<FollowEvent>;
     cancel(runId: string): Promise<Result>;
   };
 }
@@ -667,7 +672,8 @@ interface Session {
 - `runs.cancel` withdraws a queued run, which ends `canceled` without starting, or stops a running one. Runs queued
   after it start as usual.
 - A session holds at most 20 queued runs, the cap a conversation's wake-ups already have, and a process caps its runs
-  in flight, queued and running together. Past either, and for `whenBusy: "reject"`, an invoke is rejected with
+  in flight, queued and running together (100 in the reference implementation: queued runs cost almost nothing, and
+  running ones bound the memory of a small host such as an AgentCore microVM). Past either, and for `whenBusy: "reject"`, an invoke is rejected with
   `busy`, whose `details.reason` says which: `running` (with the running `runId`), `queue_full` or `capacity`.
 - Acceptance is durable: before the receipt is sent, the run is recorded with its id, key and source (§9.3), and
   `run_started` and `run_ended` are entries in the session's log (§7.5). So a run's status after the fact is read from
@@ -697,8 +703,8 @@ interface Agent {
 interface Session {
   readonly sessionId: string;
   read(options?: { after?: string; before?: string; limit?: number }):
-    Promise<{ state: SessionState; entries: Entry[]; next?: string; prev?: string }>;
-  follow(options?: { after?: string }): AsyncIterable<SessionEvent>;
+    Promise<{ ok: true; state: SessionState; entries: Entry[]; next?: string; prev?: string } | { ok: false; error: AgentError }>;
+  follow(options?: { after?: string }): AsyncIterable<FollowEvent>;
   attachment(ref: string): Promise<Attachment | undefined>;
   abort(): Promise<AbortResult>;
   rewind(entryId: string): Promise<Result>;
@@ -722,6 +728,8 @@ interface SessionSummary {
   sessionId: string; name?: string; status: "idle" | "running";
   createdAt: number; updatedAt: number; preview?: string;
 }
+
+type FollowEvent = SessionEvent | { type: "rejected"; error: AgentError };
 
 type AbortResult =
   | { ok: true; stopped: { runId?: string; queued: string[]; compaction: boolean } }
@@ -796,7 +804,7 @@ interface AgentError {
 interface AgentInfo {
   protocolVersion: string;
   capabilities: {
-    steer: boolean; fork: boolean; compaction: boolean; delete: boolean;
+    steer: boolean; fork: boolean; rewind: boolean; compaction: boolean; delete: boolean;
     updatable: ("name" | "model" | "thinkingLevel")[];
     durableQueue: boolean;   // queued runs survive a restart
     durableRuns: boolean;    // a running run continues after a restart
@@ -807,7 +815,12 @@ interface AgentInfo {
 
 Codes: `invalid_request`, `unsupported`, `not_found`, `conflict`, `busy`, `missing_model`, `auth_required`,
 `model_error`, `nothing_to_compact`, `partial_update`, `unavailable`, `internal`. A harness may add codes under its
-own prefix; a client that meets an unknown code acts on `retryable`.
+own prefix; a client that meets an unknown code acts on `retryable`. SPEC v1 §7.1 gives each its HTTP status and
+`retryable`. `rewind` is a capability of its own because pi-durable has no call for it (§9.1).
+
+A `read` page holds at most 500 entries (100 by default) and may stop short of `limit`: the reference implementation
+ends a page at 4 MiB of JSON, since a tool result's text can be large even with images left as refs. A follow that
+cannot start (an unknown session or cursor) is a single `rejected`, as an invoke is.
 
 ### 7.7 Planes and HTTP
 
@@ -852,7 +865,10 @@ gateway in front, or turns `http.api` off when only its channels are used, since
 
 ### 7.8 SPEC changes (v1)
 
-`docs/SPEC.md` is rewritten as this protocol. Against v0.1:
+`docs/SPEC.md` is rewritten as this protocol: drafted in [SPEC-v1.md](../SPEC-v1.md), which replaces it when step 4
+ships, so the published SPEC keeps describing what the package implements until then. The harness port stays out of
+the SPEC: it is the implementation's contract, and a harness conforms by passing the SPEC's suite through it. Against
+v0.1:
 
 | Section | Change |
 |---|---|
@@ -1291,7 +1307,8 @@ Each is settled when the step that needs it is built (§12).
 1. How `context.json` names a content entry's credential (its shape for content is settled: entries by name, with
    `github`, `ref`, `readonly` and `description`, and no machine's path); where an MCP server's OAuth tokens live for
    a deployed agent.
-2. The final error codes, the cap on runs in flight, and the page limits of `read`.
+2. Settled in SPEC v1 §7: the error codes with their HTTP status and `retryable`, a process cap of 100 runs in
+   flight, and `read` pages of at most 500 entries (100 by default, 4 MiB).
 3. Scaling out on AgentCore: routing each message to its conversation's runtime session, an invoke by its body; a
    fork, which reads one session and creates another; a lease that holds across processes; how state is split by
    writer (each conversation's own, and what spans conversations: redelivery dedup, the session list, schedules);
@@ -1372,9 +1389,9 @@ The serving protocol:
 - A session is named by the caller or created by the service. `sessions.create` is the only way to fork, and a session
   that exists is a `conflict`; an invoke into an unknown session creates it empty (§7.2, §7.4).
 - A busy session: each invoke says what its message is (`whenBusy`: `queue` by default, `steer`, `reject`). A session
-  holds at most 20 queued runs, and a process caps its runs in flight (§7.2, §7.3).
-- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run, except
-  a run that ended `interrupted`, whose key starts a new run. The service never reruns on its own; a caller that owes
+  holds at most 20 queued runs, and a process caps its runs in flight at 100 (§7.2, §7.3).
+- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run, without
+  comparing the message, except a run that ended `interrupted`, whose key starts a new run. The service never reruns on its own; a caller that owes
   an answer decides to, so channels stay at-least-once (§7.2, §7.3).
 - A steered message joins the running run when it is accepted, and a run does not end while it holds one it has not
   taken, so the receipt never waits for the harness (§7.2).

@@ -10,7 +10,8 @@ The stable design center is the harness-neutral Agent Handler contract (`docs/SP
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The locked v0.1 Agent Handler contract, which the code implements. Do not change its semantics without an explicit decision. |
+| `docs/SPEC-v1.md` | The approved v1 draft that replaces it when step 4 of `docs/design/agent-service.md` ships. Implement toward it; change it only by explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |

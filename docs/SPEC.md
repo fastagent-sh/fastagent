@@ -9,6 +9,9 @@ updated: 2026-07-18
 
 # Agent Handler — Protocol Specification v0.1 (locked)
 
+> This is the protocol the package implements today. [v1](SPEC-v1.md) is drafted and replaces this file when it is
+> implemented.
+
 > A handler contract for the agent layer, analogous to Web fetch handlers: one function plus a small set of MUSTs so any **Caller** can drive any **Agent** without knowing its harness, model, wire protocol, or deployment shape.
 >
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is harness-neutral and does not depend on any implementation.
