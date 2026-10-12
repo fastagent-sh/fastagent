@@ -1,52 +1,27 @@
 /**
  * RUNNING an agent's environment with mise. The agent carries its own mise, as optional npm dependencies, one package
  * per platform of which npm installs only this machine's: the author installs nothing, and the image's `npm ci`
- * installs the same mise. mise only ever reads a configuration FastAgent renders from the declaration, never the
- * machine's mise configuration, an author's own `mise.toml` or a parent directory's.
+ * installs the same mise. mise is given the packages as arguments (`gh@2`), and never reads a configuration file: not
+ * the machine's, not an author's own `mise.toml`, not a parent directory's.
  *
- * `environment/` is the image's lock, committed: only the commands an author runs (`fastagent env`, `deploy`) write it,
- * and they replace it once a new lock is complete. A process that runs the agent installs from a copy of it, so it
- * follows the locked versions, resolves a package the lock does not cover yet, and writes nothing that is committed.
+ * Nothing is locked. Each place installs the newest release a declared version allows when it first needs a package,
+ * and keeps it: a process that runs the agent installs only what has no install matching it yet (the image installs
+ * every package when it is built), and `fastagent env install` installs the newest again.
  */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  rmdirSync,
-  rmSync,
-  statSync,
-} from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
-import lockfile from "proper-lockfile";
-import { parse, stringify } from "smol-toml";
-import { writeFileAtomic } from "../atomic-write.ts";
+import { dirname, join, resolve } from "node:path";
 import { loadEnvironment } from "../content/file.ts";
 import { log } from "../log.ts";
 import { detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { aptAdvice, missingAptPackages } from "./apt.ts";
 import {
   type DeclaredEnvironment,
-  ENVIRONMENT_DIR,
   type MissingRuntime,
   missingPythonRuntime,
   resolvedBackendRefusal,
   writtenBackend,
 } from "./declare.ts";
-
-/** In `environment/`: the configuration FastAgent renders, and the lock mise writes beside it. */
-const MISE_FILE = "mise.toml";
-const MISE_LOCK_FILE = "mise.lock";
-
-/** The committed lock, relative to the agent directory: what a `dev` worker restarts on. */
-export const ENVIRONMENT_LOCK = join(ENVIRONMENT_DIR, MISE_LOCK_FILE);
 
 /** mise's npm package for each platform it publishes one for, by Node's `${platform}-${arch}`. */
 const MISE_PACKAGES: Readonly<Record<string, string>> = {
@@ -58,9 +33,6 @@ const MISE_PACKAGES: Readonly<Record<string, string>> = {
 
 /** Every platform's package: an agent lists them all, so its lockfile has the image's too. */
 export const MISE_PACKAGE_NAMES: readonly string[] = Object.values(MISE_PACKAGES);
-
-/** The platforms the lock records: the ones an image is built for. */
-const LOCK_PLATFORMS = ["linux-x64", "linux-arm64"].join(",");
 
 /** A path no file can be at, for the mise configuration files an agent's environment must not read. */
 const NO_FILE = "/dev/null/none.toml";
@@ -89,39 +61,47 @@ export function miseBinary(agentDir: string): string | undefined {
 }
 
 /**
- * What every mise run on the configuration in `configDir` (a path no link leads through) is given: only that file is
- * read, and it is trusted, as running the agent already trusts its code. The same values go into the image. They are
- * given to these runs alone, never exported to the agent's processes: a mise the agent runs is the machine's.
+ * What every run of the agent's mise is given, here and in the image: no configuration file is read, so the packages
+ * are the arguments alone, and a runtime is installed from a prebuilt release or not at all (mise compiles python by
+ * default, and `all_compile`, already false, does not stop it). Given to these runs alone, never exported to the
+ * agent's processes: a mise the agent runs is the machine's.
  */
-export function isolationAt(configDir: string): Record<string, string> {
-  return {
-    // The file, not the directory: mise trusts by prefix.
-    MISE_TRUSTED_CONFIG_PATHS: join(configDir, MISE_FILE),
-    // mise does not read the ceiling directory itself: in the agent directory, an author's own mise.toml.
-    MISE_CEILING_PATHS: dirname(configDir),
-    MISE_GLOBAL_CONFIG_FILE: NO_FILE,
-    MISE_SYSTEM_CONFIG_FILE: NO_FILE,
-    MISE_OVERRIDE_CONFIG_FILENAMES: MISE_FILE,
-    MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES: "none",
-  };
+export const MISE_ENVIRONMENT: Readonly<Record<string, string>> = {
+  MISE_GLOBAL_CONFIG_FILE: NO_FILE,
+  MISE_SYSTEM_CONFIG_FILE: NO_FILE,
+  // A path, not a name: mise looks for a file of the name given here in every directory up to the root.
+  MISE_OVERRIDE_CONFIG_FILENAMES: NO_FILE,
+  MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES: NO_FILE,
+  MISE_PYTHON_COMPILE: "false",
+  MISE_NODE_COMPILE: "false",
+  MISE_RUBY_COMPILE: "false",
+  MISE_ERLANG_COMPILE: "false",
+};
+
+/** What mise is given for `packages`: each as `name@version`, here and in the image (container.ts). */
+export function packageSpecs(packages: Record<string, string>): string[] {
+  return Object.keys(packages).map((name) => specOf(name, packages));
+}
+
+/** How mise is given the package `name` of `packages`. */
+function specOf(name: string, packages: Record<string, string>): string {
+  return `${name}@${packages[name]}`;
 }
 
 /**
- * Run the agent's mise with `args` on the configuration in `configDir`, from there unless `cwd` says otherwise. Its
- * progress and errors go to this process's stderr; `capture` returns its stdout instead of passing it through, and
- * `quiet` keeps its stderr for the error, which then says what mise said.
+ * Run the agent's mise with `args` in `cwd`. Its errors go to this process's stderr unless `quiet` keeps them for
+ * the error, which then says what mise said; `capture` returns its stdout instead of passing it through.
  */
 function runMise(
-  configDir: string,
+  cwd: string,
   bin: string,
   args: readonly string[],
-  options: { capture?: boolean; quiet?: boolean; cwd?: string } = {},
+  options: { capture?: boolean; quiet?: boolean } = {},
 ): Promise<string> {
-  const realConfigDir = join(realpathSync(dirname(configDir)), basename(configDir));
   return new Promise((done, fail) => {
     const child = spawn(bin, args, {
-      cwd: options.cwd ?? configDir,
-      env: { ...process.env, ...isolationAt(realConfigDir) },
+      cwd,
+      env: { ...process.env, ...MISE_ENVIRONMENT },
       stdio: ["inherit", options.capture ? "pipe" : process.stderr, options.quiet ? "pipe" : "inherit"],
     });
     let stdout = "";
@@ -184,7 +164,7 @@ export async function ensureMise(agentDir: string): Promise<string> {
   return added;
 }
 
-/** What the packages need before they are locked: refusals, and a PyPI package's undeclared runtime. */
+/** What the packages need before they are installed: refusals, and a PyPI package's undeclared runtime. */
 export interface PackageCheck {
   /** Registry names that resolve to a backend FastAgent leaves out. */
   refusals: string[];
@@ -206,11 +186,7 @@ export async function checkPackages(
     Object.keys(packages).map(async (name) => {
       const written = writtenBackend(name);
       if (written) return void kinds.set(name, written);
-      const out = await runMise(join(agentDir, ENVIRONMENT_DIR), bin, ["tool", name, "--json"], {
-        capture: true,
-        quiet: true,
-        cwd: agentDir,
-      });
+      const out = await runMise(agentDir, bin, ["tool", name, "--json"], { capture: true, quiet: true });
       const backend = (JSON.parse(out) as { backend?: unknown }).backend;
       if (typeof backend !== "string") throw new Error(`mise tool ${name} --json reported no backend`);
       kinds.set(name, backend.split(":")[0] ?? backend);
@@ -223,202 +199,103 @@ export async function checkPackages(
 }
 
 /**
- * The first line of every configuration FastAgent renders: what marks `environment/` as FastAgent's. A directory of
- * that name without it is the author's: never read, written or removed.
+ * Install `packages` here, each at the newest release its declared version allows. Those `newest` names (every one
+ * when it is `"all"`: `fastagent env install`) are given to mise whatever is installed, which installs a newer release
+ * where one is out; the rest only when nothing installed matches them, which `mise where` answers without the network,
+ * so a start whose packages are installed needs no network and keeps the versions it has. An install that matches may
+ * be another project's: mise's data directory is the machine's.
  */
-const RENDERED_CONFIG_HEADER = `# Rendered by FastAgent from the "environment" of context.json: change that (fastagent env), not this file.\n`;
-
-/** The files FastAgent writes in `environment/`: all it replaces or removes there. */
-const RENDERED_ENTRIES = [MISE_FILE, MISE_LOCK_FILE, ".mise"] as const;
-
-/**
- * The configuration rendered from `packages`. Prebuilt runtimes only: one with no build for a platform fails there
- * rather than compiling, which mise does for python by default (and `all_compile`, already false, does not stop).
- */
-function renderConfig(packages: Record<string, string>): string {
-  const prebuilt = { compile: false };
-  return (
-    RENDERED_CONFIG_HEADER +
-    stringify({ settings: { python: prebuilt, ruby: prebuilt, node: prebuilt, erlang: prebuilt }, tools: packages })
+export async function installPackages(
+  agentDir: string,
+  bin: string,
+  packages: Record<string, string>,
+  newest: readonly string[] | "all" = [],
+): Promise<void> {
+  const names = Object.keys(packages);
+  const asked = names.filter((name) => newest === "all" || newest.includes(name));
+  const others = names.filter((name) => !asked.includes(name));
+  const installed = await Promise.all(
+    // A failed `where` is what mise says of a package with no install here; the install that follows reports any other
+    // reason it cannot be had.
+    others.map((name) =>
+      runMise(agentDir, bin, ["where", specOf(name, packages)], { capture: true, quiet: true }).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  const present = new Set(others.filter((_, i) => installed[i]));
+  const wanted = names.filter((name) => !present.has(name)).map((name) => specOf(name, packages));
+  if (wanted.length === 0) return;
+  const installedSpecs = [...present].map((name) => specOf(name, packages));
+  // A package installs with the ones it needs (a PyPI one runs uv), which mise finds in the packages it is given or on
+  // the PATH. The installed ones go on the PATH: given as packages, mise would install a newer release of them.
+  await runInstall(
+    agentDir,
+    bin,
+    wanted,
+    installedSpecs.length > 0 ? await packagesEnvironment(agentDir, bin, installedSpecs) : {},
   );
 }
 
-/**
- * Whether `environment/` holds anything, and whether FastAgent wrote it (its configuration starts with the header).
- * An empty directory holds nothing of anyone's.
- */
-function environmentDirState(agentDir: string): "absent" | "ours" | "foreign" {
-  const dir = join(agentDir, ENVIRONMENT_DIR);
-  if (!existsSync(dir) || (statSync(dir).isDirectory() && readdirSync(dir).length === 0)) return "absent";
-  try {
-    return readFileSync(join(dir, MISE_FILE), "utf8").startsWith(RENDERED_CONFIG_HEADER) ? "ours" : "foreign";
-  } catch (error) {
-    // ENOENT: a directory without FastAgent's configuration; ENOTDIR: a file of that name.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return "foreign";
-    throw error;
-  }
+/** What `mise env` puts in a process's environment for `specs`: the PATH their commands are on. */
+async function packagesEnvironment(agentDir: string, bin: string, specs: string[]): Promise<Record<string, string>> {
+  return JSON.parse(await runMise(agentDir, bin, ["env", "--json", ...specs], { capture: true })) as Record<
+    string,
+    string
+  >;
 }
 
 /**
- * A directory of its own, outside the agent's, holding the configuration rendered from `packages` and, when
- * `environment/` is FastAgent's, a copy of its lock: where every mise run that installs or locks happens, so nothing
- * there reaches `environment/` unless it is published. The caller removes it.
+ * The notice mise prints after installing a package no configuration file names, with the `mise use` it suggests: not
+ * the agent's way to a package, so it is not passed on.
  */
-function workingCopy(agentDir: string, packages: Record<string, string>): string {
-  const work = mkdtempSync(join(tmpdir(), "fastagent-environment-"));
-  const dir = join(agentDir, ENVIRONMENT_DIR);
-  if (environmentDirState(agentDir) === "ours") {
-    for (const entry of RENDERED_ENTRIES) {
-      if (existsSync(join(dir, entry))) cpSync(join(dir, entry), join(work, entry), { recursive: true });
-    }
-  }
-  writeFileAtomic(join(work, MISE_FILE), renderConfig(packages));
-  return work;
-}
-
-/** Run `use` on a {@link workingCopy}, removed afterwards whatever happens. */
-async function inWorkingCopy<T>(
-  agentDir: string,
-  packages: Record<string, string>,
-  use: (work: string) => Promise<T>,
-): Promise<T> {
-  const work = workingCopy(agentDir, packages);
-  try {
-    return await use(work);
-  } finally {
-    rmSync(work, { recursive: true, force: true });
-  }
-}
+const NOT_ACTIVATED = /installed but not activated|^To install and activate, run:|^\s+mise use /;
 
 /**
- * Install `packages` on this machine: the versions the lock records where it covers them, the newest the declared
- * version allows where it does not. Writes nothing in the agent directory.
+ * `mise install` of `specs`, with `env` added to its environment. Its progress is passed on to this process's stderr as
+ * it comes, so a runtime that takes minutes is seen to; a failure carries what mise said, every line of it, since
+ * mise names the packages on its first line and the reason (a 404, a proxy, a rate limit) on the lines after.
  */
-async function installHere(agentDir: string, packages: Record<string, string>, bin: string): Promise<void> {
-  await inWorkingCopy(agentDir, packages, (work) => runMise(work, bin, ["install"]));
-}
-
-/** The agent directories whose environment lock this async call chain holds: what makes it re-entrant. */
-const heldEnvironmentLocks = new AsyncLocalStorage<ReadonlySet<string>>();
-
-/**
- * Run `change` holding the agent's environment lock, waiting for whoever holds it: one change to `environment/` at a
- * time, from `fastagent env` and `deploy` alike, which would otherwise lock it over each other. The lock is the
- * directory proper-lockfile keeps beside it (`environment.lock`), refreshed while held, so a wait outlasts an install.
- * Re-entrant within one call chain: `fastagent env` holds it across its read and write of the declaration, and the lock
- * it makes in between takes it again.
- */
-export async function withEnvironmentLock<T>(agentDir: string, change: () => Promise<T>): Promise<T> {
-  const path = join(resolve(agentDir), ENVIRONMENT_DIR);
-  const held = heldEnvironmentLocks.getStore() ?? new Set<string>();
-  if (held.has(path)) return change();
-  let compromised: Error | undefined;
-  // `realpath: false`: environment/ may not exist yet.
-  const options = { realpath: false, stale: 30_000, onCompromised: (error: Error) => (compromised = error) };
-  const release = await lockfile.lock(path, options).catch(async (error: NodeJS.ErrnoException) => {
-    if (error.code !== "ELOCKED") throw error;
-    log.info("[fastagent] waiting for another change to this agent's environment to finish");
-    return lockfile.lock(path, { ...options, retries: { forever: true, minTimeout: 200, maxTimeout: 2_000 } });
-  });
-  let result: T;
-  try {
-    result = await heldEnvironmentLocks.run(new Set([...held, path]), change);
-  } catch (error) {
-    // The primary failure is the one to report; a lock that cannot be released cleanly then is secondary.
-    await release().catch(() => {});
-    throw error;
-  }
-  // A compromised lock cannot be released cleanly; that, not the release, is what to report.
-  await release().catch((error: unknown) => {
-    if (!compromised) throw error;
-  });
-  if (compromised) throw compromised;
-  return result;
-}
-
-/**
- * Lock `packages` into `environment/`, for the platforms an image is built for, and say whether that changed it. An
- * `environment/` FastAgent did not write is refused first, before `mise` (the agent's mise, asked for only when there
- * is something to lock) can add anything to the agent. The packages are installed here, in a copy of their own: that
- * proves they install, and a PyPI package's lock needs its uv installed. The lock is made in another copy, since an
- * install adds this machine's platform to the lock it reads, and keeps the version the lock records for a package
- * whose declared version is unchanged; `bump` names packages to resolve again to the newest their declared version
- * allows (every one when empty). `environment/` is replaced only once the lock is complete, so a failure or an
- * interrupt leaves it as it was. Without packages, it is {@link removeEnvironment}.
- */
-export async function lockEnvironment(
-  agentDir: string,
-  packages: Record<string, string>,
-  mise: () => Promise<string>,
-  bump?: readonly string[],
-): Promise<boolean> {
-  if (Object.keys(packages).length === 0) return removeEnvironment(agentDir);
-  return withEnvironmentLock(agentDir, async () => {
-    const refusal = foreignEnvironment(agentDir);
-    if (refusal) throw new Error(refusal);
-    const dir = join(agentDir, ENVIRONMENT_DIR);
-    const bin = await mise();
-    await installHere(agentDir, packages, bin);
-    const changed = await inWorkingCopy(agentDir, packages, async (work) => {
-      if (bump) await runMise(work, bin, ["lock", "--bump", ...bump, "--platform", LOCK_PLATFORMS]);
-      await runMise(work, bin, ["lock", "--platform", LOCK_PLATFORMS]);
-      return publish(work, dir);
+function runInstall(agentDir: string, bin: string, specs: string[], env: Record<string, string>): Promise<void> {
+  log.info(`[fastagent] installing the agent's packages: ${specs.join(", ")}`);
+  return new Promise((done, fail) => {
+    const child = spawn(bin, ["install", ...specs], {
+      cwd: agentDir,
+      env: { ...process.env, ...env, ...MISE_ENVIRONMENT },
+      stdio: ["inherit", process.stderr, "pipe"],
     });
-    // What was resolved again is installed here too, so `fastagent env update` proves it installs.
-    if (bump && changed) await installHere(agentDir, packages, bin);
-    return changed;
-  });
-}
-
-/** Replace FastAgent's files in `dir` with the working copy's, when they differ; whether they did. */
-function publish(work: string, dir: string): boolean {
-  if (existsSync(dir) && renderedContent(work) === renderedContent(dir)) return false;
-  if (existsSync(dir)) for (const entry of RENDERED_ENTRIES) rmSync(join(dir, entry), { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
-  for (const entry of RENDERED_ENTRIES) {
-    if (existsSync(join(work, entry))) cpSync(join(work, entry), join(dir, entry), { recursive: true });
-  }
-  return true;
-}
-
-/** FastAgent's files in `dir`, as one comparable string: each path, then its content. */
-function renderedContent(dir: string): string {
-  const files = RENDERED_ENTRIES.flatMap((entry) => {
-    const path = join(dir, entry);
-    if (!existsSync(path)) return [];
-    if (entry !== ".mise") return [entry];
-    return readdirSync(path, { recursive: true, withFileTypes: true })
-      .filter((found) => found.isFile())
-      .map((found) => join(found.parentPath.slice(dir.length + 1), found.name));
-  });
-  return files
-    .sort()
-    .map((file) => `${file}\0${readFileSync(join(dir, file), "utf8")}`)
-    .join("\0");
-}
-
-/** The refusal for an `environment/` FastAgent did not write, which packages cannot be locked over; or undefined. */
-export function foreignEnvironment(agentDir: string): string | undefined {
-  if (environmentDirState(agentDir) !== "foreign") return undefined;
-  return (
-    `${join(agentDir, ENVIRONMENT_DIR)} was not written by FastAgent (it holds no ${MISE_FILE} rendered from ` +
-    `context.json), and it is where the lock of the packages context.json declares goes — move it out of the agent ` +
-    `directory`
-  );
-}
-
-/**
- * Remove what FastAgent wrote in `environment/`, and the directory when that was all it held: what is left of the lock
- * once no package is declared. Whether there was anything to remove; an author's `environment/` is left alone.
- */
-export function removeEnvironment(agentDir: string): Promise<boolean> {
-  return withEnvironmentLock(agentDir, async () => {
-    if (environmentDirState(agentDir) !== "ours") return false;
-    const dir = join(agentDir, ENVIRONMENT_DIR);
-    for (const entry of RENDERED_ENTRIES) rmSync(join(dir, entry), { recursive: true, force: true });
-    if (readdirSync(dir).length === 0) rmdirSync(dir);
-    return true;
+    const said: string[] = [];
+    let partial = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      const lines = (partial + chunk).split("\n");
+      partial = lines.pop() ?? "";
+      for (const line of lines) {
+        if (NOT_ACTIVATED.test(line)) continue;
+        process.stderr.write(`${line}\n`);
+        said.push(line);
+      }
+    });
+    child.on("error", fail);
+    child.on("close", (code, signal) => {
+      if (partial !== "") said.push(partial);
+      if (code === 0) return done();
+      const reason = said
+        .slice(
+          Math.max(
+            0,
+            said.findIndex((line) => /\bERROR\b/.test(line)),
+          ),
+        )
+        .filter((line) => !/ERROR\s+(Version:|Run with --verbose)/.test(line))
+        .map((line) => line.replace(/^mise\s+ERROR\s+/, "").trim())
+        .filter((line) => line !== "");
+      fail(
+        new Error(
+          `mise install ${specs.join(" ")} failed (${signal ?? `exit ${code}`})${reason.length > 0 ? `: ${reason.join("; ")}` : ""}`,
+        ),
+      );
+    });
   });
 }
 
@@ -430,11 +307,10 @@ function missingMise(agentDir: string): Error {
 }
 
 /**
- * Enter the agent's environment, for a process that runs it: install the declared packages, at the versions the lock
- * records where it covers them, and put them first on this process's PATH, which every command the agent runs
- * inherits. It runs in a copy of the lock, so it never writes `environment/`, and never refuses one that lags the
- * declaration: `fastagent env` and `deploy` lock it. mise itself is not put on the PATH. An agent without packages
- * borrows the machine's commands. Apt packages are the image's to install; one missing here is said, with how.
+ * Enter the agent's environment, for a process that runs it: install the declared packages that have no install here
+ * yet, and put them first on this process's PATH, which every command the agent runs inherits. mise itself is not put
+ * on the PATH. An agent without packages borrows the machine's commands. Apt packages are the image's to install; one
+ * missing here is said, with how.
  */
 export async function enterEnvironment(agentDir: string): Promise<DeclaredEnvironment | undefined> {
   const declared = loadEnvironment(agentDir);
@@ -444,31 +320,7 @@ export async function enterEnvironment(agentDir: string): Promise<DeclaredEnviro
   if (Object.keys(packages).length === 0) return declared;
   const bin = miseBinary(agentDir);
   if (!bin) throw missingMise(agentDir);
-  const env = await inWorkingCopy(agentDir, packages, async (work) => {
-    await runMise(work, bin, ["install"]);
-    // The PATH names the installs in mise's data (or system) directory, not the copy, which goes after this.
-    return JSON.parse(await runMise(work, bin, ["env", "--json"], { capture: true })) as Record<string, string>;
-  });
-  Object.assign(process.env, env);
+  await installPackages(agentDir, bin, packages);
+  Object.assign(process.env, await packagesEnvironment(agentDir, bin, packageSpecs(packages)));
   return declared;
-}
-
-/** The version `environment/mise.lock` records for each package, for `fastagent env list` and `update`. */
-export function lockedVersions(agentDir: string): Map<string, string> {
-  // An author's `environment/` is not read: its mise.lock is not FastAgent's, or not a lock at all.
-  if (environmentDirState(agentDir) !== "ours") return new Map();
-  let text: string;
-  try {
-    text = readFileSync(join(agentDir, ENVIRONMENT_DIR, MISE_LOCK_FILE), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
-    throw error;
-  }
-  const tools = (parse(text).tools ?? {}) as Record<string, { version?: unknown }[]>;
-  return new Map(
-    Object.entries(tools).flatMap(([name, entries]) => {
-      const version = entries[0]?.version;
-      return typeof version === "string" ? [[name, version] as [string, string]] : [];
-    }),
-  );
 }

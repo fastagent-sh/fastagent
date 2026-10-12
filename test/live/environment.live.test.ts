@@ -1,32 +1,37 @@
 /**
  * `fastagent env` on the REAL mise: the agent's own, which the first `env add` puts into its package.json at the
  * newest version, so a mise release that changes any of these is caught here. The offline suite runs a stand-in that
- * does what each of these assumes; every one of them was first a guess that a run of mise overturned:
+ * does what each of these assumes; every one of them was first a guess that a run of mise answered:
  *
- * - mise does not read the ceiling directory itself, so an author's own mise.toml beside context.json is not read;
- * - `mise lock --platform linux-x64,linux-arm64` records those platforms alone, and twice is byte for byte the same;
- * - an install over a copy of the lock follows the versions it records, older than the newest one a declaration allows,
- *   and resolves what the lock lacks;
+ * - `mise install <tool>@<version>` installs from the arguments alone, so an author's own mise.toml is not read;
+ * - a version an install already matches is kept (`mise where jq@1` answers 1.7.1 while 1.8 is out), so a start has
+ *   nothing to install and needs no network, and `mise install jq@1` then installs the newest 1.x;
  * - `mise tool <name> --json` names the backend a registry name resolves to (`tokei` is cargo, `php` is vfox);
- * - `<runtime>.compile = false` refuses a runtime with no prebuilt build instead of compiling it (python by default);
- * - a PyPI package locks once its uv is installed.
+ * - `MISE_PYTHON_COMPILE=false` refuses a runtime with no prebuilt build instead of compiling it;
+ * - a PyPI package installs once the python and uv it declares are installed, given on its install's PATH alone (the
+ *   machine's own uv is not on it), whether `env add` adds it or a start finds it missing.
  *
- * Network only: no credential.
+ * Installs into a data directory of its own, never the machine's. Network only: no credential.
  */
-import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { delimiter, dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { isolationAt, miseBinary } from "../../src/environment/mise.ts";
 import { CLI, installSpec } from "./env.ts";
 
 let agentDir = "";
+let miseData = "";
 
-const fastagent = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> =>
+const fastagent = (
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> =>
   new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: agentDir });
+    const child = spawn(process.execPath, [CLI, ...args], {
+      cwd: agentDir,
+      env: { ...process.env, MISE_DATA_DIR: miseData, MISE_CACHE_DIR: join(miseData, "cache"), ...env },
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -34,26 +39,16 @@ const fastagent = (args: string[]): Promise<{ code: number | null; stdout: strin
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 
-const lock = () => readFile(join(agentDir, "environment", "mise.lock"), "utf8");
-
-/**
- * Leave `environment/` as an add made before `date` would have: the agent's own mise locks `jq` again, to the newest
- * version its declaration allows among those released before then, recording the same request.
- */
-async function lockJqAsOf(date: string): Promise<void> {
-  const environment = await realpath(join(agentDir, "environment"));
-  await promisify(execFile)(
-    miseBinary(agentDir) as string,
-    ["lock", "--bump", "jq", "--minimum-release-age", date, "--platform", "linux-x64,linux-arm64"],
-    { cwd: environment, env: { ...process.env, ...isolationAt(environment) } },
-  );
+/** Declare `packages` in context.json by hand, as an author's edit would. */
+async function declare(packages: Record<string, string>): Promise<void> {
+  const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
+  context.environment.packages = packages;
+  await writeFile(join(agentDir, "context.json"), JSON.stringify(context));
 }
-
-/** The version `environment/mise.lock` records for `jq`. */
-const lockedJq = async () => (await lock()).match(/\[\[tools\.jq\]\]\nversion = "([^"]+)"/)?.[1];
 
 beforeAll(async () => {
   agentDir = await mkdtemp(join(tmpdir(), "fa-live-env-"));
+  miseData = await mkdtemp(join(tmpdir(), "fa-live-env-mise-"));
   await writeFile(join(agentDir, "fastagent.config.ts"), "export default {};\n");
   await writeFile(
     join(agentDir, "package.json"),
@@ -64,50 +59,34 @@ beforeAll(async () => {
     }),
   );
   // The author's own, at another version: never read.
-  await writeFile(join(agentDir, "mise.toml"), `[tools]\njq = "1.7.1"\n`);
+  await writeFile(join(agentDir, "mise.toml"), `[tools]\njq = "1.6"\n`);
 });
 
 afterAll(async () => {
   await rm(agentDir, { recursive: true, force: true });
+  await rm(miseData, { recursive: true, force: true });
 });
 
 describe("fastagent env on the real mise", () => {
-  it("locks the image's platforms alone, from context.json and not the author's mise.toml", async () => {
-    const add = await fastagent(["env", "add", "jq@1.7", "npm:cowsay@1"]);
+  it("installs what context.json declares, and not the author's mise.toml", async () => {
+    const add = await fastagent(["env", "add", "jq@1.7.1", "npm:cowsay@1"]);
     expect(add.code, add.stderr).toBe(0);
-    const locked = await lock();
-    expect(locked).toMatch(/\[\[tools\.jq\]\]\nversion = "1\.7"\n/);
-    expect([...new Set(locked.match(/platforms\.[a-z0-9-]+/g))].sort()).toEqual([
-      "platforms.linux-arm64",
-      "platforms.linux-x64",
-    ]);
-    expect(locked).toContain(".mise/locks/npm-cowsay/");
+    const exec = await fastagent(["env", "exec", "--", "sh", "-c", "jq --version && cowsay --version"]);
+    expect(exec.code, exec.stderr).toBe(0);
+    expect(exec.stdout).toMatch(/^jq-1\.7\.1\n1\./);
   });
 
-  it("locks byte for byte the same when nothing changed", async () => {
-    const before = await lock();
+  it("keeps an install a version matches, so a start installs nothing; `env install` installs the newest", async () => {
+    // jq 1.7.1 is installed, and the newest 1.x is newer: a start keeps 1.7.1.
+    await declare({ jq: "1" });
+    const start = await fastagent(["env", "exec", "--", "jq", "--version"]);
+    expect(start.code, start.stderr).toBe(0);
+    expect(start.stdout).toBe("jq-1.7.1\n");
+    expect(start.stderr).not.toContain("installing the agent's packages");
     const install = await fastagent(["env", "install"]);
     expect(install.code, install.stderr).toBe(0);
-    expect(install.stderr).not.toContain("locked again");
-    expect(await lock()).toBe(before);
-  });
-
-  it("runs the version the lock records over the newest one, resolves what it lacks, and writes nothing", async () => {
-    // Declared "1": a lock made today records the newest 1.x, which is what a run would get without the lock.
-    const add = await fastagent(["env", "add", "jq@1"]);
-    expect(add.code, add.stderr).toBe(0);
-    expect(await lockedJq()).not.toBe("1.7.1");
-    // jq 1.7.1 was the newest 1.x at the start of 2024.
-    await lockJqAsOf("2024-01-01");
-    expect(await lockedJq()).toBe("1.7.1");
-    const before = await lock();
-    const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
-    context.environment.packages.yq = "4";
-    await writeFile(join(agentDir, "context.json"), JSON.stringify(context));
-    const exec = await fastagent(["env", "exec", "--", "sh", "-c", "jq --version && yq --version"]);
-    expect(exec.code, exec.stderr).toBe(0);
-    expect(exec.stdout).toMatch(/^jq-1\.7\.1\n.*yq.* version v4\./s);
-    expect(await lock()).toBe(before);
+    const after = await fastagent(["env", "exec", "--", "jq", "--version"]);
+    expect(after.stdout).toMatch(/^jq-1\.(?!7\.1\n)\d+(\.\d+)?\n$/);
   });
 
   it("refuses by the backend mise resolves a registry name to", async () => {
@@ -125,9 +104,19 @@ describe("fastagent env on the real mise", () => {
     expect(python.stderr).toMatch(/no precompiled python found/);
   });
 
-  it("locks a PyPI package once the uv it declares is installed", async () => {
-    const add = await fastagent(["env", "add", "python@3.12", "uv", "pypi:markitdown@0.1"]);
+  it("installs a PyPI package with the python and uv it declares, installed before it, on its PATH alone", async () => {
+    // Node's own directory and the system's: no uv of the machine's, which would hide a missing one.
+    const bare = { PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) };
+    const runtime = await fastagent(["env", "add", "python@3.12", "uv"], bare);
+    expect(runtime.code, runtime.stderr).toBe(0);
+    const add = await fastagent(["env", "add", "pypi:markitdown@0.1.7"], bare);
     expect(add.code, add.stderr).toBe(0);
-    expect(await lock()).toMatch(/\[\[tools\."pypi:markitdown"\]\]\nversion = "0\.1\.\d+"/);
+    // A start that finds only the PyPI package missing installs it the same way.
+    const context = JSON.parse(await readFile(join(agentDir, "context.json"), "utf8"));
+    context.environment.packages["pypi:markitdown"] = "0.1.8";
+    await writeFile(join(agentDir, "context.json"), JSON.stringify(context));
+    const exec = await fastagent(["env", "exec", "--", "markitdown", "--version"], bare);
+    expect(exec.code, exec.stderr).toBe(0);
+    expect(exec.stderr).toContain("installing the agent's packages: pypi:markitdown@0.1.8");
   });
 });

@@ -180,8 +180,8 @@ or reverse proxy.
   file; delete a file to hand it back.
 - `--tunnel` shapes only a newly generated Compose file. `--tunnel --run` against a kept file without a `tunnel`
   service stops before touching Docker.
-- The environment (`context.json`'s `environment`, locked in `environment/`) is installed by the generated
-  Dockerfile; a hand-written one installs it only if it says so, and `deploy` warns.
+- The environment (`context.json`'s `environment`) is installed by the generated Dockerfile; a hand-written one
+  installs it only if it says so, and `deploy` warns.
 - `--run` relies on the service named `agent` (and `tunnel`). Add other services, networks, volumes or ports freely.
 
 ## Fly.io
@@ -355,10 +355,10 @@ excludes. Each start publishes it onto persistent storage:
 └── .deployment/          # release and recovery metadata
 ```
 
-- Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json` (rewritten every time; do not
-  edit it). Restarting the same release keeps what the agent wrote in `definition/`; a new release replaces
-  `definition/` whole, so a change the agent made to itself, or a file it left there, lasts until the next release.
-  `.state/`, `.secrets/` and `content/` stay.
+- Every `fastagent deploy <host>` writes a new release id to `fastagent.release.json`, and the packages the image
+  installs to `fastagent.packages`, empty without any (both rewritten every time; do not edit them). Restarting the same
+  release keeps what the agent wrote in `definition/`; a new release replaces `definition/` whole, so a change the agent
+  made to itself, or a file it left there, lasts until the next release. `.state/`, `.secrets/` and `content/` stay.
 - Updates are staged and an interrupted one completes before the agent opens. A file lock at
   `.deployment/lock` excludes competing starters; do not delete it. Custom images need `flock`.
 - Storage an earlier FastAgent laid out holds the agent's workspace in `base/`; a start refuses it rather than leave
@@ -367,17 +367,17 @@ excludes. Each start publishes it onto persistent storage:
   dependency on the same version.
 - Markdown in the definition is read every turn; tools, channels and config need a restart.
 
-**The environment**: with [packages](configuration.md#environment) declared, the image copies `environment/`, the
-committed lock, and installs it with the agent's own mise in a layer that is rebuilt only when the environment or the
-dependencies change. The packages go to mise's system directory (`/usr/local/share/mise`), so a start on the host
-downloads nothing. The agent's `aptPackages` join the image's apt layer. `deploy` checks the packages as
-`fastagent env add` does and locks them again, which keeps every version already locked: when that changes
-`environment/` (`context.json` edited without it), it says so, for you to commit. `--run` stops when `package.json` does
-not list mise, when mise is not installed here to check the packages (run `fastagent env install`), on a package whose
-backend FastAgent refuses, or on a PyPI package without `python` and `uv` declared; without `--run`, these are warnings.
-Chromium with CJK fonts adds about 1 GB to the image. The [variables](configuration.md#environment) `context.json`
-declares are required like a tool's secrets: the runbook lists each with its description, and a deploy whose
-`.secrets/production/.env` has no value for one stops before it changes anything.
+**The environment**: with [packages](configuration.md#environment) declared, `deploy` lists them in
+`fastagent.packages`, and the image copies that file and installs each package at the newest release its version allows,
+with the agent's own mise, in a layer that is rebuilt only when the packages or the dependencies change. The packages go
+to mise's system directory (`/usr/local/share/mise`), so a start on the host downloads nothing. The agent's
+`aptPackages` join the image's apt layer. `deploy` checks the packages as `fastagent env add` does, and installs nothing
+here. `--run` stops when `package.json` does not list mise, when mise is not installed here to check the packages (run
+`fastagent env install`), on a package whose backend FastAgent refuses, or on a PyPI package without `python` and `uv`
+declared; without `--run`, these are warnings. Chromium with CJK fonts adds about 1 GB to the image. The
+[variables](configuration.md#environment) `context.json` declares are required like a tool's secrets: the runbook lists
+each with its description, and a deploy whose `.secrets/production/.env` has no value for one stops before it changes
+anything.
 
 **Artifacts** land in the agent directory: `Dockerfile`, `.dockerignore` and `Dockerfile.dockerignore` (the same
 rules; BuildKit prefers the one beside the Dockerfile), and `fastagent.compose.yml` / `fly.toml` /

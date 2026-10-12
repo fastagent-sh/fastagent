@@ -346,7 +346,7 @@ machine's `prompts/` for `chat`, or put a template that belongs to the agent in 
 
 An agent that declares no environment runs the commands of the machine it is on: `bash` finds whatever that `PATH`
 holds, and a deployed image has Node and git. The `environment` of `context.json` declares the commands the agent
-needs, installed on every machine that runs it and, at locked versions, in its image:
+needs, installed on every machine that runs it and in its image:
 
 ```json
 {
@@ -378,47 +378,43 @@ needs, installed on every machine that runs it and, at locked versions, in its i
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
   Names the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) cannot be declared.
 
-Change it with [`fastagent env`](cli.md#fastagent-env): `fastagent env add gh@2` installs the package, locks it, then
+Change it with [`fastagent env`](cli.md#fastagent-env): `fastagent env add gh@2` installs the package here, then
 declares it. The first change adds mise to the agent's `package.json`, as one optional dependency per platform at the
 newest version; the package manager installs only this machine's, and the lockfile pins it. mise publishes no package
 for Windows, so an agent that declares packages does not run there.
 
-**`environment/` is the image's lock.** `fastagent env add`, `remove`, `update` and `install`, and every `deploy`,
-write it from the declaration: mise's configuration and its lock, each package's version, download and checksum for
-linux-x64 and linux-arm64, with the dependency lock an npm or PyPI package keeps. Commit it, as you commit
-`package-lock.json`: every image built from a commit installs the same versions, and a rollback restores them. A
-version is resolved when a package is first locked and stays locked, `latest` included, until `fastagent env update`
-resolves it again; locking again keeps it, so a deploy that finds `context.json` edited by hand locks what changed and
-says so, for you to commit. The name is FastAgent's: a directory of your own named `environment/` is never read,
-written or removed, and `fastagent env` refuses to lock packages over it.
-
-`dev`, `start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the declared
-packages, at the versions the lock records where it has them and at the newest their declared version allows where it
-does not yet (a package added to `context.json` by hand), and put them first on the agent's `PATH`. They install from
-a copy of the lock, so they never write `environment/`, and never refuse one that lags the declaration. A change to
-`context.json` or to the lock restarts `dev`. A package is installed into mise's data directory on this machine
+**Nothing is locked.** A package is a release the agent uses, as a CLI you install on your own machine is: each place
+installs the newest release its declared version allows when it first needs the package, and keeps it. `dev`,
+`start`, `chat`, `invoke`, `tool` and an embedder's [`createAgentService`](embedding.md) install the declared
+packages that have no install matching them here yet, and put them first on the agent's `PATH`; one already
+installed is kept, so a start needs no network. `fastagent env install` installs the newest release of each again.
+A change to `context.json` restarts `dev`. A package is installed into mise's data directory on this machine
 (`~/.local/share/mise`), which other mise projects share.
+
+The image installs every declared package when it is built, at the newest release then, in a layer cached while the
+packages do not change; a deployed agent runs on those and installs nothing at start. So the image may run a
+newer release than your machine, and a rollback installs the releases of the day it is built again, not those of the
+image it replaces.
 
 What a package may install from is checked by the backend it resolves to, since a registry name is a backend under
 another name (`ripgrep` downloads ripgrep's GitHub release, `tokei` builds with cargo). `fastagent env add`,
 `fastagent env list` and `deploy` ask mise and refuse a package that builds from source (`go`, `cargo`, `spm`),
 compiles native extensions (`gem`), runs a plugin's code at install and on every start (`vfox`, `asdf`), or installs
 from a backend FastAgent has not classified; the refusal names the backend and the way around it, the project's
-release with `github:` or your own `Dockerfile`. The configuration asks mise for prebuilt runtimes (python, ruby, node,
+release with `github:` or your own `Dockerfile`. FastAgent asks mise for prebuilt runtimes (python, ruby, node,
 erlang): a runtime with no build for a platform fails there rather than compiling.
 
-A PyPI package (`pypi:markitdown`, or a registry name such as `ansible`) runs on `python` and installs and locks with
-`uv`. mise takes both from the machine when they are not declared, so such a package installs on your machine and
-fails in the image: declare them together, `fastagent env add python uv pypi:markitdown`. `fastagent env` names what
-is missing, and `deploy --run` stops on it. An `npm:` package runs on the image's Node; Bun's image runs npm packages
-through its own `node`. A runtime the agent works with itself (`go`, `rust`) is a package like any other; for `rust`
-the image adds curl.
+A PyPI package (`pypi:markitdown`, or a registry name such as `ansible`) runs on `python` and installs with `uv`. mise
+takes both from the machine when they are not declared, so such a package installs on your machine and fails in the
+image: declare them together, `fastagent env add python uv pypi:markitdown`. `fastagent env` names what is missing, and
+`deploy --run` stops on it. An `npm:` package runs on the image's Node; Bun's image runs npm packages through its own
+`node`. A runtime the agent works with itself (`go`, `rust`) is a package like any other; for `rust` the image adds
+curl.
 
-The agent's mise reads only the configuration FastAgent renders from the declaration: never `~/.config/mise`, a parent
+The agent's mise is given the packages as arguments and reads no configuration file: never `~/.config/mise`, a parent
 directory's configuration, a `mise.toml` you keep beside `context.json` for your own work, `.tool-versions` or
 `mise.local.toml`. That isolation is FastAgent's runs alone: a mise the agent runs (the machine's, in a content
-repository with its own `mise.toml`) works as it does in your shell. `fastagent info` lists what is declared, and says
-when an `environment/` of your own is where the lock goes.
+repository with its own `mise.toml`) works as it does in your shell. `fastagent info` lists what is declared.
 
 ## Harness settings: `~/.pi/agent/settings.json`
 

@@ -302,20 +302,18 @@ The machine is read once per process, like any environment; the definition stays
 The commands the agent runs are the machine's too, unless the `environment` of its `context.json` declares them
 (`src/environment/`, [agent service](agent-service.md) §4). `declare.ts` reads the declaration, refuses what FastAgent
 does not support, and says which backends a registry name may resolve to; `mise.ts` runs the agent's own mise, an
-optional npm dependency per platform, always in a working copy outside the agent directory (a configuration rendered
-from the declaration, beside a copy of the committed lock), on that file alone; `apt.ts` asks dpkg which apt packages
-this machine lacks. `environment/` is the image's lock, committed: `fastagent env` and every `deploy` write it
-(`lockEnvironment`: an install here in one copy, `mise lock` for the image's platforms in another, since an install adds
-this machine's platform to the lock it reads, then the files replaced only when they differ), one change at a time under
-`withEnvironmentLock`, which both take inside the function that writes it. Locking keeps the versions already locked, so
-it is safe on every deploy; `fastagent env update` passes `--bump`. The rendered configuration's header is what makes
-the directory FastAgent's: one without it is never read, written or removed. The assembly (`resolveAgentAssembly`)
-installs from a copy of the lock (`enterEnvironment`: the locked versions where it has them, the newest the declaration
-allows where it does not) and puts the packages on `process.env.PATH` before anything is spawned, so every process that
-opens the agent does, an embedder's `createAgentService` included; `fastagent tool`, which opens none, does it itself,
-and the `dev` supervisor does not. It writes nothing in the agent directory and refuses nothing about the lock. An edit
-to `context.json` or to the lock restarts the `dev` worker. Only the packages reach that `PATH`: the isolation variables
-go to FastAgent's own mise runs, and mise itself is not put there.
+optional npm dependency per platform, with the packages as arguments (`gh@2`) and no configuration file read
+(`MISE_ENVIRONMENT`, which also asks for prebuilt runtimes); `apt.ts` asks dpkg which apt packages this machine lacks.
+Nothing is locked. `installPackages` gives mise the packages it names (`newest`) whatever is installed, which installs
+the newest release their version allows, and of the rest only those with no matching install, which `mise where` answers
+without the network; what is installed goes on the install's PATH (a PyPI package needs its uv there). A start names
+none, `fastagent env add` names what it adds or re-versions, and `fastagent env install` names every one (`"all"`). The
+assembly (`resolveAgentAssembly`) enters the environment (`enterEnvironment`: the missing ones installed, then
+`mise env --json` of every package) and puts the packages on `process.env.PATH` before anything is spawned, so every
+process that opens the agent does, an embedder's `createAgentService` included; `fastagent tool`, which opens none, does
+it itself, and the `dev` supervisor does not. It writes nothing in the agent directory. An edit to `context.json`
+restarts the `dev` worker. Only the packages reach that `PATH`: the isolation variables go to FastAgent's own mise runs,
+and mise itself is not put there.
 
 Deploying ships pi's project scope, which is the agent directory. What the machine lends is not compared against a
 deployment, for the same reason nobody is told their local `ffmpeg` is not in the image: an image is a
@@ -791,21 +789,23 @@ persistent-volume wiring, required secret names, and a runbook. Docker adds a us
 ingress stays operator-owned. `--run` alone causes host side effects; for a tunnel topology it also
 reads the Quick Tunnel URL and registers webhooks.
 
-The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its
-root, and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight
-says what each content entry becomes on the host: a `github` one is cloned there (afresh on every deployment on
-AgentCore, whose storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only
-reads (the agent directory) or work on it from a host (a repository). Git history ships when the host
-packer permits it, and the image installs Git when the agent directory contains `.git` or a content entry is `github`.
-The agent's `aptPackages` join the image's apt layer. With packages declared, the generated Dockerfile copies
-`environment/` and installs it with the agent's own mise (`--locked install --system`), between the dependency install
-and `COPY . .`, so the layer is rebuilt only when the environment or the dependencies change. The packages go to
-mise's system directory, so a deployed start installs nothing; it points `MISE_DATA_DIR` at `.state/mise/` on the
-storage (`prepareStartWorkspace`). Preflight (`deploy/preflight.ts` `checkEnvironment`) checks the packages as
-`fastagent env` does, locks `environment/` again only when the declaration changed without it, and gates `--run` when
-`package.json` does not list the linux mise packages, the agent's mise is not installed here to check with, a package
-resolves to a refused backend, or a PyPI package's runtime is not declared; it warns a kept hand-written Dockerfile
-that it installs the environment only if it says so.
+The build context is the agent directory, baked at `/app/definition`; the artifacts and the ignore file sit at its root,
+and preflight checks that a kept ignore file ships `fastagent.config.ts` and excludes credentials. Preflight says what
+each content entry becomes on the host: a `github` one is cloned there (afresh on every deployment on AgentCore, whose
+storage starts over); a `local` one stays on this machine, and preflight says how to ship what the agent only reads (the
+agent directory) or work on it from a host (a repository). Git history ships when the host packer permits it, and the
+image installs Git when the agent directory contains `.git` or a content entry is `github`. The agent's `aptPackages`
+join the image's apt layer. Every deploy writes `fastagent.packages` (build output beside the release manifest,
+`BUILD_OUTPUTS`: rewritten every deploy, never kept or stale, and empty without packages), one package per line as mise
+is given it (`packageSpecs`); with packages declared, the generated Dockerfile copies it and installs what it lists with
+the agent's own mise (`install --system`), between the dependency install and `COPY . .`, so the layer is rebuilt only
+when the packages or the dependencies change, and a package change is no Dockerfile change. The packages go to mise's
+system directory, which `mise where` finds, so a deployed start installs nothing; it points `MISE_DATA_DIR` at
+`.state/mise/` on the storage (`prepareStartWorkspace`). Preflight (`deploy/preflight.ts` `checkEnvironment`) checks the
+packages as `fastagent env` does, installs nothing here, and gates `--run` when `package.json` does not list the linux
+mise packages, the agent's mise is not installed here to check with, a package resolves to a refused backend, or a PyPI
+package's runtime is not declared; it warns a kept hand-written Dockerfile that it installs the environment only if it
+says so.
 
 `deploy/workspace.ts` owns the shared deployed lifecycle. Storage contains `definition/` (the cwd), `.state/`,
 `.secrets/` and `.deployment/`; the release manifest names the agent the storage belongs to. A process-lifetime

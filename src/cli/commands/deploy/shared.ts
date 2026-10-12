@@ -10,8 +10,12 @@ import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts"
 import { registerSlackWebhook } from "../../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars } from "../../../deploy/channel-ingress.ts";
-import { IMAGE_DEFINITION_DIR, isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
-import { RELEASE_FILE } from "../../../deploy/workspace.ts";
+import {
+  BUILD_OUTPUTS,
+  IMAGE_DEFINITION_DIR,
+  isGeneratedDockerfile,
+  isGeneratedDockerignore,
+} from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { FastagentConfig } from "../../../harnesses/pi/config.ts";
 import { exists, resolveStateRoot } from "../../../paths.ts";
@@ -118,7 +122,7 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (basename(a.path) === RELEASE_FILE || options.alwaysWrite?.includes(a.path)) {
+    if (BUILD_OUTPUTS.includes(basename(a.path)) || options.alwaysWrite?.includes(a.path)) {
       write(a.path, abs, a.content);
       continue;
     }

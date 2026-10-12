@@ -50,24 +50,36 @@ describe("deploy/container: shared Docker context", () => {
     expect(ships(".git/HEAD")).toBe(true);
   });
 
-  it("installs environment/, the committed lock, after the dependencies and before the definition", () => {
+  it("installs the packages deploy lists after the dependencies and before the definition", () => {
+    const artifacts = (i: Parameters<typeof containerArtifacts>[0]) => containerArtifacts(i);
     const dockerfile = (i: Parameters<typeof containerArtifacts>[0]) =>
-      containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
+      artifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(dockerfile(input)).not.toMatch(/mise/);
+    // Empty without packages, so a list an earlier deploy wrote does not outlive the last package.
+    expect(artifacts(input).find((a) => a.path === "fastagent.packages")?.content).toBe("");
+    const packages = ["gh@2", "npm:@biomejs/biome@latest"];
+    // The list is build output, one per line; the Dockerfile reads it, so a package change is no Dockerfile change.
+    expect(artifacts({ ...input, packages }).find((a) => a.path === "fastagent.packages")?.content).toBe(
+      "gh@2\nnpm:@biomejs/biome@latest\n",
+    );
+    expect(dockerfile({ ...input, packages })).toBe(dockerfile({ ...input, packages: ["jq@1"] }));
     for (const runtime of ["node", "bun"] as const) {
-      const text = dockerfile({ ...input, runtime, environment: true });
+      const text = dockerfile({ ...input, runtime, packages });
       const order = ["RUN npm ci", "RUN bun install"].find((line) => text.includes(line)) as string;
-      // Cached while the definition changes: the layer sits between the install and `COPY . .`.
-      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY environment/ ./environment/\nRUN cd environment"));
-      expect(text.indexOf("COPY environment/ ./environment/")).toBeLessThan(text.indexOf("COPY . ."));
+      // Cached while the definition changes, and built again when the packages do.
+      expect(text.indexOf(order)).toBeLessThan(text.indexOf("COPY fastagent.packages ./\nRUN export "));
+      expect(text.indexOf("COPY fastagent.packages ./")).toBeLessThan(text.indexOf("COPY . ."));
       // In mise's system directory; the build's own mise directories are thrown away with the layer.
       expect(text).not.toContain("ENV MISE_DATA_DIR");
       expect(text).toContain("MISE_DATA_DIR=/tmp/mise ");
-      expect(text).toMatch(/"\$MISE" --locked install --system \\\n && rm -rf \/tmp\/mise\n/);
-      // The same isolation every run here has, for the directory the image holds the agent in.
       expect(text).toContain(
-        "MISE_TRUSTED_CONFIG_PATHS=/app/definition/environment/mise.toml MISE_CEILING_PATHS=/app/definition " +
-          "MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml",
+        ` && xargs -d '\\n' -a fastagent.packages "$MISE" install --system \\\n && rm -rf /tmp/mise\n`,
+      );
+      // The same isolation every run here has.
+      expect(text).toContain(
+        "MISE_GLOBAL_CONFIG_FILE=/dev/null/none.toml MISE_SYSTEM_CONFIG_FILE=/dev/null/none.toml " +
+          "MISE_OVERRIDE_CONFIG_FILENAMES=/dev/null/none.toml MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES=/dev/null/none.toml " +
+          "MISE_PYTHON_COMPILE=false",
       );
       expect(text).toContain(
         'MISE="/app/definition/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise"',

@@ -61,6 +61,7 @@ describe("deploy agentcore: the plan", () => {
       TEMPLATE_FILE,
       FORWARDER_FILE,
       "fastagent.release.json",
+      "fastagent.packages",
       "Dockerfile",
       ".dockerignore",
       "Dockerfile.dockerignore",

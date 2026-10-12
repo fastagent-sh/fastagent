@@ -76,9 +76,9 @@ src/
 │   ├── resolve.ts          # where each entry is for THIS instance (a clone, a bound dir): the one answer every reader uses
 │   ├── git.ts              # a GitHub entry's git: which repository a checkout is of, its ref, a fresh clone
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
-├── environment/            # the commands an agent runs, declared in context.json, the image's lock in environment/
+├── environment/            # the commands an agent runs, declared in context.json — harness-neutral
 │   ├── declare.ts          # the `environment` declaration, read and refused in ONE place; the backend allowlist
-│   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), run in working copies: check, lock, enter
+│   ├── mise.ts             # the agent's OWN mise (an npm dep per platform), packages as arguments: install, enter
 │   └── apt.ts              # which declared apt packages THIS machine lacks (dpkg; Debian and Ubuntu only)
 ├── declared-secrets.ts     # WHICH env vars this agent needs, in ONE shape, wherever it was declared
 │                           # (defineTool/defineChannel, context.json's variables): the ONE read of

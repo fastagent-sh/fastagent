@@ -105,6 +105,21 @@ describe("deploy: ownership decides what --force may replace", () => {
     expect(said.join("\n")).toMatch(/wrote fastagent\/lambda\/index\.js/);
   });
 
+  it("build output is written by every deploy, never kept or reported stale: the release manifest and the package list", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-own-build-"));
+    for (const path of ["fastagent.release.json", "fastagent.packages"]) {
+      await writeFile(join(dir, path), "from an earlier deploy\n");
+      const plan = await planArtifacts(dir, [{ path, content: "this deploy's\n" }], {
+        force: false,
+        isOurs: () => false,
+      });
+      expect(plan.stale).toEqual([]);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await applyArtifactPlan(plan);
+      expect(await readFile(join(dir, path), "utf8")).toBe("this deploy's\n");
+    }
+  });
+
   it("a marker that does not OPEN the file is not ours (a header above it is the author's edit)", async () => {
     const path = "fastagent/fly.toml";
     const disguised = `# my own header\n${generatedFor(path)}`;
