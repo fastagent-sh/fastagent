@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { withLockedFile } from "../locked-file.ts";
-import { unbindContextContent } from "./bindings.ts";
+import { withRevokedContextBindings } from "./bindings.ts";
 import lockfile from "proper-lockfile";
 import { cloneSnapshot } from "../content/git.ts";
 import { loadContexts, parseContextCopy } from "../content/file.ts";
@@ -119,17 +119,24 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
         return { name, commit, outcome: "current" };
       }
     }
-    if (found)
-      unbindContextContent(
-        agentDir,
-        name,
-        parsed.content.map((entry) => entry.name),
-      );
-    mkdirSync(dir, { recursive: true });
-    try {
+    const declared = loadContexts(agentDir).some((entry) => entry.name === name);
+    const publish = () => {
       writeFileAtomic(join(dir, CONTEXT_FILE), declaration);
       // This single rename publishes identity and declaration together; the directory never moves.
       writeFileAtomic(join(dir, COPY_RECORD), JSON.stringify({ repo, ref, commit, declaration }));
+    };
+    mkdirSync(dir, { recursive: true });
+    try {
+      if (found || declared) {
+        withRevokedContextBindings(
+          agentDir,
+          name,
+          parsed.content.map((entry) => entry.name),
+          publish,
+        );
+      } else {
+        publish();
+      }
     } catch (error) {
       if (!found) rmSync(dir, { recursive: true, force: true });
       throw error;

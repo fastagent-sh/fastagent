@@ -361,6 +361,19 @@ describe("contexts: added and removed", () => {
     expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
   });
 
+  it("recovering a declared context's missing snapshot refuses bindings with unknown ownership", async () => {
+    const { dir, checkout, repo } = await boundContext();
+    const shared = await readFile(join(dir, "context.json"), "utf8");
+    const local = await readFile(join(dir, "context.local.json"), "utf8");
+    await rm(join(dir, ".contexts"), { recursive: true });
+    repo.commit({ "context.json": JSON.stringify({ content: {} }) });
+    await expect(fetchContexts(dir, acme(), "fail", true)).rejects.toThrow(/cannot attribute local bindings safely/);
+    expect(await readFile(join(dir, "context.json"), "utf8")).toBe(shared);
+    expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
+    expect(existsSync(join(dir, ".contexts", "acme", ".fastagent-context.json"))).toBe(false);
+    expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
+  });
+
   it("removal without a snapshot still works when there are no local bindings to attribute", async () => {
     const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
     await removeContext(dir, "acme");

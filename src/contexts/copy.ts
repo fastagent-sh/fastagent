@@ -4,11 +4,16 @@
  * a human-readable mirror; Railway strips .git, so neither identity nor declaration depends on git metadata.
  */
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { contextCopyPath } from "../paths.ts";
-import type { DeclaredContext } from "./declare.ts";
+import { type DeclaredContext, contextSource } from "./declare.ts";
 
 export const COPY_RECORD = ".fastagent-context.json";
+
+export function contextCopyFiles(name: string): string[] {
+  const declaration = contextSource(name);
+  return [declaration, `${dirname(declaration)}/${COPY_RECORD}`];
+}
 
 export interface CopyRecord {
   repo: string;

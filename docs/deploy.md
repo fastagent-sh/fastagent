@@ -219,7 +219,9 @@ fastagent deploy railway
 
 Generates `Dockerfile`, `.dockerignore` and `.railwayignore`, and prints the runbook. The `.railwayignore` adds
 `!/.contexts/`: Railway reads it over `.gitignore`, so fetched contexts enter the upload without uploading other
-git-ignored files. An author-owned `.railwayignore` must re-include `.contexts/` itself. The runbook:
+git-ignored files. An author-owned `.railwayignore` must re-include `.contexts/` itself. After artifacts are written
+or kept, deploy checks the effective upload ignores against each required context declaration and snapshot; `--run`
+stops if upload would omit one. The author-owned file remains unchanged, including under `--force`. The runbook:
 
 1. `railway init` (or `railway link`).
 2. `railway add --service <name>`.

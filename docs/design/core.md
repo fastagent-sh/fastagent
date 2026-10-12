@@ -76,8 +76,10 @@ joins its content and environment with the agent's in one place (`join.ts`). A d
 at conflicting versions refuses, naming both sources; the variable gate attributes each to its declarer. Refresh
 and removal revoke bindings of withdrawn content before replacing the old snapshot, under the same `context.json`
 lock as declaration edits. The lock is re-entrant (`src/locked-file.ts`), so `context add` can fetch while holding it;
-the order is always declaration lock then copy lock. Removal uses the old snapshot regardless of the current ref,
-and refuses when a missing snapshot makes existing bindings impossible to attribute. The shared
+the order is always declaration lock then copy lock. Binding revocation wraps publication: it restores the original
+binding bytes if publication fails, and reports both errors if restoration fails too. Removal uses the old snapshot
+regardless of the current ref; removal and recovery of a declared context refuse when the missing snapshot makes
+existing bindings impossible to attribute. The shared
 declaration holds no path; a path is
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
 readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per

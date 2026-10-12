@@ -120,8 +120,9 @@ what it declares, without fetching. `fetch` updates every declared context to it
 fetched. `remove` deletes the declaration, fetched copy and local bindings of its content. Checkout directories,
 content clones and installed packages are kept; unrelated local bindings are unchanged. Refresh also removes bindings
 for content withdrawn by the new snapshot. If the old snapshot is missing and local bindings cannot be attributed,
-removal is refused: restore the old snapshot or explicitly remove the affected bindings first. Removal can use the
-old snapshot even after changing the requested repository or `ref`.
+removal or recovery of an already-declared context is refused: restore the old snapshot or explicitly remove the
+affected bindings first. Removal can use the old snapshot even after changing the requested repository or `ref`.
+Failed snapshot publication restores the original bindings; if restoration also fails, both errors are reported.
 
 Development commands (`dev`, `chat`, `invoke`, `tool`, `env exec`) refresh contexts automatically and warn if offline
 while using an existing copy. `start` and `createAgentService` never fetch: run `context fetch` before a manual start.

@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import { isGeneratedRailwayignore, planRailwayDeploy, toRailwayName } from "../../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../../deploy/railway/run.ts";
+import { excludedRailwayContexts } from "../../../deploy/railway/upload.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
 import { assembleSecrets } from "../../../deploy/secrets.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
@@ -31,6 +32,14 @@ export const railwayHost: HostDeploy = {
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });
+    const excluded = await excludedRailwayContexts(agentDir);
+    if (excluded.length > 0) {
+      const issue =
+        `Railway upload excludes required context files: ${excluded.join(", ")} — re-include them and their ` +
+        `parent directories in .railwayignore before deploying`;
+      if (opts.run) failStartup(new Error(issue));
+      console.error(`[fastagent] warn: ${issue}`);
+    }
     if (opts.run) {
       return runDeployRailway({
         agentDir,

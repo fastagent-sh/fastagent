@@ -78,7 +78,7 @@ src/
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── contexts/               # shared external declarations the agent uses, fetched at a GitHub ref
 │   ├── declare.ts          # which contexts an agent uses, by name, repository and optional ref
-│   ├── bindings.ts         # revoke checkout bindings when refresh or removal withdraws their content
+│   ├── bindings.ts         # binding revocation around publication/removal, with restoration on failure
 │   ├── copy.ts             # ONE atomic snapshot of fetched identity and declaration, independent of git metadata
 │   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep) and reporting
 │   └── join.ts             # ONE refusal of conflicts; join content and environment with attribution
@@ -208,7 +208,10 @@ src/
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
 │   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + optional Quick Tunnel) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
-│   ├── railway/   { plan.ts, run.ts } # same two roles — NOT a copy of Fly (thin config, minted URL)
+│   ├── railway/            # Railway artifacts/run driver, plus pre-upload context inclusion checks
+│   │   ├── plan.ts         # artifacts and runbook, including generated .railwayignore
+│   │   ├── run.ts          # Railway CLI provisioning and deployment
+│   │   └── upload.ts       # effective ignore rules must retain context declarations and snapshots
 │   └── agentcore/ { plan.ts, run.ts, destroy.ts, aws-cli.ts, logs.ts, shell.ts, zip.ts, forwarder.js } # ONE stack:
 │                             # runtime + forwarder Lambda (webhooks, and the alarms the container sets). No public
 │                             # URL, no resident process, no volume — the facts every difference follows from.

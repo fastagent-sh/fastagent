@@ -51,7 +51,7 @@ import {
 } from "../../contexts/declare.ts";
 import { type FetchedContext, fetchContexts, fetchedContexts, withContextCopy } from "../../contexts/fetch.ts";
 import { type DeclaredPart, joinContent, joinEnvironment } from "../../contexts/join.ts";
-import { unbindContextContent } from "../../contexts/bindings.ts";
+import { withRevokedContextBindings } from "../../contexts/bindings.ts";
 import { type ResolvedContent, checkBinding, contentAbsentHere, resolveContent } from "../../content/resolve.ts";
 import type { ContentAddition } from "../../content/source.ts";
 import { type LockResult, withLockedFile } from "../../locked-file.ts";
@@ -450,8 +450,9 @@ export async function removeContext(agentDir: string, name: string): Promise<Con
       }
       const contexts = without(file.contexts, found.name);
       await withContextCopy(dir, found.name, async () => {
-        unbindContextContent(dir, found.name);
-        rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
+        withRevokedContextBindings(dir, found.name, [], () => {
+          rmSync(contextCopyPath(dir, found.name), { recursive: true, force: true });
+        });
       });
       return { result: found.name, next: contextFileText({ ...file, contexts }) };
     },

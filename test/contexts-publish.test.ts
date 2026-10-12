@@ -1,13 +1,16 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../src/atomic-write.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { githubStandIn } from "./github-standin.ts";
+import { git, githubStandIn } from "./github-standin.ts";
+import { resolveContent } from "../src/content/resolve.ts";
 
 let failPublish = false;
+let failRestore = false;
+let restoring = false;
 let observe: (() => void) | undefined;
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -17,11 +20,15 @@ vi.mock("node:fs", async (original) => {
       if (String(args[1]).includes("/.contexts/acme")) {
         observe?.();
         if (failPublish && String(args[1]).endsWith("/.fastagent-context.json")) {
+          restoring = true;
           throw Object.assign(new Error("EIO: could not publish context"), { code: "EIO" });
         }
         fs.renameSync(...args);
         observe?.();
       } else {
+        if (failRestore && restoring && String(args[1]).endsWith("/context.local.json")) {
+          throw Object.assign(new Error("EACCES: could not restore bindings"), { code: "EACCES" });
+        }
         fs.renameSync(...args);
       }
     },
@@ -33,6 +40,8 @@ const { loadContent, loadEnvironment } = await import("../src/content/file.ts");
 let root = "";
 afterEach(async () => {
   failPublish = false;
+  failRestore = false;
+  restoring = false;
   observe = undefined;
   vi.unstubAllEnvs();
   if (root) await rm(root, { recursive: true, force: true });
@@ -42,7 +51,7 @@ async function fixture() {
   const github = githubStandIn();
   const repo = github.repo("acme/context");
   const first = repo.commit({ "context.json": '{ "description": "first" }' });
-  root = await mkdtemp(join(tmpdir(), "fa-ctx-publish-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "fa-ctx-publish-")));
   const agent = join(root, "agent");
   await mkdir(agent);
   await writeFile(join(agent, "context.json"), JSON.stringify({ contexts: { acme: { github: "acme/context" } } }));
@@ -58,6 +67,41 @@ it("keeps the authoritative old snapshot when publishing its replacement fails a
   await expect(fetchContexts(agent, contexts, "fail")).rejects.toThrow("EIO: could not publish context");
   expect(fetchedContexts(agent, contexts)[0]).toMatchObject({ commit: first, description: "first" });
   expect(loadContent(agent).declared).toEqual([]);
+});
+
+it("a failed snapshot publication restores revoked checkout bindings and keeps the old content location", async () => {
+  const { agent, repo, contexts } = await fixture();
+  const declaration = JSON.stringify({ content: { handbook: { github: "acme/handbook", readonly: true } } });
+  const first = repo.commit({ "context.json": declaration });
+  await fetchContexts(agent, contexts, "fail");
+  const checkout = join(root, "handbook");
+  await mkdir(checkout);
+  git(checkout, "init", "-q");
+  git(checkout, "remote", "add", "origin", "https://github.com/acme/handbook.git");
+  const localPath = join(agent, "context.local.json");
+  const local = JSON.stringify({ content: { handbook: { path: checkout } } });
+  await writeFile(localPath, local);
+  repo.commit({ "context.json": JSON.stringify({ content: {} }) });
+  failPublish = true;
+  await expect(fetchContexts(agent, contexts, "fail")).rejects.toThrow("EIO: could not publish context");
+  expect(fetchedContexts(agent, contexts)[0]?.commit).toBe(first);
+  expect(await readFile(localPath, "utf8")).toBe(local);
+  expect(resolveContent(agent, loadContent(agent))).toEqual([
+    expect.objectContaining({ name: "handbook", location: checkout, readonly: true, clone: false }),
+  ]);
+});
+
+it("reports publication and restoration errors when the old bindings cannot be restored", async () => {
+  const { agent, repo, contexts } = await fixture();
+  repo.commit({ "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }) });
+  await fetchContexts(agent, contexts, "fail");
+  await writeFile(join(agent, "context.local.json"), JSON.stringify({ content: { handbook: { path: "/handbook" } } }));
+  repo.commit({ "context.json": JSON.stringify({ content: {} }) });
+  failPublish = true;
+  failRestore = true;
+  await expect(fetchContexts(agent, contexts, "fail")).rejects.toThrow(
+    /publication failed.*EIO: could not publish context.*could not be restored.*EACCES: could not restore bindings/,
+  );
 });
 
 it("two Node processes can read and publish complete snapshots concurrently", async () => {

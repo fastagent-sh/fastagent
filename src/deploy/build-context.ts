@@ -5,7 +5,7 @@
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { dirname, isAbsolute, relative, join, sep } from "node:path";
+import { isAbsolute, relative, join, sep } from "node:path";
 import ignore from "ignore";
 import {
   AGENT_CONFIG_FILE,
@@ -20,8 +20,7 @@ import {
 import { isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
 import { loadContexts } from "../content/file.ts";
-import { contextSource } from "../contexts/declare.ts";
-import { COPY_RECORD } from "../contexts/copy.ts";
+import { contextCopyFiles } from "../contexts/copy.ts";
 
 /**
  * "Would docker's packer drop this path?" — built from a `.dockerignore`'s text via the `ignore` matcher (the same
@@ -102,12 +101,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const stateShips = stateRel !== undefined && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
   const contentShips = (await exists(join(agentDir, CONTENT_DIRNAME))) ? CONTENT_DIRNAME : undefined;
   const bindingsShip = (await exists(join(agentDir, LOCAL_CONTEXT_FILE))) ? LOCAL_CONTEXT_FILE : undefined;
-  const contextCopies = await present(
-    loadContexts(agentDir).flatMap((context) => {
-      const declaration = contextSource(context.name);
-      return [declaration, `${dirname(declaration)}/${COPY_RECORD}`];
-    }),
-  );
+  const contextCopies = await present(loadContexts(agentDir).flatMap((context) => contextCopyFiles(context.name)));
   // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
   const envFiles = (await entriesIfExists(agentDir))
     .map((entry) => entry.name)
