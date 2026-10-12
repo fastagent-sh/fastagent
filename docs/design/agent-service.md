@@ -677,7 +677,7 @@ interface Session {
   `busy`, whose `details.reason` says which: `running` (with the running `runId`), `queue_full` or `capacity`.
 - Acceptance is durable: before the receipt is sent, the run is recorded with its id, key and source (§9.3), and
   `run_started` and `run_ended` are entries in the session's log (§7.5). So a run's status after the fact is read from
-  the record and the log, and `runs.get` answers `undefined` only for a run that was never accepted. A run that was
+  the record and the log, and `runs.get` answers `undefined` only for a run that was never accepted, or whose session was deleted. A run that was
   accepted and never ended, and is neither running nor queued, is reported `interrupted`: one the process stopped while
   it ran, and one lost from a queue that did not survive a restart. Whether queued runs survive a restart, and whether a
   running one continues after it, depend on the harness (`durableQueue`, `durableRuns`, §9.3). The service never reruns
@@ -691,7 +691,8 @@ interface Session {
 ```ts
 interface Agent {
   sessions: {
-    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }): Promise<{ sessionId: string }>;
+    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }):
+      Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
     list(): Promise<SessionSummary[]>;
     get(sessionId: string): Session;
   };
@@ -770,7 +771,7 @@ interface Entry {
 // assistant_message  { text, thinking?, toolCalls?, outcome? }
 // tool_result        { toolCallId, toolName, isError, text, images? }
 // run_started        {}
-// run_ended          { outcome: RunOutcome, usage: Usage }
+// run_ended          { outcome: RunOutcome, usage?: Usage }
 // settings_changed   { name?, model?, thinkingLevel? }
 // compaction         { summary, firstKeptEntryId }
 
@@ -878,12 +879,12 @@ v0.1:
 | §6, the three endings | (a) the run's `run_ended` entry; (b) `rejected`; (c) the caller stops reading and detaches, while the run goes on |
 | §6, MUST 1 | An invoke stream holds exactly one `rejected`, or ends with its run's `run_ended`, unless the process stops |
 | §6, MUST 2 | Every failure is an event: a failed run ends with a `failed` outcome, and a refusal is `rejected` |
-| §6, MUST 3 | Reversed: a caller that stops reading detaches; `runs.cancel` and `abort` stop work |
+| §6, MUST 3 | Reversed: a caller that stops reading detaches; `runs.cancel`, `abort` and `delete` stop work |
 | §6, MUST 4 | The terminal set changes once, from `{ completed, failed }` to `{ run_ended, rejected }`, and is frozen again |
 | §6, MUST 6 | Weaker: while a run is active, a session's calls must reach the process running it; portable conformance needs a session router in front (§9.3). `conformance-levels.md` says so with v1 |
 | §7 | `collect` returns the run's answer when it ends `completed`, and throws on any other outcome or on `rejected` |
 | §8 | The lineage, identity and source rows are replaced by §7.2 and §7.4; the mid-turn steering row by `whenBusy`, `runs.cancel` and `abort` |
-| New | The session operations (§7.3, §7.4), the planes (§7.7), and the harness port (§9.1) |
+| New | The session operations (§7.3, §7.4) and the planes (§7.7). The harness port (§9.1) stays out, as above |
 
 ### 7.9 Compatibility with ACP
 
@@ -1164,8 +1165,9 @@ id, key and source, written before the receipt is sent: a durable harness keeps 
 submission records), and the run helper writes it to the session's state. The second is the session's log, with each
 run's `run_started` and `run_ended`, which a harness writes natively (dsh's turn boundaries, pi-durable's settled
 submissions) or the run helper writes for it. A run's status is derived from both and the queue. A run that was
-accepted, never ended and is neither running nor queued is `interrupted`; the helper writes its closing entry when the
-session next runs, as dsh does. Only live events, and for a harness that is only a loop the order of its queue and
+accepted, never ended and is neither running nor queued is `interrupted`; the serving layer writes its closing entry
+when it first opens the session after the run stopped, before answering anything on it, so a caller reattaching with
+`runs.follow` after a restart reaches the end without the session running again. Only live events, and for a harness that is only a loop the order of its queue and
 its current run, are held in memory: a queued run lost with them is still known, as `interrupted`.
 
 | What happens | A running run | A queued run |
