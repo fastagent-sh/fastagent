@@ -5,11 +5,19 @@
  * writer queue behind each other, and it REPLACES the file rather than rewriting it in place, which is what lets every
  * reader of these files read without the lock: a reader sees the old file or the new one, never one cut short.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import lockfile from "proper-lockfile";
-import { writeFileAtomic } from "../../atomic-write.ts";
-import { SECRET_FILE_MODE } from "../../paths.ts";
+import { writeFileAtomic } from "./atomic-write.ts";
+import { SECRET_FILE_MODE } from "./paths.ts";
+
+interface HeldLock {
+  active: boolean;
+  assertOwned: () => void;
+}
+
+const heldLocks = new AsyncLocalStorage<ReadonlyMap<string, HeldLock>>();
 
 const WRITE_OPTIONS = { encoding: "utf8", mode: SECRET_FILE_MODE } as const;
 
@@ -59,10 +67,37 @@ export async function withLockedFile<T>(
     }
   }
 
-  let compromised: Error | undefined;
-  const throwIfCompromised = () => {
-    if (compromised) throw compromised;
+  const key = resolve(path);
+  const held = heldLocks.getStore() ?? new Map<string, HeldLock>();
+  const apply = async (assertOwned: () => void): Promise<T> => {
+    assertOwned();
+    const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
+    const out = await fn(current);
+    assertOwned();
+    // The last moment a caller that gave up can keep its change off disk: waiting for the lock may have outlasted it
+    // (another process held the lock through the caller's timeout or cancel).
+    options.signal?.throwIfAborted();
+    // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
+    // the mode before the content is reachable.
+    if (out.next !== undefined) {
+      writeFileAtomic(writeTarget(path), out.next, options.mode ?? SECRET_FILE_MODE);
+    }
+    assertOwned();
+    return out.result;
   };
+  const alreadyHeld = held.get(key);
+  // Context add holds this lock while fetching; a fetch takes it again to coordinate binding cleanup.
+  if (alreadyHeld?.active) return apply(alreadyHeld.assertOwned);
+
+  let compromised: Error | undefined;
+  const owner: HeldLock = {
+    active: true,
+    assertOwned: () => {
+      if (compromised) throw compromised;
+      if (!owner.active) throw new Error(`the file lock for ${path} is no longer held`);
+    },
+  };
+  const throwIfCompromised = owner.assertOwned;
 
   const release = await lockfile.lock(path, {
     // MUST match pi-coding-agent's `core/auth-storage.js`, which locks with `realpath: false`. When the file
@@ -79,20 +114,7 @@ export async function withLockedFile<T>(
   });
   let result: T;
   try {
-    throwIfCompromised();
-    const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
-    const out = await fn(current);
-    throwIfCompromised();
-    // The last moment a caller that gave up can keep its change off disk: waiting for the lock may have outlasted it
-    // (another process held the lock through the caller's timeout or cancel).
-    options.signal?.throwIfAborted();
-    // Rename, not an in-place rewrite: it is what lets `read` stay unlocked, and it is the only spelling that applies
-    // the mode before the content is reachable.
-    if (out.next !== undefined) {
-      writeFileAtomic(writeTarget(path), out.next, options.mode ?? SECRET_FILE_MODE);
-    }
-    throwIfCompromised();
-    result = out.result;
+    result = await heldLocks.run(new Map(held).set(key, owner), () => apply(throwIfCompromised));
   } catch (error) {
     // The primary failure stays the signal; unlock noise must not mask it.
     try {
@@ -100,6 +122,7 @@ export async function withLockedFile<T>(
     } catch {
       // Secondary: a compromised or stale-reclaimed lock often cannot release cleanly.
     }
+    owner.active = false;
     throw error;
   }
   // Success path: a failed release is a real cleanup failure (the leftover `<file>.lock` stalls the next writer for
@@ -107,8 +130,10 @@ export async function withLockedFile<T>(
   try {
     await release();
   } catch (releaseError) {
+    owner.active = false;
     if (compromised === undefined) throw releaseError;
   }
   throwIfCompromised();
+  owner.active = false;
   return result;
 }

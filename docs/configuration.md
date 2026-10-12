@@ -442,7 +442,9 @@ tools and prompts are not the agent's. A skill that teaches a context's CLI live
 
 - Content: each entry, the agent's own or a context's, is cloned at `content/<name>`, named in the prompt with its
   `description`, and can be bound to a checkout here in `context.local.json`. A name declared twice refuses the start,
-  naming both files.
+  naming both files. When refresh or removal withdraws a context's content, its checkout bindings are removed too;
+  checkout directories and unrelated bindings stay. Without the old snapshot, removal refuses if existing bindings
+  cannot be attributed safely.
 - Environment: the packages and apt packages are joined, and installed as the agent's own. One package at two versions
   refuses the start, naming both.
 - Variables: a name declared twice is one variable with one value, required by each; the start, `info`, `deploy` and

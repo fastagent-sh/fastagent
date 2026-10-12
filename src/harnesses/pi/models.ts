@@ -24,7 +24,7 @@ import { builtinModels, builtinProviders, getBuiltinModelDataGeneratedAt } from 
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AGENT_MODEL_CATALOG_FILE, AGENT_MODELS_FILE, globalHome, resolveOverridePath } from "../../paths.ts";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { withLockedFile } from "./locked-file.ts";
+import { withLockedFile } from "../../locked-file.ts";
 import { OPENAI_PROVIDER, registerAccountModels, withAccountModels } from "./openai-account-models.ts";
 
 /** The built-ins plus `providers` (a same id replaces a built-in), over any credential store. */

@@ -69,10 +69,15 @@ it is declared as its **content** ([agent model](agent-model.md) §3): the repos
 of `context.json` without `github`, a binding without `path` or one that redeclares a shared entry's treatment, a name
 that is not one path segment or collides ignoring case; `file.ts` reads both files through it (`loadContent` returns the
 `ContentDeclaration`, both halves), naming the file in every refusal. `src/contexts/` reads the agent's declared
-contexts and publishes their source/ref/commit and declaration in a single atomically replaced snapshot
+contexts in a temporary directory outside the agent's build context and publishes their source/ref/commit and
+declaration in a single atomically replaced snapshot
 (`.fastagent-context.json`), with `context.json` as an inspection mirror. Each read opens the snapshot once, then
 joins its content and environment with the agent's in one place (`join.ts`). A duplicate content name or a package
-at conflicting versions refuses, naming both sources; the variable gate attributes each to its declarer. The shared
+at conflicting versions refuses, naming both sources; the variable gate attributes each to its declarer. Refresh
+and removal revoke bindings of withdrawn content before replacing the old snapshot, under the same `context.json`
+lock as declaration edits. The lock is re-entrant (`src/locked-file.ts`), so `context add` can fetch while holding it;
+the order is always declaration lock then copy lock. Removal uses the old snapshot regardless of the current ref,
+and refuses when a missing snapshot makes existing bindings impossible to attribute. The shared
 declaration holds no path; a path is
 `context.local.json`'s alone. `resolve.ts` answers where each entry is for this instance (`ResolvedContent`: name, kind,
 readonly, description, location, notices, and for a `github` one its repo, ref and whether it is a clone), once per

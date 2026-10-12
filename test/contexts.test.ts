@@ -5,7 +5,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,28 @@ async function agent(context: unknown): Promise<string> {
   await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
   await writeFile(join(dir, "context.json"), JSON.stringify(context));
   return dir;
+}
+
+async function boundContext() {
+  const github = githubStandIn();
+  const repo = github.repo("acme/github-context");
+  repo.commit({
+    "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook", readonly: true } } }),
+  });
+  github.repo("acme/handbook").commit({ "README.md": "keep this checkout\n" });
+  const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
+  await fetchContexts(dir, acme(), "fail");
+  const checkout = join(dir, "..", "handbook");
+  git(dir, "clone", "-q", "https://github.com/acme/handbook.git", checkout);
+  const notes = join(dir, "..", "notes");
+  await mkdir(notes);
+  await writeFile(
+    join(dir, "context.local.json"),
+    JSON.stringify({
+      content: { handbook: { path: checkout }, notes: { path: notes, readonly: true } },
+    }),
+  );
+  return { dir, checkout, notes, repo };
 }
 
 const acme = (ref?: string) => declareContexts({ acme: { github: "acme/github-context", ...(ref ? { ref } : {}) } });
@@ -307,23 +329,7 @@ describe("contexts: added and removed", () => {
   });
 
   it("removing a context unbinds its content without changing the checkout or unrelated bindings", async () => {
-    const github = githubStandIn();
-    github.repo("acme/github-context").commit({
-      "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook", readonly: true } } }),
-    });
-    github.repo("acme/handbook").commit({ "README.md": "keep this checkout\n" });
-    const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
-    await fetchContexts(dir, acme(), "fail");
-    const checkout = join(dir, "..", "handbook");
-    git(dir, "clone", "-q", "https://github.com/acme/handbook.git", checkout);
-    const notes = join(dir, "..", "notes");
-    await mkdir(notes);
-    await writeFile(
-      join(dir, "context.local.json"),
-      JSON.stringify({
-        content: { handbook: { path: checkout }, notes: { path: notes, readonly: true } },
-      }),
-    );
+    const { dir, checkout, notes } = await boundContext();
     const before = resolveContent(dir, loadContent(dir));
     expect(before.find((entry) => entry.name === "handbook")?.readonly).toBe(true);
     await removeContext(dir, "acme");
@@ -331,6 +337,44 @@ describe("contexts: added and removed", () => {
     expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).content).toEqual({
       notes: { path: notes, readonly: true },
     });
+    expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
+  });
+
+  it("refreshing a context unbinds content the new snapshot no longer declares", async () => {
+    const { dir, checkout, notes, repo } = await boundContext();
+    repo.commit({ "context.json": JSON.stringify({ content: {} }) });
+    await fetchContexts(dir, acme(), "fail", true);
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
+    expect(JSON.parse(await readFile(join(dir, "context.local.json"), "utf8")).content).toEqual({
+      notes: { path: notes, readonly: true },
+    });
+    expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
+  });
+
+  it("missing a snapshot refuses removal when bindings cannot be attributed, without writing either declaration", async () => {
+    const { dir } = await boundContext();
+    const shared = await readFile(join(dir, "context.json"), "utf8");
+    const local = await readFile(join(dir, "context.local.json"), "utf8");
+    await rm(join(dir, ".contexts"), { recursive: true });
+    await expect(removeContext(dir, "acme")).rejects.toThrow(/restore.*snapshot|cannot.*bindings/);
+    expect(await readFile(join(dir, "context.json"), "utf8")).toBe(shared);
+    expect(await readFile(join(dir, "context.local.json"), "utf8")).toBe(local);
+  });
+
+  it("removal without a snapshot still works when there are no local bindings to attribute", async () => {
+    const dir = await agent({ contexts: { acme: { github: "acme/github-context" } } });
+    await removeContext(dir, "acme");
+    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8")).contexts).toBeUndefined();
+  });
+
+  it("removal cleans bindings from the old snapshot even when the requested ref has changed", async () => {
+    const { dir, checkout } = await boundContext();
+    const file = JSON.parse(await readFile(join(dir, "context.json"), "utf8"));
+    file.contexts.acme.ref = "does-not-exist";
+    await writeFile(join(dir, "context.json"), JSON.stringify(file));
+    expect(() => loadContent(dir)).toThrow(/was fetched from another repository or ref/);
+    await removeContext(dir, "acme");
+    expect(resolveContent(dir, loadContent(dir)).map((entry) => entry.name)).toEqual(["notes"]);
     expect(await readFile(join(checkout, "README.md"), "utf8")).toBe("keep this checkout\n");
   });
 

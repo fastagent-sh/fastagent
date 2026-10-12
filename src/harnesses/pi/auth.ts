@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { globalHome, SECRETS_DIRNAME, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
-import { withLockedFile } from "./locked-file.ts";
+import { withLockedFile } from "../../locked-file.ts";
 
 /**
  * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`), under the user-global machinery home

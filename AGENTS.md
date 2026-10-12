@@ -78,6 +78,7 @@ src/
 │   └── source.ts           # what a command's <source> adds (github:owner/repo, a checkout, a directory)
 ├── contexts/               # shared external declarations the agent uses, fetched at a GitHub ref
 │   ├── declare.ts          # which contexts an agent uses, by name, repository and optional ref
+│   ├── bindings.ts         # revoke checkout bindings when refresh or removal withdraws their content
 │   ├── copy.ts             # ONE atomic snapshot of fetched identity and declaration, independent of git metadata
 │   ├── fetch.ts            # fresh snapshots, fetch policy (strict vs offline keep) and reporting
 │   └── join.ts             # ONE refusal of conflicts; join content and environment with attribution
@@ -91,6 +92,7 @@ src/
 │                           # them, and what "has no value" means
 ├── secrets-gate.ts         # THE refusal: which declarations gate THIS run (all vs one owner), load
 │                           # failures reported before it throws, and the shape of that throw
+├── locked-file.ts          # re-entrant cross-process read-modify-write, shared by context edits, auth and models
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
@@ -257,8 +259,6 @@ src/
     ├── config.ts           # fastagent.config.ts loading + model/precedence
     ├── authoring.ts        # creating an agent + editing its content as an API; `init`/`content` are thin wrappers
     ├── auth.ts, login.ts   # the credentials file store + which files an agent reads; the `login` flow
-    ├── locked-file.ts      # the cross-process locked read-modify-write that REPLACES a file (credentials, model
-    │                       # catalogs), pi's lock included, so every reader of those files reads without one
     ├── models.ts           # the registry: the agent's OWN models.json and models-store.json (definition-local,
     │                       # so they travel), layered over the machine's ~/.fastagent/ pair (environment, never
     │                       # shipped); the explicit model-catalog refresh

@@ -2,13 +2,16 @@
  * Fetch contexts into .contexts/<name>, validating a fresh snapshot before replacing the copy. Development can use a
  * cached copy when its remote is unreachable; add, fetch and deploy cannot. Production only reads copies.
  */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { withLockedFile } from "../locked-file.ts";
+import { unbindContextContent } from "./bindings.ts";
 import lockfile from "proper-lockfile";
 import { cloneSnapshot } from "../content/git.ts";
 import { loadContexts, parseContextCopy } from "../content/file.ts";
 import { log } from "../log.ts";
-import { CONTEXT_FILE, contextCopyPath } from "../paths.ts";
+import { CONTEXT_FILE, contextCopyPath, isUnderDir } from "../paths.ts";
 import { COPY_RECORD, copyRecord, readCopyRecord } from "./copy.ts";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { type DeclaredContext, contextSource, declareContexts } from "./declare.ts";
@@ -47,24 +50,30 @@ export async function fetchContexts(
   const checked = declareContexts(
     Object.fromEntries(contexts.map((context) => [context.name, { github: context.repo, ref: context.ref }])),
   );
-  const outcomes = await Promise.allSettled(
-    checked.map((context) =>
-      withContextCopy(agentDir, context.name, () => {
-        if (
-          requireListed &&
-          !loadContexts(agentDir).some(
-            (one) => one.name === context.name && one.repo === context.repo && one.ref === context.ref,
-          )
-        ) {
-          throw new Error(`context "${context.name}" is no longer declared at that repository and ref`);
-        }
-        return fetchOne(agentDir, context, onFailure);
-      }),
-    ),
+  return withLockedFile(
+    join(agentDir, CONTEXT_FILE),
+    async () => {
+      const outcomes = await Promise.allSettled(
+        checked.map((context) =>
+          withContextCopy(agentDir, context.name, () => {
+            if (
+              requireListed &&
+              !loadContexts(agentDir).some(
+                (one) => one.name === context.name && one.repo === context.repo && one.ref === context.ref,
+              )
+            ) {
+              throw new Error(`context "${context.name}" is no longer declared at that repository and ref`);
+            }
+            return fetchOne(agentDir, context, onFailure);
+          }),
+        ),
+      );
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+      return { result: outcomes.map((outcome) => (outcome as PromiseFulfilledResult<ContextFetch>).value) };
+    },
+    { create: false },
   );
-  const failed = outcomes.find((outcome) => outcome.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
-  return outcomes.map((outcome) => (outcome as PromiseFulfilledResult<ContextFetch>).value);
 }
 
 async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "keep" | "fail"): Promise<ContextFetch> {
@@ -74,8 +83,11 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
   if (found && (!found.isDirectory() || !existsSync(join(dir, COPY_RECORD)))) {
     throw new Error(`${dir} is not a fetched context copy: move it away before fetching`);
   }
-  const next = mkdtempSync(join(dirname(dir), `.${name}.next-`));
+  const next = mkdtempSync(join(tmpdir(), "fastagent-context-"));
   try {
+    if (isUnderDir(realpathSync(next), realpathSync(agentDir))) {
+      throw new Error(`temporary context clones must be outside ${agentDir}: set TMPDIR to another directory`);
+    }
     let commit: string;
     try {
       commit = await cloneSnapshot(repo, ref, next);
@@ -93,7 +105,7 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
       );
     }
     const declaration = readFileSync(path, "utf8");
-    parseContextCopy(declaration, contextSource(name));
+    const parsed = parseContextCopy(declaration, contextSource(name));
     if (found) {
       const previous = readCopyRecord(agentDir, name);
       if (
@@ -107,6 +119,12 @@ async function fetchOne(agentDir: string, context: DeclaredContext, onFailure: "
         return { name, commit, outcome: "current" };
       }
     }
+    if (found)
+      unbindContextContent(
+        agentDir,
+        name,
+        parsed.content.map((entry) => entry.name),
+      );
     mkdirSync(dir, { recursive: true });
     try {
       writeFileAtomic(join(dir, CONTEXT_FILE), declaration);

@@ -118,7 +118,10 @@ environment shared by several agents. `add` fetches and checks it against the ag
 packages here, then writes the entry in the agent's `context.json`. `list` reports its source, description, commit and
 what it declares, without fetching. `fetch` updates every declared context to its `ref`, and stops if any cannot be
 fetched. `remove` deletes the declaration, fetched copy and local bindings of its content. Checkout directories,
-content clones and installed packages are kept; unrelated local bindings are unchanged.
+content clones and installed packages are kept; unrelated local bindings are unchanged. Refresh also removes bindings
+for content withdrawn by the new snapshot. If the old snapshot is missing and local bindings cannot be attributed,
+removal is refused: restore the old snapshot or explicitly remove the affected bindings first. Removal can use the
+old snapshot even after changing the requested repository or `ref`.
 
 Development commands (`dev`, `chat`, `invoke`, `tool`, `env exec`) refresh contexts automatically and warn if offline
 while using an existing copy. `start` and `createAgentService` never fetch: run `context fetch` before a manual start.
