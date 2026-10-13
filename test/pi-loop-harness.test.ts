@@ -62,6 +62,8 @@ function gate(): { opened: Promise<void>; open: () => void } {
 /** One process's world: what its `hold` tool waits for, and how many times `effect` has run. */
 class World {
   held = gate();
+  /** Opened when a `hold` tool starts: its run is bound to pi and past its first model call. */
+  holding = gate();
   effects = 0;
 }
 
@@ -74,6 +76,7 @@ function tools(world: World): MountedTool[] {
       description: "waits until released",
       parameters,
       async execute(_id, _params, signal) {
+        world.holding.open();
         await Promise.race([
           world.held.opened,
           new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true })),
@@ -100,7 +103,7 @@ async function piAgent(
   capacity: number = LIMITS.inFlightPerProcess,
   extensionPaths: string[] = [],
 ): Promise<Agent> {
-  const { faux } = makeFaux();
+  const { faux } = makeFaux({ models: [{ id: "first" }, { id: "second" }] });
   faux.setResponses(Array.from({ length: 2000 }, () => answer));
   const model = faux.getModel();
   const createModelRuntime = async () => {
@@ -295,18 +298,31 @@ describe("pi-coding-agent through LoopPort", () => {
     expect(forked?.getEntries().filter(isRunMarker)).toEqual([]);
   });
 
-  it("an update during a run is written at once and runs from the next run", async () => {
+  it("a model set during a run is written at once, and the next run runs on it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
+    const store = piSessionRecordStore({ dir, cwd: process.cwd() });
     const local = new World();
-    const agent = await piAgent(piSessionRecordStore({ dir, cwd: process.cwd() }), local);
+    const agent = await piAgent(store, local);
     const session = agent.sessions.get("s");
     const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
-    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
-    expect(await session.update({ name: "renamed" })).toEqual({ ok: true });
-    expect(await session.read({ limit: 0 })).toMatchObject({ ok: true, state: { name: "renamed", status: "running" } });
+    await local.holding.opened;
+    expect(await session.update({ model: "faux/second" })).toEqual({ ok: true });
+    expect(await session.read({ limit: 0 })).toMatchObject({
+      ok: true,
+      state: { model: "faux/second", status: "running" },
+    });
     local.held.open();
-    await vi.waitFor(async () =>
-      expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
+    await vi.waitFor(
+      async () =>
+        expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
+      { timeout: 5000 },
     );
+    for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "next" } })) void _;
+    const record = await store.openIfExists("s");
+    const answeredBy = (record?.getEntries() ?? []).flatMap((e) =>
+      e.type === "message" && e.message.role === "assistant" ? [e.message.model] : [],
+    );
+    // The running run keeps the model it started on, through its tool call and its answer.
+    expect(answeredBy).toEqual(["first", "first", "second"]);
   });
 });

@@ -1208,7 +1208,9 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
 - **Writes during a run.** Appended through the run's own manager, a marker or a settings change keeps the log one
   chain, never reaches the model's context, and survives a reopen unchanged. A running run takes its model from its
   agent's state, so `update` during a run applies from the next run, as SPEC v1 says, instead of answering `busy` as
-  today.
+  today. One window is not covered: a run accepted but not yet bound to pi (its extensions still loading) binds on the
+  new settings. Binding it on the settings it was accepted with would not help, since pi records the model it binds,
+  which would then override the update for every later run too.
 - **Which run an entry belongs to.** pi's entries carry no run id. A marker names its run; a message belongs to the run
   whose `run_started` and `run_ended` enclose it, since a session runs one run at a time; a settings change belongs to
   none.

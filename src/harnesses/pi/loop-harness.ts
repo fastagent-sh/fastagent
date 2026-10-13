@@ -7,7 +7,7 @@
  * `handled`, and one still in pi's queue when the run settled, which pi will never run, is `untaken`.
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, type Models, contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Models, contentText } from "@earendil-works/pi-ai";
 import type { AgentSession, SessionEntry as PiSessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import type { LogRecord, LoopHarness, LoopLog, LoopRun, MessageFate, RunMarker } from "../../loop-port.ts";
@@ -32,7 +32,8 @@ import { sessionUsage, toSessionEntry } from "./session-control.ts";
 import { RUN_MARKERS, isConversationMessage, isPlaneMarker, isRunMarker } from "./session-markers.ts";
 import {
   MissingModel,
-  THINKING_LEVELS,
+  modelBySpec,
+  thinkingLevelProblem,
   activePath,
   describeModels,
   resolveSessionSettings,
@@ -265,24 +266,23 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         },
       };
 
+      /** Never rejects: a message pi did not take is `untaken`, which the run then takes itself. */
       const deliver = async (h: Handed): Promise<void> => {
         const bound = await ready;
         if (!bound || finished) return;
-        const prepared = await toPiPromptOptions(h.message, "queued");
         const agent = bound.agent;
         const queue = agent.steer;
-        let pushed: unknown;
+        // Registered as pi queues it, not when `steer()` returns: nothing orders pi's loop taking and writing it after
+        // that return. Not reproduced: with the tool round ending the moment pi queues it, pi 1.1.0 writes it later.
         agent.steer = (queued) => {
-          pushed = queued;
+          const content = (queued as { content?: unknown }).content;
+          h.queued = { object: queued, text: contentText(content as never, "") };
           queue.call(agent, queued);
         };
         try {
+          const prepared = await toPiPromptOptions(h.message, "queued");
           const disposition = await bound.steer(h.message.text, prepared?.images);
           if (disposition === "handled") h.fate = { handled: true };
-          else if (pushed !== undefined) {
-            const content = (pushed as { content?: unknown }).content;
-            h.queued = { object: pushed, text: contentText(content as never, "") };
-          }
         } catch (error) {
           log.warn(`[fastagent] session ${sessionId}: pi refused a steered message: ${String(error)}`);
         } finally {
@@ -301,96 +301,105 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         }
         const bound = session;
         resolveReady(bound);
-        const project = agentEventProjection();
-        let finalAssistant: AssistantMessage | undefined;
-        let runStarted = false;
-        let streamedAnswer = false;
-        let retriedAfterAnswer: string | undefined;
-        let extensionFailure: string | undefined;
-        let thrown: unknown;
-        const abort = (why: string) => {
-          void bound.abort().catch((error: unknown) => log.warn(`[fastagent] ${why} abort failed: ${String(error)}`));
-        };
-        const unsubscribe = bound.subscribe((event) => {
-          if (event.type === "agent_start") runStarted = true;
-          if ((event.type === "agent_start" || event.type === "compaction_start") && stopRequested) abort("requested");
-          if (event.type === "message_end" && event.message.role === "assistant") {
-            finalAssistant = event.message as AssistantMessage;
-          }
-          if (event.type === "auto_retry_start" && streamedAnswer && retriedAfterAnswer === undefined) {
-            // A retry after streamed output would add a second answer to the first; pi installs its retry after this.
-            retriedAfterAnswer = event.errorMessage;
-            queueMicrotask(() => abort("retry-after-answer"));
-            return;
-          }
-          const rich = toSessionEvent(event, "");
-          const projected = rich && project(rich);
-          if (!projected) return;
-          switch (projected.type) {
-            case "text":
-            case "thinking":
-              streamedAnswer = true;
-              emit({ type: "message_delta", channel: projected.type, delta: projected.delta });
-              break;
-            case "tool_started":
-              emit({ type: "tool_started", toolCallId: projected.id, name: projected.name, args: projected.args });
-              break;
-            case "tool_progress":
-              emit({ type: "tool_progress", toolCallId: projected.id, text: projected.text });
-              break;
-            case "retrying":
-              emit({
-                type: "retry_scheduled",
-                attempt: projected.attempt,
-                maxAttempts: projected.maxAttempts,
-                delayMs: projected.delayMs,
-                reason: projected.reason,
-              });
-              break;
-          }
-        });
-        const unlisten = bound.extensionRunner.onError((error) => {
-          if (OWED_BY_THE_RUN.has(error.event)) {
-            extensionFailure ??= `${error.event} failed (${error.extensionPath}): ${error.error}`;
-          }
-        });
-        const extensionTurns = trackExtensionTurns(bound);
-        const extensionMayTakeInput =
-          bound.extensionRunner.getRegisteredCommands().length > 0 || bound.extensionRunner.hasHandlers("input");
+        const cleanup: (() => void)[] = [];
         try {
-          if (stopRequested) abort("requested");
-          const prepared = await toPiPromptOptions(message, "prompt");
-          await bound.prompt(message.text, prepared);
-          do {
-            await Promise.allSettled([...extensionTurns]);
-            await bound.waitForIdle();
-          } while (extensionTurns.size > 0);
-        } catch (error) {
-          thrown = error;
+          const project = agentEventProjection();
+          let finalAssistant: AssistantMessage | undefined;
+          let runStarted = false;
+          let streamedAnswer = false;
+          let retriedAfterAnswer: string | undefined;
+          let extensionFailure: string | undefined;
+          let thrown: unknown;
+          const abort = (why: string) => {
+            void bound.abort().catch((error: unknown) => log.warn(`[fastagent] ${why} abort failed: ${String(error)}`));
+          };
+          const unsubscribe = bound.subscribe((event) => {
+            if (event.type === "agent_start") runStarted = true;
+            if ((event.type === "agent_start" || event.type === "compaction_start") && stopRequested)
+              abort("requested");
+            if (event.type === "message_end" && event.message.role === "assistant") {
+              finalAssistant = event.message as AssistantMessage;
+            }
+            if (event.type === "auto_retry_start" && streamedAnswer && retriedAfterAnswer === undefined) {
+              // A retry after streamed output would add a second answer to the first; pi installs its retry after this.
+              retriedAfterAnswer = event.errorMessage;
+              queueMicrotask(() => abort("retry-after-answer"));
+              return;
+            }
+            const rich = toSessionEvent(event, "");
+            const projected = rich && project(rich);
+            if (!projected) return;
+            switch (projected.type) {
+              case "text":
+              case "thinking":
+                streamedAnswer = true;
+                emit({ type: "message_delta", channel: projected.type, delta: projected.delta });
+                break;
+              case "tool_started":
+                emit({ type: "tool_started", toolCallId: projected.id, name: projected.name, args: projected.args });
+                break;
+              case "tool_progress":
+                emit({ type: "tool_progress", toolCallId: projected.id, text: projected.text });
+                break;
+              case "retrying":
+                emit({
+                  type: "retry_scheduled",
+                  attempt: projected.attempt,
+                  maxAttempts: projected.maxAttempts,
+                  delayMs: projected.delayMs,
+                  reason: projected.reason,
+                });
+                break;
+            }
+          });
+          cleanup.push(unsubscribe);
+          const unlisten = bound.extensionRunner.onError((error) => {
+            if (OWED_BY_THE_RUN.has(error.event)) {
+              extensionFailure ??= `${error.event} failed (${error.extensionPath}): ${error.error}`;
+            }
+          });
+          cleanup.push(unlisten);
+          const extensionTurns = trackExtensionTurns(bound);
+          const extensionMayTakeInput =
+            bound.extensionRunner.getRegisteredCommands().length > 0 || bound.extensionRunner.hasHandlers("input");
+          try {
+            if (stopRequested) abort("requested");
+            const prepared = await toPiPromptOptions(message, "prompt");
+            await bound.prompt(message.text, prepared);
+            do {
+              await Promise.allSettled([...extensionTurns]);
+              await bound.waitForIdle();
+            } while (extensionTurns.size > 0);
+          } catch (error) {
+            thrown = error;
+          }
+          // A steer still in its `input` handlers may yet be consumed, which only its answer says.
+          await steering;
+          if (thrown !== undefined) outcome = thrownOutcome(thrown);
+          else if (extensionFailure !== undefined)
+            outcome = { status: "failed", error: agentError("internal", extensionFailure) };
+          else if (retriedAfterAnswer !== undefined) {
+            outcome = {
+              status: "failed",
+              error: { ...agentError("model_error", retriedAfterAnswer), retryable: true },
+            };
+          } else if (finalAssistant) outcome = answeredOutcome(finalAssistant);
+          else if (!runStarted && extensionMayTakeInput) outcome = { status: "intercepted" };
+          else outcome = { status: "failed", error: agentError("internal", "pi settled the run without an answer") };
+          const first = handed[0] as Handed;
+          if (first.fate === undefined && outcome.status === "intercepted") first.fate = { handled: true };
+          return {
+            outcome,
+            ...(usage ? { usage } : {}),
+            messages: handed.map((h) => h.fate ?? { untaken: true as const }),
+          };
+        } finally {
+          finished = true;
+          // What pi still holds it will never run: this run has settled.
+          bound.clearQueue();
+          for (const stop of cleanup) stop();
+          await release(bound);
         }
-        // A steer still in its `input` handlers may yet be consumed, which only its answer says.
-        await steering;
-        finished = true;
-        // What pi still holds it will never run: this run has settled.
-        bound.clearQueue();
-        unsubscribe();
-        unlisten();
-        if (thrown !== undefined) outcome = thrownOutcome(thrown);
-        else if (extensionFailure !== undefined)
-          outcome = { status: "failed", error: agentError("internal", extensionFailure) };
-        else if (retriedAfterAnswer !== undefined) {
-          outcome = { status: "failed", error: { ...agentError("model_error", retriedAfterAnswer), retryable: true } };
-        } else if (finalAssistant) outcome = answeredOutcome(finalAssistant);
-        else if (!runStarted && extensionMayTakeInput) outcome = { status: "intercepted" };
-        else outcome = { status: "failed", error: agentError("internal", "pi settled the run without an answer") };
-        const first = handed[0] as Handed;
-        if (first.fate === undefined && outcome.status === "intercepted") first.fate = { handled: true };
-        await release(bound);
-        return {
-          outcome,
-          ...(usage ? { usage } : {}),
-          messages: handed.map((h) => h.fate ?? { untaken: true as const }),
-        };
       })().finally(() => {
         run = undefined;
       });
@@ -448,29 +457,21 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           await release(bound);
         }
       },
+      // Applies from the next run pi binds: a run accepted but not bound yet (its extensions still loading) binds on it.
+      // Holding the run to its settings at acceptance would not help: pi records the model it binds, which would then
+      // override this update for every later run too.
       update: async (patch: SessionSettings) => {
         settings = await settingsOf();
         let model: AnyModel | undefined;
         if (patch.model !== undefined) {
-          const slash = patch.model.indexOf("/");
-          model =
-            slash > 0
-              ? (settings.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1)) as AnyModel)
-              : undefined;
+          model = modelBySpec(settings.models, patch.model);
           if (!model) return invalid(`unknown model "${patch.model}": models() lists the accepted models`);
         }
         if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
         if (patch.thinkingLevel !== undefined) {
-          if (!(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
-            return invalid(`unknown thinking level "${patch.thinkingLevel}"`);
-          }
           const target = model ?? resolveSessionSettings(activePath(record), settings.models, settings.defaults)?.model;
-          const levels = target ? (getSupportedThinkingLevels(target) as string[]) : undefined;
-          if (target && levels && !levels.includes(patch.thinkingLevel)) {
-            return invalid(
-              `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
-            );
-          }
+          const problem = thinkingLevelProblem(patch.thinkingLevel, target);
+          if (problem) return invalid(problem);
         }
         const applied = applyPropertiesTo(record, {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
