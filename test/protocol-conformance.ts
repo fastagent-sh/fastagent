@@ -167,6 +167,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const session = agent.sessions.get("s");
         const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
         await until(session, first.run.runId, "running");
+        // A running run reports the entry each message became as soon as it is written.
+        const written = await vi.waitFor(
+          async () => {
+            const entry = (await all(session)).find((e) => e.kind === "user_message" && e.runId === first.run.runId);
+            if (!entry) throw new Error("the run's message is not written yet");
+            return entry;
+          },
+          { timeout: 5000 },
+        );
         const steered = agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" });
         if (!agent.info().capabilities.steer) {
           expect(rejected((await drain(steered))[0] as InvokeEvent).error.code).toBe("unsupported");
@@ -178,14 +187,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(joined).toMatchObject({ joined: true, duplicate: false });
         expect(joined.run.runId).toBe(first.run.runId);
         expect(joined.run.messages).toHaveLength(2);
+        expect(joined.run.messages[0]?.entryId).toBe(written.id);
         subject.release();
         const events = await rest;
         const run = await until(session, first.run.runId, "done");
         expect(run.messages).toHaveLength(2);
         expect(run.messages.every((m) => m.entryId !== undefined)).toBe(true);
         expect(answerOf(events)).toBe("answer: also");
-        const written = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
-        expect(written.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
+        const users = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
+        expect(users.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
       });
 
       it("an idle session starts a run whatever whenBusy says", async () => {

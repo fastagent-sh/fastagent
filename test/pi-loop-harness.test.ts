@@ -15,7 +15,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { piSessionBinder } from "../src/harnesses/pi/agent-session-factory.ts";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { isRunMarker } from "../src/harnesses/pi/session-markers.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
@@ -115,17 +114,14 @@ async function piAgent(
   const cwd = process.cwd();
   const harness = piLoopHarness({
     sessions,
-    bind: piSessionBinder({
-      createModelRuntime,
-      modelSpec: `${model.provider}/${model.id}`,
-      tools: tools(world),
-      readDefinition: () => ({ systemPrompt: "test", skills: [] }),
-      extensionPaths: async () => extensionPaths,
-      cwd,
-    }),
-    models: async () => registry,
-    defaultModel: () => model,
+    createModelRuntime,
+    modelSpec: `${model.provider}/${model.id}`,
     thinkingLevel: "off",
+    tools: tools(world),
+    readDefinition: () => ({ systemPrompt: "test", skills: [] }),
+    extensionPaths: async () => extensionPaths,
+    cwd,
+    catalog: async () => registry,
   });
   return servingAgent(loopPort(harness, { queuedPerSession: LIMITS.queuedPerSession, inFlightPerProcess: capacity }));
 }
@@ -190,6 +186,41 @@ export default function (pi) {
 }
 
 describe("pi-coding-agent through LoopPort", () => {
+  it("a run on a provider with no credential fails auth_required", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    try {
+      const createModelRuntime = () => ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+      const catalog = await createModelRuntime();
+      const model = catalog.getModels("anthropic")[0];
+      if (!model) throw new Error("pi's catalog has no anthropic model");
+      const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
+      const agent = servingAgent(
+        loopPort(
+          piLoopHarness({
+            sessions: store,
+            createModelRuntime,
+            modelSpec: `${model.provider}/${model.id}`,
+            readDefinition: () => ({ systemPrompt: "test", skills: [] }),
+            cwd: process.cwd(),
+            catalog: async () => catalog,
+          }),
+        ),
+      );
+      const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+      const run = await vi.waitFor(
+        async () => {
+          const status = await agent.sessions.get("s").runs.get({ runId: first.run.runId });
+          if (status?.status !== "done") throw new Error("not done");
+          return status;
+        },
+        { timeout: 5000 },
+      );
+      expect(run).toMatchObject({ outcome: { status: "failed", error: { code: "auth_required", retryable: false } } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a steer an extension consumed is not run again", async () => {
     const ext = await extensionDir();
     const local = new World();

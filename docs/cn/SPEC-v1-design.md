@@ -276,7 +276,7 @@ steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪�
 
 这要求每个会话的日志只有一个写者。从第一次有操作拿到会话，到会话空闲、队列为空且没有操作持有它，`LoopPort` 一直持有这个会话唯一的 `SessionManager`，每个 run 新绑定的 `AgentSession` 都用它，所有写入（标记、被撤回 run 的 `run_ended`、`update`、`rewind`、`compact`）也都经过它。对会话的任何操作，包括只读的 `read`，都要先经过 `LoopPort` 的会话锁拿到这个 `SessionManager`；本进程第一次拿到时先补写中断 run 的 `run_ended`，所以重启后同时到达的两个请求不会各写一条。如果另开一个 `SessionManager` 写同一个文件，写入的 entry 会变成活动分支之外的旁支，等于丢失。细节见 [agent-service.md](../design/agent-service.md) §9.3。
 
-steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以每个 loop 结束时按位置报告每条消息的去向，`LoopPort` 在同一个 run 里补跑没被处理的消息，并把每条消息对应的 entry 记进 `run_ended`。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被跑两遍。
+steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以 loop 按 `LoopPort` 给每条消息的 id、在发生的那一刻报告它的去向；run 结束时还没被报告的，就是没被处理，`LoopPort` 在同一个 run 里补跑，并把每条消息对应的 entry 记进 `run_ended`。按 id 而不按位置，是因为某条 steer 出错时，按位置会让后面的消息全部错位；当场报告，是为了让运行中的 run 也能查到已写入的 entry。进程中断的 run 没有这份记录，所以它的消息不带 entryId。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被跑两遍。
 
 ### 4. 位置依赖（MUST 8，比 v0.1 弱）
 

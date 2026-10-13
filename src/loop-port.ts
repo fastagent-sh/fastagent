@@ -60,22 +60,33 @@ type LoopOutcome = Extract<RunOutcome, { status: "completed" | "max_tokens" | "i
 type Distribute<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type LoopLiveEvent = Distribute<LiveEvent, "runId">;
 
+/** A message handed to a loop, under the id its fate is reported by. */
+export interface HandedMessage {
+  readonly id: number;
+  readonly prompt: Prompt;
+}
+
 /**
- * What became of one message handed to a loop: written as the `user_message` entry `taken`, consumed by something in
- * the harness that writes no entry (an extension command or input handler), or not taken at all.
+ * What became of a handed message: written as the `user_message` entry `taken`, or consumed by something in the harness
+ * that writes no entry (an extension command or input handler).
  */
-export type MessageFate = { taken: string } | { handled: true } | { untaken: true };
+export type MessageFate = { taken: string } | { handled: true };
+
+export interface LoopHooks {
+  emit(event: LoopLiveEvent): void;
+  /**
+   * Said once per message, as it happens. Only the loop can tell (an extension may consume a message; pi's `steer()`
+   * can queue after its run settled), so a message it has said nothing for when its run ends counts as not taken, and
+   * `LoopPort` runs it itself.
+   */
+  fate(messageId: number, fate: MessageFate): void;
+}
 
 export interface LoopRun {
   /** Hand a message to the run, which takes it after its current tool round. */
-  steer(message: Prompt): void;
+  steer(message: HandedMessage): void;
   stop(): void;
-  /**
-   * `messages` reports each message the loop was handed, by position: the one that started it, then each steer in
-   * order. Only the loop can say what became of them (an extension may consume one; pi's `steer()` can queue after its
-   * run settled), so it must: a message it reports nothing for counts as untaken.
-   */
-  readonly done: Promise<{ outcome: LoopOutcome; usage?: Usage; messages: MessageFate[] }>;
+  readonly done: Promise<{ outcome: LoopOutcome; usage?: Usage }>;
 }
 
 /** A session's log, opened for writing. `LoopPort` holds at most one per session at a time. */
@@ -86,7 +97,7 @@ export interface LoopLog {
   append(kind: RunMarker, data: Json): LogRecord;
   state(): Omit<SessionState, "status" | "run" | "queued">;
   /** Start a run on this log. The harness writes the message as a `user_message` entry when it takes it. */
-  run(message: Prompt, emit: (event: LoopLiveEvent) => void): LoopRun;
+  run(message: HandedMessage, hooks: LoopHooks): LoopRun;
   rewind(entryId: string): Promise<Result>;
   compact(options: { instructions?: string }, signal: AbortSignal): Promise<Result>;
   update(settings: SessionSettings): Promise<Result>;
@@ -142,8 +153,8 @@ interface Running extends Queued {
   closing: boolean;
   /** The message that started the run, then each one joined, in the order they were accepted. */
   readonly messages: Prompt[];
-  /** The entry each message became, by the same position; absent until a loop reports it taken. */
-  readonly entries: (string | undefined)[];
+  /** What each message became, by the same position: its entry, `null` when consumed, absent until a loop says. */
+  readonly fates: (string | null | undefined)[];
   /** The positions in `messages` the current loop was handed: its own first, then its steers. */
   handed: number[];
 }
@@ -247,7 +258,7 @@ function failedRun(error: unknown): LoopRun {
   return {
     steer: () => {},
     stop: () => {},
-    done: Promise.resolve({ outcome: { status: "failed", error: agentError("internal", message) }, messages: [] }),
+    done: Promise.resolve({ outcome: { status: "failed", error: agentError("internal", message) } }),
   };
 }
 
@@ -378,7 +389,8 @@ export function loopPort(
     const ended = entries.find((entry) => entry.kind === "run_ended");
     const endedData = ended?.data as EndedData | undefined;
     const running = held.running?.runId === runId ? held.running : undefined;
-    const entryOf = (i: number) => (running ? running.entries[i] : endedData?.messages?.[i]?.entryId);
+    // An interrupted run has none: which entry was whose is said by its loop, and recorded with its end.
+    const entryOf = (i: number) => (running ? (running.fates[i] ?? undefined) : endedData?.messages?.[i]?.entryId);
     const messages: RunMessage[] = accepted.map((data, i) => {
       const entryId = entryOf(i);
       return {
@@ -446,11 +458,11 @@ export function loopPort(
     running.loop.stop();
   };
 
-  /** A loop that throws instead of taking the message reports nothing for it, so it counts as untaken. */
+  /** A loop that throws instead of taking the message says nothing for it, so it counts as untaken. */
   const steerInto = (running: Running, position: number): void => {
     running.handed.push(position);
     try {
-      running.loop.steer(running.messages[position] as Prompt);
+      running.loop.steer({ id: position, prompt: running.messages[position] as Prompt });
     } catch (error) {
       logger.error(
         `[fastagent] steering run ${running.runId} threw; the run takes the message itself: ${String(error)}`,
@@ -458,9 +470,19 @@ export function loopPort(
     }
   };
 
-  const startLoop = (held: Held, log: LoopLog, runId: string, message: Prompt): LoopRun => {
+  const startLoop = (held: Held, log: LoopLog, running: Running, position: number): LoopRun => {
+    const { runId } = running;
     try {
-      return log.run(message, (event) => emit(held.sessionId, { ...event, runId }));
+      return log.run(
+        { id: position, prompt: running.messages[position] as Prompt },
+        {
+          emit: (event) => emit(held.sessionId, { ...event, runId }),
+          fate: (messageId, fate) => {
+            if (running.fates[messageId] !== undefined) return;
+            running.fates[messageId] = "taken" in fate ? fate.taken : null;
+          },
+        },
+      );
     } catch (error) {
       logger.error(`[fastagent] the harness could not start run ${runId}: ${String(error)}`);
       return failedRun(error);
@@ -480,12 +502,7 @@ export function loopPort(
         }
         outcome = result.value.outcome;
         usage = addUsage(usage, result.value.usage);
-        const fates = result.value.messages;
-        const untaken = running.handed.filter((position, i) => {
-          const fate = fates[i];
-          if (fate && "taken" in fate) running.entries[position] = fate.taken;
-          return fate === undefined || "untaken" in fate;
-        });
+        const untaken = running.handed.filter((position) => running.fates[position] === undefined);
         // A loop that did not take its own first message refused it (a failure before the model): the run ends with
         // that outcome, and the messages it never took end with it.
         const [next, ...rest] = untaken;
@@ -494,7 +511,7 @@ export function loopPort(
           break;
         }
         running.handed = [next];
-        running.loop = startLoop(held, log, running.runId, running.messages[next] as Prompt);
+        running.loop = startLoop(held, log, running, next);
         for (const position of rest) steerInto(running, position);
       }
       if (running.stoppedBy) outcome = { status: "canceled", by: running.stoppedBy };
@@ -521,7 +538,7 @@ export function loopPort(
               outcome,
               ...(usage ? { usage } : {}),
               messages: running.messages.map((_, i): { entryId?: string } => {
-                const entryId = running.entries[i];
+                const entryId = running.fates[i] ?? undefined;
                 return entryId === undefined ? {} : { entryId };
               }),
             } satisfies EndedData,
@@ -553,7 +570,7 @@ export function loopPort(
       loop: NOT_STARTED,
       closing: false,
       messages: [next.message],
-      entries: [],
+      fates: [],
       handed: [0],
     };
     if (!recorded(held, log, "run_started", { runId: running.runId }, running.runId)) {
@@ -563,7 +580,7 @@ export function loopPort(
       return;
     }
     held.running = running;
-    running.loop = startLoop(held, log, running.runId, running.message);
+    running.loop = startLoop(held, log, running, 0);
     Effect.runFork(drive(held, log, running));
   };
 

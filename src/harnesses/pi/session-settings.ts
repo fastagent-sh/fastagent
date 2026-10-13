@@ -92,7 +92,9 @@ export function modelBySpec(models: Models, spec: string): AnyModel | undefined 
  * on; without one, any level of the vocabulary is recorded, and clamped once the session has a model.
  */
 export function thinkingLevelProblem(level: string, model: AnyModel | undefined): string | undefined {
-  if (!(THINKING_LEVELS as ReadonlySet<string>).has(level)) return `unknown thinking level "${level}"`;
+  if (!(THINKING_LEVELS as ReadonlySet<string>).has(level)) {
+    return `unknown thinking level "${level}": state() lists the levels this session accepts`;
+  }
   if (!model) return undefined;
   const levels = getSupportedThinkingLevels(model) as string[];
   return levels.includes(level)

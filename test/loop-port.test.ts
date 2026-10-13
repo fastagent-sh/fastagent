@@ -147,6 +147,50 @@ describe("LoopPort", () => {
     );
   });
 
+  it("a steer the harness throws on shifts nothing: each message is run once", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    const throwingOnBad = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const run = log.run(message, hooks);
+        return {
+          ...run,
+          steer: (steered) => {
+            if (steered.prompt.text === "bad") throw new Error("sync");
+            run.steer(steered);
+          },
+        };
+      },
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && throwingOnBad(log);
+        },
+        create: async (sessionId, onRecord, fork) => throwingOnBad(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const session = agent.sessions.get("s");
+    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
+    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "bad" }, whenBusy: "steer" }));
+    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "good" }, whenBusy: "steer" }));
+    store.release();
+    const run = await vi.waitFor(async () => {
+      const status = await session.runs.get({ runId: first.run.runId });
+      if (status?.status !== "done") throw new Error("not done");
+      return status;
+    });
+    const page = await session.read();
+    const written = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    expect(written.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "good", "bad"]);
+    const byText = new Map(written.map((e) => [(e.data as { text: string }).text, e.id]));
+    expect(run.messages.map((m) => m.entryId)).toEqual([byText.get("hold"), byText.get("bad"), byText.get("good")]);
+  });
+
   it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},
@@ -156,7 +200,6 @@ describe("LoopPort", () => {
           () =>
             resolve({
               outcome: { status: "failed", error: agentError("missing_model", "no model") },
-              messages: [{ untaken: true }],
             }),
           5,
         ),
