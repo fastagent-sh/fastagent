@@ -43,8 +43,16 @@ function invalid(request: InvokeRequest): AgentError | undefined {
   return undefined;
 }
 
-/** A port that rejected: a harness failure or a bug, neither of which the caller can act on but by retrying later. */
+/**
+ * A port that rejected. Its own `AgentRejection` (its storage cannot answer now) is the caller's answer as it is;
+ * anything else is a harness failure or a bug, reported `internal`.
+ */
 function portFailed(operation: string, cause: unknown): AgentError {
+  if (cause instanceof AgentRejection) {
+    log.warn(`[fastagent] ${operation}: ${cause.code}: ${cause.message}`);
+    const { code, message, retryable, details } = cause;
+    return { code, message, retryable, ...(details === undefined ? {} : { details }) };
+  }
   log.error(`[fastagent] ${operation} failed in the harness: ${String(cause)}`);
   return agentError("internal", `${operation} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
 }
@@ -166,7 +174,7 @@ export function servingAgent(port: HarnessPort): Agent {
       return { ok: true as const, events: Stream.concat(recorded, fresh).pipe(Stream.takeUntilEffect(ended)) };
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.succeed(failure("internal", portFailed("reading a run", portError(cause)).message)),
+        Effect.succeed({ ok: false as const, error: portFailed("reading a run", portError(cause)) }),
       ),
     );
 
@@ -186,7 +194,7 @@ export function servingAgent(port: HarnessPort): Agent {
             }),
           ).pipe(
             Effect.catchCause((cause) =>
-              Effect.succeed(failure("internal", portFailed("invoke", portError(cause)).message)),
+              Effect.succeed({ ok: false as const, error: portFailed("invoke", portError(cause)) }),
             ),
           );
           if (!admission.ok) return Stream.succeed<InvokeEvent>({ type: "rejected", error: admission.error });

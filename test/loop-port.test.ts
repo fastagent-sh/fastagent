@@ -180,6 +180,30 @@ describe("LoopPort", () => {
     });
   });
 
+  it("an invoke whose first record the storage refused leaves no session behind", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    store.refuseNext = "run_accepted";
+    const events: InvokeEvent[] = [];
+    for await (const event of agent.invoke({ sessionId: "new", prompt: { text: "x" } })) events.push(event);
+    expect(events).toMatchObject([{ type: "rejected", error: { code: "internal" } }]);
+    expect(await agent.sessions.list()).toEqual([]);
+    expect(store.openLogs).toBe(0);
+  });
+
+  it("a harness that says its storage is unavailable reaches the caller as unavailable", async () => {
+    const harness = fakeLoopHarness(new FakeStore());
+    const down = new AgentRejection(agentError("unavailable", "disk busy"));
+    const agent = servingAgent(loopPort({ ...harness, open: () => Promise.reject(down) }));
+    const session = agent.sessions.get("s");
+    const unavailable = { code: "unavailable", retryable: true, message: "disk busy" };
+    await expect(session.runs.get({ runId: "r" })).rejects.toMatchObject(unavailable);
+    expect(await session.read()).toEqual({ ok: false, error: unavailable });
+    const events: InvokeEvent[] = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+    expect(events).toEqual([{ type: "rejected", error: unavailable }]);
+  });
+
   it("a withdrawal the storage refused still frees the session", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));

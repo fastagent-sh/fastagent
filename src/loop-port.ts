@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import * as RcMap from "effect/RcMap";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { PortFailure, port } from "./effect-port.ts";
+import { PortFailure, port, portCleanup, portError } from "./effect-port.ts";
 import type { Admission, HarnessPort, Page, PortRead } from "./harness-port.ts";
 import { log as logger } from "./log.ts";
 import {
@@ -87,6 +87,10 @@ export interface LoopLog {
   close(): void;
 }
 
+/**
+ * Every call either answers or rejects; a rejection with an `AgentRejection` of code `unavailable` says the storage
+ * cannot answer now, and reaches the caller as that. Any other rejection is a harness failure, reported `internal`.
+ */
 export interface LoopHarness {
   readonly capabilities: Omit<Capabilities, "durableQueue" | "durableRuns">;
   /** `onRecord` sees every record appended from now on, by the harness or by `LoopPort`, once it is durable. */
@@ -322,8 +326,12 @@ export function loopPort(
     ),
   );
 
-  const use = <A, E>(sessionId: string, work: (held: Held) => Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
-    Effect.runPromise(Effect.scoped(Effect.flatMap(RcMap.get(sessions, sessionId), work)));
+  /** Rejects with the harness's own error, so an `AgentRejection` it threw (its storage is unavailable) arrives as is. */
+  const use = async <A, E>(sessionId: string, work: (held: Held) => Effect.Effect<A, E, Scope.Scope>): Promise<A> => {
+    const exit = await Effect.runPromiseExit(Effect.scoped(Effect.flatMap(RcMap.get(sessions, sessionId), work)));
+    if (Exit.isSuccess(exit)) return exit.value;
+    throw portError(exit.cause);
+  };
 
   const locked = <A, E, R>(held: Held, work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Semaphore.withPermits(held.lock, 1)(work);
@@ -514,15 +522,39 @@ export function loopPort(
     Effect.runFork(drive(held, log, running));
   };
 
+  /**
+   * A session that does not exist yet is created only once nothing can refuse the run, and removed again if its first
+   * record is refused: a rejected invoke records nothing (SPEC v1 §3.1).
+   */
+  const recordAccepted = (held: Held, data: AcceptedData): Effect.Effect<LoopLog, PortFailure> =>
+    Effect.gen(function* () {
+      const existing = held.log;
+      const log = existing ?? (yield* port(() => harness.create(held.sessionId, onRecord(held))));
+      held.log = log;
+      yield* Effect.try({ try: () => log.append("run_accepted", data), catch: (cause) => new PortFailure(cause) }).pipe(
+        Effect.onError(() =>
+          existing
+            ? Effect.void
+            : Effect.suspend(() => {
+                log.close();
+                held.log = undefined;
+                return portCleanup(`removing session ${held.sessionId}`, () => harness.delete(held.sessionId));
+              }),
+        ),
+      );
+      return log;
+    });
+
   const accept = (
     held: Held,
-    log: LoopLog,
     message: Prompt,
     options: { whenBusy: WhenBusy; idempotencyKey?: string; source: RunSource },
   ): Effect.Effect<Admission, PortFailure, Scope.Scope> =>
     Effect.gen(function* () {
       const { whenBusy, idempotencyKey, source } = options;
-      if (idempotencyKey !== undefined) {
+      const existing = held.log;
+      if (existing && idempotencyKey !== undefined) {
+        const log = existing;
         const known = held.keys.get(idempotencyKey);
         const run = known === undefined ? undefined : statusOf(held, log, known);
         if (run && !(run.status === "done" && run.outcome.status === "interrupted")) {
@@ -548,12 +580,12 @@ export function loopPort(
         }
         if (whenBusy === "steer" && running && !running.stoppedBy && !running.closing) {
           if (!capabilities.steer) return failure("unsupported", "this agent cannot steer a running run");
-          log.append("run_accepted", {
+          const log = yield* recordAccepted(held, {
             runId: running.runId,
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
             source,
             joined: true,
-          } satisfies AcceptedData);
+          });
           if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, running.runId);
           running.messages.push(message);
           steerInto(running, message);
@@ -567,11 +599,11 @@ export function loopPort(
         return failure("busy", `this process already has ${inFlight} runs in flight`, { reason: "capacity" });
       }
       const runId = crypto.randomUUID();
-      log.append("run_accepted", {
+      const log = yield* recordAccepted(held, {
         runId,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         source,
-      } satisfies AcceptedData);
+      });
       if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, runId);
       const hold = Scope.makeUnsafe();
       yield* Scope.provide(RcMap.get(sessions, held.sessionId), hold);
@@ -611,16 +643,7 @@ export function loopPort(
   return {
     capabilities,
 
-    submit: (sessionId, message, options) =>
-      use(sessionId, (held) =>
-        locked(
-          held,
-          Effect.gen(function* () {
-            if (!held.log) held.log = yield* port(() => harness.create(sessionId, onRecord(held)));
-            return yield* accept(held, held.log, message, options);
-          }),
-        ),
-      ),
+    submit: (sessionId, message, options) => use(sessionId, (held) => locked(held, accept(held, message, options))),
 
     getRun: (sessionId, key: RunKey) =>
       use(sessionId, (held) =>

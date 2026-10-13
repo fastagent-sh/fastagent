@@ -208,6 +208,7 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
           code: "busy",
           details: { reason: "capacity" },
         });
+        expect((await agent.sessions.list()).map((s) => s.sessionId)).not.toContain("c");
         subject.release();
       });
     });
