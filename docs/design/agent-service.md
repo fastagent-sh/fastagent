@@ -902,7 +902,7 @@ Compatibility is checked in both directions, so the protocol stays expressible i
 - **An ACP agent as a harness.** claude-agent-acp, codex-acp, Gemini CLI or dsh's ACP server plug in through the
   harness port (§9.1) with fewer capabilities: no steering under v1, no durable queue, and run boundaries written by
   the serving layer. An agent that cannot replay its history (`session/load`, which dsh's server lacks) leaves the
-  whole log to the run helper, which records every `session/update` it receives, so `read` and `follow` work as for
+  whole log to `LoopPort`, which records every `session/update` it receives, so `read` and `follow` work as for
   any harness.
 - **What ACP cannot express today:** caller-named sessions (the bridge maps them), idempotency keys, and a run's
   status by id. FastAgent does not use ACP's client file system and terminals, permission requests or elicitation.
@@ -1072,25 +1072,31 @@ Two ways to place the queue of a busy session:
 |---|---|---|
 | The port offers | Run one turn, steer it, stop it, read the log | Submit with a mode, cancel a run, abort a session, read the log, settings, fork |
 | A harness with a durable queue (pi-durable, dsh) | Its queue goes unused, and queued runs are lost on a restart | Its queue is used, and queued runs survive a restart |
-| A harness that is only a loop (pi, an ACP agent) | Works as it is | A shared run helper adds the queue, run ids and run boundaries |
+| A harness that is only a loop (pi, an ACP agent) | Works as it is | A shared `LoopPort` adds the queue, run ids and run boundaries |
 | The semantics | Written once | Defined once by the protocol, and held by one conformance suite every port implementation runs |
 
 B wins: durable harnesses are the reason to plug in pi-durable and dsh at all, and A would leave their durability
 unused.
 
+So the port has two layers. `HarnessPort` is the one the serving layer calls, and a durable harness implements it
+directly. `LoopHarness` is what a harness that is only a loop implements: start a run on a message, steer it, stop it,
+and read and append its log. `LoopPort` turns a `LoopHarness` into a `HarnessPort`, owning what such a harness lacks:
+admission, the queue, idempotency, run records, the steering promise and closing interrupted runs (§9.3). It is
+written once, so the semantics of a busy session are the same for pi-coding-agent and for an ACP agent later.
+
 | Port operation | Means |
 |---|---|
-| `submit(session, message, { whenBusy, idempotencyKey, source })` | Returns the run. Looking up the key, recording the accepted run and queueing it are one step, serialized per session, so two deliveries of one message cannot both start a run: a durable harness does it natively (pi-durable keys submissions by request id), and the run helper under its per-session lock, with the keys of queued runs in its durable record. A durable harness queues natively; the run helper queues for one that is only a loop |
+| `submit(session, message, { whenBusy, idempotencyKey, source })` | Returns the run. Looking up the key, recording the accepted run and queueing it are one step, serialized per session, so two deliveries of one message cannot both start a run: a durable harness does it natively (pi-durable keys submissions by request id), and `LoopPort` under its per-session lock, with each accepted run recorded in the session's log (§9.3). A durable harness queues natively; `LoopPort` queues for one that is only a loop |
 | `cancelRun(session, runId)`, `abort(session)` | Withdraw or stop one run; stop everything the session is doing |
 | `read(session, { after })`, live events | The serving layer builds `read`, `follow` and `runs.follow` on them |
 | `create`, `open`, `fork`, `delete`, settings | Session lifecycle; the serving layer maps caller-named ids to the harness's own |
-| Capabilities | `steer`, `fork`, `durableQueue`, `durableRuns`, and whether run boundaries are native or written by the helper. A port that offers `steer` keeps a run going while it holds a steered message it has not taken |
+| Capabilities | `steer`, `fork`, `durableQueue`, `durableRuns`, and whether run boundaries are native or written by `LoopPort`. A port that offers `steer` keeps a run going while it holds a steered message it has not taken |
 
 |  | Withdraw a queued run | Stop the running run, keep the queue | Abort the session |
 |---|---|---|---|
 | DeepSeek Harness | `inbox.remove(id)` | `cancel(user, { keepInbox: true })` | `cancel()` |
 | pi-durable | `submission.abort()` | `harness.abortTask()` on the generation task; the port then starts the queued inputs itself | `conversation.abort()` |
-| pi, an ACP agent (the run helper) | Remove it from the helper's queue | The `AbortSignal` given to the turn | Both |
+| pi, an ACP agent (`LoopPort`) | Remove it from `LoopPort`'s queue | The `AbortSignal` given to the turn | Both |
 
 Steering stays a harness capability, because only the loop knows where its steps end: from outside, the serving
 layer could only stop a step, killing a tool mid-call, or wait for the run to end, which is a queued run.
@@ -1143,7 +1149,7 @@ show:
   it cannot replay a session's history to a client.
 
 So DeepSeek Harness is reached first as an ACP agent (step 5), with what ACP v1 carries. Without `session/load`, the
-port's `read` has no source in dsh: the run helper records the whole log, every `session/update` it receives, not
+port's `read` has no source in dsh: `LoopPort` records the whole log, every `session/update` it receives, not
 only run boundaries (§7.9). A native port for it waits for the cost of composing its plugin runtime to be worth what
 ACP leaves out, which a run against the npm `alpha` release would measure.
 
@@ -1162,14 +1168,46 @@ Works with      Content (content/<name>/) · Connectors (tools, MCP) · Environm
 ### 9.3 Runs and durability
 
 What a caller reads after the fact comes from two durable records. The first is the record of each accepted run, its
-id, key and source, written before the receipt is sent: a durable harness keeps it in its own queue (pi-durable's
-submission records), and the run helper writes it to the session's state. The second is the session's log, with each
-run's `run_started` and `run_ended`, which a harness writes natively (dsh's turn boundaries, pi-durable's settled
-submissions) or the run helper writes for it. A run's status is derived from both and the queue. A run that was
-accepted, never ended and is neither running nor queued is `interrupted`; the serving layer writes its closing entry
-when it first opens the session after the run stopped, before answering anything on it, so a caller reattaching with
-`runs.follow` after a restart reaches the end without the session running again. Only live events, and for a harness that is only a loop the order of its queue and
-its current run, are held in memory: a queued run lost with them is still known, as `interrupted`.
+id, key and source, written before the receipt is sent. The second is each run's `run_started` and `run_ended`, which
+a harness writes natively (dsh's turn boundaries, pi-durable's settled submissions) or `LoopPort` writes for it. A
+run's status is derived from both and the queue. A run that was accepted, never ended and is neither running nor
+queued is `interrupted`; its closing entry is written when the session is first opened after the run stopped, before
+anything on it is answered, so a caller reattaching with `runs.follow` after a restart reaches the end without the
+session running again. Only live events, and for a harness that is only a loop the order of its queue and its current
+run, are held in memory: a queued run lost with them is still known, as `interrupted`.
+
+Both records live in the same store as the conversation, written together. pi-durable keeps its submissions in their
+own table, but commits them atomically with the entries they place. `LoopPort` gets the same property from a harness
+log that has one writer: it writes `run_accepted`, `run_started` and `run_ended` as plane markers (entries the model
+never sees and a fork does not copy) into the session's log, each naming its run. A record of accepted runs in a file
+of its own was considered and not chosen: two files cannot be written atomically, so every crash between them would
+need its own recovery rule, for a gain that arrives only with scaling out, whose storage is redesigned anyway (§10.2,
+§13).
+
+The rules this gives `LoopPort` over pi-coding-agent, each checked against pi with a faux model:
+
+- **One writer.** pi's `SessionManager` keeps the whole log and its leaf in memory and appends to the file. A second
+  manager writing the same file does not corrupt it, but the entry it writes is a side branch the active path never
+  reaches. So from a session's first accepted run until it is idle with an empty queue, `LoopPort` holds the session's
+  one `SessionManager`, binds each run's fresh `AgentSession` to it, and sends every write through it: the markers, a
+  withdrawn run's `run_ended`, and `update`. An idle session holds nothing in process.
+- **Writes during a run.** Appended through the run's own manager, a marker or a settings change keeps the log one
+  chain, never reaches the model's context, and survives a reopen unchanged. A running run takes its model from its
+  agent's state, so `update` during a run applies from the next run, as SPEC v1 says, instead of answering `busy` as
+  today.
+- **Which run an entry belongs to.** pi's entries carry no run id. A marker names its run; a message belongs to the run
+  whose `run_started` and `run_ended` enclose it, since a session runs one run at a time; a settings change belongs to
+  none.
+- **Idempotency.** Opening a session scans its whole log, not only the active path (a rewind leaves earlier runs'
+  keys on an abandoned branch), into an index of keys to runs held while the session is busy.
+- **Steering.** pi keeps a run going for a message steered before `agent_settled`, even after a failed model request.
+  What it does not cover is pi's own gap: `steer()` awaits the definition's `input` handlers before it queues, so a
+  message `LoopPort` has already joined can reach pi's queue after the run settled. `LoopPort` stops joining at
+  `agent_settled`, and when `prompt()` returns it runs any joined message that was not written as a user entry in the
+  same run, before writing `run_ended`.
+
+pi and `writeFileAtomic` both write without `fsync`, so either choice survives a process crash and may lose its newest
+write on power loss; pi drops a torn last line when it loads a log.
 
 | What happens | A running run | A queued run |
 |---|---|---|
@@ -1187,8 +1225,8 @@ Process affinity exists only while a run is active, and routing across instances
 FastAgent ([session control](session-control.md) §9). FastAgent's deployments meet it by topology: one process per
 agent on a resident host, and on AgentCore the microVM of the runtime session the call names. Scaling out keeps it by
 giving each conversation its own runtime session, which a router finds from the path or the invoke's body (§7.7). This
-is weaker than SPEC MUST 6, which forbids requiring a session's invocations to land in one process: a queued run in a
-helper's memory, or a steer, is state only the process running the session holds. Portable conformance needs that
+is weaker than SPEC MUST 6, which forbids requiring a session's invocations to land in one process: a queued run in
+`LoopPort`'s memory, or a steer, is state only the process running the session holds. Portable conformance needs that
 router in front (§7.8).
 
 ### 9.4 Where state lives
@@ -1299,7 +1337,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
 | 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
-| 4 | The serving protocol (§7) on the harness port (§9.1), with the run helper for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
+| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |
@@ -1427,14 +1465,14 @@ The serving protocol:
 The architecture and deployment:
 
 - The protocol is written once above a harness port, so another harness can be added; the queue of a busy session
-  lives behind the port, so a durable harness's queue is used, and a shared run helper serves harnesses that are only
-  a loop (§9.1).
+  lives behind the port, so a durable harness's queue is used, and a shared `LoopPort` serves harnesses that are only
+  a loop, writing its run records into the harness's own log through its one writer (§9.1).
 - Steering is a harness capability; stopping a run is a signal the port receives (§9.1).
 - pi-durable is a second harness in step 4, behind the same port, which an agent opts into; pi-coding-agent stays the
   default, so `extensions/`, MCP and `chat` keep working. An agent that chooses pi-durable and declares `extensions/`
   or `mcp.json` is refused at start. A spike measured it against the port's run, queue, stop, read and restart
   operations; `rewind` and `delete`, which it lacks, are open (§9.1, §13).
-- DeepSeek Harness is reached through its ACP server first (step 5), with the run helper recording its whole log; a
+- DeepSeek Harness is reached through its ACP server first (step 5), with `LoopPort` recording its whole log; a
   native harness for it waits until a run against its npm `alpha` release shows that composing its plugin runtime is
   worth what ACP leaves out (§9.1).
 - After a failed run, queued runs start as usual. pi-durable leaves its queue waiting after any run that does not end

@@ -188,7 +188,7 @@ for await (const e of session.runs.follow(runId, { after: lastEntryId })) { /* .
 
 不同 harness 能力不同，客户端读一次即可，因为它在 agent 的整个生命周期内固定不变。
 
-| 能力 | pi-coding-agent（通过 run helper 接入） | pi-durable |
+| 能力 | pi-coding-agent（通过 `LoopPort` 接入） | pi-durable |
 |---|---|---|
 | `steer` | 支持 | 支持 |
 | `fork` | 支持 | 支持 |
@@ -237,7 +237,7 @@ for await (const e of session.runs.follow(runId, { after: lastEntryId })) { /* .
                ↓ 全部调用同一个协议（本 SPEC）
 服务层       id 映射 · 忙时规则 · 上限 · follow · 平面划分      ← 只写一次
                ↓ harness port（实现内部契约，不写进 SPEC）
-harness      pi-coding-agent（+ run helper）· pi-durable · 将来 ACP agent / DeepSeek Harness
+harness      pi-coding-agent（+ `LoopPort`）· pi-durable · 将来 ACP agent / DeepSeek Harness
                ↓
 存储         .state/（文件系统）；将来 AgentCore 上换成 API 存储
 ```
@@ -251,7 +251,7 @@ channel、定时任务和 wake 不再走特殊通道，它们和外部应用一�
 | | A：队列放在服务层 | B：队列放在 port 后面（选定） |
 |---|---|---|
 | 自带持久队列的 harness（pi-durable、dsh） | 它的队列用不上，重启后排队的 run 会丢 | 直接使用它的原生队列，重启不丢 |
-| 只有循环的 harness（pi、ACP agent） | 直接可用 | 由共享的 run helper 补上队列、run 编号和开始/结束记录 |
+| 只有循环的 harness（pi、ACP agent） | 直接可用 | 由共享的 `LoopPort` 补上队列、run 编号和开始/结束记录 |
 
 选 B，因为接入 pi-durable 的意义就在于它的持久性。
 
@@ -265,6 +265,10 @@ steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪�
 2. **会话日志**：其中包含 `run_started` 和 `run_ended`。
 
 只有实时事件放在内存里。对只有循环的 harness，排队顺序和当前 run 也在内存里。内存丢了不会让 run 凭空消失，它会被认定为 `interrupted`。
+
+对 pi-coding-agent，`LoopPort` 把这两份记录都写进 pi 的会话日志，形式是三种 plane marker（模型看不到、fork 也不复制的记录）：`run_accepted`、`run_started`、`run_ended`，每条都带自己的 runId。不单独存一个文件，因为两个文件没法原子写入。pi-durable 也一样：它的 submission 是单独一张表，但和 entry 在同一次 commit 里写入。
+
+这要求每个会话的日志只有一个写者。从会话第一次接受请求，到空闲且队列为空，`LoopPort` 一直持有这个会话唯一的 `SessionManager`，每个 run 新绑定的 `AgentSession` 都用它，所有写入（标记、被撤回 run 的 `run_ended`、`update`）也都经过它。如果另开一个 `SessionManager` 写同一个文件，写入的 entry 会变成活动分支之外的旁支，等于丢失。细节见 [agent-service.md](../design/agent-service.md) §9.3。
 
 ### 4. 位置依赖（MUST 8，比 v0.1 弱）
 
