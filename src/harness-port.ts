@@ -34,6 +34,11 @@ export type Admission =
   | { ok: true; run: RunStatus; joined: boolean; duplicate: boolean }
   | { ok: false; error: AgentError };
 
+/**
+ * Every call answers with a value. A read with no failure branch (`getRun`, `attachment`, `list`, `models`,
+ * `commands`) rejects with an `AgentRejection` of code `unavailable` when its storage cannot answer; any other
+ * rejection is a harness failure, reported `internal`.
+ */
 export interface HarnessPort {
   readonly capabilities: Capabilities;
   /**

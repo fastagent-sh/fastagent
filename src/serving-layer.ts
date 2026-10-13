@@ -28,9 +28,9 @@ import {
   isAddressable,
 } from "./protocol.ts";
 
+/** The rules a request's type cannot carry. Decoding untyped input into an `InvokeRequest` is the transport's. */
 function invalid(request: InvokeRequest): AgentError | undefined {
   const { sessionId, idempotencyKey } = request;
-  if (typeof request.prompt?.text !== "string") return agentError("invalid_request", "prompt.text must be a string");
   if (sessionId !== undefined && !isAddressable(sessionId)) {
     return agentError("invalid_request", `session id ${JSON.stringify(sessionId)} cannot be addressed`);
   }
@@ -54,15 +54,23 @@ const settle =
   <T>(pending: Promise<T>): Promise<T | { ok: false; error: AgentError }> =>
     pending.catch((cause: unknown) => ({ ok: false as const, error: portFailed(operation, cause) }));
 
-const rejectUnavailable =
+/** A read without a failure branch: the port's own `AgentRejection` (its storage is unavailable) passes as it is. */
+const rejectRead =
   (operation: string) =>
   <T>(pending: Promise<T>): Promise<T> =>
     pending.catch((cause: unknown) => {
-      throw new AgentRejection(
-        agentError("unavailable", `${operation} failed: ${cause instanceof Error ? cause.message : String(cause)}`),
-        { cause },
-      );
+      if (cause instanceof AgentRejection) throw cause;
+      throw new AgentRejection(portFailed(operation, cause), { cause });
     });
+
+const failedStream = (error: AgentError): Stream.Stream<SessionEvent> =>
+  Stream.succeed({ type: "serving_error", message: error.message });
+
+/** A follow's page the port refused (the session went away mid-way) is an answer, not a harness failure. */
+const followFailed = (cause: unknown): Stream.Stream<SessionEvent> =>
+  cause instanceof AgentRejection
+    ? Stream.succeed({ type: "serving_error", message: cause.message })
+    : failedStream(portFailed("follow", cause));
 
 const entryEvent = (entry: Entry): SessionEvent => ({ type: "entry", entry });
 
@@ -85,13 +93,15 @@ const endsRun =
   (event: SessionEvent): boolean =>
     event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId;
 
+const utf8 = new TextEncoder();
+
 /** A page trimmed to the byte budget from the side away from its cursor, keeping at least one entry. */
 function withinBudget(entries: Entry[], keepNewest: boolean): Entry[] {
   const ordered = keepNewest ? [...entries].reverse() : entries;
   const kept: Entry[] = [];
   let bytes = 0;
   for (const entry of ordered) {
-    bytes += JSON.stringify(entry).length;
+    bytes += utf8.encode(JSON.stringify(entry)).byteLength;
     if (kept.length > 0 && bytes > LIMITS.pageBytes) break;
     kept.push(entry);
   }
@@ -143,9 +153,6 @@ export function servingAgent(port: HarnessPort): Agent {
       ),
     );
 
-  const failedStream = (error: AgentError): Stream.Stream<SessionEvent> =>
-    Stream.succeed({ type: "serving_error", message: error.message });
-
   const invoke = (request: InvokeRequest): AsyncIterable<InvokeEvent> =>
     asIterable(
       Stream.unwrap(
@@ -191,7 +198,7 @@ export function servingAgent(port: HarnessPort): Agent {
           const backfill = Stream.paginate<Loaded | string, SessionEvent, unknown>(first, (state) =>
             Effect.gen(function* () {
               const page = typeof state === "string" ? yield* load(state) : state;
-              if (!page.ok) return yield* Effect.fail(page.error);
+              if (!page.ok) return yield* Effect.fail(new AgentRejection(page.error));
               for (const entry of page.entries) seen.add(entry.id);
               const last = page.entries.at(-1);
               return [
@@ -204,8 +211,8 @@ export function servingAgent(port: HarnessPort): Agent {
             backfill,
             Stream.fromQueue(queue).pipe(Stream.filter((event) => event.type !== "entry" || !seen.has(event.entry.id))),
           ) as Stream.Stream<FollowEvent, unknown>;
-        }).pipe(Effect.catchCause((cause) => Effect.succeed(failedStream(portFailed("follow", portError(cause)))))),
-      ).pipe(Stream.catchCause((cause) => failedStream(portFailed("follow", portError(cause))))),
+        }).pipe(Effect.catchCause((cause) => Effect.succeed(followFailed(portError(cause))))),
+      ).pipe(Stream.catchCause((cause) => followFailed(portError(cause)))),
     );
 
   const read = async (
@@ -254,14 +261,14 @@ export function servingAgent(port: HarnessPort): Agent {
       read: (options = {}) => checked(() => read(sessionId, options)),
       follow: (options = {}) =>
         isAddressable(sessionId) ? follow(sessionId, options.after) : rejectedStream(unaddressable(sessionId).error),
-      attachment: (ref) => rejectUnavailable("reading an attachment")(port.attachment(sessionId, ref)),
+      attachment: (ref) => rejectRead("reading an attachment")(port.attachment(sessionId, ref)),
       abort: () => checked(() => settle("abort")(port.abort(sessionId))),
       rewind: (entryId) => checked(() => settle("rewind")(port.rewind(sessionId, entryId))),
       compact: (options) => checked(() => settle("compact")(port.compact(sessionId, options))),
       update: (settings) => checked(() => settle("update")(port.update(sessionId, settings))),
       delete: () => checked(() => settle("delete")(port.delete(sessionId))),
       runs: {
-        get: (key) => rejectUnavailable("reading a run")(port.getRun(sessionId, key)),
+        get: (key) => rejectRead("reading a run")(port.getRun(sessionId, key)),
         cancel: (runId) => checked(() => settle("cancel")(port.cancelRun(sessionId, runId))),
         follow: (runId, options = {}) => {
           if (!isAddressable(sessionId)) return rejectedStream(unaddressable(sessionId).error);
@@ -291,11 +298,11 @@ export function servingAgent(port: HarnessPort): Agent {
         const result = await settle("create")(port.create(sessionId, options.fork));
         return result.ok ? { ok: true, sessionId } : result;
       },
-      list: () => rejectUnavailable("listing sessions")(port.list()),
+      list: () => rejectRead("listing sessions")(port.list()),
       get: session,
     },
     info: () => ({ protocolVersion: "1.0", capabilities: port.capabilities }),
-    models: () => rejectUnavailable("listing models")(port.models()),
-    commands: () => rejectUnavailable("listing commands")(port.commands()),
+    models: () => rejectRead("listing models")(port.models()),
+    commands: () => rejectRead("listing commands")(port.commands()),
   };
 }

@@ -28,6 +28,8 @@ export class FakeStore {
   readonly sessions = new Map<string, StoredSession>();
   generation = 0;
   effects = 0;
+  /** Makes the storage refuse the next append of this kind, the way a full disk would. */
+  refuseNext: string | undefined;
   private ids = 0;
   private held = gate();
 
@@ -64,6 +66,10 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
     const write = (kind: string, data: Json): LogRecord => {
       alive();
       if (closed) throw new Error(`the log of ${sessionId} is closed`);
+      if (store.refuseNext === kind) {
+        store.refuseNext = undefined;
+        throw new Error("ENOSPC: no space left on device");
+      }
       const record: LogRecord = {
         id: store.nextId(),
         ...(stored.leaf ? { parentEntryId: stored.leaf } : {}),
@@ -111,9 +117,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       })();
       return {
         steer: async (steered) => {
-          if (finished) return "too_late";
-          pending.push(steered);
-          return "queued";
+          if (!finished) pending.push(steered);
         },
         stop: () => {
           stopped = true;
