@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type LoopHarness, type LoopLog, loopPort } from "../src/loop-port.ts";
+import { type LoopHarness, type LoopLog, type LoopRun, loopPort } from "../src/loop-port.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
 import { AgentRejection, type FollowEvent, type InvokeEvent, LIMITS, agentError, failure } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
@@ -42,6 +42,31 @@ function steeringDropped(harness: LoopHarness): LoopHarness {
   };
 }
 
+/** A harness whose every loop ends before it writes its message, counting the loops it was asked to start. */
+function refusingEveryMessage(
+  harness: LoopHarness,
+  refuse: () => LoopRun,
+): { harness: LoopHarness; loops: () => number } {
+  let loops = 0;
+  // Past a handful, a regression would restart forever; a run that never ends stops it so the count can fail.
+  const never: LoopRun = { steer: async () => {}, stop: () => {}, done: new Promise(() => {}) };
+  const refusing = (log: LoopLog): LoopLog => ({
+    ...log,
+    run: () => (++loops > 5 ? never : refuse()),
+  });
+  return {
+    harness: {
+      ...harness,
+      open: async (sessionId, onRecord) => {
+        const log = await harness.open(sessionId, onRecord);
+        return log && refusing(log);
+      },
+      create: async (sessionId, onRecord, fork) => refusing(await harness.create(sessionId, onRecord, fork)),
+    },
+    loops: () => loops,
+  };
+}
+
 async function receiptOf(events: AsyncIterable<InvokeEvent>) {
   for await (const event of events) if (event.type === "accepted") return event;
   throw new Error("not accepted");
@@ -68,19 +93,91 @@ describe("LoopPort", () => {
     const ends = page.ok ? page.entries.filter((e) => e.kind === "run_ended") : [];
     expect(ends).toHaveLength(1);
   });
+  it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
+    const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
+      steer: async () => {},
+      stop: () => {},
+      done: new Promise((resolve) =>
+        setTimeout(() => resolve({ outcome: { status: "failed", error: agentError("missing_model", "no model") } }), 5),
+      ),
+    }));
+    const first = servingAgent(loopPort(missingModel.harness));
+    const failed = await receiptOf(first.invoke({ sessionId: "s", prompt: { text: "x" } }));
+    await vi.waitFor(async () =>
+      expect(await first.sessions.get("s").runs.get({ runId: failed.run.runId })).toMatchObject({
+        outcome: { status: "failed", error: { code: "missing_model" } },
+      }),
+    );
+    expect(missingModel.loops()).toBe(1);
+
+    const throwing = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => {
+      throw new Error("cannot start");
+    });
+    const second = servingAgent(loopPort(throwing.harness));
+    const thrown = await receiptOf(second.invoke({ sessionId: "s", prompt: { text: "x" } }));
+    await vi.waitFor(async () =>
+      expect(await second.sessions.get("s").runs.get({ runId: thrown.run.runId })).toMatchObject({
+        outcome: { status: "failed", error: { code: "internal" } },
+      }),
+    );
+    expect(throwing.loops()).toBe(1);
+  });
+
   it("a run whose start the storage refused reads as interrupted, and the session goes on", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
     const session = agent.sessions.get("s");
     store.refuseNext = "run_started";
-    const refused = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" }));
-    expect(refused.run).toMatchObject({ status: "done", outcome: { status: "interrupted" } });
+    const events: InvokeEvent[] = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
+      events.push(event);
+    }
+    // Released once its run failed to start, the session is acquired again by the stream itself, which closes the run.
+    expect(events[0]).toMatchObject({ type: "accepted", run: { status: "done", outcome: { status: "interrupted" } } });
+    expect(events.slice(1)).toMatchObject([
+      { type: "entry", entry: { kind: "run_ended", data: { outcome: { status: "interrupted" } } } },
+    ]);
     const next = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "y" } }));
     await vi.waitFor(async () =>
       expect(await session.runs.get({ runId: next.run.runId })).toMatchObject({ outcome: { status: "completed" } }),
     );
     const retried = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" }));
     expect(retried.duplicate).toBe(false);
+  });
+
+  it("a run whose end the storage refused ends the streams waiting for it", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    const session = agent.sessions.get("s");
+    const iterator = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
+    const head = await iterator.next();
+    const runId = head.done || head.value.type !== "accepted" ? "" : head.value.run.runId;
+    await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("running"));
+    store.refuseNext = "run_ended";
+    store.release();
+    const rest: InvokeEvent[] = [];
+    for (let next = await iterator.next(); !next.done; next = await iterator.next()) rest.push(next.value);
+    expect(rest.at(-1)?.type).toBe("serving_error");
+    expect(rest.some((e) => e.type === "entry" && e.entry.kind === "run_ended")).toBe(false);
+    expect(await session.runs.get({ runId })).toMatchObject({ outcome: { status: "interrupted" } });
+  });
+
+  it("closes the log when closing a previous process's runs fails", async () => {
+    const store = new FakeStore();
+    const before = servingAgent(loopPort(fakeLoopHarness(store)));
+    const held = await receiptOf(before.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(async () =>
+      expect((await before.sessions.get("s").runs.get({ runId: held.run.runId }))?.status).toBe("running"),
+    );
+    store.restart();
+    const after = servingAgent(loopPort(fakeLoopHarness(store)));
+    store.refuseNext = "run_ended";
+    const refused = await after.sessions.get("s").read();
+    expect(refused.ok).toBe(false);
+    expect(store.openLogs).toBe(0);
+    expect(await after.sessions.get("s").runs.get({ runId: held.run.runId })).toMatchObject({
+      outcome: { status: "interrupted" },
+    });
   });
 
   it("a withdrawal the storage refused still frees the session", async () => {
@@ -93,6 +190,9 @@ describe("LoopPort", () => {
     store.refuseNext = "run_ended";
     expect(await session.runs.cancel(queued.run.runId)).toEqual({ ok: true });
     expect(await session.runs.get({ runId: queued.run.runId })).toMatchObject({ outcome: { status: "interrupted" } });
+    const followed: FollowEvent[] = [];
+    for await (const event of session.runs.follow(queued.run.runId)) followed.push(event);
+    expect(followed).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/no recorded end/) }]);
     store.release();
     const after = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "after" } }));
     await vi.waitFor(async () =>
@@ -154,6 +254,14 @@ describe("serving layer", () => {
     await expect(down.sessions.list()).rejects.toBe(unavailable);
     const broken = servingAgent({ ...port, list: () => Promise.reject(new TypeError("x is undefined")) });
     await expect(broken.sessions.list()).rejects.toMatchObject({ code: "internal", retryable: false });
+  });
+
+  it("never hands the harness a session id no URL can address", async () => {
+    const port = loopPort(fakeLoopHarness(new FakeStore()));
+    const untouchable = () => Promise.reject(new Error("the port was reached"));
+    const agent = servingAgent({ ...port, getRun: untouchable, attachment: untouchable });
+    expect(await agent.sessions.get("..").runs.get({ runId: "r" })).toBeUndefined();
+    expect(await agent.sessions.get(".").attachment("ref")).toBeUndefined();
   });
 
   it("stops a page at the byte budget, keeping the entries nearest its cursor", async () => {

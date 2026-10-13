@@ -28,6 +28,8 @@ export class FakeStore {
   readonly sessions = new Map<string, StoredSession>();
   generation = 0;
   effects = 0;
+  /** Logs this process has open. */
+  openLogs = 0;
   /** Makes the storage refuse the next append of this kind, the way a full disk would. */
   refuseNext: string | undefined;
   private ids = 0;
@@ -49,6 +51,7 @@ export class FakeStore {
 
   restart(): void {
     this.generation++;
+    this.openLogs = 0;
     this.held = gate();
   }
 }
@@ -63,6 +66,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
 
   const logOf = (sessionId: string, stored: StoredSession, onRecord: (record: LogRecord) => void): LoopLog => {
     let closed = false;
+    store.openLogs++;
     const write = (kind: string, data: Json): LogRecord => {
       alive();
       if (closed) throw new Error(`the log of ${sessionId} is closed`);
@@ -155,6 +159,7 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       },
       attachment: async () => undefined,
       close: () => {
+        if (!closed) store.openLogs--;
         closed = true;
       },
     };

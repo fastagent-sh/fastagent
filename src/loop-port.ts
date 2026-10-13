@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import * as RcMap from "effect/RcMap";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { type PortFailure, port } from "./effect-port.ts";
+import { PortFailure, port } from "./effect-port.ts";
 import type { Admission, HarnessPort, Page, PortRead } from "./harness-port.ts";
 import { log as logger } from "./log.ts";
 import {
@@ -299,8 +299,15 @@ export function loopPort(
                 running: undefined,
                 compaction: undefined,
               };
-              held.log = yield* port(() => harness.open(sessionId, onRecord(held)));
-              if (held.log) reconcile(held, held.log);
+              const log = yield* port(() => harness.open(sessionId, onRecord(held)));
+              if (log) {
+                // The release below never runs for an acquisition that failed, so a log reconcile could not close is
+                // closed here.
+                yield* Effect.try({ try: () => reconcile(held, log), catch: (cause) => new PortFailure(cause) }).pipe(
+                  Effect.onError(() => Effect.sync(() => log.close())),
+                );
+              }
+              held.log = log;
               active.set(sessionId, held);
               return held;
             }),
@@ -362,15 +369,18 @@ export function loopPort(
   };
 
   /**
-   * A marker the storage refused. The run is already out of memory by then, so it reads as `interrupted` (an accepted
-   * run with no `run_ended`, neither queued nor running), and the session goes on with the rest of its work.
+   * A marker the storage refused. Callers take the run out of memory first, so it reads as `interrupted` (an accepted
+   * run with no `run_ended`, neither queued nor running), and the session goes on with the rest of its work. The
+   * `serving_error` is what ends a stream waiting for this run's `run_ended`.
    */
-  const recorded = (log: LoopLog, kind: RunMarker, data: Json, runId: string): boolean => {
+  const recorded = (held: Held, log: LoopLog, kind: RunMarker, data: Json, runId: string): boolean => {
     try {
       log.append(kind, data);
       return true;
     } catch (error) {
-      logger.error(`[fastagent] could not record ${kind} of run ${runId}; it reads as interrupted: ${String(error)}`);
+      const message = `could not record ${kind} of run ${runId}; it reads as interrupted: ${String(error)}`;
+      logger.error(`[fastagent] ${message}`);
+      emit(held.sessionId, { type: "serving_error", message });
       return false;
     }
   };
@@ -380,6 +390,7 @@ export function loopPort(
     inFlight--;
     release(queued.hold);
     recorded(
+      held,
       log,
       "run_ended",
       { runId: queued.runId, outcome: { status: "canceled", by } } satisfies EndedData,
@@ -401,13 +412,10 @@ export function loopPort(
     running.steering.add(tracked);
   };
 
-  /** The run's messages the harness has not written yet: it takes them in order, so the count says which. */
-  const untaken = (log: LoopLog, running: Running): Prompt[] => {
-    const taken = published(log.records()).entries.filter(
-      (entry) => entry.runId === running.runId && entry.kind === "user_message",
-    ).length;
-    return running.messages.slice(taken);
-  };
+  /** How many of the run's messages the harness has written: it takes them in order, so the count says which. */
+  const takenCount = (log: LoopLog, running: Running): number =>
+    published(log.records()).entries.filter((entry) => entry.runId === running.runId && entry.kind === "user_message")
+      .length;
 
   const startLoop = (held: Held, log: LoopLog, runId: string, message: Prompt): LoopRun => {
     try {
@@ -422,6 +430,7 @@ export function loopPort(
     Effect.gen(function* () {
       let outcome: RunOutcome = { status: "completed" };
       let usage: Usage | undefined;
+      let takenBefore = 0;
       for (;;) {
         const result = yield* Effect.exit(port(() => running.loop.done));
         if (Exit.isFailure(result)) {
@@ -432,23 +441,41 @@ export function loopPort(
         outcome = result.value.outcome;
         usage = addUsage(usage, result.value.usage);
         while (running.steering.size > 0) yield* port(() => Promise.all(running.steering)).pipe(Effect.ignore);
-        const [next, ...rest] = untaken(log, running);
-        if (running.stoppedBy || !next) {
+        const taken = takenCount(log, running);
+        const [next, ...rest] = running.messages.slice(taken);
+        // A loop that ended without writing even its own first message refused it (a failure before the model, an
+        // interception): the run ends with that outcome, and the messages it never took end with it.
+        if (running.stoppedBy || !next || taken === takenBefore) {
           running.closing = true;
           break;
         }
+        takenBefore = taken;
         running.loop = startLoop(held, log, running.runId, next);
         for (const message of rest) steerInto(running, message);
       }
       if (running.stoppedBy) outcome = { status: "canceled", by: running.stoppedBy };
-      log.append("run_ended", {
-        runId: running.runId,
-        outcome,
-        ...(usage ? { usage } : {}),
-      } satisfies EndedData);
+      return { outcome, usage };
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.sync(() => logger.error(`[fastagent] run ${running.runId} could not record its end: ${String(cause)}`)),
+        Effect.sync(() => {
+          logger.error(`[fastagent] run ${running.runId} failed in LoopPort: ${String(cause)}`);
+          return {
+            outcome: { status: "failed", error: agentError("internal", "the run failed") } as RunOutcome,
+            usage: undefined,
+          };
+        }),
+      ),
+      Effect.flatMap(({ outcome, usage }) =>
+        Effect.sync(() => {
+          held.running = undefined;
+          recorded(
+            held,
+            log,
+            "run_ended",
+            { runId: running.runId, outcome, ...(usage ? { usage } : {}) } satisfies EndedData,
+            running.runId,
+          );
+        }),
       ),
       Effect.ensuring(
         Effect.gen(function* () {
@@ -476,7 +503,7 @@ export function loopPort(
       steering: new Set(),
       messages: [next.message],
     };
-    if (!recorded(log, "run_started", { runId: running.runId }, running.runId)) {
+    if (!recorded(held, log, "run_started", { runId: running.runId }, running.runId)) {
       inFlight--;
       release(next.hold);
       pump(held);

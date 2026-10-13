@@ -63,6 +63,9 @@ const rejectRead =
       throw new AgentRejection(portFailed(operation, cause), { cause });
     });
 
+const unrecordedEnd = (runId: string): AgentError =>
+  agentError("internal", `run ${runId} has no recorded end; it reads as interrupted`);
+
 const failedStream = (error: AgentError): Stream.Stream<SessionEvent> =>
   Stream.succeed({ type: "serving_error", message: error.message });
 
@@ -80,8 +83,9 @@ const belongsTo =
     switch (event.type) {
       case "entry":
         return event.entry.runId === runId;
-      case "state":
       case "serving_error":
+        return true;
+      case "state":
         return false;
       default:
         return event.runId === runId;
@@ -137,16 +141,29 @@ export function servingAgent(port: HarnessPort): Agent {
       const backfill = yield* fromPort(() => port.runEntries(sessionId, runId, after));
       if (!backfill.ok) return backfill;
       const recorded = Stream.fromIterable(backfill.entries.map(entryEvent));
-      // A run that ended before the cursor has nothing more to say.
-      if (run.status === "done" && !backfill.entries.some((entry) => entry.kind === "run_ended")) {
-        return { ok: true as const, events: recorded };
+      const hasEnd = (entries: Entry[]) => entries.some((entry) => entry.kind === "run_ended");
+      if (run.status === "done" && !hasEnd(backfill.entries)) {
+        // Either its end lies before the cursor, or the storage refused to record it.
+        const whole = after === undefined ? backfill : yield* fromPort(() => port.runEntries(sessionId, runId));
+        if (whole.ok && hasEnd(whole.entries)) return { ok: true as const, events: recorded };
+        return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(runId))) };
       }
       const seen = new Set(backfill.entries.map((entry) => entry.id));
       const fresh = Stream.fromQueue(live).pipe(
         Stream.filter(belongsTo(runId)),
         Stream.filter((event) => event.type !== "entry" || !seen.has(event.entry.id)),
       );
-      return { ok: true as const, events: Stream.concat(recorded, fresh).pipe(Stream.takeUntil(endsRun(runId))) };
+      // A run whose end the storage refused never sends `run_ended`; the `serving_error` that says so ends the wait.
+      const ended = (event: SessionEvent) =>
+        endsRun(runId)(event)
+          ? Effect.succeed(true)
+          : event.type === "serving_error"
+            ? fromPort(() => port.getRun(sessionId, { runId })).pipe(
+                Effect.map((now) => now?.status === "done"),
+                Effect.catchCause(() => Effect.succeed(true)),
+              )
+            : Effect.succeed(false);
+      return { ok: true as const, events: Stream.concat(recorded, fresh).pipe(Stream.takeUntilEffect(ended)) };
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.succeed(failure("internal", portFailed("reading a run", portError(cause)).message)),
@@ -261,14 +278,20 @@ export function servingAgent(port: HarnessPort): Agent {
       read: (options = {}) => checked(() => read(sessionId, options)),
       follow: (options = {}) =>
         isAddressable(sessionId) ? follow(sessionId, options.after) : rejectedStream(unaddressable(sessionId).error),
-      attachment: (ref) => rejectRead("reading an attachment")(port.attachment(sessionId, ref)),
+      attachment: (ref) =>
+        isAddressable(sessionId)
+          ? rejectRead("reading an attachment")(port.attachment(sessionId, ref))
+          : Promise.resolve(undefined),
       abort: () => checked(() => settle("abort")(port.abort(sessionId))),
       rewind: (entryId) => checked(() => settle("rewind")(port.rewind(sessionId, entryId))),
       compact: (options) => checked(() => settle("compact")(port.compact(sessionId, options))),
       update: (settings) => checked(() => settle("update")(port.update(sessionId, settings))),
       delete: () => checked(() => settle("delete")(port.delete(sessionId))),
       runs: {
-        get: (key) => rejectRead("reading a run")(port.getRun(sessionId, key)),
+        get: (key) =>
+          isAddressable(sessionId)
+            ? rejectRead("reading a run")(port.getRun(sessionId, key))
+            : Promise.resolve(undefined),
         cancel: (runId) => checked(() => settle("cancel")(port.cancelRun(sessionId, runId))),
         follow: (runId, options = {}) => {
           if (!isAddressable(sessionId)) return rejectedStream(unaddressable(sessionId).error);
