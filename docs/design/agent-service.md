@@ -1214,11 +1214,14 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
   none.
 - **Idempotency.** Opening a session scans its whole log, not only the active path (a rewind leaves earlier runs'
   keys on an abandoned branch), into an index of keys to runs held while the session is busy.
-- **Steering.** pi keeps a run going for a message steered before `agent_settled`, even after a failed model request.
-  What it does not cover is pi's own gap: `steer()` awaits the definition's `input` handlers before it queues, so a
-  message `LoopPort` has already joined can reach pi's queue after the run settled. `LoopPort` stops joining at
-  `agent_settled`, and when `prompt()` returns it runs any joined message that was not written as a user entry in the
-  same run, before writing `run_ended`.
+- **Steering.** Only the loop can say what became of a message it was handed, so a loop reports it for each message,
+  by position: written as an entry, consumed without one, or not taken. pi keeps a run going for a message steered
+  before `agent_settled`, even after a failed model request; an extension's `input` handler can consume one
+  (`steer()` answers `handled`, and no entry is written); and since `steer()` awaits those handlers before it queues,
+  a message can reach pi's queue after its run settled, where nothing runs it. The pi harness reports those three
+  from what pi tells it, and `LoopPort` runs every message reported untaken in the same run, before writing
+  `run_ended`, which records the entry each message became. Counting the run's user entries cannot tell these apart,
+  checked against pi: a consumed message has no entry and would run twice.
 
 pi and `writeFileAtomic` both write without `fsync`, so either choice survives a process crash and may lose its newest
 write on power loss; pi drops a torn last line when it loads a log.

@@ -174,7 +174,6 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(joined).toMatchObject({ joined: true, duplicate: false });
         expect(joined.run.runId).toBe(first.run.runId);
         expect(joined.run.messages).toHaveLength(2);
-        expect(joined.run.messages[0]?.entryId).toBeDefined();
         subject.release();
         const events = await rest;
         const run = await until(session, first.run.runId, "done");
