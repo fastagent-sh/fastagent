@@ -901,9 +901,11 @@ Compatibility is checked in both directions, so the protocol stays expressible i
   transport) are followed as they stabilize.
 - **An ACP agent as a harness.** claude-agent-acp, codex-acp, Gemini CLI or dsh's ACP server plug in through the
   harness port (§9.1) with fewer capabilities: no steering under v1, no durable queue, and run boundaries written by
-  the serving layer. An agent that cannot replay its history (`session/load`, which dsh's server lacks) leaves the
-  whole log to `LoopPort`, which records every `session/update` it receives, so `read` and `follow` work as for
-  any harness.
+  the serving layer. ACP has no way to append a record of one's own to an agent's history, so for every ACP agent
+  `LoopPort` keeps the whole log, recording every `session/update` it receives, and writes its run records into that
+  log: `read` and `follow` then work as for any harness, and a run's records and its conversation stay in one log with
+  one writer (§9.3). An agent's own replay (`session/load`, which dsh's server lacks) is not the source of `read`;
+  whether to use it for anything else is settled in step 5.
 - **What ACP cannot express today:** caller-named sessions (the bridge maps them), idempotency keys, and a run's
   status by id. FastAgent does not use ACP's client file system and terminals, permission requests or elicitation.
 
@@ -1079,9 +1081,12 @@ B wins: durable harnesses are the reason to plug in pi-durable and dsh at all, a
 unused.
 
 So the port has two layers. `HarnessPort` is the one the serving layer calls, and a durable harness implements it
-directly. `LoopHarness` is what a harness that is only a loop implements: start a run on a message, steer it, stop it,
-and read and append its log. `LoopPort` turns a `LoopHarness` into a `HarnessPort`, owning what such a harness lacks:
-admission, the queue, idempotency, run records, the steering promise and closing interrupted runs (§9.3). It is
+directly. `LoopHarness` is what a harness that is only a loop implements: start a run on a message, steer it and stop
+it, and, if it keeps a log that can take records of its own, read and append that log. `LoopPort` turns a
+`LoopHarness` into a `HarnessPort`, owning what such a harness lacks: admission, the queue, idempotency, run records,
+the steering promise and closing interrupted runs. Its run records go into the one log it writes: the harness's own
+when it has one that takes them (pi's), otherwise a log `LoopPort` keeps itself, recording every event of the run, as
+for every ACP agent (§7.9). Either way the records and the conversation share one log with one writer (§9.3). It is
 written once, so the semantics of a busy session are the same for pi-coding-agent and for an ACP agent later.
 
 | Port operation | Means |
@@ -1173,13 +1178,18 @@ a harness writes natively (dsh's turn boundaries, pi-durable's settled submissio
 run's status is derived from both and the queue. A run that was accepted, never ended and is neither running nor
 queued is `interrupted`; its closing entry is written when the session is first opened after the run stopped, before
 anything on it is answered, so a caller reattaching with `runs.follow` after a restart reaches the end without the
-session running again. Only live events, and for a harness that is only a loop the order of its queue and its current
-run, are held in memory: a queued run lost with them is still known, as `interrupted`.
+session running again. Only live events and, for a harness that is only a loop, what `LoopPort` holds while a session
+is busy are in memory: the order of its queue, its current run, the session's one log writer (pi's `SessionManager`,
+which caches the whole log) and the index of its keys. The last two are caches of the durable log, and a queued run
+lost with the first two is still known, as `interrupted`.
 
 Both records live in the same store as the conversation, written together. pi-durable keeps its submissions in their
 own table, but commits them atomically with the entries they place. `LoopPort` gets the same property from a harness
-log that has one writer: it writes `run_accepted`, `run_started` and `run_ended` as plane markers (entries the model
-never sees and a fork does not copy) into the session's log, each naming its run. A record of accepted runs in a file
+log that has one writer, into which it writes three records, each naming its run. `run_accepted` is a plane marker
+(`isPlaneMarker`): never published, never navigable, never seen by the model, never copied by a fork. `run_started`
+and `run_ended` are run markers: entries SPEC v1 publishes (`read`, `follow`, the replay of a duplicate), which the
+model never sees and a fork does not copy, since a fork copies history and not runs. The two kinds are kept apart in
+code, so widening `isPlaneMarker` can never hide an entry the SPEC requires. A record of accepted runs in a file
 of its own was considered and not chosen: two files cannot be written atomically, so every crash between them would
 need its own recovery rule, for a gain that arrives only with scaling out, whose storage is redesigned anyway (§10.2,
 §13).
@@ -1188,9 +1198,13 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
 
 - **One writer.** pi's `SessionManager` keeps the whole log and its leaf in memory and appends to the file. A second
   manager writing the same file does not corrupt it, but the entry it writes is a side branch the active path never
-  reaches. So from a session's first accepted run until it is idle with an empty queue, `LoopPort` holds the session's
-  one `SessionManager`, binds each run's fresh `AgentSession` to it, and sends every write through it: the markers, a
-  withdrawn run's `run_ended`, and `update`. An idle session holds nothing in process.
+  reaches. So every operation on a session, a read included, acquires it through `LoopPort`'s per-session lock, which
+  holds the session's one `SessionManager` from the first acquisition until the session is idle, its queue empty and
+  no operation holds it. Every write to the log goes through that manager: the markers, a withdrawn run's `run_ended`,
+  `update`, `rewind` (pi's `branch` and its leaf anchor), `compact`, and each run's fresh `AgentSession`, which is
+  bound to it. The first acquisition in a process closes the session's interrupted runs before anything else, so two
+  operations arriving together after a restart cannot both write a run's `run_ended`. An idle session holds nothing in
+  process.
 - **Writes during a run.** Appended through the run's own manager, a marker or a settings change keeps the log one
   chain, never reaches the model's context, and survives a reopen unchanged. A running run takes its model from its
   agent's state, so `update` during a run applies from the next run, as SPEC v1 says, instead of answering `busy` as
@@ -1466,7 +1480,8 @@ The architecture and deployment:
 
 - The protocol is written once above a harness port, so another harness can be added; the queue of a busy session
   lives behind the port, so a durable harness's queue is used, and a shared `LoopPort` serves harnesses that are only
-  a loop, writing its run records into the harness's own log through its one writer (§9.1).
+  a loop, writing its run records into the one log it writes (the harness's own, pi's, or one it keeps for an ACP
+  agent) through that log's one writer, which every operation on a session acquires (§9.1, §9.3).
 - Steering is a harness capability; stopping a run is a signal the port receives (§9.1).
 - pi-durable is a second harness in step 4, behind the same port, which an agent opts into; pi-coding-agent stays the
   default, so `extensions/`, MCP and `chat` keep working. An agent that chooses pi-durable and declares `extensions/`
