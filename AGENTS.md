@@ -30,6 +30,13 @@ src/
 ├── agent.ts                # the Agent Handler contract (pure types, no harness import)
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
 ├── session.ts              # the session-control contract: state/entries/events + dispatch, error codes
+├── protocol.ts             # SPEC v1 (docs/SPEC-v1.md) as types, plus its limits and error values: the contract step 4
+│                           # moves every caller to
+├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
+├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency, run
+│                           # markers in the session's own log through its one writer, closing interrupted runs
+├── serving-layer.ts        # servingAgent: the SPEC v1 Agent over any harness port: session ids, request rules, the
+│                           # invoke and follow streams, read pages
 ├── service.ts              # THE PRODUCT AS ONE CALL — a directory becomes a live service (mountAgentService),
 │                           # plus the assembly parts dev/start share: routesFor / mountSessionControl / startSchedules
 ├── effect-port.ts          # the ONE crossing from a Promise-shaped port into Effect: port / portJoin / portAbort /
