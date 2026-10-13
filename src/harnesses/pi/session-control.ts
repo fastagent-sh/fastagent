@@ -30,7 +30,7 @@ import {
   estimateTokens,
   getLastAssistantUsage,
 } from "@earendil-works/pi-coding-agent";
-import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import { type ImageRef, type Json, MISSING_MODEL_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
@@ -75,7 +75,8 @@ import { startCompaction } from "./agent-session-factory.ts";
 import { toRetryScheduledEvent } from "./retry-event.ts";
 import {
   MissingModel,
-  THINKING_LEVELS,
+  modelBySpec,
+  thinkingLevelProblem,
   activePath,
   describeModels,
   resolveSessionSettings,
@@ -95,7 +96,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
  * count no longer describes the context (pi's own rule). pi then estimates from characters; this reports unknown
  * until the next response.
  */
-function sessionUsage(
+export function sessionUsage(
   path: PiSessionEntry[],
   record: SessionManager,
   contextWindow: number | undefined,
@@ -140,7 +141,7 @@ function sessionUsage(
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  * One exception: `context_edit` carries `{ targetId, omitted }`, never the replacement content.
  */
-function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
+export function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
   const base = {
     id: entry.id,
     parentId,
@@ -826,20 +827,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // invalid value must not briefly block a run.
         let model: AnyModel | undefined;
         if (patch.model !== undefined) {
-          const slash = patch.model.indexOf("/");
-          model =
-            slash > 0
-              ? modelsAndDefaults.models.getModel(patch.model.slice(0, slash), patch.model.slice(slash + 1))
-              : undefined;
-          if (!model) {
-            return invalid(`unknown model "${patch.model}" — models() lists the accepted models`);
-          }
+          model = modelBySpec(modelsAndDefaults.models, patch.model);
+          if (!model) return invalid(`unknown model "${patch.model}": models() lists the accepted models`);
         }
-        if (patch.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(patch.thinkingLevel)) {
-          return invalid(
-            `unknown thinking level "${patch.thinkingLevel}" — state().availableThinkingLevels lists what this session accepts`,
-          );
-        }
+        const unknownLevel =
+          patch.thinkingLevel === undefined ? undefined : thinkingLevelProblem(patch.thinkingLevel, undefined);
+        if (unknownLevel) return invalid(unknownLevel);
         // A name is the client's own label; the only thing that cannot be one is nothing.
         if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
 
@@ -881,15 +874,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           // after the move, so it is what the session ends up running. With neither (no model recorded, no
           // default), any level of the vocabulary is recorded, and clamped once the session has a model, like a
           // recorded level after a model change.
-          const target = model ?? resolved?.model;
-          if (target) {
-            const levels = getSupportedThinkingLevels(target) as string[];
-            if (!levels.includes(patch.thinkingLevel)) {
-              return invalid(
-                `thinking level "${patch.thinkingLevel}" is not supported by ${target.provider}/${target.id} (allowed: ${levels.join(", ")})`,
-              );
-            }
-          }
+          const unsupported = thinkingLevelProblem(patch.thinkingLevel, model ?? resolved?.model);
+          if (unsupported) return invalid(unsupported);
         }
 
         // Release before publishing state_changed: an observer may immediately issue another command.

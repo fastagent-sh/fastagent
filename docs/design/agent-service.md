@@ -1208,17 +1208,25 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
 - **Writes during a run.** Appended through the run's own manager, a marker or a settings change keeps the log one
   chain, never reaches the model's context, and survives a reopen unchanged. A running run takes its model from its
   agent's state, so `update` during a run applies from the next run, as SPEC v1 says, instead of answering `busy` as
-  today.
+  today. One window is not covered: a run accepted but not yet bound to pi (its extensions still loading) binds on the
+  new settings. Binding it on the settings it was accepted with would not help, since pi records the model it binds,
+  which would then override the update for every later run too.
 - **Which run an entry belongs to.** pi's entries carry no run id. A marker names its run; a message belongs to the run
   whose `run_started` and `run_ended` enclose it, since a session runs one run at a time; a settings change belongs to
   none.
 - **Idempotency.** Opening a session scans its whole log, not only the active path (a rewind leaves earlier runs'
   keys on an abandoned branch), into an index of keys to runs held while the session is busy.
-- **Steering.** pi keeps a run going for a message steered before `agent_settled`, even after a failed model request.
-  What it does not cover is pi's own gap: `steer()` awaits the definition's `input` handlers before it queues, so a
-  message `LoopPort` has already joined can reach pi's queue after the run settled. `LoopPort` stops joining at
-  `agent_settled`, and when `prompt()` returns it runs any joined message that was not written as a user entry in the
-  same run, before writing `run_ended`.
+- **Steering.** Only the loop can say what became of a message it was handed, so a loop reports it for each message,
+  by the id `LoopPort` handed it under and as it happens: written as an entry, or consumed without one. A message it
+  has said nothing for when its run ends was not taken. By id, because a report by position shifts every later message
+  when one steer fails; as it happens, because a running run's `runs.get` should name the entries already written. pi keeps a run going for a message steered
+  before `agent_settled`, even after a failed model request; an extension's `input` handler can consume one
+  (`steer()` answers `handled`, and no entry is written); and since `steer()` awaits those handlers before it queues,
+  a message can reach pi's queue after its run settled, where nothing runs it. The pi harness reports those three
+  from what pi tells it, and `LoopPort` runs every message not taken in the same run, before writing `run_ended`,
+  which records the entry each message became. A run the process lost has no such record, so its messages name no
+  entry: which entry was whose is the loop's to say, and that loop is gone. Counting the run's user entries cannot tell these apart,
+  checked against pi: a consumed message has no entry and would run twice.
 
 pi and `writeFileAtomic` both write without `fsync`, so either choice survives a process crash and may lose its newest
 write on power loss; pi drops a torn last line when it loads a log.

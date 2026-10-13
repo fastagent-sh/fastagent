@@ -138,14 +138,14 @@ export function toSessionEvent(event: AgentSessionEvent, runId: string): Session
 }
 
 /** pi's error-channel events for work an invoke owes its caller: the command it ran, and the turns it started. */
-const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]);
+export const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]);
 
 /**
  * The turns extensions start on this session and have not finished. `pi.sendUserMessage` and `pi.sendMessage` reach
  * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is this run's
  * alone, so the wrap never outlives the run.
  */
-function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
+export function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
   const pending = new Set<Promise<void>>();
   const track = (sent: Promise<void>): Promise<void> => {
     pending.add(sent);

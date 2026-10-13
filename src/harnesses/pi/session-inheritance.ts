@@ -5,7 +5,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type CompactionEntry, type SessionManager, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import { isConversationMessage, isPlaneMarker } from "./session-markers.ts";
+import { isConversationMessage, isPlaneMarker, isRunMarker } from "./session-markers.ts";
 
 /** What a Caller names when a new session should start from an existing one. */
 export interface SessionInheritance {
@@ -196,8 +196,9 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         childId = child.appendThinkingLevelChange(entry.thinkingLevel);
         break;
       case "custom":
-        // The plane's markers describe the parent's RECORD, not the thread's history.
-        if (!isPlaneMarker(entry)) childId = child.appendCustomEntry(entry.customType, entry.data);
+        // The plane's markers describe the parent's RECORD, and its run markers its runs: neither is history.
+        if (!isPlaneMarker(entry) && !isRunMarker(entry))
+          childId = child.appendCustomEntry(entry.customType, entry.data);
         break;
       case "label":
       case "session_info":

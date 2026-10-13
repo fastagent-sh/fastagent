@@ -6,8 +6,16 @@
  * `restart()` is a process restart: the store (the disk) stays, a new harness opens it, and the old one's runs never
  * move again, the way a killed process's do not.
  */
-import type { LogRecord, LoopHarness, LoopLog, LoopRun, RunMarker } from "../src/loop-port.ts";
-import { type Json, type Prompt, type Result, agentError, failure } from "../src/protocol.ts";
+import type {
+  HandedMessage,
+  LogRecord,
+  LoopHarness,
+  LoopHooks,
+  LoopLog,
+  LoopRun,
+  RunMarker,
+} from "../src/loop-port.ts";
+import { type Json, type Result, agentError, failure } from "../src/protocol.ts";
 
 interface StoredSession {
   records: LogRecord[];
@@ -28,6 +36,8 @@ export class FakeStore {
   readonly sessions = new Map<string, StoredSession>();
   generation = 0;
   effects = 0;
+  /** How many messages an extension command consumed. */
+  handled = 0;
   /** Logs this process has open. */
   openLogs = 0;
   /** Makes the storage refuse the next append of this kind, the way a full disk would. */
@@ -87,16 +97,23 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       return record;
     };
 
-    const run = (message: Prompt, emit: Parameters<LoopLog["run"]>[1]): LoopRun => {
-      const pending: Prompt[] = [message];
+    const run = (first: HandedMessage, { emit, fate }: LoopHooks): LoopRun => {
+      const handed: HandedMessage[] = [first];
+      let next = 0;
       let finished = false;
       let stopped = false;
       const stop = gate();
       const done = (async () => {
         let outcome: Awaited<LoopRun["done"]>["outcome"] = { status: "completed" };
-        while (pending.length > 0) {
-          const taken = pending.shift() as Prompt;
-          write("user_message", { text: taken.text });
+        while (next < handed.length) {
+          const { id, prompt: taken } = handed[next++] as HandedMessage;
+          // An extension command: consumed, and nothing written.
+          if (taken.text === "handle") {
+            store.handled++;
+            fate(id, { handled: true });
+            continue;
+          }
+          fate(id, { taken: write("user_message", { text: taken.text }).id });
           if (taken.text === "hold") await Promise.race([store.holding(), stop.opened]);
           if (stopped) {
             outcome = { status: "failed", error: agentError("internal", "stopped") };
@@ -120,8 +137,9 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
         return { outcome, usage: { inputTokens: 1, outputTokens: 1 } };
       })();
       return {
-        steer: async (steered) => {
-          if (!finished) pending.push(steered);
+        // A message handed after the loop finished is one it never takes, as pi's late `steer()`.
+        steer: (steered) => {
+          if (!finished) handed.push(steered);
         },
         stop: () => {
           stopped = true;

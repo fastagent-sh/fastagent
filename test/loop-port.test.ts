@@ -26,11 +26,11 @@ describeProtocolConformance("LoopPort over a fake loop harness", {
   effects: () => store.effects,
 });
 
-/** pi's gap: `steer()` resolves, but the message reaches the run only after it ended, and is never written. */
+/** A harness that loses a steer and says nothing about it. */
 function steeringDropped(harness: LoopHarness): LoopHarness {
   const dropping = (log: LoopLog): LoopLog => ({
     ...log,
-    run: (message, emit) => ({ ...log.run(message, emit), steer: async () => {} }),
+    run: (message, emit) => ({ ...log.run(message, emit), steer: () => {} }),
   });
   return {
     ...harness,
@@ -73,7 +73,7 @@ async function receiptOf(events: AsyncIterable<InvokeEvent>) {
 }
 
 describe("LoopPort", () => {
-  it("runs a joined message the harness never wrote in the same run, before it ends", async () => {
+  it("runs a joined message the harness reports nothing for in the same run, before it ends", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(steeringDropped(fakeLoopHarness(store))));
     const session = agent.sessions.get("s");
@@ -93,6 +93,24 @@ describe("LoopPort", () => {
     const ends = page.ok ? page.entries.filter((e) => e.kind === "run_ended") : [];
     expect(ends).toHaveLength(1);
   });
+  it("a message an extension consumed is not run again, and has no entry", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    const session = agent.sessions.get("s");
+    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
+    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "handle" }, whenBusy: "steer" }));
+    store.release();
+    const run = await vi.waitFor(async () => {
+      const status = await session.runs.get({ runId: first.run.runId });
+      if (status?.status !== "done") throw new Error("not done");
+      return status;
+    });
+    expect(store.handled).toBe(1);
+    expect(run.messages.map((m) => m.entryId !== undefined)).toEqual([true, false]);
+    expect(run).toMatchObject({ outcome: { status: "completed" }, answer: { text: "answer: hold" } });
+  });
+
   it("a steer the harness throws on is still accepted, and the run takes the message itself", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
@@ -129,12 +147,62 @@ describe("LoopPort", () => {
     );
   });
 
+  it("a steer the harness throws on shifts nothing: each message is run once", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    const throwingOnBad = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const run = log.run(message, hooks);
+        return {
+          ...run,
+          steer: (steered) => {
+            if (steered.prompt.text === "bad") throw new Error("sync");
+            run.steer(steered);
+          },
+        };
+      },
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && throwingOnBad(log);
+        },
+        create: async (sessionId, onRecord, fork) => throwingOnBad(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const session = agent.sessions.get("s");
+    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
+    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "bad" }, whenBusy: "steer" }));
+    await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "good" }, whenBusy: "steer" }));
+    store.release();
+    const run = await vi.waitFor(async () => {
+      const status = await session.runs.get({ runId: first.run.runId });
+      if (status?.status !== "done") throw new Error("not done");
+      return status;
+    });
+    const page = await session.read();
+    const written = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    expect(written.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "good", "bad"]);
+    const byText = new Map(written.map((e) => [(e.data as { text: string }).text, e.id]));
+    expect(run.messages.map((m) => m.entryId)).toEqual([byText.get("hold"), byText.get("bad"), byText.get("good")]);
+  });
+
   it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},
       stop: () => {},
       done: new Promise((resolve) =>
-        setTimeout(() => resolve({ outcome: { status: "failed", error: agentError("missing_model", "no model") } }), 5),
+        setTimeout(
+          () =>
+            resolve({
+              outcome: { status: "failed", error: agentError("missing_model", "no model") },
+            }),
+          5,
+        ),
       ),
     }));
     const first = servingAgent(loopPort(missingModel.harness));

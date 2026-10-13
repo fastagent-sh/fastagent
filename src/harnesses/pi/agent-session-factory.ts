@@ -571,17 +571,9 @@ export async function servedExtensionCommands(options: {
  * holds the code on disk (live-extensions.ts), so the session loads the code as it is now.
  */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
-  const { sessions, thinkingLevel, cwd } = options;
-  const excludedToolNames = options.excludedToolNames ?? [];
-  const tools = options.tools ?? [];
-
+  const { sessions } = options;
+  const bind = piSessionBinder(options);
   return async (sessionId, inherit) => {
-    // `ctx.ui.theme` reads pi's global theme, which only pi's own entry points initialize. Serving only: chat's theme
-    // is InteractiveMode's, and resetting it on every session switch would drop the user's.
-    if (!themeReady) {
-      initTheme();
-      themeReady = true;
-    }
     // Without a default, a turn that cannot run must leave no conversation behind in the listing. A new record with
     // nothing to inherit records no model, so it is refused before it is created. One that inherits may get a model
     // from its parent, which only the copy decides (the store's cut), so it is created and, if still model-less,
@@ -590,6 +582,39 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     if (!existed && !inherit) throw new MissingModel(sessionId, []);
     // Publish the record before loading resources: boundary writes must find it while binding is in flight.
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
+    try {
+      return await bind(sessionId, sessionManager);
+    } catch (error) {
+      if (error instanceof MissingModel && !existed) {
+        // The record this bind created for a thread whose parent supplied no model. A failed removal is reported on
+        // its own and does not replace `missing`: the caller still needs the missing_model answer and its fix.
+        await sessions.delete(sessionId).catch((removal: unknown) => {
+          log.warn(
+            `[fastagent] session ${sessionId}: could not remove the record of a refused turn: ${String(removal)}`,
+          );
+        });
+      }
+      throw error;
+    }
+  };
+}
+
+/** Binds a fresh session, with this definition, to a record the caller holds: it opens and creates nothing. */
+export type PiSessionBinder = (sessionId: string, sessionManager: SessionManager) => Promise<AgentSession>;
+
+/** The binding half of {@link piAgentSessionFactory}; it throws {@link MissingModel} when nothing names a model. */
+export function piSessionBinder(options: Omit<PiAgentSessionFactoryOptions, "sessions">): PiSessionBinder {
+  const { thinkingLevel, cwd } = options;
+  const excludedToolNames = options.excludedToolNames ?? [];
+  const tools = options.tools ?? [];
+
+  return async (sessionId, sessionManager) => {
+    // `ctx.ui.theme` reads pi's global theme, which only pi's own entry points initialize. Serving only: chat's theme
+    // is InteractiveMode's, and resetting it on every session switch would drop the user's.
+    if (!themeReady) {
+      initTheme();
+      themeReady = true;
+    }
     const definition = await options.readDefinition();
     const modelRuntime = await options.createModelRuntime();
     const extensionPaths = (await options.extensionPaths?.()) ?? [];
@@ -602,17 +627,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       ...(model ? { model } : {}),
       thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     });
-    if (!settings) {
-      const missing = new MissingModel(sessionId, path);
-      if (!existed) {
-        // The record this bind created for a thread whose parent supplied no model. A failed removal is reported on
-        // its own and does not replace `missing`: the caller still needs the missing_model answer and its fix.
-        await sessions.delete(sessionId).catch((error: unknown) => {
-          log.warn(`[fastagent] session ${sessionId}: could not remove the record of a refused turn: ${String(error)}`);
-        });
-      }
-      throw missing;
-    }
+    if (!settings) throw new MissingModel(sessionId, path);
     const { session } = await bindPiSession({
       services,
       sessionManager,

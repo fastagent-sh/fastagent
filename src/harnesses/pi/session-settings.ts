@@ -81,6 +81,27 @@ export interface SessionSettings {
   dropped?: { model?: string; thinkingLevel?: { recorded: string; running: string; known: boolean } };
 }
 
+/** A FastAgent model spec (`provider/id`) in the registry, or undefined when it names none there. */
+export function modelBySpec(models: Models, spec: string): AnyModel | undefined {
+  const slash = spec.indexOf("/");
+  return slash > 0 ? (models.getModel(spec.slice(0, slash), spec.slice(slash + 1)) as AnyModel | undefined) : undefined;
+}
+
+/**
+ * Why a session cannot be set to this thinking level, or undefined when it can. `model` is what the session will run
+ * on; without one, any level of the vocabulary is recorded, and clamped once the session has a model.
+ */
+export function thinkingLevelProblem(level: string, model: AnyModel | undefined): string | undefined {
+  if (!(THINKING_LEVELS as ReadonlySet<string>).has(level)) {
+    return `unknown thinking level "${level}": state() lists the levels this session accepts`;
+  }
+  if (!model) return undefined;
+  const levels = getSupportedThinkingLevels(model) as string[];
+  return levels.includes(level)
+    ? undefined
+    : `thinking level "${level}" is not supported by ${model.provider}/${model.id} (allowed: ${levels.join(", ")})`;
+}
+
 /**
  * `defaults` is the assembly's configured pair — what a session with no overrides runs on. An agent may set no default
  * model, so a session runs on the model it records, else the default, else none: undefined then, and the session

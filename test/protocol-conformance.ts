@@ -85,6 +85,10 @@ async function all(session: Session): Promise<Entry[]> {
   return page.entries;
 }
 
+/** What was said, without the settings a harness records along the way. */
+const conversation = (entries: Entry[]) =>
+  entries.filter((e) => ["user_message", "assistant_message", "tool_result"].includes(e.kind));
+
 /** SPEC v1 §6: each entry names its parent, which a caller can read. */
 function expectParentsPublished(entries: Entry[]): void {
   const ids = new Set(entries.map((entry) => entry.id));
@@ -163,6 +167,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const session = agent.sessions.get("s");
         const first = accepted(await receipt(agent.invoke({ sessionId: "s", prompt: { text: "hold" } })));
         await until(session, first.run.runId, "running");
+        // A running run reports the entry each message became as soon as it is written.
+        const written = await vi.waitFor(
+          async () => {
+            const entry = (await all(session)).find((e) => e.kind === "user_message" && e.runId === first.run.runId);
+            if (!entry) throw new Error("the run's message is not written yet");
+            return entry;
+          },
+          { timeout: 5000 },
+        );
         const steered = agent.invoke({ sessionId: "s", prompt: { text: "also" }, whenBusy: "steer" });
         if (!agent.info().capabilities.steer) {
           expect(rejected((await drain(steered))[0] as InvokeEvent).error.code).toBe("unsupported");
@@ -174,13 +187,15 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(joined).toMatchObject({ joined: true, duplicate: false });
         expect(joined.run.runId).toBe(first.run.runId);
         expect(joined.run.messages).toHaveLength(2);
-        expect(joined.run.messages[0]?.entryId).toBeDefined();
+        expect(joined.run.messages[0]?.entryId).toBe(written.id);
         subject.release();
         const events = await rest;
         const run = await until(session, first.run.runId, "done");
         expect(run.messages).toHaveLength(2);
         expect(run.messages.every((m) => m.entryId !== undefined)).toBe(true);
         expect(answerOf(events)).toBe("answer: also");
+        const users = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
+        expect(users.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
       });
 
       it("an idle session starts a run whatever whenBusy says", async () => {
@@ -494,12 +509,12 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         });
         expect(forked.ok).toBe(true);
         const copied = await all(agent.sessions.get("f"));
-        expect(copied.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
+        expect(conversation(copied).map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
         expect(copied.every((e) => e.runId === undefined)).toBe(true);
         expectParentsPublished(copied);
         expect(await agent.sessions.create({ sessionId: "g", fork: { sessionId: "s" } })).toMatchObject({ ok: true });
         const whole = await all(agent.sessions.get("g"));
-        expect(whole.map((e) => e.kind)).toEqual([
+        expect(conversation(whole).map((e) => e.kind)).toEqual([
           "user_message",
           "assistant_message",
           "user_message",
