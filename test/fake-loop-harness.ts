@@ -188,7 +188,18 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
       if (fork) {
         const source = fork.from.records();
         const end = fork.entryId === undefined ? source.length : source.findIndex((r) => r.id === fork.entryId) + 1;
-        stored.records = source.slice(0, end).filter((record) => !RUN_MARKERS.has(record.kind));
+        // Runs are not copied, so a kept record's parent is its nearest kept ancestor.
+        const kept = new Map<string, string | undefined>();
+        for (const record of source.slice(0, end)) {
+          const parent = record.parentEntryId === undefined ? undefined : kept.get(record.parentEntryId);
+          if (RUN_MARKERS.has(record.kind)) {
+            kept.set(record.id, parent);
+            continue;
+          }
+          const { parentEntryId: _source, ...rest } = record;
+          stored.records.push(parent === undefined ? rest : { ...rest, parentEntryId: parent });
+          kept.set(record.id, record.id);
+        }
         stored.leaf = stored.records.at(-1)?.id;
       }
       store.sessions.set(sessionId, stored);

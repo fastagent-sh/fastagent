@@ -141,8 +141,8 @@ interface Held {
   readonly sessionId: string;
   readonly lock: Semaphore.Semaphore;
   log: LoopLog | undefined;
-  /** The run whose `run_started` opened the current span of the log. */
-  span: string | undefined;
+  /** The log read so far, for the live path; reads project the whole log again. */
+  projection: Projection;
   readonly keys: Map<string, string>;
   readonly queue: Queued[];
   running: Running | undefined;
@@ -177,19 +177,40 @@ function place(
   }
 }
 
-function toEntry(record: LogRecord, runId: string | undefined): Entry {
-  return runId === undefined ? { ...record } : { ...record, runId };
+/** What reading the log so far has established: the open run span, and each record's nearest published ancestor. */
+interface Projection {
+  span: string | undefined;
+  readonly visible: Map<string, string | undefined>;
 }
 
-function published(records: readonly LogRecord[]): { entries: Entry[]; span: string | undefined } {
+const emptyProjection = (): Projection => ({ span: undefined, visible: new Map() });
+
+/**
+ * A record as published, or `undefined` for a plane marker. A published entry's parent is its nearest published
+ * ancestor, so an entry never names one a caller cannot read.
+ */
+function project(projection: Projection, record: LogRecord): Entry | undefined {
+  const parent = record.parentEntryId === undefined ? undefined : projection.visible.get(record.parentEntryId);
+  const placed = place(projection.span, record);
+  projection.span = placed.span;
+  projection.visible.set(record.id, placed.published ? record.id : parent);
+  if (!placed.published) return undefined;
+  const { parentEntryId: _stored, ...rest } = record;
+  return {
+    ...rest,
+    ...(parent === undefined ? {} : { parentEntryId: parent }),
+    ...(placed.runId === undefined ? {} : { runId: placed.runId }),
+  };
+}
+
+function published(records: readonly LogRecord[]): { entries: Entry[]; projection: Projection } {
+  const projection = emptyProjection();
   const entries: Entry[] = [];
-  let span: string | undefined;
   for (const record of records) {
-    const placed = place(span, record);
-    span = placed.span;
-    if (placed.published) entries.push(toEntry(record, placed.runId));
+    const entry = project(projection, record);
+    if (entry) entries.push(entry);
   }
-  return { entries, span };
+  return { entries, projection };
 }
 
 function addUsage(total: Usage | undefined, more: Usage | undefined): Usage | undefined {
@@ -265,16 +286,14 @@ export function loopPort(
   const onRecord =
     (held: Held) =>
     (record: LogRecord): void => {
-      const placed = place(held.span, record);
-      held.span = placed.span;
-      if (!placed.published) return;
-      emit(held.sessionId, { type: "entry", entry: toEntry(record, placed.runId) });
+      const entry = project(held.projection, record);
+      if (entry) emit(held.sessionId, { type: "entry", entry });
     };
 
   /** Close the runs a previous process left open, and index the keys. Runs before anything else on the session. */
   const reconcile = (held: Held, log: LoopLog): void => {
     const records = log.records();
-    held.span = published(records).span;
+    held.projection = published(records).projection;
     const ended = new Set(records.filter((r) => r.kind === "run_ended").map(markerRunId));
     const open: string[] = [];
     for (const record of records) {
@@ -297,7 +316,7 @@ export function loopPort(
                 sessionId,
                 lock: Semaphore.makeUnsafe(1),
                 log: undefined,
-                span: undefined,
+                projection: emptyProjection(),
                 keys: new Map(),
                 queue: [],
                 running: undefined,
@@ -413,7 +432,9 @@ export function loopPort(
   };
 
   const steerInto = (running: Running, message: Prompt): void => {
-    const handed = running.loop.steer(message).catch((error) => {
+    // The executor turns a harness that throws instead of rejecting into the same rejection: the message is already
+    // among the run's, so either way the run takes it itself.
+    const handed = new Promise<void>((resolve) => resolve(running.loop.steer(message))).catch((error) => {
       logger.error(`[fastagent] steering run ${running.runId} failed; it runs the message itself: ${String(error)}`);
     });
     const tracked = handed.finally(() => running.steering.delete(tracked));
@@ -849,7 +870,7 @@ export function loopPort(
             }
             log.close();
             held.log = undefined;
-            held.span = undefined;
+            held.projection = emptyProjection();
             held.keys.clear();
             yield* port(() => harness.delete(sessionId));
             return { ok: true } as Result;

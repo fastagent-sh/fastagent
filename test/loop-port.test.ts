@@ -93,6 +93,42 @@ describe("LoopPort", () => {
     const ends = page.ok ? page.entries.filter((e) => e.kind === "run_ended") : [];
     expect(ends).toHaveLength(1);
   });
+  it("a steer the harness throws on is still accepted, and the run takes the message itself", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    const throwing = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, emit) => ({
+        ...log.run(message, emit),
+        steer: () => {
+          throw new Error("sync");
+        },
+      }),
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && throwing(log);
+        },
+        create: async (sessionId, onRecord, fork) => throwing(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const session = agent.sessions.get("s");
+    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(async () => expect((await session.runs.get({ runId: first.run.runId }))?.status).toBe("running"));
+    const steered = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "steered" }, whenBusy: "steer" }));
+    expect(steered).toMatchObject({ joined: true, run: { runId: first.run.runId } });
+    store.release();
+    await vi.waitFor(async () =>
+      expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({
+        status: "done",
+        answer: { text: "answer: steered" },
+      }),
+    );
+  });
+
   it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},

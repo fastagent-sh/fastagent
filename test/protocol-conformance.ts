@@ -85,6 +85,13 @@ async function all(session: Session): Promise<Entry[]> {
   return page.entries;
 }
 
+/** SPEC v1 §6: each entry names its parent, which a caller can read. */
+function expectParentsPublished(entries: Entry[]): void {
+  const ids = new Set(entries.map((entry) => entry.id));
+  const dangling = entries.filter((entry) => entry.parentEntryId !== undefined && !ids.has(entry.parentEntryId));
+  expect(dangling).toEqual([]);
+}
+
 const outcomeOf = (run: RunStatus) => (run.status === "done" ? run.outcome : undefined);
 
 export function describeProtocolConformance(name: string, subject: ProtocolSubject): void {
@@ -399,6 +406,8 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const agent = await subject.start();
         const events = await drain(agent.invoke({ sessionId: "s", prompt: { text: "effect" } }));
         const runId = accepted(events[0] as InvokeEvent).run.runId;
+        await drain(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
+        expectParentsPublished(await all(agent.sessions.get("s")));
         const entries = (await all(agent.sessions.get("s"))).filter((e) => e.runId === runId);
         expect(entries[0]?.kind).toBe("run_started");
         expect(entries.at(-1)?.kind).toBe("run_ended");
@@ -487,6 +496,16 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         const copied = await all(agent.sessions.get("f"));
         expect(copied.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
         expect(copied.every((e) => e.runId === undefined)).toBe(true);
+        expectParentsPublished(copied);
+        expect(await agent.sessions.create({ sessionId: "g", fork: { sessionId: "s" } })).toMatchObject({ ok: true });
+        const whole = await all(agent.sessions.get("g"));
+        expect(whole.map((e) => e.kind)).toEqual([
+          "user_message",
+          "assistant_message",
+          "user_message",
+          "assistant_message",
+        ]);
+        expect(whole.slice(1).map((e) => e.parentEntryId)).toEqual(whole.slice(0, -1).map((e) => e.id));
         expect(await all(agent.sessions.get("s"))).toEqual(source);
         expect((await agent.sessions.get("f").runs.get({ runId: source[0]?.runId as string })) ?? null).toBeNull();
       });
