@@ -538,6 +538,9 @@ same model independently. ACP is validated as a compatibility target in both dir
 the contract: its center is a person in an editor driving a local coding agent, and the parts this design needs most
 are still drafts.
 
+The normative text is [SPEC v1](../SPEC-v1.md) (§7.8); this section keeps the reasoning, and where the two differ the
+SPEC wins.
+
 ### 7.1 Concepts
 
 | Concept | Is | A user uses it to | Exposed as |
@@ -591,7 +594,8 @@ type InvokeEvent =
 ```
 
 - **Accepted.** The first event names the session and the run. `joined` says the message was steered into the
-  running run; `duplicate` says the key had been seen, and `run` is that run as it is now. The run's events follow
+  running run; `duplicate` says the key had been seen, and `run` is that run as it is now. The run follows from
+  its first entry, so a duplicate or a steered message sees the whole run and `collect` over it gets the same answer
   (§7.5), and the stream ends after the run's `run_ended` entry. A caller that stops reading detaches: the run goes
   on, and the caller can come back to it (§7.3).
 - **Rejected.** The only event of an invoke that was not accepted: nothing ran and nothing was recorded, so it is safe
@@ -613,7 +617,9 @@ type InvokeEvent =
   layer and never reach a caller.
 - **Idempotency.** A key is unique within its session and requires `sessionId`: without one, every invoke creates a
   new session, and a retry could never match. A channel uses the platform's message id, a schedule its occurrence id.
-  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message. The one exception
+  pi-durable keys its submissions the same way, and dsh stores a client-minted id on the message. The key alone
+  identifies the message: a second invoke with it is not compared with the first, as pi-durable does not compare
+  its `requestId`'s submissions, and storing a hash to compare would buy a `conflict` no caller has needed. The one exception
   to "the same key returns the same run" is a run that ended `interrupted` (§7.3): an invoke with its key starts a new
   run for the message, which the key names from then on, and the receipt says `duplicate: false`.
 - **Source.** Channels, schedules and wake-ups name themselves in `source`, and the run records it. A remote caller
@@ -646,7 +652,7 @@ type RunOutcome =
   | { status: "completed" }
   | { status: "max_tokens" }
   | { status: "intercepted" }    // a command or an extension took the message; no model was called
-  | { status: "interrupted" }    // the process stopped before it ended, running or queued; derived when read
+  | { status: "interrupted" }    // the process stopped before it ended, running or queued; written once on reopen (§9.3)
   | { status: "canceled"; by: "cancel" | "abort" | "delete" }   // includes a queued run withdrawn before it started
   | { status: "failed"; error: AgentError };
 
@@ -655,7 +661,7 @@ interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: n
 interface Session {
   runs: {
     get(key: { runId: string } | { idempotencyKey: string }): Promise<RunStatus | undefined>;
-    follow(runId: string, options?: { after?: string }): AsyncIterable<SessionEvent>;
+    follow(runId: string, options?: { after?: string }): AsyncIterable<FollowEvent>;
     cancel(runId: string): Promise<Result>;
   };
 }
@@ -667,11 +673,12 @@ interface Session {
 - `runs.cancel` withdraws a queued run, which ends `canceled` without starting, or stops a running one. Runs queued
   after it start as usual.
 - A session holds at most 20 queued runs, the cap a conversation's wake-ups already have, and a process caps its runs
-  in flight, queued and running together. Past either, and for `whenBusy: "reject"`, an invoke is rejected with
+  in flight, queued and running together (100 in the reference implementation: queued runs cost almost nothing, and
+  running ones bound the memory of a small host such as an AgentCore microVM). Past either, and for `whenBusy: "reject"`, an invoke is rejected with
   `busy`, whose `details.reason` says which: `running` (with the running `runId`), `queue_full` or `capacity`.
 - Acceptance is durable: before the receipt is sent, the run is recorded with its id, key and source (§9.3), and
   `run_started` and `run_ended` are entries in the session's log (§7.5). So a run's status after the fact is read from
-  the record and the log, and `runs.get` answers `undefined` only for a run that was never accepted. A run that was
+  the record and the log, and `runs.get` answers `undefined` only for a run that was never accepted, or whose session was deleted. A run that was
   accepted and never ended, and is neither running nor queued, is reported `interrupted`: one the process stopped while
   it ran, and one lost from a queue that did not survive a restart. Whether queued runs survive a restart, and whether a
   running one continues after it, depend on the harness (`durableQueue`, `durableRuns`, §9.3). The service never reruns
@@ -685,7 +692,8 @@ interface Session {
 ```ts
 interface Agent {
   sessions: {
-    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }): Promise<{ sessionId: string }>;
+    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }):
+      Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
     list(): Promise<SessionSummary[]>;
     get(sessionId: string): Session;
   };
@@ -697,8 +705,8 @@ interface Agent {
 interface Session {
   readonly sessionId: string;
   read(options?: { after?: string; before?: string; limit?: number }):
-    Promise<{ state: SessionState; entries: Entry[]; next?: string; prev?: string }>;
-  follow(options?: { after?: string }): AsyncIterable<SessionEvent>;
+    Promise<{ ok: true; state: SessionState; entries: Entry[]; next?: string; prev?: string } | { ok: false; error: AgentError }>;
+  follow(options?: { after?: string }): AsyncIterable<FollowEvent>;
   attachment(ref: string): Promise<Attachment | undefined>;
   abort(): Promise<AbortResult>;
   rewind(entryId: string): Promise<Result>;
@@ -722,6 +730,8 @@ interface SessionSummary {
   sessionId: string; name?: string; status: "idle" | "running";
   createdAt: number; updatedAt: number; preview?: string;
 }
+
+type FollowEvent = SessionEvent | { type: "rejected"; error: AgentError };
 
 type AbortResult =
   | { ok: true; stopped: { runId?: string; queued: string[]; compaction: boolean } }
@@ -762,7 +772,7 @@ interface Entry {
 // assistant_message  { text, thinking?, toolCalls?, outcome? }
 // tool_result        { toolCallId, toolName, isError, text, images? }
 // run_started        {}
-// run_ended          { outcome: RunOutcome, usage: Usage }
+// run_ended          { outcome: RunOutcome, usage?: Usage }
 // settings_changed   { name?, model?, thinkingLevel? }
 // compaction         { summary, firstKeptEntryId }
 
@@ -796,7 +806,7 @@ interface AgentError {
 interface AgentInfo {
   protocolVersion: string;
   capabilities: {
-    steer: boolean; fork: boolean; compaction: boolean; delete: boolean;
+    steer: boolean; fork: boolean; rewind: boolean; compaction: boolean; delete: boolean;
     updatable: ("name" | "model" | "thinkingLevel")[];
     durableQueue: boolean;   // queued runs survive a restart
     durableRuns: boolean;    // a running run continues after a restart
@@ -807,7 +817,12 @@ interface AgentInfo {
 
 Codes: `invalid_request`, `unsupported`, `not_found`, `conflict`, `busy`, `missing_model`, `auth_required`,
 `model_error`, `nothing_to_compact`, `partial_update`, `unavailable`, `internal`. A harness may add codes under its
-own prefix; a client that meets an unknown code acts on `retryable`.
+own prefix; a client that meets an unknown code acts on `retryable`. SPEC v1 §7.1 gives each its HTTP status and
+`retryable`. `rewind` is a capability of its own because pi-durable has no call for it (§9.1).
+
+A `read` page holds at most 500 entries (100 by default) and may stop short of `limit`: the reference implementation
+ends a page at 4 MiB of JSON, since a tool result's text can be large even with images left as refs. A follow that
+cannot start (an unknown session or cursor) is a single `rejected`, as an invoke is.
 
 ### 7.7 Planes and HTTP
 
@@ -852,7 +867,10 @@ gateway in front, or turns `http.api` off when only its channels are used, since
 
 ### 7.8 SPEC changes (v1)
 
-`docs/SPEC.md` is rewritten as this protocol. Against v0.1:
+`docs/SPEC.md` is rewritten as this protocol: drafted in [SPEC-v1.md](../SPEC-v1.md), which replaces it when step 4
+ships, so the published SPEC keeps describing what the package implements until then. The harness port stays out of
+the SPEC: it is the implementation's contract, and a harness conforms by passing the SPEC's suite through it. Against
+v0.1:
 
 | Section | Change |
 |---|---|
@@ -862,12 +880,12 @@ gateway in front, or turns `http.api` off when only its channels are used, since
 | §6, the three endings | (a) the run's `run_ended` entry; (b) `rejected`; (c) the caller stops reading and detaches, while the run goes on |
 | §6, MUST 1 | An invoke stream holds exactly one `rejected`, or ends with its run's `run_ended`, unless the process stops |
 | §6, MUST 2 | Every failure is an event: a failed run ends with a `failed` outcome, and a refusal is `rejected` |
-| §6, MUST 3 | Reversed: a caller that stops reading detaches; `runs.cancel` and `abort` stop work |
+| §6, MUST 3 | Reversed: a caller that stops reading detaches; `runs.cancel`, `abort` and `delete` stop work |
 | §6, MUST 4 | The terminal set changes once, from `{ completed, failed }` to `{ run_ended, rejected }`, and is frozen again |
 | §6, MUST 6 | Weaker: while a run is active, a session's calls must reach the process running it; portable conformance needs a session router in front (§9.3). `conformance-levels.md` says so with v1 |
 | §7 | `collect` returns the run's answer when it ends `completed`, and throws on any other outcome or on `rejected` |
 | §8 | The lineage, identity and source rows are replaced by §7.2 and §7.4; the mid-turn steering row by `whenBusy`, `runs.cancel` and `abort` |
-| New | The session operations (§7.3, §7.4), the planes (§7.7), and the harness port (§9.1) |
+| New | The session operations (§7.3, §7.4) and the planes (§7.7). The harness port (§9.1) stays out, as above |
 
 ### 7.9 Compatibility with ACP
 
@@ -1148,8 +1166,9 @@ id, key and source, written before the receipt is sent: a durable harness keeps 
 submission records), and the run helper writes it to the session's state. The second is the session's log, with each
 run's `run_started` and `run_ended`, which a harness writes natively (dsh's turn boundaries, pi-durable's settled
 submissions) or the run helper writes for it. A run's status is derived from both and the queue. A run that was
-accepted, never ended and is neither running nor queued is `interrupted`; the helper writes its closing entry when the
-session next runs, as dsh does. Only live events, and for a harness that is only a loop the order of its queue and
+accepted, never ended and is neither running nor queued is `interrupted`; the serving layer writes its closing entry
+when it first opens the session after the run stopped, before answering anything on it, so a caller reattaching with
+`runs.follow` after a restart reaches the end without the session running again. Only live events, and for a harness that is only a loop the order of its queue and
 its current run, are held in memory: a queued run lost with them is still known, as `interrupted`.
 
 | What happens | A running run | A queued run |
@@ -1157,6 +1176,7 @@ its current run, are held in memory: a queued run lost with them is still known,
 | The caller stops reading | Continues | Stays queued, and runs in its turn |
 | `runs.cancel` | Stops: `canceled` by `cancel` | Withdrawn: `canceled` by `cancel` |
 | `abort` | Stops: `canceled` by `abort` | Withdrawn: `canceled` by `abort` |
+| `delete` | Stops: `canceled` by `delete` | Withdrawn: `canceled` by `delete` |
 | The process stops: a restart or a deploy | Continues with `durableRuns`; otherwise ends `interrupted`, and what it recorded stays | Stays queued with `durableQueue`; otherwise ends `interrupted` without starting |
 
 The service never reruns a run on its own: its tools may already have had effects (§3.1, invariant 3). A caller that
@@ -1291,7 +1311,8 @@ Each is settled when the step that needs it is built (§12).
 1. How `context.json` names a content entry's credential (its shape for content is settled: entries by name, with
    `github`, `ref`, `readonly` and `description`, and no machine's path); where an MCP server's OAuth tokens live for
    a deployed agent.
-2. The final error codes, the cap on runs in flight, and the page limits of `read`.
+2. Settled in SPEC v1 §7: the error codes with their HTTP status and `retryable`, a process cap of 100 runs in
+   flight, and `read` pages of at most 500 entries (100 by default, 4 MiB).
 3. Scaling out on AgentCore: routing each message to its conversation's runtime session, an invoke by its body; a
    fork, which reads one session and creates another; a lease that holds across processes; how state is split by
    writer (each conversation's own, and what spans conversations: redelivery dedup, the session list, schedules);
@@ -1372,9 +1393,9 @@ The serving protocol:
 - A session is named by the caller or created by the service. `sessions.create` is the only way to fork, and a session
   that exists is a `conflict`; an invoke into an unknown session creates it empty (§7.2, §7.4).
 - A busy session: each invoke says what its message is (`whenBusy`: `queue` by default, `steer`, `reject`). A session
-  holds at most 20 queued runs, and a process caps its runs in flight (§7.2, §7.3).
-- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run, except
-  a run that ended `interrupted`, whose key starts a new run. The service never reruns on its own; a caller that owes
+  holds at most 20 queued runs, and a process caps its runs in flight at 100 (§7.2, §7.3).
+- An idempotency key is unique within its session and requires `sessionId`; the same key returns the same run, without
+  comparing the message, except a run that ended `interrupted`, whose key starts a new run. The service never reruns on its own; a caller that owes
   an answer decides to, so channels stay at-least-once (§7.2, §7.3).
 - A steered message joins the running run when it is accepted, and a run does not end while it holds one it has not
   taken, so the receipt never waits for the harness (§7.2).
@@ -1387,7 +1408,7 @@ The serving protocol:
 - `update` changes a session's name, model and thinking level, on the control plane, and creates nothing; moving the
   active branch is `rewind` (§7.4).
 - Run boundaries are entries in the session's log, so a run's status after the fact is read from the log, and
-  `interrupted` is derived when read (§7.3, §9.3).
+  an `interrupted` run's `run_ended` is written once, when the session is first opened after it stopped (§7.3, §9.3).
 - A thread forks at the answer of the run named by the nearest message of its reply chain: a message the channel
   posted for a run, which it records, or a user's message, by its idempotency key. When nothing names a run,
   including a post the agent made through a send tool, it forks at the chat's present; a post is never followed back
