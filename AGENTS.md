@@ -235,6 +235,8 @@ src/
     ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, default model)
     ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
     │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
+    ├── loop-harness.ts     # pi as a LoopHarness (loop-port.ts): the session's one SessionManager as its log, a fresh
+    │                       # AgentSession per run bound to it, and what became of each message it was handed
     ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
     ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
     ├── agent-session-factory.ts # the harness binding: assembly → one record per invoke (bindPiSession)

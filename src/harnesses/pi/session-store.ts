@@ -44,7 +44,7 @@ export interface PropertyWrites {
 }
 
 /** What a property write actually did, and what the record holds after it. */
-interface AppliedProperties {
+export interface AppliedProperties {
   /** In write order. */
   landed: SessionUpdateField[];
   /** Why the rest stopped, if anything did. */
@@ -261,7 +261,11 @@ async function applyProperties(
   writes: PropertyWrites,
 ): Promise<AppliedProperties | undefined> {
   const record = await open();
-  if (!record) return undefined;
+  return record ? applyPropertiesTo(record, writes) : undefined;
+}
+
+/** {@link applyProperties} on a record the caller already holds, which is then the write's only writer. */
+export function applyPropertiesTo(record: SessionManager, writes: PropertyWrites): AppliedProperties {
   const landed: SessionUpdateField[] = [];
   let moved = false;
   let failure: unknown;

@@ -85,6 +85,10 @@ async function all(session: Session): Promise<Entry[]> {
   return page.entries;
 }
 
+/** What was said, without the settings a harness records along the way. */
+const conversation = (entries: Entry[]) =>
+  entries.filter((e) => ["user_message", "assistant_message", "tool_result"].includes(e.kind));
+
 /** SPEC v1 §6: each entry names its parent, which a caller can read. */
 function expectParentsPublished(entries: Entry[]): void {
   const ids = new Set(entries.map((entry) => entry.id));
@@ -180,6 +184,8 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         expect(run.messages).toHaveLength(2);
         expect(run.messages.every((m) => m.entryId !== undefined)).toBe(true);
         expect(answerOf(events)).toBe("answer: also");
+        const written = (await all(session)).filter((e) => e.kind === "user_message" && e.runId === first.run.runId);
+        expect(written.map((e) => (e.data as { text: string }).text)).toEqual(["hold", "also"]);
       });
 
       it("an idle session starts a run whatever whenBusy says", async () => {
@@ -493,12 +499,12 @@ export function describeProtocolConformance(name: string, subject: ProtocolSubje
         });
         expect(forked.ok).toBe(true);
         const copied = await all(agent.sessions.get("f"));
-        expect(copied.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
+        expect(conversation(copied).map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
         expect(copied.every((e) => e.runId === undefined)).toBe(true);
         expectParentsPublished(copied);
         expect(await agent.sessions.create({ sessionId: "g", fork: { sessionId: "s" } })).toMatchObject({ ok: true });
         const whole = await all(agent.sessions.get("g"));
-        expect(whole.map((e) => e.kind)).toEqual([
+        expect(conversation(whole).map((e) => e.kind)).toEqual([
           "user_message",
           "assistant_message",
           "user_message",

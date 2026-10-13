@@ -95,7 +95,7 @@ import type { PiSessionRecordStore } from "./session-store.ts";
  * count no longer describes the context (pi's own rule). pi then estimates from characters; this reports unknown
  * until the next response.
  */
-function sessionUsage(
+export function sessionUsage(
   path: PiSessionEntry[],
   record: SessionManager,
   contextWindow: number | undefined,
@@ -140,7 +140,7 @@ function sessionUsage(
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  * One exception: `context_edit` carries `{ targetId, omitted }`, never the replacement content.
  */
-function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
+export function toSessionEntry(entry: PiSessionEntry, parentId?: string): SessionEntry {
   const base = {
     id: entry.id,
     parentId,
