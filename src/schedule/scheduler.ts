@@ -1,9 +1,11 @@
 /** Resident cron and wake polling. */
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
-import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
+import type { Agent, InvokeEvent, InvokeRequest, RunOutcome } from "../protocol.ts";
 import { PortFailure } from "../effect-port.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
@@ -13,7 +15,7 @@ import { basename } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { type Schedule, scheduleSession } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
-import { deferWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
+import { takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /**
  * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
@@ -61,10 +63,11 @@ export interface ScheduleLoad {
   failures: readonly ModuleLoadFailure[];
 }
 
+/** All the scheduler asks of the agent. */
+export type ScheduledAgent = Pick<Agent, "invoke">;
+
 export interface SchedulerOptions {
-  agent: Agent;
-  /** What the agent's own wake-ups run through, so their runs say they are wake-ups; `agent` when absent. */
-  wakeAgent?: Agent;
+  agent: ScheduledAgent;
   stateRoot: string;
   /** Every valid schedule this serve loaded at start. */
   schedules: readonly Schedule[];
@@ -128,55 +131,98 @@ function oneLine(text: string): string {
   return folded === "" ? "" : `: ${folded}`;
 }
 
+/** How one invoke went: refused before it ran, or the run's outcome; `undefined` when the stream stopped first. */
+type InvokeEnd = { refused: string; busy: boolean } | { outcome: RunOutcome } | undefined;
+
 /**
- * The iterator is a Promise port inside an uninterruptible claimed occurrence, including its cleanup.
+ * Read an invoke's stream to its run's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes the
+ * stream, and the run goes on: a caller that stops reading only detaches (SPEC v1 §3.1).
+ */
+async function readInvoke(
+  agent: ScheduledAgent,
+  request: InvokeRequest,
+  onAccepted: () => void,
+  signal: AbortSignal,
+): Promise<InvokeEnd> {
+  const iterator = agent.invoke(request)[Symbol.asyncIterator]();
+  const close = () => void iterator.return?.();
+  signal.addEventListener("abort", close, { once: true });
+  try {
+    let runId: string | undefined;
+    for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+      const event: InvokeEvent = next.value;
+      if (event.type === "rejected") return { refused: event.error.message, busy: event.error.code === "busy" };
+      if (event.type === "accepted") {
+        runId = event.run.runId;
+        onAccepted();
+      }
+      if (event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId) {
+        return { outcome: (event.entry.data as { outcome: RunOutcome }).outcome };
+      }
+    }
+    return undefined;
+  } finally {
+    signal.removeEventListener("abort", close);
+    await iterator.return?.();
+  }
+}
+
+/** A run's outcome as the one word a claim keeps, and the detail worth a log line. */
+function settled(outcome: RunOutcome): { fire: "completed" | "failed" | "interrupted"; detail?: string } {
+  switch (outcome.status) {
+    case "completed":
+    case "max_tokens":
+    case "intercepted":
+      return { fire: "completed" };
+    case "interrupted":
+      return { fire: "interrupted", detail: "the process stopped before the run ended" };
+    case "canceled":
+      return { fire: "failed", detail: `canceled by ${outcome.by}` };
+    case "failed":
+      return { fire: "failed", detail: outcome.error.message };
+  }
+}
+
+/**
+ * One invoke, read to its run's end, with what became of it said in the log.
  *
- * WHAT THE TURN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
+ * WHAT THE RUN SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
  * (`schedule:<name>` for a schedule, the asking conversation for a wake-up), and a session is persisted under
  * `<stateRoot>/sessions/` like any other. Copying the reply into the log would be a second store of the same text,
  * unstructured, in a stream with a wider audience and a bound that differs per host.
  */
-function runTurn(agent: Agent, label: string, session: string, prompt: string) {
+function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, onAccepted: () => void = () => {}) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
     const elapsed = () => clock.currentTimeMillisUnsafe() - startedAt;
-    log.info(`[schedule] ${label} firing (session=${session})`);
-    return yield* Effect.tryPromise({
-      try: async () => {
-        let failed: string | undefined;
-        let busy = false;
-        // The text deltas are iterated and dropped. Accumulating them would be a second copy of what the session
-        // already holds, and no caller here reads it — the outcome is the whole record (docs/design/core.md §8).
-        for await (const e of agent.invoke({ session }, { text: prompt })) {
-          if (e.type === "failed") {
-            failed = e.details;
-            busy = e.code === SESSION_BUSY_CODE;
-          }
-        }
-        return { busy: failed !== undefined && busy, failed };
-      },
+    log.info(`[schedule] ${label} firing (session=${request.sessionId})`);
+    const read = yield* Effect.tryPromise({
+      try: (signal) => readInvoke(agent, request, onAccepted, signal),
       catch: (cause) => new PortFailure(cause),
-    }).pipe(
-      Effect.match({
-        onSuccess: (result) => {
-          // BUSY IS NOT A FAILURE, and this line is where that distinction has to land: the claim file says
-          // `skipped`, but `docker logs` / CloudWatch is the first place anyone looks, and
-          // it kept saying `ERROR … failed: busy`. "The previous turn is still running" and "the model call died"
-          // need different reactions — a session-busy rejection carries `failed` only because that is the SPEC's
-          // one terminal event shape, which is a wire detail, not a verdict.
-          if (result.busy) log.info(`[schedule] ${label}: occurrence skipped (session busy) (${elapsed()}ms)`);
-          else if (result.failed) log.error(`[schedule] ${label} failed (${elapsed()}ms)${oneLine(result.failed)}`);
-          else log.info(`[schedule] ${label} completed (${elapsed()}ms)`);
-          return { ...result, ms: elapsed() };
-        },
-        onFailure: (error) => {
-          // An iterator throw violates SPEC MUST 2 and is never a replay-safe busy rejection.
-          log.error(`[schedule] ${label} errored (${elapsed()}ms)${oneLine(String(error.cause))}`);
-          return { busy: false, failed: String(error.cause), ms: elapsed() };
-        },
-      }),
-    );
+    }).pipe(Effect.result);
+    const ms = elapsed();
+    if (Result.isFailure(read)) {
+      // A stream that throws breaks the protocol (failures are values), so it is this fire's failure, never a refusal.
+      const failed = String(read.failure.cause);
+      log.error(`[schedule] ${label} errored (${ms}ms)${oneLine(failed)}`);
+      return { fire: "failed" as const, busy: false, failed, ms };
+    }
+    const end = read.success;
+    if (end === undefined) {
+      log.error(`[schedule] ${label} failed (${ms}ms): the stream ended before the run did`);
+      return { fire: "failed" as const, busy: false, failed: "the stream ended before the run did", ms };
+    }
+    if ("refused" in end) {
+      // BUSY IS NOT A FAILURE: "the previous run is still going" and "the model call died" need different reactions.
+      if (end.busy) log.info(`[schedule] ${label}: occurrence skipped (session busy) (${ms}ms)`);
+      else log.error(`[schedule] ${label} refused (${ms}ms)${oneLine(end.refused)}`);
+      return { fire: "failed" as const, busy: end.busy, failed: end.refused, ms };
+    }
+    const { fire, detail } = settled(end.outcome);
+    if (fire === "completed") log.info(`[schedule] ${label} completed (${ms}ms)`);
+    else log.error(`[schedule] ${label} ${fire} (${ms}ms)${oneLine(detail ?? "")}`);
+    return { fire, busy: false, failed: fire === "completed" ? undefined : detail, ms };
   });
 }
 
@@ -196,7 +242,7 @@ export interface ScheduleFireOutcome {
 
 /** Shared resident/external claim → run → settle. */
 export function fireScheduleOnce(opts: {
-  agent: Agent;
+  agent: ScheduledAgent;
   stateRoot: string;
   schedule: Schedule;
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
@@ -231,7 +277,14 @@ export function fireScheduleOnce(opts: {
       catch: (cause) => new PortFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const r = yield* runTurn(agent, s.name, scheduleSession(s.name), s.prompt);
+    // An occurrence on a busy session is refused, and so skipped; its key is the instant, so one occurrence is one run.
+    const r = yield* runTurn(agent, s.name, {
+      sessionId: scheduleSession(s.name),
+      prompt: { text: s.prompt },
+      whenBusy: "reject",
+      idempotencyKey: slot.toISOString(),
+      source: { kind: "schedule", name: s.name },
+    });
     // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
     // what decided it was the previous turn still holding `schedule:<name>`, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
@@ -244,8 +297,8 @@ export function fireScheduleOnce(opts: {
         ms: r.ms,
       };
     }
-    settleClaim(stateRoot, s.name, slot, r.failed ? "failed" : "completed", r.ms);
-    return { fired: true, failed: r.failed, ms: r.ms };
+    settleClaim(stateRoot, s.name, slot, r.fire, r.ms);
+    return { fired: true, ...(r.failed === undefined ? {} : { failed: r.failed }), ms: r.ms };
   }).pipe(Effect.uninterruptible);
 }
 
@@ -263,7 +316,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const fork = Effect.runForkWith(yield* Effect.context<never>());
     const {
       agent,
-      wakeAgent = agent,
       stateRoot,
       schedules,
       failures = [],
@@ -326,33 +378,44 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         }
       });
 
+    /**
+     * Fire the first due wake-up into its session, queued behind whatever runs there. The wake-up is taken out of the
+     * store first, so accepted is delivered: the pump goes on to the next one, and how the run ends is followed apart.
+     */
     const wakeOnce = Effect.gen(function* () {
       const w = yield* Effect.try({
         try: () => takeFirstDueWakeup(stateRoot, now()),
         catch: (cause) => new PortFailure(cause),
       });
       if (!w) return false;
+      const label = `wake ${w.id.slice(0, 8)}`;
+      const request: InvokeRequest = {
+        sessionId: w.session,
+        prompt: { text: wakeEnvelope(w) },
+        whenBusy: "queue",
+        idempotencyKey: `wake:${w.id}@${w.fireAt}`,
+        source: { kind: "wake" },
+      };
+      // Counted until the run is accepted: from then on the run itself is the work in flight.
       yield* Effect.acquireUseRelease(
         Effect.sync(beginWork),
         () =>
           Effect.gen(function* () {
-            const label = `wake ${w.id.slice(0, 8)}`;
-            const r = yield* runTurn(wakeAgent, label, w.session, wakeEnvelope(w));
-            let kept = false;
-            if (r.busy && !w.cron) {
-              kept = yield* Effect.try({
-                try: () => deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS)),
-                catch: (cause) => new PortFailure(cause),
-              });
-              if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
-              else log.error(`[schedule] ${label}: dropped after too many busy retries`);
-            } else if (r.busy && w.cron) {
-              // `runTurn` already said it was skipped for a busy session; this adds the one thing it cannot know —
-              // that a recurring wake has a next occurrence, so nothing is deferred and nothing is lost.
-              log.info(`[schedule] ${label}: next fires per cron`);
-            }
-            // A wake-up has no claim to settle (it is removed from the store before the turn starts), so its whole
-            // record is the log lines above and `runTurn`'s — deferred, dropped, failed, completed.
+            const accepted = yield* Deferred.make<void>();
+            const delivered = () => void Deferred.doneUnsafe(accepted, Effect.void);
+            const followed = runTurn(agent, label, request, delivered).pipe(
+              Effect.tap((r) =>
+                Effect.sync(() => {
+                  // A recurring wake-up has its next occurrence; a one-shot one refused now is gone.
+                  if (r.busy && w.cron === undefined) {
+                    log.error(`[schedule] ${label}: dropped — its session refused it (${r.failed})`);
+                  }
+                }),
+              ),
+              Effect.ensuring(Effect.sync(delivered)),
+            );
+            launch(label, Effect.asVoid(followed));
+            yield* Deferred.await(accepted);
           }),
         (done) => Effect.sync(done),
       );

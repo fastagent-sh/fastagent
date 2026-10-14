@@ -1,5 +1,5 @@
 /**
- * TEMPORARY, removed once the built-in channels and the scheduler speak SPEC v1 themselves (step 4, PR 4b): the v0.1
+ * TEMPORARY, removed once the built-in channels speak SPEC v1 themselves (step 4, PR 4b): the v0.1
  * `Agent` they were written against, over the v1 `Agent` the serve now runs. Every write goes through the v1 Agent,
  * so a session keeps one writer. It keeps v0.1's own rules: a caller that stops reading cancels the run (v0.1 MUST 3),
  * and a busy session queues a channel's message, so its only `session_busy` is a full queue.
@@ -41,20 +41,7 @@ function terminalOf(outcome: RunOutcome): AgentEvent {
   }
 }
 
-/**
- * The scheduler's caller, for its schedules or for the agent's wake-ups, which is what their runs record as their
- * source. A busy session is refused, so the scheduler applies its own rule to it, as it did before v1: a cron
- * occurrence is skipped, a one-shot wake-up deferred to the next poll.
- */
-export function scheduleCaller(agent: ProtocolAgent, kind: "schedule" | "wake"): LegacyAgent {
-  return legacyAgent(agent, { kind }, "reject");
-}
-
-export function legacyAgent(
-  agent: ProtocolAgent,
-  source?: InvokeRequest["source"],
-  whenBusy: "queue" | "reject" = "queue",
-): LegacyAgent {
+export function legacyAgent(agent: ProtocolAgent, source?: InvokeRequest["source"]): LegacyAgent {
   return {
     invoke: (scope, prompt) =>
       cancellableStream(async function* ({ onCancelReady, wasCancelled }) {
@@ -69,7 +56,7 @@ export function legacyAgent(
         }
         if (wasCancelled()) return;
         const iterator = agent
-          .invoke({ sessionId: scope.session, prompt, whenBusy, ...(source ? { source } : {}) })
+          .invoke({ sessionId: scope.session, prompt, whenBusy: "queue", ...(source ? { source } : {}) })
           [Symbol.asyncIterator]();
         let runId: string | undefined;
         let ended = false;

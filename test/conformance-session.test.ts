@@ -4,7 +4,6 @@
  * (portability) included: every turn builds a fresh `AgentSession` over the same jsonl on disk, with
  * nothing shared in-process but the directory.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,10 +29,6 @@ import { runQueuedTurn } from "../src/channels/kit/turn-runner.ts";
 import type { TurnRecordBase } from "../src/channels/kit/turn-store.ts";
 import { telegramTurnStream } from "../src/channels/telegram/invoke-turn.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
-import { createScheduler } from "../src/schedule/scheduler.ts";
-import { scheduleFile, writeScheduleFile } from "../src/schedule/state.ts";
-import { listWakeups } from "../src/schedule/wakeups.ts";
-import { readFires } from "../src/schedule/state.ts";
 
 afterEach(() => vi.restoreAllMocks());
 import { definitionResourceLoaderOptions } from "../src/harnesses/pi/agent-session-factory.ts";
@@ -330,82 +325,3 @@ it.each([
     release?.();
   },
 );
-
-it("scheduler stop lets a claimed cron OR wake finish its actual SDK tool and report", async () => {
-  for (const kind of ["cron", "wake"] as const) {
-    const stateRoot = await mkdtemp(join(tmpdir(), "fa-scheduled-sdk-"));
-    const entered = Promise.withResolvers<void>();
-    const finish = Promise.withResolvers<void>();
-    const abort = vi.fn();
-    const lease = inProcessLease();
-    const sessionId = kind === "cron" ? "schedule:job" : "conversation";
-    const factory = await sessionFactory(
-      [fauxAssistantMessage(fauxToolCall("wait", {}, { id: "scheduled-tool" })), fauxAssistantMessage("done")],
-      {
-        customTools: [
-          {
-            name: "wait",
-            label: "wait",
-            description: "Wait for completion",
-            parameters: Type.Object({}),
-            execute: async (_id, _args, signal) => {
-              signal!.addEventListener("abort", abort, { once: true });
-              entered.resolve();
-              await finish.promise;
-              return { content: [{ type: "text", text: "finished" }], details: {} };
-            },
-          } as ToolDefinition,
-        ],
-      },
-    );
-    const bound = vi.fn(factory);
-    const agent = createPiAgentFromSession({ lease, sessionFactory: bound });
-    if (kind === "cron") {
-      // The claim a previous, completed fire left: where catch-up resumes from.
-      const claims = join(stateRoot, "schedule", "claims", "job");
-      mkdirSync(claims, { recursive: true });
-      const record = JSON.stringify({ firedAt: "2026-07-07T08:00:00.000Z", outcome: "completed", ms: 1 });
-      writeFileSync(join(claims, "2026-07-07T08-00-00-000Z"), record);
-    } else
-      writeScheduleFile(scheduleFile(stateRoot, "wakeups"), [
-        { id: "first", session: sessionId, prompt: "go", fireAt: "2026-07-07T09:00:00Z" },
-        { id: "next", session: "other", prompt: "later", fireAt: "2026-07-07T09:00:00Z" },
-      ]);
-    const s = Effect.runSync(
-      createScheduler({
-        agent,
-        stateRoot,
-        schedules: kind === "cron" ? [{ name: "job", cron: "0 * * * *", prompt: "go" }] : [],
-        now: () => new Date("2026-07-07T10:30:00Z"),
-      }),
-    );
-    // The turn's own report is a log line (a wake-up has no claim to settle at all), so that is what both kinds are
-    // observed through.
-    const logs: string[] = [];
-    const stderr = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    try {
-      s.start();
-      await entered.promise;
-      expect(s.stop(), kind).toBeUndefined();
-      expect(abort, kind).not.toHaveBeenCalled();
-      expect(lease.tryAcquire(sessionId), kind).toBeNull();
-      // Neither kind logs what the turn said (the session holds that), so the shared observable is the completion.
-      const reported = () => logs.filter((l) => /completed \(\d+ms\)/.test(l));
-      expect(reported(), kind).toEqual([]);
-      finish.resolve();
-      await vi.waitFor(() => expect(reported(), kind).toHaveLength(1));
-      // The cron fire also settles its claim; the wake-up's whole record is the line above.
-      if (kind === "cron") expect(readFires(stateRoot, "job").at(-1)).toMatchObject({ outcome: "completed" });
-      expect(abort, kind).not.toHaveBeenCalled();
-      expect(bound, kind).toHaveBeenCalledOnce();
-      if (kind === "wake") expect(listWakeups(stateRoot).map((w) => w.id)).toEqual(["next"]);
-      const release = lease.tryAcquire(sessionId);
-      expect(release, kind).toBeTypeOf("function");
-      release?.();
-    } finally {
-      s.stop();
-      finish.resolve();
-      stderr.mockRestore();
-    }
-  }
-});

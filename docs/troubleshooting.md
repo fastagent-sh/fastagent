@@ -145,15 +145,17 @@ FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent 
 Sessions live under the state root. Set `FASTAGENT_SECRETS_DIR` too, or a rotated `auth.json` stays in the agent
 dir.
 
-## `session busy`
+## `busy`
 
-Only one turn can write to a session at a time. A concurrent turn on the same session fails fast with a retryable `failed` event.
+A session runs one run at a time. A message for a running session queues behind the run by default
+(`whenBusy: "queue"`), so `busy` means one of two things: the request asked not to wait (`whenBusy: "reject"`,
+which is how a schedule's occurrence is skipped while its previous run goes on), or the session's queue is full
+(`details.reason` says which).
 
-Fixes depend on the channel:
+Fixes depend on the caller:
 
 - use distinct sessions for independent work,
-- debounce duplicate webhook events,
-- retry later for chat-style follow-ups,
+- send each message with an `idempotencyKey`, so a resend returns the run it already started,
 - design tools to be idempotent if events can overlap.
 
 ## Tool, channel or schedule failed to load
