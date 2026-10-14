@@ -26,12 +26,10 @@ import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine, withMachine } from "./machi
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
-import type { PiAgentSessionFactory } from "./invoke-session.ts";
-import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
+import type { PiAgentSessionFactoryOptions } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
-import { type Lease, inProcessLease } from "./turn-kit.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 
@@ -310,9 +308,7 @@ function contentSection({ agentDir, content }: { agentDir: string; content: read
 
 /** The assembly, as a value: what every rung builds and what the agent runs on. */
 export interface PiAssembly {
-  lease: Lease;
-  sessionFactory: PiAgentSessionFactory;
-  /** What binds a session to a record: the same options `sessionFactory` was built from. */
+  /** What binds a session to a record: everything but the store, which is `sessions`. */
   binding: Omit<PiAgentSessionFactoryOptions, "sessions">;
   sessions: PiSessionRecordStore;
   /** Extension-aware catalog for startup reporting and control-plane validation; never bound to a session. */
@@ -360,12 +356,8 @@ function assemblePi(opts: {
   cwd?: string;
   /** What authored tools see as `ctx.content`. */
   content?: readonly ResolvedContent[];
-  lease?: Lease;
 }): PiAssembly {
   const cwd = opts.cwd ?? process.cwd();
-  // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the agent runs under
-  // — boundary mutations must contend on it.
-  const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   const createModelRuntime = opts.models;
   // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
@@ -387,10 +379,7 @@ function assemblePi(opts: {
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     excludedToolNames,
   };
-  const sessionFactory = piAgentSessionFactory({ ...binding, sessions });
   return {
-    lease,
-    sessionFactory,
     binding,
     sessions,
     modelRuntime,

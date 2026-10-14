@@ -82,22 +82,34 @@ export async function forkThread(
   const own = await agent.sessions.get(sessionId).read({ limit: 0 });
   if (own.ok) return;
   if (own.error.code !== "not_found") throw new Error(`reading session ${sessionId} failed: ${own.error.message}`);
-  const history = await wholeHistory(agent, parent);
-  if (!history) {
+  const forkAt = async (at: string | undefined): Promise<void> => {
+    const created = await agent.sessions.create({
+      sessionId,
+      fork: { sessionId: parent, ...(at === undefined ? {} : { entryId: at }), context: "recent" },
+    });
+    // Another delivery of the thread's first message created it meanwhile: it exists, which is all this asks.
+    if (!created.ok && created.error.code !== "conflict") {
+      throw new Error(`forking thread ${sessionId} from ${parent} failed: ${created.error.message}`);
+    }
+  };
+  const noParent = () =>
     log.warn(`${label} thread ${sessionId} names ${parent}, which has no session: the thread starts empty`);
+  // Nothing to search for: the thread starts from the room's present, which its state alone names.
+  if (hints.length === 0) {
+    const room = await agent.sessions.get(parent).read({ limit: 0 });
+    if (!room.ok) {
+      if (room.error.code === "not_found") return noParent();
+      throw new Error(`reading session ${parent} failed: ${room.error.message}`);
+    }
+    if (room.state.leafEntryId !== undefined) await forkAt(undefined);
     return;
   }
+  // The whole room: a hint earlier in the list outranks a later one wherever each is found.
+  const history = await wholeHistory(agent, parent);
+  if (!history) return noParent();
   if (history.entries.length === 0) return;
   const at = branchPoint(activePath(history.entries, history.leaf), hints);
-  if (at === undefined && hints.length > 0) {
+  if (at === undefined)
     log.warn(`${label} no branch hint matched in ${parent}: thread ${sessionId} starts from its present`);
-  }
-  const created = await agent.sessions.create({
-    sessionId,
-    fork: { sessionId: parent, ...(at === undefined ? {} : { entryId: at }), context: "recent" },
-  });
-  // Another delivery of the thread's first message created it meanwhile: it exists, which is all this asks.
-  if (!created.ok && created.error.code !== "conflict") {
-    throw new Error(`forking thread ${sessionId} from ${parent} failed: ${created.error.message}`);
-  }
+  await forkAt(at);
 }

@@ -231,6 +231,34 @@ describe("dispatchStop", () => {
 });
 
 describe("forkThread", () => {
+  it("with no hint, forks at the room's present from its state alone, never reading its history", async () => {
+    const { v1 } = agentOver();
+    await drain(legacyAgent(v1).invoke({ session: "room" }, { text: "one" }));
+    await drain(legacyAgent(v1).invoke({ session: "room" }, { text: "two" }));
+    const reads: { limit?: number }[] = [];
+    const counting = {
+      ...v1,
+      sessions: {
+        ...v1.sessions,
+        get: (id: string) => {
+          const session = v1.sessions.get(id);
+          return {
+            ...session,
+            read: (options?: { limit?: number }) => {
+              if (id === "room") reads.push(options ?? {});
+              return session.read(options);
+            },
+          };
+        },
+      },
+    } as Agent;
+    await forkThread(counting, "thread", "room", [], "[test]");
+    expect(reads).toEqual([{ limit: 0 }]);
+    const page = await v1.sessions.get("thread").read();
+    const said = page.ok ? page.entries.filter((e) => e.kind === "user_message").map((e) => e.data) : [];
+    expect(said).toEqual([{ text: "one" }, { text: "two" }]);
+  });
+
   it("a thread whose own read fails is an error, never taken for one that exists", async () => {
     const down = {
       sessions: { get: () => ({ read: async () => failure("unavailable", "the store is down") }) },

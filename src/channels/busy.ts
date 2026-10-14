@@ -1,6 +1,6 @@
 /**
- * The process's work in flight: every session a lease holds (a turn or compaction, however it started), and the
- * channel, schedule and AgentCore work that has not reached one yet. Webhooks ACK before their turns finish, so open
+ * The process's work in flight: every run queued or running and every compaction (counted by the agent's LoopPort),
+ * and the channel, schedule and AgentCore work that has not reached a run yet. Webhooks ACK before their turns finish, so open
  * requests cannot tell whether the process is idle; this can. Read by AgentCore's `/ping` and by `dev`'s restart.
  */
 let inFlight = 0;

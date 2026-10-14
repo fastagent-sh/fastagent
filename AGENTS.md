@@ -242,17 +242,19 @@ src/
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── harnesses/pi/           # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
-    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, default model)
-    ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
-    │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
+    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (binding, store, default model), run as `agentOf`
+    ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: terminals, image prep, the event projection.
+    │                       # Its lease and observer seam are v0.1's (see invoke-session.ts)
     ├── loop-harness.ts     # pi as a LoopHarness (loop-port.ts): the session's one SessionManager as its log, a fresh
     │                       # AgentSession per run bound to it, and what became of each message it was handed
-    ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
-    ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
+    ├── invoke-session.ts   # v0.1's L0 (createPiAgentFromSession): no longer serves anything; loop-harness.ts still
+    │                       # imports its event projection. The L0, session-effects.ts and session-control.ts's hub go
+    │                       # in 4c, once those helpers move and session.ts's v0.1 event types with them
+    ├── session-effects.ts  # v0.1's lease/session acquisition, for the L0 above only
     ├── agent-session-factory.ts # the harness binding: assembly → one record per invoke (bindPiSession)
     ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
-    ├── session-control.ts  # the pi control hub: observation projections + dispatch
+    ├── session-control.ts  # v0.1's control hub (dispatch: unused); its entry/usage projections are loop-harness.ts's
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
     ├── session-markers.ts  # which journal entries are POSITIONS, which are the plane's own bookkeeping, and
     │                       # which are conversation turns (vs the harness's own `system` entries)
