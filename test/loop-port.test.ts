@@ -392,22 +392,76 @@ describe("serving layer", () => {
     expect(await agent.sessions.get(".").attachment("ref")).toBeUndefined();
   });
 
-  it("a subscriber that falls behind is told so and ended, rather than buffered without bound", async () => {
+  it("a subscriber that falls behind reads what it missed from the log: every entry once, and the run's end", async () => {
     const saved = { ...LIVE_BACKLOG };
     LIVE_BACKLOG.events = 3;
     try {
       const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
       for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
-      const follow = agent.sessions.get("s").follow()[Symbol.asyncIterator]();
-      await follow.next();
-      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "second" } })) void _;
-      const rest: FollowEvent[] = [];
-      for (let next = await follow.next(); !next.done; next = await follow.next()) rest.push(next.value);
-      expect(rest.at(-1)).toMatchObject({ type: "serving_error", message: expect.stringMatching(/fell behind/) });
-      expect(rest.filter((e) => e.type === "entry").length).toBeLessThan(6);
+      const session = agent.sessions.get("s");
+      const follow = session.follow()[Symbol.asyncIterator]();
+      const followed: FollowEvent[] = [(await follow.next()).value as FollowEvent];
+      // Not read while the next runs write: this subscriber and the invoke's own both fall behind.
+      const invoked = agent.invoke({ sessionId: "s", prompt: { text: "second" } })[Symbol.asyncIterator]();
+      const receipt = await invoked.next();
+      for (const text of ["third", "fourth"]) {
+        for await (const _ of agent.invoke({ sessionId: "s", prompt: { text } })) void _;
+      }
+      const rest = [];
+      for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
+      expect(receipt.value).toMatchObject({ type: "accepted" });
+      expect(rest.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+      const page = await session.read({ limit: 500 });
+      const all = page.ok ? page.entries.map((e) => e.id) : [];
+      while (followed.filter((e) => e.type === "entry").length < all.length) {
+        followed.push((await follow.next()).value as FollowEvent);
+      }
+      // Caught up, it is live again.
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "fifth" } })) void _;
+      const after = await session.read({ limit: 500 });
+      const everything = after.ok ? after.entries.map((e) => e.id) : [];
+      while (followed.filter((e) => e.type === "entry").length < everything.length) {
+        followed.push((await follow.next()).value as FollowEvent);
+      }
+      await follow.return?.();
+      expect(all.length).toBeLessThan(everything.length);
+      expect(followed.filter((e) => e.type === "serving_error")).toEqual([]);
+      expect(followed.flatMap((e) => (e.type === "entry" ? [e.entry.id] : []))).toEqual(everything);
     } finally {
       Object.assign(LIVE_BACKLOG, saved);
     }
+  });
+
+  it("an entry written between subscribing and the first read is delivered once", async () => {
+    const port = loopPort(fakeLoopHarness(new FakeStore()));
+    let first = true;
+    const agent = servingAgent({
+      ...port,
+      read: async (sessionId, page) => {
+        if (first) {
+          first = false;
+          await port.submit(sessionId, { text: "meanwhile" }, { whenBusy: "queue", source: { kind: "api" } });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return port.read(sessionId, page);
+      },
+    });
+    await agent.sessions.create({ sessionId: "s" });
+    const follow = agent.sessions.get("s").follow()[Symbol.asyncIterator]();
+    const ids: string[] = [];
+    for (;;) {
+      const next = await Promise.race([
+        follow.next(),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 200)),
+      ]);
+      if (!next) break;
+      if (!next.done && next.value.type === "entry") ids.push(next.value.entry.id);
+    }
+    await follow.return?.();
+    const page = await port.read("s", { after: null, limit: 500 });
+    const all = page.ok ? page.entries.map((e) => e.id) : [];
+    expect(all.length).toBeGreaterThan(0);
+    expect(ids).toEqual(all);
   });
 
   it("stops a page at the byte budget, keeping the entries nearest its cursor", async () => {

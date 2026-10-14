@@ -166,21 +166,24 @@ describe("the HTTP binding", () => {
     expect(queued.status).toBe(404);
   });
 
-  /** A connection that delivered the request and then failed before the reply: the server may have run it. */
-  const lostAfterSending: typeof fetch = async (input, init) => {
-    if (String(input).endsWith("/invoke")) {
-      const res = await fetch(input, init);
-      await res.body?.cancel();
-      throw new TypeError("fetch failed", {
-        cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      });
-    }
-    return fetch(input, init);
-  };
+  const lostConnection = () =>
+    new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
 
-  it("a connection lost before the receipt is settled by the key: the run that was accepted is followed", async () => {
+  /** The first `times` invokes are delivered, and their connection then fails before the reply. */
+  const lostAfterSending =
+    (times = 1): typeof fetch =>
+    async (input, init) => {
+      if (String(input).endsWith("/invoke") && times-- > 0) {
+        const res = await fetch(input, init);
+        await res.body?.cancel();
+        throw lostConnection();
+      }
+      return fetch(input, init);
+    };
+
+  it("a connection lost before the receipt is settled by sending again with the key: one run, followed", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending });
+    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending() });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
       events.push(event);
@@ -189,11 +192,42 @@ describe("the HTTP binding", () => {
     expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
     const runs = await connectRemoteAgent({ url });
     expect(await runs.sessions.get("s").runs.get({ idempotencyKey: "k" })).toMatchObject({ status: "done" });
+    const page = await runs.sessions.get("s").read();
+    expect(page.ok ? page.entries.filter((e) => e.kind === "user_message") : []).toHaveLength(1);
+  });
+
+  it("a request lost before it reached the server is sent again with its key, and runs once", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    let first = true;
+    const lostBeforeSending: typeof fetch = async (input, init) => {
+      if (String(input).endsWith("/invoke") && first) {
+        first = false;
+        throw lostConnection();
+      }
+      return fetch(input, init);
+    };
+    const agent = await connectRemoteAgent({ url, fetchFn: lostBeforeSending });
+    const events = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
+      events.push(event);
+    }
+    expect(events[0]).toMatchObject({ type: "accepted", duplicate: false });
+    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+  });
+
+  it("a connection lost twice leaves it unknown, never rejected", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending(2) });
+    const events = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
+      events.push(event);
+    }
+    expect(events).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/unknown/) }]);
   });
 
   it("without a key, a connection lost before the receipt is not called rejected", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending });
+    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending() });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
     expect(events).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/unknown/) }]);
@@ -244,6 +278,46 @@ describe("the HTTP binding", () => {
       code: "unavailable",
       retryable: true,
     });
+  });
+
+  it("a stream cut off before its end says so, and data that is not an event is not read as one", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const sse = (body: string) => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const accepted = { type: "accepted", sessionId: "s", run: { runId: "r", status: "running" }, joined: false };
+    const cutOff: typeof fetch = async (input, init) =>
+      String(input).endsWith("/invoke") ? sse(`data: ${JSON.stringify(accepted)}\n\n`) : fetch(input, init);
+    const cut = await connectRemoteAgent({ url, fetchFn: cutOff });
+    const events = [];
+    for await (const event of cut.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+    expect(events.map((e) => e.type)).toEqual(["accepted", "serving_error"]);
+    const garbage: typeof fetch = async (input, init) =>
+      String(input).endsWith("/invoke") ? sse("data: null\n\n") : fetch(input, init);
+    const odd = await connectRemoteAgent({ url, fetchFn: garbage });
+    const oddEvents = [];
+    for await (const event of odd.invoke({ sessionId: "s", prompt: { text: "x" } })) oddEvents.push(event);
+    expect(oddEvents).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/not an event/) }]);
+  });
+
+  it("a reconnect resumes after the newest id it received, not the cursor in the URL it reopens", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const agent = await connectRemoteAgent({ url });
+    for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
+    const page = await agent.sessions.get("s").read();
+    if (!page.ok) throw new Error(page.error.message);
+    const [opened, received, ...rest] = page.entries;
+    const abort = new AbortController();
+    const res = await fetch(`${url}/sessions/s/follow?after=${opened?.id}`, {
+      headers: { "last-event-id": received?.id as string },
+      signal: abort.signal,
+    });
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    let text = "";
+    while ((text.match(/^data:/gm) ?? []).length < rest.length) {
+      const { value } = await reader.read();
+      text += new TextDecoder().decode(value);
+    }
+    abort.abort();
+    expect([...text.matchAll(/^id: (.+)$/gm)].map((m) => m[1])).toEqual(rest.map((e) => e.id));
   });
 
   it("a follow the server refuses is one rejected event", async () => {

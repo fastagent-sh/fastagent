@@ -204,6 +204,13 @@ function app(table: Record<string, Handler>): ChannelHandler {
   };
 }
 
+/**
+ * Where a follow starts. A browser reconnecting an `EventSource` sends the URL it opened, cursor included, and the
+ * last id it received, which is newer: that one wins.
+ */
+const resumeFrom = (req: Request, url: URL): { after?: string } =>
+  optional("after", req.headers.get("last-event-id") ?? url.searchParams.get("after"));
+
 /** A query parameter as a non-negative integer, or the answer that it is not one. */
 function limitOf(url: URL): { limit?: number } | { error: Response } {
   const raw = url.searchParams.get("limit");
@@ -280,7 +287,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
       );
     },
     "GET /sessions/{s}/follow": (req, url, params) => {
-      const after = optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id"));
+      const after = resumeFrom(req, url);
       const session = sessions(url, params);
       return stream(refusalOf(session, after), () => session.follow(after));
     },
@@ -321,7 +328,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
     "GET /sessions/{s}/runs/{r}": (_req, url, params) =>
       read(() => sessions(url, params).runs.get({ runId: params.r as string }), runOf),
     "GET /sessions/{s}/runs/{r}/events": (req, url, params) => {
-      const after = optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id"));
+      const after = resumeFrom(req, url);
       const session = sessions(url, params);
       const runId = params.r as string;
       const refusal = (async () => {

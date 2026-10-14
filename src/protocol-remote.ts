@@ -42,7 +42,6 @@ export interface RemoteAgentOptions {
   fetchFn?: typeof fetch;
 }
 
-/** A reply the server refused, with the error it gave. */
 /** A non-2xx reply. `ours` when this protocol answered it, which says nothing ran; a gateway's page says nothing. */
 class Refused extends Error {
   readonly error: AgentError;
@@ -70,6 +69,21 @@ async function bodyOf<T>(res: Response): Promise<{ value: T } | { error: AgentEr
   } catch {
     return { error: agentError("internal", `a ${res.status} reply that is not JSON: ${text.slice(0, 200)}`) };
   }
+}
+
+/** Whether an event is `runId`'s `run_ended`. */
+const endsRunOf =
+  (runId: string) =>
+  (event: FollowEvent | InvokeEvent): boolean =>
+    event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId;
+
+/** An invoke ends on the `run_ended` of the run its receipt named. */
+function receiptThenEnd(): (event: InvokeEvent) => boolean {
+  let runId: string | undefined;
+  return (event) => {
+    if (event.type === "accepted") runId = event.run.runId;
+    return runId !== undefined && endsRunOf(runId)(event);
+  };
 }
 
 /** A request that never reached a server: the connection was not made, so nothing was recorded. */
@@ -157,6 +171,11 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     path: string,
     init: RequestInit,
     connectMs: number,
+    /**
+     * Whether an event is the one the stream ends on. A stream that ends before it is cut off, by a proxy or a server
+     * going down, and says so with a `serving_error`: a caller must not read a run that did not end as one that did.
+     */
+    ends: (event: T) => boolean,
     /** Said instead of `rejected` when the request may have reached the server before the connection failed. */
     unsure?: (reason: string) => AsyncIterable<T>,
   ): AsyncIterable<T> => {
@@ -183,8 +202,14 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
             yield { type: "serving_error", message: `${path}: data that is not JSON on the stream` } as T;
             return;
           }
+          if (typeof event !== "object" || event === null || typeof event.type !== "string") {
+            yield { type: "serving_error", message: `${path}: data that is not an event on the stream` } as T;
+            return;
+          }
           yield event;
+          if (event.type === "rejected" || event.type === "serving_error" || ends(event)) return;
         }
+        yield { type: "serving_error", message: `${path}: the stream was cut off before it ended` } as T;
       } catch (error) {
         const ended = endedBecause(abort.signal);
         if (ended?.kind === "cancelled") return;
@@ -229,8 +254,11 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
       sessionId,
       read: async (options = {}) =>
         addressable ? result<Extract<ReadResult, { ok: true }>>(`${path}${query(options)}`) : unaddressable,
+      // A follow never ends on its own: any end is a cut.
       follow: (options = {}) =>
-        addressable ? events<FollowEvent>(`${path}/follow${query(options)}`, {}, REQUEST_TIMEOUT_MS) : rejectedStream(),
+        addressable
+          ? events<FollowEvent>(`${path}/follow${query(options)}`, {}, REQUEST_TIMEOUT_MS, () => false)
+          : rejectedStream(),
       attachment: async (ref) => {
         if (!addressable) return undefined;
         return reading(`${path}/attachments/${encodeURIComponent(ref)}`, async (res) => {
@@ -276,6 +304,7 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
                 `${path}/runs/${encodeURIComponent(runId)}/events${query(options)}`,
                 {},
                 REQUEST_TIMEOUT_MS,
+                (event) => endsRunOf(runId)(event),
               )
             : rejectedStream(),
         cancel: async (runId) =>
@@ -287,52 +316,47 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
   };
 
   /**
-   * The connection failed before the receipt, so the run may have been accepted. A key settles it: the key's run is
-   * this message's, followed from its start; no run under it means none was accepted, and sending again with the key
-   * is safe either way. Without a key nothing can tell, and saying `rejected` would invite a second run.
+   * The connection failed before the receipt, so the run may have been accepted, or may yet be: the server can still be
+   * reading the request. Sending it again with its key settles it, since the server answers a key it has seen with that
+   * run and starts one for a key it has not. Without a key nothing can tell, and saying `rejected` would invite a
+   * second run.
    */
-  async function* settleUnsure(invokeRequest: InvokeRequest, reason: string): AsyncGenerator<InvokeEvent> {
-    const { sessionId, idempotencyKey } = invokeRequest;
-    if (sessionId === undefined || idempotencyKey === undefined) {
-      yield {
-        type: "serving_error",
-        message: `the connection failed before the receipt (${reason}), so whether the run was accepted is unknown: send with an idempotencyKey to make sending again safe`,
-      };
-      return;
+  function settleUnsure(invokeRequest: InvokeRequest, reason: string): AsyncIterable<InvokeEvent> {
+    const unknown = (why: string): AsyncIterable<InvokeEvent> => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "serving_error", message: `whether the run was accepted is unknown: ${why}` };
+      },
+    });
+    if (invokeRequest.sessionId === undefined || invokeRequest.idempotencyKey === undefined) {
+      return unknown(
+        `the connection failed before the receipt (${reason}); send with an idempotencyKey to make sending again safe`,
+      );
     }
-    const target = session(sessionId);
-    let run: RunStatus | undefined;
-    try {
-      run = await target.runs.get({ idempotencyKey });
-    } catch (error) {
-      yield {
-        type: "serving_error",
-        message: `the connection failed before the receipt (${reason}), and asking for the key's run failed too: ${String(error)}`,
-      };
-      return;
-    }
-    if (!run) {
-      yield { type: "rejected", error: agentError("unavailable", `the run was not accepted: ${reason}`) };
-      return;
-    }
-    const joined = run.messages[0]?.idempotencyKey !== idempotencyKey;
-    yield { type: "accepted", sessionId, run, joined, duplicate: false };
-    yield* target.runs.follow(run.runId) as AsyncIterable<InvokeEvent>;
+    return invokeStream(invokeRequest, (again) =>
+      unknown(`the connection failed before the receipt (${reason}), and again when it was sent again (${again})`),
+    );
   }
+
+  const invokeStream = (
+    invokeRequest: InvokeRequest,
+    unsure: (reason: string) => AsyncIterable<InvokeEvent>,
+  ): AsyncIterable<InvokeEvent> =>
+    events<InvokeEvent>(
+      "/invoke",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(invokeRequest),
+      },
+      PAYLOAD_TIMEOUT_MS,
+      receiptThenEnd(),
+      unsure,
+    );
 
   return {
     // The connect limit is the payload one: a scale-to-zero host may hold this open while a machine boots.
     invoke: (invokeRequest: InvokeRequest) =>
-      events<InvokeEvent>(
-        "/invoke",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json", accept: "text/event-stream" },
-          body: JSON.stringify(invokeRequest),
-        },
-        PAYLOAD_TIMEOUT_MS,
-        (reason) => settleUnsure(invokeRequest, reason),
-      ),
+      invokeStream(invokeRequest, (reason) => settleUnsure(invokeRequest, reason)),
     sessions: {
       create: (options = {}) =>
         result<{ ok: true; sessionId: string }>("/sessions", { method: "POST", body: JSON.stringify(options) }),
