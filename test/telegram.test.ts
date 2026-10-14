@@ -11,7 +11,7 @@ import {
   telegramEnvelope,
   telegramTransport,
 } from "../src/telegram.ts";
-import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
+import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
 import { registerTelegramTransport } from "../src/channels/telegram/shared-api.ts";
 import { log } from "../src/log.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";

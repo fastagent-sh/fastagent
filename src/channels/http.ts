@@ -4,15 +4,9 @@
  * and the body cap.
  */
 import type { Agent } from "../agent.ts";
-import { readBodyCapped, refuseNonJsonBody } from "./body.ts";
+import { MAX_BODY_BYTES, readBodyCapped, refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
 import { sseResponse } from "./sse.ts";
-
-/**
- * Request body cap (1 MiB) — shared by every Prompt-bearing wire surface (the control plane's dispatch imports it), so
- * the two caps cannot drift apart.
- */
-export const MAX_BODY_BYTES = 1 << 20;
 
 /**
  * A valid example request body for the invoke handler — lives HERE, next to the shape check it must satisfy, so the

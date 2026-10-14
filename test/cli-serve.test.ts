@@ -10,7 +10,7 @@ import { announceControl, reportServing, withRunOverrides } from "../src/cli/ser
 import { mountAgentcore } from "../src/channels/agentcore-service.ts";
 import { type MountableAgent, routesFor } from "../src/service.ts";
 import { log } from "../src/log.ts";
-import { router } from "../src/channels/serve.ts";
+import { router } from "../src/channels/router.ts";
 import { text } from "../src/channels/respond.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
 

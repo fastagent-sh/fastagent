@@ -15,7 +15,7 @@ import { setWakeupsSink } from "../schedule/wakeups.ts";
 import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { router } from "./serve.ts";
+import { router } from "./router.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
 

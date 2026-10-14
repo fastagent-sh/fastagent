@@ -20,7 +20,7 @@ export interface SessionControl {
   sessions: SessionCollection;
 }
 
-export interface SessionCollection {
+interface SessionCollection {
   /**
    * Every session this DEPLOYMENT holds — what a GUI shows as its conversation list, and the only call that is not
    * about ONE session. Deployment-level on purpose: a multi-tenant facade in front of one deployment MUST NOT expose
@@ -339,7 +339,6 @@ export interface SessionEvent<TType extends string = string, TData extends Json 
   data: TData;
 }
 
-export type RunStartedEvent = SessionEvent<"run_started", Record<never, never>> & { runId: string };
 export type RunSettledEvent = SessionEvent<
   "run_settled",
   {
@@ -347,9 +346,6 @@ export type RunSettledEvent = SessionEvent<
     error?: { code?: string; message: string; retryable: boolean };
   }
 > & { runId: string };
-// message_*/tool_* events only exist inside a run, so their types REQUIRE `runId` — a consumer of KnownSessionEvent
-// must not null-check a field the contract guarantees.
-export type MessageStartedEvent = SessionEvent<"message_started", Record<never, never>> & { runId: string };
 /**
  * A user message entered the conversation: the run's opening prompt, a steer or follow-up leaving `pending`, or one an
  * extension sent. It reports after the message is recorded, so `entries()` already holds `entryId` with the same
@@ -361,13 +357,6 @@ export type UserMessageEvent = SessionEvent<
   { entryId: string; text: string; images?: EntryImage[] }
 > & { runId: string };
 /**
- * A piece of the answer being written. The `thinking` deltas of one answer add up to its `assistant` entry's
- * `thinking`, as its `text` deltas add up to its `text`; redacted reasoning is streamed in neither.
- */
-export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
-  runId: string;
-};
-/**
  * How an answer ended, when it did not end normally: absent on an answer that did. One value, carried live by its
  * `message_finished` and durably by its `assistant` entry, so a reopened conversation reads what a watcher saw.
  * `truncated` is an answer cut off at the output limit — a property of the answer, not of its run, which may still
@@ -375,31 +364,6 @@ export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" 
  * harness abandoned; a retry usually, but not always, follows it.
  */
 export type AnswerOutcome = { status: "failed" | "aborted" | "truncated"; error?: { message: string } };
-export type MessageFinishedEvent = SessionEvent<"message_finished", { outcome?: AnswerOutcome }> & { runId: string };
-export type ToolStartedEvent = SessionEvent<
-  "tool_started",
-  { id: string; name: string; args: Json; parentToolCallId?: string }
-> & {
-  runId: string;
-};
-/** Replace semantics: `partialResult` is the accumulated snapshot so far, not a delta. */
-export type ToolProgressEvent = SessionEvent<
-  "tool_progress",
-  { id: string; name: string; partialResult: Json; parentToolCallId?: string }
-> & {
-  runId: string;
-};
-/**
- * `terminate: true` when the call asked to end its run. Once every call answering one assistant message asks it, the
- * model is not called again for them, and the run ends there with no answer after its `tool` entries (which carry the
- * same flag) unless a queued steer or follow-up continues it. Whether the run ended is `run_settled`'s to say.
- */
-export type ToolFinishedEvent = SessionEvent<
-  "tool_finished",
-  { id: string; isError: boolean; content: Json; parentToolCallId?: string; terminate?: true }
-> & {
-  runId: string;
-};
 /**
  * The prompts queued on the active run, oldest first, as the harness queued them: plain text as sent, a slash command
  * already expanded (a `/skill:…` becomes the skill's text), without its images (its `user_message` carries them). A
@@ -409,11 +373,6 @@ export type ToolFinishedEvent = SessionEvent<
  */
 export type PendingPrompts = { steering: string[]; followUp: string[] };
 
-/** The active run's queue changed (L1); `data` is the whole queue, not a delta. */
-export type QueueChangedEvent = SessionEvent<"queue_changed", PendingPrompts> & {
-  runId: string;
-};
-
 /**
  * Durable session state changed (L2; no runId). An {@link Session.update} reports what it landed; where
  * `capabilities().usage` holds, a finished run or compaction reports the session's `usage` as it now reads, and an
@@ -422,13 +381,6 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", PendingPrompts> & 
 export type StateChangedEvent = SessionEvent<
   "state_changed",
   { name?: string; model?: string; thinkingLevel?: string; leafEntryId?: string; usage?: SessionState["usage"] }
->;
-
-/** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one `compaction_finished`. */
-export type CompactionStartedEvent = SessionEvent<"compaction_started", Record<never, never>>;
-export type CompactionFinishedEvent = SessionEvent<
-  "compaction_finished",
-  { summary?: string; error?: string; aborted?: boolean }
 >;
 
 /**
@@ -449,26 +401,3 @@ export type RetryScheduledEvent = SessionEvent<
     error: string;
   }
 >;
-
-/** The serving process failed outside a normal run outcome (fail visibly). */
-export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
-
-/**
- * Every event the in-process observation plane emits today: L0, L1 `queue_changed`, and the L2 events
- * (`state_changed`, `compaction_*`, `retry_scheduled`).
- */
-export type KnownSessionEvent =
-  | RunStartedEvent
-  | RunSettledEvent
-  | MessageStartedEvent
-  | UserMessageEvent
-  | MessageDeltaEvent
-  | MessageFinishedEvent
-  | ToolStartedEvent
-  | ToolProgressEvent
-  | ToolFinishedEvent
-  | QueueChangedEvent
-  | StateChangedEvent
-  | CompactionStartedEvent
-  | CompactionFinishedEvent
-  | RetryScheduledEvent;

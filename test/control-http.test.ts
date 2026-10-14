@@ -19,7 +19,8 @@ import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiSessionControl } from "../src/harnesses/pi/session-control.ts";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/harnesses/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
-import { router, serveNode } from "../src/channels/serve.ts";
+import { router } from "../src/channels/router.ts";
+import { serveNode } from "../src/channels/serve.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import {
   SESSIONS_UNAVAILABLE_CODE,

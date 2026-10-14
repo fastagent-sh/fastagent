@@ -66,15 +66,15 @@ describe("definition: one discovery of extensions/ for the catalog and the sessi
     const failedToLoad = () => warn.mock.calls.filter(([m]) => /notify\.ts failed to load/.test(m)).length;
     try {
       const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-      await collect(agent.invoke({ session: "s" }, { text: "1" }));
-      await collect(agent.invoke({ session: "s" }, { text: "2" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "1" } }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "2" } }));
       expect(prompts[0]).toMatch(/<extension_errors>\nThese extensions in extensions\/ did not load[^\n]*notify\.ts: /);
       expect(failedToLoad()).toBe(1); // said when it appears, not by every session that meets it again
       await writeFile(join(dir, "extensions", "notify.ts"), markerExtension("notify"));
-      await collect(agent.invoke({ session: "s" }, { text: "3" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "3" } }));
       expect(prompts[2]).not.toContain("<extension_errors>");
       await writeFile(join(dir, "extensions", "notify.ts"), broken);
-      await collect(agent.invoke({ session: "s" }, { text: "4" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "4" } }));
       expect(prompts[3]).toContain("<extension_errors>");
       expect(failedToLoad()).toBe(2); // repaired, then broken the same way again: said again
     } finally {
@@ -126,15 +126,15 @@ export default async function (api) {
     };
     faux.setResponses([reply, reply, reply, reply]);
     const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ session: "s" }, { text: "1" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "1" } }));
     await writeFile(join(dir, "extensions", "a.ts"), ext("tool_v2", true));
     await writeFile(join(dir, "extensions", "lib", "label.ts"), 'export const label = "LABEL_V2";\n');
-    await collect(agent.invoke({ session: "s" }, { text: "2" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "2" } }));
     await writeFile(join(dir, "extensions", "b.ts"), ext("tool_added"));
     // Two sessions bound at once after the edit: neither may load what the cache held before it.
     await Promise.all([
-      collect(agent.invoke({ session: "s" }, { text: "3" })),
-      collect(agent.invoke({ session: "t" }, { text: "3" })),
+      collect(agent.invoke({ sessionId: "s", prompt: { text: "3" } })),
+      collect(agent.invoke({ sessionId: "t", prompt: { text: "3" } })),
     ]);
     expect(seen).toEqual([
       { tools: ["tool_v1"], label: "v1" },
@@ -259,8 +259,8 @@ export default function (pi) {
     const offered: string[][] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const agent = await servedAgent({ "extensions/probe.ts": probe(key) }, offered);
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
 
     expect(offered[0]).toContain("probe_tool");
     expect(logOf(key)).toEqual([
@@ -281,8 +281,8 @@ export default function (pi) {
   it("runs the turn a command starts, in the command's own session, even when sessions run concurrently", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
     const [a, b] = await Promise.all([
-      collect(agent.invoke({ session: "a" }, { text: "/go A" })),
-      collect(agent.invoke({ session: "b" }, { text: "/go B" })),
+      collect(agent.invoke({ sessionId: "a", prompt: { text: "/go A" } })),
+      collect(agent.invoke({ sessionId: "b", prompt: { text: "/go B" } })),
     ]);
     expect(a.text).toContain("from command A");
     expect(b.text).toContain("from command B");
@@ -300,39 +300,49 @@ export default function (pi) {
 }
 `,
     });
-    expect((await collect(agent.invoke({ session: "s" }, { text: "/go slow" }))).text).toContain("from command slow");
+    expect((await collect(agent.invoke({ sessionId: "s", prompt: { text: "/go slow" } }))).text).toContain(
+      "from command slow",
+    );
   });
 
   it("refreshes distinct session-local runtimes for successive bindings", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await collect(agent.invoke({ session: "s" }, { text: "first" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "first" } }));
     const refresh = vi.spyOn(ModelRuntime.prototype, "refresh");
-    await collect(agent.invoke({ session: "s" }, { text: "second" }));
-    await collect(agent.invoke({ session: "s" }, { text: "third" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "second" } }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "third" } }));
     expect(new Set(refresh.mock.contexts).size).toBe(2);
     refresh.mockRestore();
   });
 
   it("completes a command that does its work without a model turn", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    expect(await collect(agent.invoke({ session: "s" }, { text: "/tag" }))).toEqual({ text: "", data: undefined });
+    // A command that took the message: no model was called, so the run ends `intercepted`, which `collect` reports.
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/tag" } }))).rejects.toMatchObject({
+      outcome: { status: "intercepted" },
+    });
   });
 
   it("fails the invoke with the error of a command that throws", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await expect(collect(agent.invoke({ session: "s" }, { text: "/boom" }))).rejects.toThrow(/command blew up/);
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/boom" } }))).rejects.toThrow(
+      /command blew up/,
+    );
   });
 
   it("refuses a command's session replacement instead of reporting it done", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await expect(collect(agent.invoke({ session: "s" }, { text: "/new" }))).rejects.toThrow(
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/new" } }))).rejects.toThrow(
       /ctx\.newSession\(\) is not available when serving/,
     );
   });
 
   it("accepts a provider registered after loading on the session-local runtime", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    expect(await collect(agent.invoke({ session: "s" }, { text: "/provider" }))).toEqual({ text: "", data: undefined });
+    // A command that took the message: no model was called, so the run ends `intercepted`, which `collect` reports.
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/provider" } }))).rejects.toMatchObject({
+      outcome: { status: "intercepted" },
+    });
   });
 
   it("says once per process what pi warned about while loading: an extension tool replacing a built-in", async () => {
@@ -341,8 +351,8 @@ export default function (pi) {
       const agent = await servedAgent({
         "extensions/search.ts": `export default (pi) => pi.registerTool({ name: "tool_search", label: "s", description: "mine", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: undefined }) });`,
       });
-      await collect(agent.invoke({ session: "a" }, { text: "hi" }));
-      await collect(agent.invoke({ session: "b" }, { text: "hi" }));
+      await collect(agent.invoke({ sessionId: "a", prompt: { text: "hi" } }));
+      await collect(agent.invoke({ sessionId: "b", prompt: { text: "hi" } }));
       const said = warn.mock.calls
         .flat()
         .filter((line) =>
@@ -371,7 +381,7 @@ export default function (pi) {
       },
       offered,
     );
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(offered[0]).toContain("marker_tool");
     expect(offered[0]).toContain("acme_tool");

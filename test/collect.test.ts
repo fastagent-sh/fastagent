@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AgentFailure, collect, type AgentEvent } from "../src/index.ts";
+import type { AgentEvent } from "../src/agent.ts";
+import { AgentFailure, collect } from "../src/collect.ts";
 
 async function* stream(...events: AgentEvent[]): AsyncIterable<AgentEvent> {
   for (const e of events) yield e;

@@ -20,14 +20,12 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { definitionSkill } from "./agent.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { Agent } from "../src/agent.ts";
-import { createInvokeHandler } from "../src/channels/http.ts";
-import { collect, createPiAgentFromDefinition } from "../src/index.ts";
+import { type Agent, collect, createAgentHandler, createPiAgentFromDefinition } from "../src/index.ts";
 import { log } from "../src/log.ts";
-import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
-import { inProcessLease } from "../src/harnesses/pi/turn-kit.ts";
+import { loopPort } from "../src/loop-port.ts";
+import { servingAgent } from "../src/serving-layer.ts";
 import { makeFaux } from "./faux.ts";
 
 const SKILL = (body: string) => `---\nname: weather\ndescription: Report weather.\n---\n${body}\n`;
@@ -54,7 +52,7 @@ async function agentWithSkill(): Promise<{ agent: Agent; skillPath: string; sent
 
 it("`/skill:<name>` arrives as the skill's BODY, re-read per turn, with the arguments after it", async () => {
   const { agent, skillPath, sent } = await agentWithSkill();
-  await collect(agent.invoke({ session: "s" }, { text: "/skill:weather in Berlin" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "/skill:weather in Berlin" } }));
 
   // The harness read the file and sent its contents; the client sent 23 characters.
   expect(sent()).toContain("Call the METAR endpoint.");
@@ -64,21 +62,26 @@ it("`/skill:<name>` arrives as the skill's BODY, re-read per turn, with the argu
   // Per TURN, not per boot: the definition is live, so an edit while serving is the next turn's prompt.
   // A fresh session, because the old body is legitimately still in this one's history.
   await writeFile(skillPath, SKILL("Call the TAF endpoint instead."));
-  await collect(agent.invoke({ session: "s2" }, { text: "/skill:weather in Berlin" }));
+  await collect(agent.invoke({ sessionId: "s2", prompt: { text: "/skill:weather in Berlin" } }));
   expect(sent()).toContain("Call the TAF endpoint instead.");
   expect(sent()).not.toContain("Call the METAR endpoint.");
+});
+
+it("the directory agent lists the skill it can run, so a client can offer it", async () => {
+  const { agent } = await agentWithSkill();
+  expect(await agent.commands()).toContainEqual({ name: "weather", description: "Report weather.", source: "skill" });
 });
 
 it("the same prompt over HTTP produces the same expansion — the point of putting it in the harness", async () => {
   // A remote client has no access to `skills/weather/SKILL.md`; it sends the spelling and nothing else. If this
   // ever diverged from the in-process path, every GUI would have to reimplement definition loading to compensate.
   const { agent, sent } = await agentWithSkill();
-  const handler = createInvokeHandler(agent);
+  const handler = createAgentHandler(agent);
   const response = await handler(
     new Request("http://agent/invoke", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session: "s", text: "/skill:weather in Berlin" }),
+      body: JSON.stringify({ sessionId: "s", prompt: { text: "/skill:weather in Berlin" } }),
     }),
   );
   expect(response.status).toBe(200);
@@ -92,7 +95,7 @@ it("a BARE name is ordinary text — the prefix is what makes it deterministic",
   // Typing `/weather` reaches the model unchanged, which is why the model "usually reads the skill" rather than
   // always. A client that wants the deterministic path sends the prefixed spelling.
   const { agent, sent } = await agentWithSkill();
-  await collect(agent.invoke({ session: "s" }, { text: "/weather in Berlin" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "/weather in Berlin" } }));
 
   expect(sent()).toContain("/weather in Berlin");
   expect(sent()).not.toContain("Call the METAR endpoint.");
@@ -103,7 +106,7 @@ it("an unknown name goes through as plain text, silently", async () => {
   // sense of a line the author meant as a command. Checking the name against `commands()` first is the client's
   // job precisely because this layer cannot tell a typo from a sentence that starts with a slash.
   const { agent, sent } = await agentWithSkill();
-  await collect(agent.invoke({ session: "s" }, { text: "/skill:wether in Berlin" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "/skill:wether in Berlin" } }));
 
   expect(sent()).toContain("/skill:wether in Berlin");
   expect(sent()).not.toContain("Call the METAR endpoint.");
@@ -119,7 +122,7 @@ it("a skill whose FILE went unreadable leaves the definition, loudly, and then r
   const warned: string[] = [];
   const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
   try {
-    await collect(agent.invoke({ session: "s" }, { text: "/skill:weather now" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "/skill:weather now" } }));
   } finally {
     await chmod(skillPath, 0o644);
     warn.mockRestore();
@@ -150,26 +153,28 @@ it("an expansion that fails because the LIST outlived the file is reported, not 
   ]);
   const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
   modelRuntime.registerNativeProvider(faux.provider);
-  const agent = createPiAgentFromSession({
-    lease: inProcessLease(),
-    sessionFactory: piAgentSessionFactory({
-      sessions: piInMemorySessionRecordStore({ cwd: dir }),
-      createModelRuntime: async () => modelRuntime,
-      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
-      // A list that still names the skill, pinned the way a run in flight pins it.
-      readDefinition: () => ({
-        systemPrompt: "test",
-        skills: [definitionSkill({ name: "weather", description: "Report weather.", filePath: skillPath })],
+  const agent = servingAgent(
+    loopPort(
+      piLoopHarness({
+        sessions: piInMemorySessionRecordStore({ cwd: dir }),
+        createModelRuntime: async () => modelRuntime,
+        catalog: async () => modelRuntime,
+        modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
+        // A list that still names the skill, pinned the way a run in flight pins it.
+        readDefinition: () => ({
+          systemPrompt: "test",
+          skills: [definitionSkill({ name: "weather", description: "Report weather.", filePath: skillPath })],
+        }),
+        cwd: dir,
       }),
-      cwd: dir,
-    }),
-  });
+    ),
+  );
   await rm(skillPath);
 
   const warned: string[] = [];
   const warn = vi.spyOn(log, "warn").mockImplementation((message) => void warned.push(message));
   try {
-    await collect(agent.invoke({ session: "s" }, { text: "/skill:weather now" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "/skill:weather now" } }));
   } finally {
     warn.mockRestore();
   }
@@ -190,7 +195,7 @@ it("a bare `/<name>` expands a PROMPT TEMPLATE — the second spelling the contr
   vi.stubEnv("HOME", home);
 
   const { agent, sent } = await agentWithSkill();
-  await collect(agent.invoke({ session: "s" }, { text: "/triage this inbox" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "/triage this inbox" } }));
 
   expect(sent()).toContain("TEMPLATE-BODY-MARKER for:");
   expect(sent()).toContain("this inbox");
@@ -207,11 +212,11 @@ it("an ANONYMOUS caller fires a machine prompt template too — who invokes one 
   vi.stubEnv("HOME", home);
 
   const { agent, sent } = await agentWithSkill();
-  const response = await createInvokeHandler(agent)(
+  const response = await createAgentHandler(agent)(
     new Request("http://agent/invoke", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session: "s", text: "/start now" }),
+      body: JSON.stringify({ sessionId: "s", prompt: { text: "/start now" } }),
     }),
   );
   expect(response.status).toBe(200);

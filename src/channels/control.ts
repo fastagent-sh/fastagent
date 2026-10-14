@@ -17,10 +17,10 @@ import {
   UPDATE_FIELDS,
 } from "../session.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
+import { type PrefixMount, parseRouteKey, withoutBody } from "./router.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES } from "./http.ts";
+import { MAX_BODY_BYTES } from "./body.ts";
 import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
 

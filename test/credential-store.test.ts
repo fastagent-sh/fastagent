@@ -17,7 +17,7 @@ import {
   fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/collect.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/pi/auth.ts";
 import { createPiAgent } from "../src/harnesses/pi/create.ts";
 import { createAgentService } from "../src/harnesses/pi/service.ts";
@@ -139,7 +139,7 @@ describe("a caller's credential store replaces the credentials file", () => {
     };
     const store = await recordingStore({ faux: { type: "api_key", key: "sk-from-store" } });
     const agent = createPiAgent({ model: "faux/faux-1", providers: [gated], credentialStore: store });
-    expect((await collect(agent.invoke({ session: "s" }, { text: "hi" }))).text).toBe("ok");
+    expect((await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }))).text).toBe("ok");
     expect(store.calls).toContain("read faux");
   });
 

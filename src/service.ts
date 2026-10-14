@@ -8,7 +8,7 @@ import { protocolHttp } from "./channels/protocol-http.ts";
 import { text } from "./channels/respond.ts";
 import { legacyAgent } from "./legacy-agent.ts";
 import type { Agent } from "./protocol.ts";
-import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
+import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/router.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/scheduler.ts";

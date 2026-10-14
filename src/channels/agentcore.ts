@@ -12,7 +12,7 @@ import {
 } from "./agentcore-protocol.ts";
 import { beginWork } from "./busy.ts";
 import type { ChannelHandler, Routes } from "../channel.ts";
-import { router } from "../channels/serve.ts";
+import { router } from "../channels/router.ts";
 import { log } from "../log.ts";
 import { once } from "../once.ts";
 import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
  */
 const srcDir = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 
-function staticPackageGraph(entryRel: string): Set<string> {
+function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
   const visited = new Set<string>();
   const packages = new Set<string>();
   // `import type` / `export type` are erased at compile time, so they cost a consumer nothing. A
@@ -31,7 +31,7 @@ function staticPackageGraph(entryRel: string): Set<string> {
         const spec = m[1];
         if (!spec) continue;
         if (spec.startsWith("./") || spec.startsWith("../")) visit(resolve(dirname(fileAbs), spec));
-        else if (!spec.startsWith("node:")) packages.add(spec);
+        else if (builtins === spec.startsWith("node:")) packages.add(spec);
       }
     }
   };
@@ -90,6 +90,10 @@ describe("harness neutrality: the core subpath + channel spine import no harness
   // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
   const neutral = [
     "core.ts",
+    "protocol.ts",
+    "protocol-remote.ts",
+    "channels/protocol-http.ts",
+    "channels/router.ts",
     "agent.ts",
     "collect.ts",
     "cli/invoke-stream.ts",
@@ -135,7 +139,7 @@ describe("the public subpaths do not reach into the CLI", () => {
     return seen;
   };
   it("no public entry reaches a cli/ module", () => {
-    const offenders = ["index.ts", "core.ts", "pi.ts", "session.ts"].flatMap((entry) =>
+    const offenders = ["index.ts", "core.ts", "pi.ts"].flatMap((entry) =>
       [...relativeGraph(entry)]
         .filter((f) => f.includes(`${srcDir}/cli/`))
         .map((f) => `${entry} → ${f.replace(`${srcDir}/`, "")}`),
@@ -200,24 +204,26 @@ describe("the assembly's parts stay out of the public surface", () => {
     // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
     // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
     // name list nor a module import can see that coming.
-    for (const entry of ["core.ts", "node.ts", "pi.ts", "session.ts"]) {
+    for (const entry of ["core.ts", "node.ts", "pi.ts"]) {
       expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
     }
     // The root is the all-in-one, and may forward the curated three — but only those.
     const index = readFileSync(resolve(srcDir, "index.ts"), "utf8");
     const targets = [...index.matchAll(/export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/g)].map((m) => m[1]);
-    expect(targets.sort()).toEqual(["./core.ts", "./node.ts", "./pi.ts", "./session.ts"]);
+    expect(targets.sort()).toEqual(["./core.ts", "./node.ts", "./pi.ts"]);
   });
 
   const ENTRIES = ["core.ts", "pi.ts", "index.ts"];
 
-  it("every failure code a caller must recognise is exported as a VALUE", async () => {
-    // A type-only export makes an embedder copy the literal, and `"session_busy"` decides whether a first
-    // `failed` is a fail-fast reject or the retry/steer path. The session plane already exports its codes.
+  it("every failure a caller must tell apart is exported as a VALUE", async () => {
+    // `collect` throws one of three, and a caller branches on which: refused before anything ran, ended without an
+    // answer, or a stream that stopped before its run did. A type-only export would leave nothing to `instanceof`.
     const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
-    expect([core.SESSION_BUSY_CODE, core.ABORTED_CODE]).toEqual(["session_busy", "aborted"]);
+    for (const name of ["AgentRejection", "RunNotCompleted", "RunUnfinished"]) {
+      expect(typeof core[name], name).toBe("function");
+    }
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(index.SESSION_BUSY_CODE).toBe(core.SESSION_BUSY_CODE);
+    expect(index.RunNotCompleted).toBe(core.RunNotCompleted);
   });
 
   it("no entry exports an assembly part", async () => {
@@ -294,13 +300,14 @@ describe("channels/kit is defined by who imports it", () => {
 });
 
 describe("the contracts depend on nothing", () => {
-  // agent.ts (what a harness implements), channel.ts (what a trigger implements) and session.ts (the
-  // serving control plane) are the three product contracts — pure types, zero packages. The bar is
+  // protocol.ts (what every caller speaks) and channel.ts (what a trigger implements) are the product
+  // contracts — pure types, zero packages. The bar is
   // ZERO rather than "no harness": an agent directory's hand-written channel imports ChannelModule,
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
-  it("each of the three pulls no package at all", () => {
-    const offenders = ["agent.ts", "channel.ts", "session.ts"].flatMap((contract) =>
+  it("each of them pulls no package at all", () => {
+    // protocol.ts is the contract every caller uses; agent.ts and session.ts are v0.1's, kept until nothing uses them.
+    const offenders = ["protocol.ts", "channel.ts", "agent.ts", "session.ts"].flatMap((contract) =>
       [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
     );
     expect(offenders).toEqual([]);
@@ -309,8 +316,13 @@ describe("the contracts depend on nothing", () => {
   it("the three neutral layers each cost exactly what their name promises", () => {
     // Harness-neutral and runtime-neutral are DIFFERENT properties, and the entries are layered by
     // them: /core has both, /node drops the second (a filesystem, a clock, an environment), /pi
-    // drops both. Each layer's package list is that statement, checkable.
-    expect([...staticPackageGraph("core.ts")]).toEqual([]);
+    // drops both. Each layer's package list is that statement, checkable. /core may use Effect (the
+    // HTTP binding decodes with Schema), and nothing else: no other package, and no Node built-in.
+    expect([...staticPackageGraph("core.ts")].filter((p) => !p.startsWith("effect/"))).toEqual([]);
+    expect([...staticPackageGraph("core.ts", true)]).toEqual([]);
+    // A remote client imports nothing at all: it is what a browser bundle pulls in.
+    expect([...staticPackageGraph("protocol-remote.ts")]).toEqual([]);
+    expect([...staticPackageGraph("protocol-remote.ts", true)]).toEqual([]);
     // Service lifecycle management uses Effect; channel and agent contracts remain dependency-free.
     expect([...staticPackageGraph("node.ts")].sort()).toEqual([
       "@hono/node-server",

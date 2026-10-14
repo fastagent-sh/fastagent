@@ -11,7 +11,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { readSecretDeclaration } from "../../declared-secrets.ts";
-import { assertCorsOrigins } from "../../channels/serve.ts";
+import { assertCorsOrigins } from "../../channels/router.ts";
 import type { HttpSurface } from "../../service.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_FILE, CONTEXT_FILE } from "../../paths.ts";

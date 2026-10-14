@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
+import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
 import type { SessionControl } from "../src/session.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";

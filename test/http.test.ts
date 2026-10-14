@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { createInvokeHandler, nodeListener, serveNode, type Agent, type AgentEvent } from "../src/index.ts";
+import type { Agent, AgentEvent } from "../src/agent.ts";
+import { createInvokeHandler } from "../src/channels/http.ts";
+import { nodeListener, serveNode } from "../src/index.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import { fauxAgent } from "./agent.ts";
 

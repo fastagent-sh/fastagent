@@ -148,7 +148,7 @@ describe("init: scaffoldAgent", () => {
       },
     ]);
     const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(prompt).toContain(
       `<name>writing-great-skills</name>\n    <description>Reference for writing and editing skills well`,
     );

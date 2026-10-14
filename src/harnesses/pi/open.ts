@@ -5,10 +5,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../protocol.ts";
-import { servingAgent } from "../../serving-layer.ts";
-import { loopPort } from "../../loop-port.ts";
 import { beginWork } from "../../channels/busy.ts";
-import { piLoopHarness } from "./loop-harness.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import {
   CONTEXT_FILE,
@@ -18,19 +15,22 @@ import {
   resolveSessionsDir,
   resolveStateRoot,
 } from "../../paths.ts";
-import type { AgentCommand, ModelDescriptor } from "../../session.ts";
+import type { ModelDescriptor } from "../../session.ts";
 import { describeModels } from "./session-settings.ts";
-import { type IndirectTool, type PiAssembly, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
+import {
+  type IndirectTool,
+  type PiAssembly,
+  agentOf,
+  assemblePiFromDefinition,
+  directoryCommands,
+  resolveAgentTools,
+} from "./create.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
 import { declaredVariables } from "../../environment/declare.ts";
 import { enterEnvironment } from "../../environment/mise.ts";
-import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { servedExtensionCommands } from "./agent-session-factory.ts";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { LoadedDefinition } from "./definition.ts";
 import type { CredentialStore } from "@earendil-works/pi-ai";
-import { reportFindingsIfChanged } from "./report.ts";
-import { readMachine, withMachine } from "./machine.ts";
 import type { CredentialSourceOptions, FastagentAuthOptions } from "./auth.ts";
 import { createPiModelRuntime, globalCatalogPath, machineModelRuntime, refreshCatalog } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
@@ -49,59 +49,6 @@ import {
   resolveContent,
 } from "../../content/resolve.ts";
 import { loadContent } from "../../content/file.ts";
-
-/**
- * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
- * machine lends (machine.ts) — and the commands its `extensions/` register.
- *
- * `source` says how a name is INVOKED, which is the one thing a client needs from it: a `skill` is sent as
- * `/skill:<name>`, an `extension` command and a `prompt` as `/<name>` (docs/design/session-control.md §5.1.1).
- *
- * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
- * bound session runs on, so the menu cannot offer a name the next prompt would not expand. The same holds for
- * extensions: `served` is what sessions load — the entry points `extensions/` holds now, asked through the same
- * live-extensions check a session's load goes through (live-extensions.ts), and the runtime turns run on (asked only
- * when there are extensions) — never a listing of its own.
- */
-export async function agentCommands(
-  agentDir: string,
-  served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
-): Promise<AgentCommand[]> {
-  // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
-  // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
-  // one set from both readers instead of warning again after every menu request.
-  const own = await loadAgentDefinition(agentDir);
-  reportFindingsIfChanged(own.dir, own);
-  const machine = await readMachine(agentDir);
-  const prompts = withMachine(own.prompts, machine.prompts);
-  const extensionPaths = await served.extensionPaths();
-  const extensionCommands = await servedExtensionCommands({
-    cwd: agentDir,
-    modelRuntime: await served.modelRuntime(),
-    extensionPaths,
-  });
-  // pi dispatches an extension command before it expands a template, so a template it shadows never runs.
-  const shadowed = new Set(extensionCommands.map((command) => command.invocationName));
-  return [
-    ...withMachine(own.skills, machine.skills).map((skill) => ({
-      name: skill.name,
-      description: skill.description,
-      source: "skill",
-    })),
-    ...extensionCommands.map((command) => ({
-      name: command.invocationName,
-      ...(command.description ? { description: command.description } : {}),
-      source: "extension",
-    })),
-    ...prompts
-      .filter((prompt) => !shadowed.has(prompt.name))
-      .map((prompt) => ({
-        name: prompt.name,
-        ...(prompt.description ? { description: prompt.description } : {}),
-        source: "prompt",
-      })),
-  ];
-}
 
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). */
@@ -390,25 +337,7 @@ export async function createPiAgentFromDir(
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: agentDir });
   // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
   const { assembly, definition } = await assembleFront(front, { tools: mountedTools, sessions });
-  // ONE LoopPort per opened directory: it holds each session's one writer while the session is busy.
-  const agent = servingAgent(
-    loopPort(
-      piLoopHarness({
-        ...assembly.binding,
-        sessions,
-        catalog: assembly.modelRuntime,
-        // What a client offers is what a run WOULD run, which since this agent inherits its machine is not the
-        // definition alone: built through the same resource posture a run uses.
-        commands: () =>
-          agentCommands(agentDir, {
-            extensionPaths: assembly.extensionPaths,
-            modelRuntime: assembly.createModelRuntime,
-          }),
-      }),
-      undefined,
-      { beginWork },
-    ),
-  );
+  const agent = agentOf(assembly, { commands: () => directoryCommands(agentDir, assembly), hooks: { beginWork } });
   return {
     agent,
     definition,

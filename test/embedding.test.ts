@@ -17,7 +17,8 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { nodeListener, router } from "../src/channels/serve.ts";
+import { router } from "../src/channels/router.ts";
+import { nodeListener } from "../src/channels/serve.ts";
 
 /** The handler shape every snippet bridges: reads the RAW body, answers with what it saw. */
 const echoRaw = async (req: Request) => new Response(`raw=[${await req.text()}]`);

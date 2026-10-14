@@ -119,7 +119,7 @@ async function refusalOf(res: Response): Promise<{ error: AgentError; ours: bool
 }
 
 /** Connects once to read the agent's capabilities, which `info()` answers without a request. */
-export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<Agent> {
+export async function connectAgent(options: RemoteAgentOptions): Promise<Agent> {
   const { fetchFn = fetch } = options;
   const base = options.url.replace(/\/$/, "");
 

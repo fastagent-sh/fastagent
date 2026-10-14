@@ -18,7 +18,7 @@ export type { ReadonlySessionManager, ToolActivation } from "./harnesses/pi/tool
 export { z } from "zod";
 export type { AgentTool } from "@earendil-works/pi-agent-core";
 export type { Skill } from "@earendil-works/pi-coding-agent";
-/** A conversation record, as the tool runtime and the control plane hold it. */
+/** A conversation record, as the tool runtime and the session store hold it. */
 export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 
 export {
@@ -54,12 +54,6 @@ export {
   type CreateAgentOptions,
   type CreatedAgent,
 } from "./harnesses/pi/authoring.ts";
-export type { SessionObserver } from "./harnesses/pi/turn-kit.ts";
-export { inProcessLease, type Lease, type Release } from "./harnesses/pi/turn-kit.ts";
-export {
-  createPiSessionControl,
-  type CreatePiSessionControlOptions,
-} from "./harnesses/pi/session-control.ts";
 export {
   piInMemorySessionRecordStore,
   piSessionRecordStore,

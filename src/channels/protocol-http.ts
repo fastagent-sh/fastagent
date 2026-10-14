@@ -19,10 +19,9 @@ import {
   type Session,
   agentError,
 } from "../protocol.ts";
-import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES } from "./http.ts";
+import { MAX_BODY_BYTES, readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
-import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
+import { type PrefixMount, parseRouteKey, router, withoutBody } from "./router.ts";
 import { sseResponse } from "./sse.ts";
 
 /** A valid request body for `POST /invoke`: the CLI's "try it" line, next to the decoder it must satisfy. */
@@ -230,6 +229,26 @@ function limitOf(url: URL): { limit?: number } | { error: Response } {
 const optional = <K extends string>(key: K, value: string | null | undefined): { [P in K]?: string } =>
   (value === null || value === undefined ? {} : { [key]: value }) as { [P in K]?: string };
 
+/** Base64 without `Buffer`: this module runs in any Fetch runtime. */
+function fromBase64(data: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * The agent's API as one Fetch handler, for an app to mount: the user plane always, `/control` only when asked. It
+ * authenticates nobody; the app's own middleware decides who reaches it.
+ */
+export function createAgentHandler(agent: Agent, options: { control?: boolean } = {}): ChannelHandler {
+  const planes = protocolHttp(agent);
+  return router({
+    unverified: planes.user.routes,
+    mounts: [...planes.user.mounts, ...(options.control ? [planes.control] : [])],
+  });
+}
+
 /** The two planes, as what a host router mounts: the user plane's routes and prefixes, and the control prefix. */
 export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: PrefixMount[] }; control: PrefixMount } {
   const runOf = (run: RunStatus | undefined): Response => json(run ?? null);
@@ -305,7 +324,7 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
         () => sessions(url, params).attachment(params.ref as string),
         (attachment) =>
           attachment
-            ? new Response(Buffer.from(attachment.data, "base64"), {
+            ? new Response(fromBase64(attachment.data), {
                 headers: {
                   "content-type": RASTER_IMAGE_TYPES.has(attachment.mimeType)
                     ? attachment.mimeType

@@ -16,7 +16,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
-import { agentCommands } from "../src/harnesses/pi/open.ts";
+import { agentCommands } from "../src/harnesses/pi/create.ts";
 import { loadExtensionPaths } from "../src/harnesses/pi/definition.ts";
 import { readMachine } from "../src/harnesses/pi/machine.ts";
 import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
@@ -74,7 +74,7 @@ async function promptSentBy(dir: string): Promise<string> {
     },
   ]);
   const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-  await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
   return sent;
 }
 
@@ -266,10 +266,10 @@ it("a definition that did not change does not reload the loader per turn", async
     model: "faux/faux-1",
     providers: [faux.provider],
   });
-  await collect(served.invoke({ session: "s" }, { text: "one" }));
+  await collect(served.invoke({ sessionId: "s", prompt: { text: "one" } }));
 
   await skill(join(agent, "skills", "drift"), "drift", "Second description.");
-  await collect(served.invoke({ session: "s" }, { text: "two" }));
+  await collect(served.invoke({ sessionId: "s", prompt: { text: "two" } }));
 
   expect(sent[1]).toContain("First description.");
   expect(sent[1]).not.toContain("Second description.");
@@ -339,7 +339,7 @@ it("a definition's prompt template expands in a served turn, wins the machine's 
     },
   ]);
   const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-  await collect(agent.invoke({ session: "s" }, { text: "/review the plan" }));
+  await collect(agent.invoke({ sessionId: "s", prompt: { text: "/review the plan" } }));
   expect(asked).toContain("DEFINITION review of the plan");
   expect(asked).not.toContain("MACHINE");
 

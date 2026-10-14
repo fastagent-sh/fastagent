@@ -1,7 +1,7 @@
 /** Channel discovery (the N axis, filesystem form). */
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
-import { assertRouteKey, routeKeysConflict } from "./serve.ts";
+import { assertRouteKey, routeKeysConflict } from "./router.ts";
 import { type ModuleLoadFailure, loadModuleDir } from "../loader.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../declared-secrets.ts";
 import { gateSecrets } from "../secrets-gate.ts";
