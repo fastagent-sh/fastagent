@@ -68,7 +68,8 @@ async function wholeHistory(agent: Agent, sessionId: string): Promise<{ entries:
 
 /**
  * Create `sessionId` as a fork of `parent` when it does not exist yet. A parent with no session leaves the thread to
- * start empty, as its first invoke creates it.
+ * start empty, as its first invoke creates it, and says so. A read that fails is thrown: taking it for "the thread
+ * exists" would start the thread empty for good.
  */
 export async function forkThread(
   agent: Agent,
@@ -78,9 +79,14 @@ export async function forkThread(
   label: string,
 ): Promise<void> {
   const own = await agent.sessions.get(sessionId).read({ limit: 0 });
-  if (own.ok || own.error.code !== "not_found") return;
+  if (own.ok) return;
+  if (own.error.code !== "not_found") throw new Error(`reading session ${sessionId} failed: ${own.error.message}`);
   const history = await wholeHistory(agent, parent);
-  if (!history || history.entries.length === 0) return;
+  if (!history) {
+    log.warn(`${label} thread ${sessionId} names ${parent}, which has no session: the thread starts empty`);
+    return;
+  }
+  if (history.entries.length === 0) return;
   const at = branchPoint(activePath(history.entries, history.leaf), hints);
   if (at === undefined && hints.length > 0) {
     log.warn(`${label} no branch hint matched in ${parent}: thread ${sessionId} starts from its present`);

@@ -12,6 +12,7 @@ import {
   SESSION_BUSY_CODE,
 } from "./agent.ts";
 import { forkThread } from "./channels/kit/thread-fork.ts";
+import { log } from "./log.ts";
 import { runText } from "./run-text.ts";
 import { cancellableStream } from "./collect.ts";
 import type { AgentError, InvokeEvent, InvokeRequest, Agent as ProtocolAgent, RunOutcome } from "./protocol.ts";
@@ -59,8 +60,11 @@ export function legacyAgent(agent: ProtocolAgent, source?: InvokeRequest["source
           [Symbol.asyncIterator]();
         let runId: string | undefined;
         let ended = false;
+        // Before `accepted` there is no run to cancel, and closing the stream would not withdraw the invoke: the run
+        // would be accepted with nobody left to cancel it. So the stream stays open until `accepted` names the run.
         onCancelReady(() => {
-          if (runId !== undefined && !ended) void agent.sessions.get(scope.session).runs.cancel(runId);
+          if (runId === undefined) return;
+          if (!ended) void agent.sessions.get(scope.session).runs.cancel(runId);
           void iterator.return?.();
         });
         let lastError: string | undefined;
@@ -70,8 +74,12 @@ export function legacyAgent(agent: ProtocolAgent, source?: InvokeRequest["source
           switch (event.type) {
             case "accepted":
               runId = event.run.runId;
-              // Cancelled while the invoke was being accepted: the door had no run to stop yet.
-              if (wasCancelled()) void agent.sessions.get(scope.session).runs.cancel(runId);
+              if (wasCancelled()) {
+                const canceled = await agent.sessions.get(scope.session).runs.cancel(runId);
+                if (!canceled.ok) log.warn(`${label} run ${runId} outlived its caller: ${canceled.error.message}`);
+                await iterator.return?.();
+                return;
+              }
               break;
             case "rejected":
               yield failedFrom(event.error);

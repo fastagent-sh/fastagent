@@ -1,6 +1,8 @@
 /** `fastagent deploy agentcore` — the AWS Bedrock AgentCore deploy PLAN, computed from the resolved definition. */
 import { readFileSync } from "node:fs";
 import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
+import type { AgentcoreEnvelope } from "../../channels/agentcore-protocol.ts";
+import { INVOKE_EXAMPLE_BODY } from "../../channels/protocol-http.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds, webhookRunbook } from "../channel-ingress.ts";
@@ -177,6 +179,15 @@ export function runtimeLogGroupPrefix(runtimeOrName: string): string {
 export function forwarderLogGroup(name: string): string {
   return `/aws/lambda/${forwarderFunctionName(name)}`;
 }
+
+/** An `invoke-agent-runtime` payload that runs one turn: the agent's API, carried in an `api` envelope. */
+export const INVOKE_PAYLOAD = JSON.stringify({
+  kind: "api",
+  method: "POST",
+  path: "/invoke",
+  headers: { "content-type": "application/json" },
+  bodyB64: Buffer.from(INVOKE_EXAMPLE_BODY).toString("base64"),
+} satisfies AgentcoreEnvelope);
 
 /** The ONE fixed ingress session id (webhooks + schedule fires). */
 export function ingressSessionId(name: string): string {
@@ -564,7 +575,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Invoke the agent programmatically (reuse the deployment session; conversations remain separate):`,
     `aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn <RuntimeArn> \\`,
     `  --runtime-session-id "${ingressSessionId(name)}" \\`,
-    `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
+    `  --payload '${INVOKE_PAYLOAD}' --cli-binary-format raw-in-base64-out /dev/stdout`,
   );
   runbook.push(
     ``,

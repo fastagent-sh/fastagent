@@ -12,6 +12,7 @@ import type { AgentcoreEnvelope, WebhookReply } from "../src/channels/agentcore-
 import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "../src/channels/agentcore-limits.ts";
 import type { Routes } from "../src/channel.ts";
 import { readWakeAlarmUrl, rememberWakeAlarmUrl } from "../src/schedule/wake-alarm.ts";
+import { INVOKE_PAYLOAD } from "../src/deploy/agentcore/plan.ts";
 
 const scriptedAgent = (): Agent => servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
 const invokeBody = (text: string) =>
@@ -391,6 +392,12 @@ describe("agentcore adapter: api envelope", () => {
     const body = await res.text();
     expect(body).toContain('"kind":"assistant_message","data":{"text":"answer: hello"}');
     expect(body).toContain('"status":"completed"');
+  });
+
+  it("the payload the deploy prints runs a turn as printed", async () => {
+    const res = await post(adapter(), INVOKE_PAYLOAD);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('"kind":"run_ended"');
   });
 
   it("serves BOTH planes (IAM is the gateway), and refuses a request it cannot carry", async () => {

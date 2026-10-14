@@ -2,10 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
-import { branchPoint } from "../src/channels/kit/thread-fork.ts";
+import { branchPoint, forkThread } from "../src/channels/kit/thread-fork.ts";
+import { log } from "../src/log.ts";
 import { legacyAgent } from "../src/legacy-agent.ts";
 import { loopPort } from "../src/loop-port.ts";
-import type { Entry } from "../src/protocol.ts";
+import { type Agent, type Entry, failure } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 
@@ -46,6 +47,19 @@ describe("legacyAgent", () => {
       const state = await v1.sessions.get("s").read({ limit: 0 });
       expect(state.ok && state.state.status).toBe("running");
     });
+    await iterator.return?.();
+    await first;
+    await vi.waitFor(async () => {
+      const now = await v1.sessions.get("s").read();
+      const end = now.ok ? now.entries.find((e) => e.kind === "run_ended") : undefined;
+      expect(end?.data).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    });
+  });
+
+  it("a caller that stops reading before the run is accepted still cancels it", async () => {
+    const { v1, legacy } = agentOver();
+    const iterator = legacy.invoke({ session: "s" }, { text: "hold" })[Symbol.asyncIterator]();
+    const first = iterator.next();
     await iterator.return?.();
     await first;
     await vi.waitFor(async () => {
@@ -97,5 +111,29 @@ describe("dispatchStop", () => {
     await vi.waitFor(async () => expect(await dispatchStop(v1, "s", "[test]")).toBe("Nothing is running."));
     expect(await dispatchStop(v1, "never-used", "[test]")).toBe("Nothing is running.");
     await first.return?.();
+  });
+});
+
+describe("forkThread", () => {
+  it("a thread whose own read fails is an error, never taken for one that exists", async () => {
+    const down = {
+      sessions: { get: () => ({ read: async () => failure("unavailable", "the store is down") }) },
+    } as unknown as Agent;
+    await expect(forkThread(down, "thread", "room", [], "[test]")).rejects.toThrow(
+      "reading session thread failed: the store is down",
+    );
+  });
+
+  it("a parent with no session leaves the thread empty, and says so", async () => {
+    const { v1 } = agentOver();
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await forkThread(v1, "thread", "room", [], "[test]");
+      expect(warn.mock.calls.flat().join(" ")).toContain("names room, which has no session");
+      const own = await v1.sessions.get("thread").read({ limit: 0 });
+      expect(own.ok).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -66,8 +66,8 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
  * said, and a loopback one is `dev`'s default, not a claim about who may call.
  *
  * WHAT `*` GRANTS, stated because it is the default and nobody opts into it: any page the user's browser visits can
- * call this port cross-origin and read the reply — a turn with the agent's full tool authority, and with
- * `sessionControl: true`, reading and deleting sessions. On a published port that is nothing an attacker could not
+ * call this port cross-origin and read the reply — a turn with the agent's full tool authority and every session's
+ * history (the user plane, on by default), and with `http.control`, renaming and deleting sessions. On a published port that is nothing an attacker could not
  * already curl. On a loopback `dev` serve it is the whole attack path, and this is the posture the decision costs:
  * `announceControl` says so at every boot, and `http.cors` is the one way to take it back.
  *

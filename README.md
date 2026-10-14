@@ -93,7 +93,7 @@ Then send a local test turn:
 ```bash
 curl -N -X POST localhost:8787/invoke \
   -H 'content-type: application/json' \
-  -d '{"session":"s1","text":"hello"}'
+  -d '{"sessionId":"s1","prompt":{"text":"hello"}}'
 ```
 
 For production-style local serving:

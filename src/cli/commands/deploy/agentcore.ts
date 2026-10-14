@@ -13,6 +13,7 @@ import {
   agentcoreName,
   agentcoreStackName,
   forwarderLogGroup,
+  INVOKE_PAYLOAD,
   ingressSessionId,
   isGeneratedAgentcoreTemplate,
   planAgentcoreDeploy,
@@ -237,7 +238,7 @@ async function runDeployAgentcore(params: {
     console.error(
       `[fastagent] invoke: aws bedrock-agentcore invoke-agent-runtime --agent-runtime-arn ${outcome.runtimeArn} \\\n` +
         `  --runtime-session-id "${ingressSessionId(name)}" \\\n` +
-        `  --payload '{"kind":"invoke","session":"cli","text":"hello"}' --cli-binary-format raw-in-base64-out /dev/stdout`,
+        `  --payload '${INVOKE_PAYLOAD}' --cli-binary-format raw-in-base64-out /dev/stdout`,
     );
   } finally {
     await rm(paramsDir, { recursive: true, force: true });

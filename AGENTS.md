@@ -118,11 +118,11 @@ src/
 │   ├── busy.ts             # the process's work in flight (every leased session, channel work not yet at one),
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
-│   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
+│   ├── http.ts             # v0.1's POST /invoke over HTTP/SSE: createInvokeHandler only; no serve mounts it (goes in 4c)
 │   ├── protocol-http.ts    # SPEC v1 over HTTP: the user plane (/invoke, /sessions, /agent) and /control as mounts,
 │   │                       # each code's status, request bodies decoded strictly (a remote `source` is refused)
-│   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
-│   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
+│   ├── control.ts          # v0.1's /control/* route table + SSE events, over SessionControl; no serve mounts it
+│   │                       # (goes in 4c)
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), harness-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
