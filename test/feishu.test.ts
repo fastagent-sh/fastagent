@@ -1791,7 +1791,10 @@ describe("turn flow", () => {
     // there (the card was sent after its turn), so the chain's ask, which DID pass through a room turn, places it.
     expect(calls.at(-1)?.scope.session).toBe("feishu:oc_1:omt_on_card");
     expect(protocol.forks).toEqual([
-      { sessionId: "feishu:oc_1:omt_on_card", fork: { sessionId: "feishu:oc_1", entryId: exchangeEnd } },
+      {
+        sessionId: "feishu:oc_1:omt_on_card",
+        fork: { sessionId: "feishu:oc_1", entryId: exchangeEnd, context: "recent" },
+      },
     ]);
   });
 

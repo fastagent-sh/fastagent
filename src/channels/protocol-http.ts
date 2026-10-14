@@ -84,7 +84,13 @@ const InvokeBody = Schema.Struct({
 
 const CreateBody = Schema.Struct({
   sessionId: Schema.optionalKey(Schema.String),
-  fork: Schema.optionalKey(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optionalKey(Schema.String) })),
+  fork: Schema.optionalKey(
+    Schema.Struct({
+      sessionId: Schema.String,
+      entryId: Schema.optionalKey(Schema.String),
+      context: Schema.optionalKey(Schema.Literals(["full", "recent"])),
+    }),
+  ),
 });
 
 const RewindBody = Schema.Struct({ entryId: Schema.String });

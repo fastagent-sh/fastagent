@@ -9,6 +9,7 @@ import type { HarnessPort } from "../src/harness-port.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, AgentRejection, type FollowEvent, LIMITS } from "../src/protocol.ts";
 import { connectRemoteAgent } from "../src/protocol-remote.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
@@ -134,6 +135,29 @@ describe("the HTTP binding", () => {
     expect(await busy.json()).toMatchObject({ error: { code: "busy", retryable: true } });
     fake.release();
     await held.return?.();
+  });
+
+  it("carries a fork's context to the harness, and refuses one it does not know", async () => {
+    const harness = fakeLoopHarness(new FakeStore());
+    const contexts: unknown[] = [];
+    const url = await serve(
+      loopPort({
+        ...harness,
+        create: (sessionId, onRecord, fork) => {
+          if (fork) contexts.push(fork.context);
+          return harness.create(sessionId, onRecord, fork);
+        },
+      }),
+    );
+    const agent = await connectRemoteAgent({ url });
+    await collect(agent.invoke({ sessionId: "room", prompt: { text: "hi" } }));
+    expect(await agent.sessions.create({ sessionId: "t", fork: { sessionId: "room", context: "recent" } })).toEqual({
+      ok: true,
+      sessionId: "t",
+    });
+    expect(contexts).toEqual(["recent"]);
+    const bogus = await fetch(`${url}/sessions`, invokeBody({ fork: { sessionId: "room", context: "all" } }));
+    expect(bogus.status).toBe(400);
   });
 
   it("refuses an unknown field instead of dropping it", async () => {

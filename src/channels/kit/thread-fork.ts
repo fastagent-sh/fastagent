@@ -93,7 +93,7 @@ export async function forkThread(
   }
   const created = await agent.sessions.create({
     sessionId,
-    fork: { sessionId: parent, ...(at === undefined ? {} : { entryId: at }) },
+    fork: { sessionId: parent, ...(at === undefined ? {} : { entryId: at }), context: "recent" },
   });
   // Another delivery of the thread's first message created it meanwhile: it exists, which is all this asks.
   if (!created.ok && created.error.code !== "conflict") {

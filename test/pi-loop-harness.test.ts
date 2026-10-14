@@ -17,7 +17,11 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { isRunMarker } from "../src/harnesses/pi/session-markers.ts";
-import { type PiSessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
+import {
+  type PiSessionRecordStore,
+  piInMemorySessionRecordStore,
+  piSessionRecordStore,
+} from "../src/harnesses/pi/session-store.ts";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, type InvokeEvent, LIMITS } from "../src/protocol.ts";
@@ -392,5 +396,28 @@ describe("pi-coding-agent through LoopPort", () => {
     const read = await reopened.sessions.get("s").read({ limit: 0 });
     expect(read.ok).toBe(true);
     expect(read.ok && read.state.model).toBe(undefined);
+  });
+
+  it("a `recent` fork gives the model a window of the copy; a plain fork gives it all", async () => {
+    const store = piInMemorySessionRecordStore();
+    const room = await store.openOrCreate("room");
+    for (let i = 0; i < 60; i++) {
+      room.appendMessage({ role: "user", content: `q${i}`, timestamp: i });
+      room.appendMessage(fauxAssistantMessage(`a${i}`));
+    }
+    const agent = await piAgent(store, new World());
+    const compactions = async (sessionId: string) => {
+      const page = await agent.sessions.get(sessionId).read({ limit: LIMITS.readMax });
+      return page.ok ? page.entries.filter((e) => e.kind === "compaction").length : -1;
+    };
+    expect(
+      await agent.sessions.create({ sessionId: "thread", fork: { sessionId: "room", context: "recent" } }),
+    ).toEqual({ ok: true, sessionId: "thread" });
+    expect(await agent.sessions.create({ sessionId: "copy", fork: { sessionId: "room" } })).toEqual({
+      ok: true,
+      sessionId: "copy",
+    });
+    expect(await compactions("thread")).toBe(1);
+    expect(await compactions("copy")).toBe(0);
   });
 });

@@ -113,11 +113,14 @@ export interface LoopHarness {
   readonly capabilities: Omit<Capabilities, "durableQueue" | "durableRuns">;
   /** `onRecord` sees every record appended from now on, by the harness or by `LoopPort`, once it is durable. */
   open(sessionId: string, onRecord: (record: LogRecord) => void): Promise<LoopLog | undefined>;
-  /** A fork copies the source's conversation up to `entryId`, never its run markers: runs are not copied. */
+  /**
+   * A fork copies the source's conversation up to `entryId`, never its run markers: runs are not copied. `recent` bounds
+   * what the model is given of that copy, for a harness that manages context; one that does not copies it whole.
+   */
   create(
     sessionId: string,
     onRecord: (record: LogRecord) => void,
-    fork?: { from: LoopLog; entryId?: string },
+    fork?: { from: LoopLog; entryId?: string; context?: "full" | "recent" },
   ): Promise<LoopLog>;
   /** Called with the session's log closed. */
   delete(sessionId: string): Promise<void>;
@@ -813,12 +816,16 @@ export function loopPort(
             const source = yield* RcMap.get(sessions, fork.sessionId);
             const from = source.log;
             if (!from) return notFound(fork.sessionId);
-            const { entryId } = fork;
+            const { entryId, context } = fork;
             if (entryId !== undefined && !published(from.records()).entries.some((entry) => entry.id === entryId)) {
               return failure("not_found", `no entry ${entryId} in session ${fork.sessionId}`);
             }
             held.log = yield* port(() =>
-              harness.create(sessionId, onRecord(held), { from, ...(entryId === undefined ? {} : { entryId }) }),
+              harness.create(sessionId, onRecord(held), {
+                from,
+                ...(entryId === undefined ? {} : { entryId }),
+                ...(context === undefined ? {} : { context }),
+              }),
             );
             return { ok: true } as Result;
           }),

@@ -10,6 +10,7 @@ import type {
   Attachment,
   Capabilities,
   Entry,
+  ForkSource,
   ModelDescriptor,
   Prompt,
   Result,
@@ -63,7 +64,7 @@ export interface HarnessPort {
   /** Live: an entry is reported once it is durable. Returns the unsubscribe. */
   watch(sessionId: string, listener: (event: SessionEvent) => void): () => void;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
-  create(sessionId: string, fork?: { sessionId: string; entryId?: string }): Promise<Result>;
+  create(sessionId: string, fork?: ForkSource): Promise<Result>;
   rewind(sessionId: string, entryId: string): Promise<Result>;
   compact(sessionId: string, options?: { instructions?: string }): Promise<Result>;
   update(sessionId: string, settings: SessionSettings): Promise<Result>;

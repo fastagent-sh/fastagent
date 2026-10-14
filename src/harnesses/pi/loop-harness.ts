@@ -625,7 +625,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         if (!source) throw new Error("a fork's source is not a log this harness opened");
         const at = fork.entryId ?? source.record.getLeafId();
         if (!at) throw new Error(`session ${source.sessionId} has nothing to fork`);
-        await sessions.fork(source.sessionId, at, sessionId, `${source.sessionId}@${at}`);
+        await sessions.fork(source.sessionId, at, sessionId, `${source.sessionId}@${at}`, fork.context ?? "full");
         const record = await sessions.openIfExists(sessionId);
         if (!record) throw new Error(`the fork ${sessionId} has no record after it was written`);
         return logOf(sessionId, record, onRecord);
