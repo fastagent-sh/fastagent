@@ -420,7 +420,7 @@ describe("github content: what runs the agent clones, what reports on it does no
       providers: [faux.provider],
       content,
     });
-    await collect(running.invoke({ session: "s" }, { text: "hi" }));
+    await collect(running.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(prompt).toContain(
       `- app: ${join(agentDir, "content", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change) The product. Open pull requests against main.`,
     );

@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
 import { log } from "../../log.ts";
+import { legacyAgent } from "../../legacy-agent.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
@@ -264,7 +265,9 @@ function createFeishuRuntimeFactory(
   const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
-  return ({ agent, stateRoot, control }) => {
+  return ({ agent: protocolAgent, stateRoot }) => {
+    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
+    const agent = legacyAgent(protocolAgent, { kind: "channel", name: kind });
     // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
@@ -548,7 +551,7 @@ function createFeishuRuntimeFactory(
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
         sideTasks.track(
-          dispatchStop(control, session, label)
+          dispatchStop(protocolAgent, session, label)
             .then((feedback) =>
               placeApi(historyKey)
                 .sendText({ chatId, replyTo, replyInThread }, feedback)

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Agent } from "../src/index.ts";
+import type { Agent } from "../src/protocol.ts";
 import { loadChannels, inspectChannels } from "../src/channels/discover.ts";
 import { log } from "../src/log.ts";
 

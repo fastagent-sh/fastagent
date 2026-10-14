@@ -17,24 +17,27 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 
 ## The one mental model
 
-An agent is a thing with `invoke`. Everything else is "how you get it" and "how you consume it".
+An agent is a thing with `invoke` and sessions ([SPEC v1](SPEC-v1.md)). Everything else is "how you get it" and "how
+you consume it".
 
 ```ts
 interface Agent {
-  invoke(scope: { session: string }, prompt: { text: string }): AsyncIterable<AgentEvent>;
+  invoke(request: { sessionId?: string; prompt: { text: string }; idempotencyKey?: string }): AsyncIterable<InvokeEvent>;
+  sessions: { create; list; get(sessionId: string): Session }; // read, follow, abort, rewind, compact, update, delete
+  info(); models(); commands();
 }
-type AgentEvent =
-  | { type: "text"; delta: string }
-  | { type: "thinking"; delta: string }
-  | { type: "tool_started"; id: string; name: string; args: Json }
-  | { type: "tool_ended"; id: string; isError: boolean; content: Json }
-  | { type: "tool_progress"; id: string; text: string } // advisory: a running tool's current status line
-  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string } // advisory: internal retry backoff
-  | { type: "completed"; data?: Json }    // terminal: success
-  | { type: "failed"; details: string; retryable: boolean; code?: string };  // terminal: failure
+type InvokeEvent =
+  | { type: "accepted"; sessionId: string; run: RunStatus }           // first: the run is recorded
+  | { type: "rejected"; error: AgentError }                            // or first and only: nothing ran
+  | { type: "message_delta"; runId: string; channel: "text" | "thinking"; delta: string } // live text
+  | { type: "tool_started"; runId: string; toolCallId: string; name: string; args: Json }
+  | { type: "entry"; entry: Entry }                                    // durable: messages, tool results, run_ended
+  | /* tool_progress, retry_scheduled, state, serving_error */ …;
 ```
 
-The stream ends with exactly one `completed` / `failed`, or is cancelled by the consumer. `session` is an opaque string you choose; reuse it to continue a conversation.
+The stream ends after the run's `run_ended` entry, whose `outcome` says how it ended. `sessionId` is an opaque string
+you choose; reuse it to continue a conversation. A message for a session that is running queues behind the run.
+Stopping reading detaches; the run goes on, and `agent.sessions.get(id).abort()` stops it.
 
 ## 1. Get the agent (pick by what you have)
 
@@ -75,36 +78,36 @@ Use the `z` re-exported from `@fastagent-sh/fastagent`, not a separately install
 
 ```ts
 // (1) raw stream — render tokens as they arrive
-import { SESSION_BUSY_CODE } from "@fastagent-sh/fastagent";
-for await (const e of agent.invoke({ session: "u1" }, { text: "hi" })) {
-  if (e.type === "text") render(e.delta);
-  // A FIRST event of this shape is a reject, not a failed turn: that session is mid-run. Retry with
-  // backoff, or steer the running turn (docs/design/session-control.md). Import the code, never copy it.
-  if (e.type === "failed" && e.code === SESSION_BUSY_CODE) queueOrSteer();
+for await (const e of agent.invoke({ sessionId: "u1", prompt: { text: "hi" } })) {
+  if (e.type === "message_delta" && e.channel === "text") render(e.delta);
+  if (e.type === "entry" && e.entry.kind === "run_ended") done(e.entry.data);
 }
 
 // (2) buffered JSON — one question, one answer
-import { collect } from "@fastagent-sh/fastagent";
-const { text } = await collect(agent.invoke({ session: "u1" }, { text: "hi" }));
-// `collect` throws AgentFailure on a failed turn, and errors if the stream has no terminal event.
+import { collect, RunNotCompleted } from "@fastagent-sh/fastagent";
+const { text } = await collect(agent.invoke({ sessionId: "u1", prompt: { text: "hi" } }));
+// `collect` throws AgentRejection (nothing ran), RunNotCompleted (the run ended otherwise; `.outcome` says how) or
+// RunUnfinished (the stream stopped first).
 
-// (3) HTTP/SSE — createInvokeHandler is a Fetch handler: mount it in any host route
-import { createInvokeHandler } from "@fastagent-sh/fastagent";
-const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
-// Standalone it checks the method, requires content-type: application/json, and caps the body. It sends
-// NO CORS headers — mounted in your app, who may call it cross-origin is your middleware's decision.
+// (3) HTTP/SSE — the agent's API as one Fetch handler: POST /invoke, /sessions/*, /agent/*
+import { createAgentHandler } from "@fastagent-sh/fastagent";
+const handler = createAgentHandler(agent);   // (Request) => Promise<Response>; `{ control: true }` adds /control/*
+// It requires content-type: application/json on a body and caps it. It sends NO CORS headers and answers no preflight
+// — mounted in your app, who may call it cross-origin is your middleware's decision — unless you name the origins:
+// `createAgentHandler(agent, { corsOrigins: ["https://app.example.com"] })`. Call it from another process with
+// `connectAgent`.
 ```
 
 ### The whole agent, as a service
 
-The handler above serves `invoke` only. To mount the **whole** agent — every channel it declares,
-its control plane, health — open the directory as a service:
+The handler above serves the agent's API only. To mount the **whole** agent — every channel it declares,
+its API, health — open the directory as a service:
 
 ```ts
 import { nodeListener, createAgentService } from "@fastagent-sh/fastagent";
 
 const service = await createAgentService("./my-agent");
-app.use("/agent", nodeListener(service.handler));   // channels + control plane + health
+app.use("/agent", nodeListener(service.handler));   // channels + the agent's API + health
 await service.ready;      // long connections up; rejects if one cannot come up
 // ...
 await service.close();    // stops long connections and schedules
@@ -114,8 +117,9 @@ await service.close();    // stops long connections and schedules
 bound, no signal handlers are installed, nothing calls `process.exit`. Like them, it enters the agent's
 [environment](configuration.md#environment): the declared packages are installed where they have no install yet,
 and put first on this process's `PATH`, which the agent's commands inherit, and an environment FastAgent
-refuses fails the call. Two agents opened in one process share that `PATH`. With `sessionControl` on,
-`service.controlPrefix` names the prefix the plane owns (`/control`) so your app can route around it.
+refuses fails the call. Two agents opened in one process share that `PATH`. `service.planes` says which of
+the agent's HTTP planes it serves (`api`: `/invoke`, `/sessions`, `/agent`; `control`: `/control`), so your app
+can route around them.
 
 **Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the handler behind
 your own middleware. The cross-origin default is `*`: any page your users visit can call it and read the reply
@@ -125,7 +129,7 @@ Pass `{ signal }` to bind its lifetime to something you already own.
 
 ### Mounting a single handler
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it.
+The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`. It does not start a server: your app keeps its own, and fastagent becomes routes on it. It routes on the request's path (`/invoke`, `/sessions/…`), so mount it under a prefix your host strips, or strip it yourself.
 
 > **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
 > webhook channels verify signatures over the raw body:
@@ -138,39 +142,46 @@ The Fetch handler mounts wherever your host speaks `(Request) => Response` — a
 > Scoping the parser (`app.use("/other", express.json())`) works too. Getting it wrong is logged with this fix.
 
 ```ts
-// Next.js App Router — app/api/chat/route.ts
-export const POST = handler;
+// Next.js App Router — app/agent/[...path]/route.ts: strip the prefix the route lives under
+const toApi = (req: Request) => {
+  const url = new URL(req.url);
+  url.pathname = url.pathname.slice("/agent".length);
+  return handler(new Request(url, req));
+};
+export { toApi as GET, toApi as POST, toApi as PATCH, toApi as DELETE };
 
-// Hono — c.req.raw is a Web Request
-app.post("/chat", (c) => handler(c.req.raw));
+// Hono — mount strips the prefix
+app.mount("/agent", handler);
 
-// Express — nodeListener bridges (req, res) to the Fetch handler. It reads the RAW body
-// stream, so mount it BEFORE any body parser (see the note below).
+// Express — nodeListener bridges (req, res) to the Fetch handler, and app.use strips the prefix. It reads the RAW
+// body stream, so mount it BEFORE any body parser (see the note above).
 import { nodeListener } from "@fastagent-sh/fastagent";
-app.post("/chat", nodeListener(handler));
+app.use("/agent", nodeListener(handler));
 
-// Fastify — same bridge on the raw req/res: keep the body stream unread, hijack the reply
+// Fastify — same bridge on the raw req/res: keep the body stream unread, hijack the reply, strip the prefix
 app.register(async (scope) => {
   scope.removeAllContentTypeParsers();
   scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
-  scope.post("/chat", (req, reply) => {
+  scope.all("/agent/*", (req, reply) => {
     reply.hijack();
+    req.raw.url = req.raw.url!.slice("/agent".length);
     nodeListener(handler)(req.raw, reply.raw);
   });
 });
 
-// Bun
-Bun.serve({ port: 8787, fetch: (req) =>
-  new URL(req.url).pathname === "/chat" ? handler(req) : new Response("not found", { status: 404 }) });
+// Bun — the handler is the whole server
+Bun.serve({ port: 8787, fetch: handler });
 
 // Plain Node (no native Fetch routing) — the built-in server
 import { createAgentService, serveNode } from "@fastagent-sh/fastagent";
-serveNode(handler, { port: 8787 });                    // just the invoke route
+serveNode(handler, { port: 8787 });                    // just the agent's API
 // ...or the whole agent, channels and all:
 serveNode((await createAgentService("./my-agent")).handler, { port: 8787 });
 ```
 
-Cancellation, backpressure, and a body cap are native to the web-stream primitives: a client disconnect cancels the underlying invoke. Concurrent requests on the **same** session fail fast — the second receives `failed{session busy}`.
+Backpressure and a body cap are native to the web-stream primitives. A client disconnect detaches from the run, which
+goes on; `POST /sessions/{s}/abort` or `/runs/{r}/cancel` stops it. A second message for a running session queues
+behind the run, as `whenBusy` says.
 
 ## 3. Tier 1 vs Tier 2
 
@@ -186,7 +197,6 @@ createPiAgent({
   // ── Tier 2: injectable ports (default values run fine) ──
   sessions,   // PiSessionRecordStore  — persistence (default: in-memory)
   cwd,        // string          — working directory (default: process.cwd())
-  lease,      // Lease           — concurrency floor (default: in-process fail-fast)
   providers,  // Provider[]      — your own model source (see §5)
 });
 ```
@@ -195,7 +205,6 @@ createPiAgent({
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
 | `cwd` | `process.cwd()` | tools should operate in another directory; it is not a sandbox |
-| `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
 `env` governs definition loading only. The coding tools and your `tools/` use the local process directly, so `env`

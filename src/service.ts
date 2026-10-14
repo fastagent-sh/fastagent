@@ -4,15 +4,14 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import type { Agent } from "./agent.ts";
-import { createControlPlane } from "./channels/control.ts";
-import { createInvokeHandler } from "./channels/http.ts";
+import { protocolHttp } from "./channels/protocol-http.ts";
 import { text } from "./channels/respond.ts";
-import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/serve.ts";
+import { scheduleCaller } from "./legacy-agent.ts";
+import type { Agent } from "./protocol.ts";
+import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/router.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { type ScheduleLoad, type Scheduler, createScheduler } from "./schedule/scheduler.ts";
-import type { SessionControl } from "./session.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
 import { log } from "./log.ts";
 import { once } from "./once.ts";
@@ -64,7 +63,7 @@ function closeWithin(
 export interface ServingSurface {
   /**
    * The routes that AUTHENTICATE NOBODY — `GET /health` and `POST /invoke`, minus what a channel took over or
-   * `http.invoke: false` withheld. Kept APART from the
+   * `http.api: false` withheld. Kept APART from the
    * channels' table rather than derived from it, because three decisions read it (browser reachability, the JSON
    * body gate, what the startup line calls unauthenticated) and must give the same answer.
    */
@@ -74,8 +73,8 @@ export interface ServingSurface {
    * inside itself — an assumption about the author for a CUSTOM channel, not a property we enforce (§14).
    */
   selfVerifying: Routes;
-  /** Prefix-owning handlers mounted beside the routes (the session control plane). */
-  mounts?: readonly PrefixMount[];
+  /** The protocol's planes that own a prefix (`/sessions`, `/agent`, `/control`): unverified too. */
+  mounts: readonly PrefixMount[];
   longConnections: LoadedLongConnectionChannel[];
   /** Route-channel basenames; the tunnel registers only this subset. */
   routeChannels: string[];
@@ -100,48 +99,67 @@ export interface HttpSurface {
    */
   cors?: readonly string[];
   /**
-   * Serve the data plane, `POST /invoke`. On by default: it is the framework's interface, and a deployment that can
-   * only be reached through a chat channel is still worth curling. Set it `false` when this port is public and the
-   * channels' own signature checks are meant to be the only way in — the route is unauthenticated and runs a turn
-   * with the agent's full tool authority.
+   * Serve the user plane (SPEC v1 §9): `POST /invoke`, `/sessions` and `/agent`. On by default: it is the agent's
+   * interface. Unauthenticated, like everything served here, so whoever reaches the port can run the agent with its
+   * full tool authority, and list, read, follow, abort and rewind every session, a channel's direct messages
+   * included. Set it `false` when the port is public and the channels' own signature checks are meant to be the only
+   * way in (they call the agent in process, so they need nothing served).
    */
-  invoke?: boolean;
+  api?: boolean;
+  /**
+   * Serve the control plane, `/control`: set a session's name, model and thinking level, and delete it. Off by
+   * default: it is the operator's, and as unauthenticated as the rest.
+   */
+  control?: boolean;
+}
+
+/** Which of the protocol's planes a port serves. */
+export interface Planes {
+  api: boolean;
+  control: boolean;
+}
+
+/** The planes a serve publishes: the user plane unless `http.api: false`, the control plane only with `http.control`. */
+export function planesOf(http: HttpSurface | undefined): Planes {
+  return { api: http?.api !== false, control: http?.control === true };
 }
 
 /**
  * What an anonymous caller of a port can do, worst first — the ONE wording the startup report and deploy's pre-flight
  * both print, each from its own facts (what mounted vs what will mount).
  */
-export function describeAnonymousSurface(open: { invoke: boolean; controlPrefix?: string }): string[] {
+export function describeAnonymousSurface(open: Planes): string[] {
   return [
-    ...(open.invoke ? ["POST /invoke (run a turn with this agent's tools)"] : []),
-    ...(open.controlPrefix ? [`${open.controlPrefix}/* (read, steer or delete any session)`] : []),
+    ...(open.api
+      ? [
+          "POST /invoke (run the agent with its tools)",
+          "/sessions/* (list, read, follow, abort and rewind any session, a channel's direct messages included)",
+        ]
+      : []),
+    ...(open.control ? ["/control/* (rename, reconfigure or delete any session)"] : []),
   ];
 }
 
 /**
- * The surface this deployment serves: the DATA plane (`POST /invoke`), `GET /health`, and the discovered channels.
+ * The surface this deployment serves: the protocol's planes (SPEC v1 §9), `GET /health`, and the discovered channels.
  *
- * `/invoke` is the framework's interface, so it is served whatever channels a definition declares (unless
- * `http.invoke: false`). It is RESERVED for the same reason `/control/*` is: a channel taking that path would silently replace the one route every client,
- * every doc and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
+ * The protocol's paths are RESERVED: a channel taking one would silently replace the routes every client, every doc
+ * and the startup line all name. `/health` stays overridable — a probe is the deployment's to shape.
  */
 export async function routesFor(
   agentDir: string,
   agent: Agent,
   stateRoot: string,
-  control: SessionControl | undefined,
   /**
-   * `http.invoke: false` withholds the data plane. Two callers, two reasons: the AgentCore adapter serves the
-   * Runtime's `/invocations` contract instead, and an author sets it to leave the channels' signature checks as the
-   * only way into a public port.
+   * Which planes to serve. Two callers withhold them, for two reasons: the AgentCore adapter serves the Runtime's
+   * `/invocations` contract instead, and an author sets `http.api: false` to leave the channels' signature checks as
+   * the only way into a public port.
    */
-  options: { http?: HttpSurface } = {},
+  options: { planes: Planes },
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
     stateRoot,
-    control,
   });
   for (const c of collisions) {
     log.warn(`[fastagent] channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`);
@@ -165,7 +183,23 @@ export async function routesFor(
   // AgentCore serves the data plane through the Runtime's own `/invocations` contract, so the adapter opts out — and
   // with no `/invoke` of ours on that surface there is nothing to reserve, which is why the refusal is in here.
   const unverified: Routes = { ...(covered("/health", "GET") ? {} : { "GET /health": health }) };
-  if (options.http?.invoke !== false) unverified["POST /invoke"] = createInvokeHandler(agent);
+  const planes = protocolHttp(agent);
+  const mounts: PrefixMount[] = [];
+  if (options.planes.api) {
+    Object.assign(unverified, planes.user.routes);
+    mounts.push(...planes.user.mounts);
+  }
+  if (options.planes.control) mounts.push(planes.control);
+  const swallowed = Object.keys(routes).filter((key) =>
+    mounts.some((mount) => pathUnderPrefix(parseRouteKey(key).path, mount.prefix)),
+  );
+  if (swallowed.length > 0) {
+    throw new Error(
+      `channel route(s) ${swallowed.map((key) => `"${key}"`).join(", ")} are inside a path the agent's own API ` +
+        `serves (${mounts.map((m) => m.prefix).join(", ")}) — rename the channel route, or turn that plane off ` +
+        "(http.api, http.control)",
+    );
+  }
   // ONE rule over the whole table, so the next route we add is reserved by existing here rather than by someone
   // remembering to write a second check for it. `/health` is exempt by construction: it is only in `ours` when no
   // channel already serves it, because a probe is the deployment's to shape.
@@ -183,38 +217,13 @@ export async function routesFor(
   return {
     unverified,
     selfVerifying: routes,
+    mounts,
     longConnections,
     routeChannels,
     setReady(value: boolean) {
       ready = value;
     },
   };
-}
-
-/** Refuse channel routes the control plane would swallow. */
-export function assertNoControlPlaneCollision(channelRoutes: Routes, plane: PrefixMount): void {
-  const collisions = Object.keys(channelRoutes).filter((key) => pathUnderPrefix(parseRouteKey(key).path, plane.prefix));
-  if (collisions.length > 0) {
-    throw new Error(
-      `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +
-        `rename the channel route or disable sessionControl in fastagent.config`,
-    );
-  }
-}
-
-export function mountSessionControl(
-  routes: Routes,
-  control: SessionControl | undefined,
-): {
-  routes: Routes;
-  mounts: PrefixMount[];
-  /** The prefix the plane owns, when it is published — what a startup line names. */
-  controlPrefix?: string;
-} {
-  if (!control) return { routes, mounts: [] };
-  const plane = createControlPlane(control);
-  assertNoControlPlaneCollision(routes, plane);
-  return { routes, mounts: [plane], controlPrefix: plane.prefix };
 }
 
 /**
@@ -242,7 +251,9 @@ export function startSchedules(
   const { schedules, failures } = loaded;
   const scheduler = Effect.runSync(
     createScheduler({
-      agent,
+      // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
+      agent: scheduleCaller(agent, "schedule"),
+      wakeAgent: scheduleCaller(agent, "wake"),
       stateRoot,
       schedules,
       failures,
@@ -257,7 +268,7 @@ export function startSchedules(
 }
 
 export interface AgentService {
-  /** The assembled Fetch handler: channel routes, the control plane, and health. */
+  /** The assembled Fetch handler: channel routes, the protocol's planes, and health. */
   handler: ChannelHandler;
   /** The agent behind it — invoke it directly when you also want a programmatic path. */
   agent: Agent;
@@ -283,8 +294,8 @@ export interface AgentService {
   schedules: () => readonly Schedule[];
   /** Settles when every long connection is up — immediately when there are none. */
   ready: Promise<void>;
-  /** The control plane's prefix, when `sessionControl` is on. */
-  controlPrefix?: string;
+  /** Which of the protocol's planes the handler serves. */
+  planes: Planes;
   /**
    * Stop long connections and schedules. It does NOT drain agent turns: a turn takes seconds to minutes, and the
    * deployment wants the old process gone in under a second (`SHUTDOWN_GRACE_MS` in `src/cli/serve.ts`). What makes
@@ -315,12 +326,6 @@ export interface MountableAgent {
   agentDir: string;
   /** Where durable state lives (channel state, sessions, schedule fires). */
   stateRoot: string;
-  /** The session-control hub, when the opener built one. A serve has it whether or not `/control/*` is published:
-   *  a chat channel's stop command reaches the running turn through it. */
-  sessionControl?: SessionControl;
-  /** Whether that hub is ALSO served as `/control/*` (`config.sessionControl`). Required, not defaulted: an
-   *  embedder assembling this by hand would otherwise lose the plane to a 404 with nothing said anywhere. */
-  publishControl: boolean;
   /** What the port publishes, and to which browsers — the config's `http` block ({@link HttpSurface}). */
   http?: HttpSurface;
 }
@@ -333,9 +338,9 @@ export async function mountAgentService(
   opened: MountableAgent,
   options: MountAgentServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, stateRoot, sessionControl } = opened;
-  // Wrapped BEFORE anything consumes it: routes, the control plane and schedules must all drive the same agent, so
-  // this is a hook rather than something a caller applies afterwards.
+  const { agentDir, stateRoot } = opened;
+  // Wrapped BEFORE anything consumes it: routes, the planes and schedules must all drive the same agent, so this is a
+  // hook rather than something a caller applies afterwards.
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
   // The embedder's way in, checked like the config file's: `allowedOrigin` compares exact strings, so a stray
@@ -345,13 +350,13 @@ export async function mountAgentService(
 
   // A schedule that is not valid is the clock's to report (it never refuses the serve: see loadServingSchedules).
   const schedules = await loadServingSchedules(agentDir);
-  const routed = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: opened.http });
-  const withControl = mountSessionControl(routed.selfVerifying, opened.publishControl ? sessionControl : undefined);
+  const planes = planesOf(opened.http);
+  const routed = await routesFor(agentDir, agent, stateRoot, { planes });
   // Composed BEFORE anything starts.
   const handler = router({
     unverified: routed.unverified,
-    selfVerifying: withControl.routes,
-    mounts: withControl.mounts,
+    selfVerifying: routed.selfVerifying,
+    mounts: routed.mounts,
     ...(corsOrigins ? { corsOrigins } : {}),
   });
   return Effect.runPromise(
@@ -480,7 +485,7 @@ export async function mountAgentService(
         return {
           handler,
           agent,
-          routes: { ...routed.unverified, ...withControl.routes },
+          routes: { ...routed.unverified, ...routed.selfVerifying },
           agentDir,
           channels: {
             routes: routed.routeChannels,
@@ -490,7 +495,7 @@ export async function mountAgentService(
           ...(corsOrigins ? { corsOrigins } : {}),
           schedules: () => scheduled.current(),
           ready,
-          ...(withControl.controlPrefix ? { controlPrefix: withControl.controlPrefix } : {}),
+          planes,
           close,
         };
       }).pipe(

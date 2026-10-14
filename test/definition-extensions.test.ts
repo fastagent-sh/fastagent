@@ -66,15 +66,15 @@ describe("definition: one discovery of extensions/ for the catalog and the sessi
     const failedToLoad = () => warn.mock.calls.filter(([m]) => /notify\.ts failed to load/.test(m)).length;
     try {
       const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-      await collect(agent.invoke({ session: "s" }, { text: "1" }));
-      await collect(agent.invoke({ session: "s" }, { text: "2" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "1" } }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "2" } }));
       expect(prompts[0]).toMatch(/<extension_errors>\nThese extensions in extensions\/ did not load[^\n]*notify\.ts: /);
       expect(failedToLoad()).toBe(1); // said when it appears, not by every session that meets it again
       await writeFile(join(dir, "extensions", "notify.ts"), markerExtension("notify"));
-      await collect(agent.invoke({ session: "s" }, { text: "3" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "3" } }));
       expect(prompts[2]).not.toContain("<extension_errors>");
       await writeFile(join(dir, "extensions", "notify.ts"), broken);
-      await collect(agent.invoke({ session: "s" }, { text: "4" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "4" } }));
       expect(prompts[3]).toContain("<extension_errors>");
       expect(failedToLoad()).toBe(2); // repaired, then broken the same way again: said again
     } finally {
@@ -126,15 +126,15 @@ export default async function (api) {
     };
     faux.setResponses([reply, reply, reply, reply]);
     const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ session: "s" }, { text: "1" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "1" } }));
     await writeFile(join(dir, "extensions", "a.ts"), ext("tool_v2", true));
     await writeFile(join(dir, "extensions", "lib", "label.ts"), 'export const label = "LABEL_V2";\n');
-    await collect(agent.invoke({ session: "s" }, { text: "2" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "2" } }));
     await writeFile(join(dir, "extensions", "b.ts"), ext("tool_added"));
     // Two sessions bound at once after the edit: neither may load what the cache held before it.
     await Promise.all([
-      collect(agent.invoke({ session: "s" }, { text: "3" })),
-      collect(agent.invoke({ session: "t" }, { text: "3" })),
+      collect(agent.invoke({ sessionId: "s", prompt: { text: "3" } })),
+      collect(agent.invoke({ sessionId: "t", prompt: { text: "3" } })),
     ]);
     expect(seen).toEqual([
       { tools: ["tool_v1"], label: "v1" },
@@ -259,8 +259,8 @@ export default function (pi) {
     const offered: string[][] = [];
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const agent = await servedAgent({ "extensions/probe.ts": probe(key) }, offered);
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
 
     expect(offered[0]).toContain("probe_tool");
     expect(logOf(key)).toEqual([
@@ -281,8 +281,8 @@ export default function (pi) {
   it("runs the turn a command starts, in the command's own session, even when sessions run concurrently", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
     const [a, b] = await Promise.all([
-      collect(agent.invoke({ session: "a" }, { text: "/go A" })),
-      collect(agent.invoke({ session: "b" }, { text: "/go B" })),
+      collect(agent.invoke({ sessionId: "a", prompt: { text: "/go A" } })),
+      collect(agent.invoke({ sessionId: "b", prompt: { text: "/go B" } })),
     ]);
     expect(a.text).toContain("from command A");
     expect(b.text).toContain("from command B");
@@ -300,39 +300,49 @@ export default function (pi) {
 }
 `,
     });
-    expect((await collect(agent.invoke({ session: "s" }, { text: "/go slow" }))).text).toContain("from command slow");
+    expect((await collect(agent.invoke({ sessionId: "s", prompt: { text: "/go slow" } }))).text).toContain(
+      "from command slow",
+    );
   });
 
   it("refreshes distinct session-local runtimes for successive bindings", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await collect(agent.invoke({ session: "s" }, { text: "first" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "first" } }));
     const refresh = vi.spyOn(ModelRuntime.prototype, "refresh");
-    await collect(agent.invoke({ session: "s" }, { text: "second" }));
-    await collect(agent.invoke({ session: "s" }, { text: "third" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "second" } }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "third" } }));
     expect(new Set(refresh.mock.contexts).size).toBe(2);
     refresh.mockRestore();
   });
 
   it("completes a command that does its work without a model turn", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    expect(await collect(agent.invoke({ session: "s" }, { text: "/tag" }))).toEqual({ text: "", data: undefined });
+    // A command that took the message: no model was called, so the run ends `intercepted`, which `collect` reports.
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/tag" } }))).rejects.toMatchObject({
+      outcome: { status: "intercepted" },
+    });
   });
 
   it("fails the invoke with the error of a command that throws", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await expect(collect(agent.invoke({ session: "s" }, { text: "/boom" }))).rejects.toThrow(/command blew up/);
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/boom" } }))).rejects.toThrow(
+      /command blew up/,
+    );
   });
 
   it("refuses a command's session replacement instead of reporting it done", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    await expect(collect(agent.invoke({ session: "s" }, { text: "/new" }))).rejects.toThrow(
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/new" } }))).rejects.toThrow(
       /ctx\.newSession\(\) is not available when serving/,
     );
   });
 
   it("accepts a provider registered after loading on the session-local runtime", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
-    expect(await collect(agent.invoke({ session: "s" }, { text: "/provider" }))).toEqual({ text: "", data: undefined });
+    // A command that took the message: no model was called, so the run ends `intercepted`, which `collect` reports.
+    await expect(collect(agent.invoke({ sessionId: "s", prompt: { text: "/provider" } }))).rejects.toMatchObject({
+      outcome: { status: "intercepted" },
+    });
   });
 
   it("says once per process what pi warned about while loading: an extension tool replacing a built-in", async () => {
@@ -341,8 +351,8 @@ export default function (pi) {
       const agent = await servedAgent({
         "extensions/search.ts": `export default (pi) => pi.registerTool({ name: "tool_search", label: "s", description: "mine", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: undefined }) });`,
       });
-      await collect(agent.invoke({ session: "a" }, { text: "hi" }));
-      await collect(agent.invoke({ session: "b" }, { text: "hi" }));
+      await collect(agent.invoke({ sessionId: "a", prompt: { text: "hi" } }));
+      await collect(agent.invoke({ sessionId: "b", prompt: { text: "hi" } }));
       const said = warn.mock.calls
         .flat()
         .filter((line) =>
@@ -371,7 +381,7 @@ export default function (pi) {
       },
       offered,
     );
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(offered[0]).toContain("marker_tool");
     expect(offered[0]).toContain("acme_tool");
@@ -393,12 +403,12 @@ describe("definition: the served `/` menu lists what sessions load", () => {
       }),
       "extensions/early.ts": 'export default (pi) => pi.registerCommand("early", { handler: async () => {} });\n',
     });
-    const { sessionControl } = await createPiAgentFromDir(dir, { serving: true });
+    const { agent } = await createPiAgentFromDir(dir, { serving: true });
     await writeFile(
       join(dir, "extensions", "late.ts"),
       'export default (pi) => pi.registerCommand("late", { handler: async () => {} });\n',
     );
-    const names = (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
+    const names = (await agent.commands()).filter((c) => c.source === "extension").map((c) => c.name);
     expect(names).toEqual(["early", "late"]);
   });
 
@@ -414,9 +424,8 @@ describe("definition: the served `/` menu lists what sessions load", () => {
       }),
       "extensions/early.ts": 'export default (pi) => pi.registerCommand("early", { handler: async () => {} });\n',
     });
-    const { sessionControl } = await createPiAgentFromDir(dir, { serving: true });
-    const names = async () =>
-      (await sessionControl?.commands())?.filter((c) => c.source === "extension").map((c) => c.name);
+    const { agent } = await createPiAgentFromDir(dir, { serving: true });
+    const names = async () => (await agent.commands()).filter((c) => c.source === "extension").map((c) => c.name);
     expect(await names()).toEqual(["early"]);
     await writeFile(
       join(dir, "extensions", "early.ts"),
@@ -575,48 +584,53 @@ describe("definition: an extension can define the model chat runs on", () => {
     ).toEqual(["third"]);
   });
 
-  it("the control plane follows it too, from the first read after the edit: models, the default, validation", async () => {
+  it("the agent follows it too, from the first read after the edit: models, the default, validation", async () => {
     const provider = (id: string) =>
       `export default pi => pi.registerProvider("acme", { baseUrl: "https://acme.invalid", api: "openai-completions", apiKey: "test", models: [{ id: ${JSON.stringify(id)}, name: "m", contextWindow: 1000, maxTokens: 100 }] });`;
     const dir = await agentDirWith({
       "fastagent.config.ts": 'export default { model: "acme/first" };\n',
       "extensions/provider.ts": provider("first"),
     });
-    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
-    const allowed = async () =>
-      (await sessionControl!.models()).map((m) => m.spec).filter((spec) => spec.startsWith("acme/"));
+    const { agent } = await createPiAgentFromDir(dir, {});
+    for (const id of ["s", "t"]) expect(await agent.sessions.create({ sessionId: id })).toMatchObject({ ok: true });
+    const allowed = async () => (await agent.models()).map((m) => m.spec).filter((spec) => spec.startsWith("acme/"));
+    const modelOf = async (id: string) => {
+      const read = await agent.sessions.get(id).read({ limit: 0 });
+      if (!read.ok) throw new Error(read.error.message);
+      return read.state.model;
+    };
     expect(await allowed()).toEqual(["acme/first"]);
-    expect((await sessionControl!.sessions.get("s").state()).model).toBe("acme/first");
+    expect(await modelOf("s")).toBe("acme/first");
     await writeFile(join(dir, "extensions", "provider.ts"), provider("second"));
-    // No turn, no menu read first: the plane resolves through the same function a turn would, at each call.
+    // No run, no menu read first: each read resolves through the same function a run would.
     expect(await allowed()).toEqual(["acme/second"]);
-    // The configured default is gone from the registry, so state() reports no model (and a turn would fail on it).
+    // The configured default is gone from the registry, so a read reports no model (and a run would fail on it).
     // Said once, not by every read that meets it again.
     const warns = vi.spyOn(log, "warn").mockImplementation(() => {});
     const defaultGone = () => warns.mock.calls.filter(([m]) => /configured default model does not resolve/.test(m));
     try {
-      expect((await sessionControl!.sessions.get("s").state()).model).toBeUndefined();
-      expect((await sessionControl!.sessions.get("t").state()).model).toBeUndefined();
-      expect(await sessionControl!.sessions.get("s").update({ name: "n" })).toEqual({ ok: true });
+      expect(await modelOf("s")).toBeUndefined();
+      expect(await modelOf("t")).toBeUndefined();
+      expect(await agent.sessions.get("s").update({ name: "n" })).toEqual({ ok: true });
       expect(defaultGone()).toHaveLength(1);
-      expect(await sessionControl!.sessions.get("s").update({ model: "acme/second" })).toEqual({ ok: true });
-      expect((await sessionControl!.sessions.get("s").update({ model: "acme/first" })).ok).toBe(false);
+      expect(await agent.sessions.get("s").update({ model: "acme/second" })).toEqual({ ok: true });
+      expect((await agent.sessions.get("s").update({ model: "acme/first" })).ok).toBe(false);
 
-      // A registry that cannot be built now (extensions/ unreadable): state() stays TOTAL and reports no model, said
-      // once; models() rejects, since [] would say the model is not updatable.
+      // A registry that cannot be built now (extensions/ unreadable): a read stays whole and reports no model, said
+      // once; models() rejects, since [] would say no model is selectable.
       await chmod(join(dir, "extensions"), 0o000);
       try {
-        const state = await sessionControl!.sessions.get("t").state();
-        expect(state.status).toBe("idle");
-        expect(state.model).toBeUndefined();
-        await sessionControl!.sessions.get("t").state();
+        const read = await agent.sessions.get("t").read({ limit: 0 });
+        expect(read).toMatchObject({ ok: true, state: { status: "idle" } });
+        expect(read.ok && read.state.model).toBeUndefined();
+        await agent.sessions.get("t").read({ limit: 0 });
         expect(warns.mock.calls.filter(([m]) => /model registry cannot be built/.test(m))).toHaveLength(1);
-        await expect(sessionControl!.models()).rejects.toThrow(/EACCES/);
+        await expect(agent.models()).rejects.toThrow(/EACCES/);
       } finally {
         await chmod(join(dir, "extensions"), 0o755);
       }
       await writeFile(join(dir, "extensions", "provider.ts"), provider("first"));
-      expect((await sessionControl!.sessions.get("t").state()).model).toBe("acme/first");
+      expect(await modelOf("t")).toBe("acme/first");
     } finally {
       warns.mockRestore();
     }

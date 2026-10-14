@@ -191,6 +191,33 @@ describe("LoopPort", () => {
     expect(run.messages.map((m) => m.entryId)).toEqual([byText.get("hold"), byText.get("bad"), byText.get("good")]);
   });
 
+  it("counts each queued and running run as work in flight, until it ends", async () => {
+    const store = new FakeStore();
+    let working = 0;
+    const agent = servingAgent(
+      loopPort(fakeLoopHarness(store), undefined, {
+        beginWork: () => {
+          working++;
+          let done = false;
+          return () => {
+            if (!done) working--;
+            done = true;
+          };
+        },
+      }),
+    );
+    const session = agent.sessions.get("s");
+    const first = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    const queued = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "next" } }));
+    expect(working).toBe(2);
+    store.release();
+    await vi.waitFor(async () =>
+      expect(await session.runs.get({ runId: queued.run.runId })).toMatchObject({ status: "done" }),
+    );
+    await vi.waitFor(() => expect(working).toBe(0));
+    expect(await session.runs.get({ runId: first.run.runId })).toMatchObject({ status: "done" });
+  });
+
   it("a loop that ends without writing its message ends the run once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},

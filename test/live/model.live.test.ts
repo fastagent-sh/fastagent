@@ -26,8 +26,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { AgentEvent } from "../../src/agent.ts";
-import { collect } from "../../src/collect.ts";
+import { collect, RunNotCompleted } from "../../src/protocol-collect.ts";
+import type { InvokeEvent, Entry } from "../../src/protocol.ts";
 import { createPiAgentFromDir } from "../../src/harnesses/pi/open.ts";
 import { installProxyFetch } from "../../src/proxy.ts";
 import { requireEnv } from "./env.ts";
@@ -62,9 +62,10 @@ async function agentDirectory(model: string, files: Record<string, string> = {})
 }
 
 /** Drain a turn without letting a `failed` terminal throw — the SPEC's own discipline (MUST 2). */
-async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
-  const out: AgentEvent[] = [];
-  for await (const event of events) out.push(event);
+/** The run's durable entries, in order: what a probe asserts on (live deltas are best-effort). */
+async function entries(events: AsyncIterable<InvokeEvent>): Promise<Entry[]> {
+  const out: Entry[] = [];
+  for await (const event of events) if (event.type === "entry") out.push(event.entry);
   return out;
 }
 
@@ -95,7 +96,7 @@ async function refusingDefinition(): Promise<string> {
 describe(`live model: ${MODEL}`, () => {
   it("a real stream reaches a completed terminal with an answer", async () => {
     const { agent } = await createPiAgentFromDir(await agentDirectory(MODEL));
-    const { text } = await collect(agent.invoke({ session: "live-answer" }, { text: "Reply with just: ok" }));
+    const { text } = await collect(agent.invoke({ sessionId: "live-answer", prompt: { text: "Reply with just: ok" } }));
     expect(text.trim()).not.toBe("");
   });
 
@@ -140,10 +141,10 @@ export default defineTool({
     expect(toolNames, "get_probe_code is not on the mounted tool surface").toContain("get_probe_code");
 
     const { text } = await collect(
-      agent.invoke(
-        { session: "live-tool" },
-        { text: "Call get_probe_code and reply with only the code it returns, digits alone." },
-      ),
+      agent.invoke({
+        sessionId: "live-tool",
+        prompt: { text: "Call get_probe_code and reply with only the code it returns, digits alone." },
+      }),
     );
 
     const calls = (await readFile(marker, "utf8").catch(() => "")).split("called").length - 1;
@@ -191,16 +192,19 @@ export default defineTool({
     });
     expect(toolNames, "a deferred tool must not be on the active-by-default surface").not.toContain("get_vault_code");
 
-    const events = await drain(
-      agent.invoke(
-        { session: "live-deferred" },
-        {
+    const log = await entries(
+      agent.invoke({
+        sessionId: "live-deferred",
+        prompt: {
           text: "Use tool_search to find the tool that reads the vault code, then call it and reply with only the code, digits alone.",
         },
-      ),
+      }),
     );
-    const called = events.flatMap((event) => (event.type === "tool_started" ? [event.name] : []));
-    const text = events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
+    type Data = { text?: string; toolCalls?: { id: string; name: string }[]; toolCallId?: string };
+    const answers = log.filter((e) => e.kind === "assistant_message").map((e) => e.data as Data);
+    const calls = answers.flatMap((d) => d.toolCalls ?? []);
+    const called = calls.map((c) => c.name);
+    const text = answers.at(-1)?.text ?? "";
 
     // The two hops, asserted separately: "the loader was never reached" and "the loader ran but
     // activation did not take" are different defects, and a single end-to-end check reports the wrong
@@ -214,13 +218,13 @@ export default defineTool({
     // find out which one it was means paying for another real turn on a provider that has since moved on.
     //
     // Capture every search answer, so a miss followed by a hit is diagnosable.
-    const searchIds = new Set(
-      events.flatMap((e) => (e.type === "tool_started" && e.name === "tool_search" ? [e.id] : [])),
-    );
+    const searchIds = new Set(calls.flatMap((c) => (c.name === "tool_search" ? [c.id] : [])));
     //
     // Bound each answer separately; one large miss must not hide a later hit.
-    const answered = events.flatMap((e) =>
-      e.type === "tool_ended" && searchIds.has(e.id) ? [JSON.stringify(e.content).slice(0, 600)] : [],
+    const answered = log.flatMap((e) =>
+      e.kind === "tool_result" && searchIds.has((e.data as Data).toolCallId ?? "")
+        ? [String((e.data as Data).text).slice(0, 600)]
+        : [],
     );
     expect(
       called,
@@ -236,11 +240,16 @@ export default defineTool({
     const dir = await agentDirectory(MODEL);
     const session = "-1001234567890"; // a telegram group id: pi refuses it verbatim
     const { agent: first } = await createPiAgentFromDir(dir);
-    await collect(first.invoke({ session }, { text: "Remember this number: 47. Reply with just: ok" }));
+    await collect(
+      first.invoke({ sessionId: session, prompt: { text: "Remember this number: 47. Reply with just: ok" } }),
+    );
 
     const { agent: second } = await createPiAgentFromDir(dir);
     const { text } = await collect(
-      second.invoke({ session }, { text: "What number did I ask you to remember? Reply with digits only." }),
+      second.invoke({
+        sessionId: session,
+        prompt: { text: "What number did I ask you to remember? Reply with digits only." },
+      }),
     );
     // The witness is a literal crossing the instance boundary, never the model's phrasing.
     expect(text).toContain("47");
@@ -248,18 +257,17 @@ export default defineTool({
 
   it("a real HTTP error becomes a failed terminal, classified non-retryable", async () => {
     const { agent } = await createPiAgentFromDir(await refusingDefinition());
-    // MUST 2: iteration must not throw — a rejection here is the violation, not a failed event.
-    const events = await drain(agent.invoke({ session: "live-refused" }, { text: "go" }));
-    // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches
-    // on. This is the half a faux provider cannot settle — the shape of a real provider error as it
-    // travels through pi's stack into our classifier.
-    // The terminal travels IN the message for the reason `expectCompleted` exists: a matcher's diff prints only the
-    // keys it named, and `details` — what the provider actually said — is the whole point of a probe about
-    // classification. `expectCompleted` is the wrong shape here: this case EXPECTS a failure.
-    const terminal = events.at(-1);
-    expect(terminal, `the refused turn did not fail non-retryably: ${JSON.stringify(terminal)}`).toMatchObject({
-      type: "failed",
-      retryable: false,
+    // A failed run is an outcome, never a thrown iteration error: `collect` turns it into RunNotCompleted.
+    const failure = await collect(agent.invoke({ sessionId: "live-refused", prompt: { text: "go" } })).catch((e) => e);
+    // 400 is decisive: re-sending it would fail identically, and `retryable` is what a caller branches on. This is the
+    // half a faux provider cannot settle: the shape of a real provider error as it travels through pi's stack into
+    // our classifier. The outcome travels IN the message, because a matcher's diff prints only the keys it named.
+    expect(failure, `the refused run did not fail non-retryably: ${JSON.stringify(failure)}`).toBeInstanceOf(
+      RunNotCompleted,
+    );
+    expect((failure as RunNotCompleted).outcome, JSON.stringify((failure as RunNotCompleted).outcome)).toMatchObject({
+      status: "failed",
+      error: { retryable: false },
     });
   });
 });

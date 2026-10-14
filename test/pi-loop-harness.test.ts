@@ -3,7 +3,7 @@
  * run does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
  * `effect` call tools of those names first, and `fail` is an error the model returns.
  */
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,7 +17,11 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { isRunMarker } from "../src/harnesses/pi/session-markers.ts";
-import { type PiSessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
+import {
+  type PiSessionRecordStore,
+  piInMemorySessionRecordStore,
+  piSessionRecordStore,
+} from "../src/harnesses/pi/session-store.ts";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, type InvokeEvent, LIMITS } from "../src/protocol.ts";
@@ -101,6 +105,7 @@ async function piAgent(
   world: World,
   capacity: number = LIMITS.inFlightPerProcess,
   extensionPaths: string[] = [],
+  catalog?: () => Promise<ModelRuntime>,
 ): Promise<Agent> {
   const { faux } = makeFaux({ models: [{ id: "first" }, { id: "second" }] });
   faux.setResponses(Array.from({ length: 2000 }, () => answer));
@@ -121,7 +126,7 @@ async function piAgent(
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     extensionPaths: async () => extensionPaths,
     cwd,
-    catalog: async () => registry,
+    catalog: catalog ?? (async () => registry),
   });
   return servingAgent(loopPort(harness, { queuedPerSession: LIMITS.queuedPerSession, inFlightPerProcess: capacity }));
 }
@@ -355,5 +360,64 @@ describe("pi-coding-agent through LoopPort", () => {
     );
     // The running run keeps the model it started on, through its tool call and its answer.
     expect(answeredBy).toEqual(["first", "first", "second"]);
+  });
+
+  it("a registry that cannot be built leaves the model out of state, and refuses a model it cannot check", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
+      const agent = await piAgent(store, new World(), undefined, [], async () => {
+        throw new Error("extensions/ unreadable");
+      });
+      expect(await agent.sessions.create({ sessionId: "s" })).toEqual({ ok: true, sessionId: "s" });
+      const read = await agent.sessions.get("s").read({ limit: 0 });
+      expect(read.ok && read.state.model).toBe(undefined);
+      expect(await agent.sessions.get("s").update({ model: "faux/first" })).toMatchObject({
+        ok: false,
+        error: { code: "unavailable" },
+      });
+      expect(await agent.sessions.get("s").update({ name: "still nameable" })).toEqual({ ok: true });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a record whose entry chain is cut stays readable, without the settings that chain decides", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
+    const store = piSessionRecordStore({ dir, cwd: process.cwd() });
+    const first = await piAgent(store, new World());
+    for await (const _ of first.invoke({ sessionId: "s", prompt: { text: "one" } })) {
+    }
+    const [file] = (await readdir(dir, { recursive: true })).filter((name) => String(name).endsWith(".jsonl"));
+    const path = join(dir, String(file));
+    const [header, , ...rest] = (await readFile(path, "utf8")).trimEnd().split("\n");
+    await writeFile(path, `${[header, ...rest].join("\n")}\n`); // the first entry is gone; its child's parent with it
+    const reopened = await piAgent(store, new World());
+    const read = await reopened.sessions.get("s").read({ limit: 0 });
+    expect(read.ok).toBe(true);
+    expect(read.ok && read.state.model).toBe(undefined);
+  });
+
+  it("a `recent` fork gives the model a window of the copy; a plain fork gives it all", async () => {
+    const store = piInMemorySessionRecordStore();
+    const room = await store.openOrCreate("room");
+    for (let i = 0; i < 60; i++) {
+      room.appendMessage({ role: "user", content: `q${i}`, timestamp: i });
+      room.appendMessage(fauxAssistantMessage(`a${i}`));
+    }
+    const agent = await piAgent(store, new World());
+    const compactions = async (sessionId: string) => {
+      const page = await agent.sessions.get(sessionId).read({ limit: LIMITS.readMax });
+      return page.ok ? page.entries.filter((e) => e.kind === "compaction").length : -1;
+    };
+    expect(
+      await agent.sessions.create({ sessionId: "thread", fork: { sessionId: "room", context: "recent" } }),
+    ).toEqual({ ok: true, sessionId: "thread" });
+    expect(await agent.sessions.create({ sessionId: "copy", fork: { sessionId: "room" } })).toEqual({
+      ok: true,
+      sessionId: "copy",
+    });
+    expect(await compactions("thread")).toBe(1);
+    expect(await compactions("copy")).toBe(0);
   });
 });

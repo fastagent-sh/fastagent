@@ -270,7 +270,7 @@ describe("loadTools (filesystem discovery)", () => {
       providers: [faux.provider],
       tools: [...piAllCodingTools(agentDir), ...surface],
     });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(prompt).toContain("- direct:");
     expect(prompt).toContain("- modelOnly:");
     expect(prompt).not.toContain("- scriptOnly:");

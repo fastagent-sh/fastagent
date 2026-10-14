@@ -82,7 +82,7 @@ describe("an agent with content", () => {
       content,
       tools: [...piAllCodingTools(agentDir), where],
     });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(prompt).toContain(`Your working directory, ${agentDir}, is your own directory`);
     expect(prompt).toContain(`You work on:\n- app: ${app} (a directory on this machine)`);
@@ -118,7 +118,7 @@ describe("an agent with content", () => {
       providers: [faux.provider],
       content,
     });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(prompt).toContain("You write only in your own directory: the directories above are for reading.");
     expect(prompt).not.toContain("You work on:");
     expect(prompt).not.toContain("belongs in a directory you work on");
@@ -135,7 +135,7 @@ describe("an agent with content", () => {
       },
     ]);
     const { agent } = await createPiAgentFromDefinition(agentDir, { model: "faux/faux-1", providers: [faux.provider] });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     expect(prompt).toContain("Nothing else is declared for you: you work only in your own directory.");
     expect(prompt).toContain("OWN-AGENTS"); // its own AGENTS.md is its project context still
   });

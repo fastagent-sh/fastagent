@@ -390,6 +390,23 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     expect(thread.getBranch().filter((e) => e.type === "compaction").length).toBeGreaterThan(0);
   });
 
+  it("a `recent` fork is bounded by the inheritance window, on disk and in memory alike", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-recent-"));
+    for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
+      const parent = await store.openOrCreate("long");
+      let at = "";
+      for (let i = 0; i < 60; i++) {
+        parent.appendMessage({ role: "user", content: `q${i}`, timestamp: i });
+        at = parent.appendMessage(fauxAssistantMessage(`a${i}`));
+      }
+      await store.fork("long", at, "recent", "test-provenance", "recent");
+      const child = await store.openIfExists("recent");
+      expect(child?.getBranch().filter((e) => e.type === "compaction").length).toBeGreaterThan(0);
+      // The history itself is copied whole: only what the model is given is bounded.
+      expect(child?.getBranch().filter((e) => e.type === "message")).toHaveLength(120);
+    }
+  });
+
   it("a fork carries the source's name, on disk and in memory alike", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-store-forkname-"));
     for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {

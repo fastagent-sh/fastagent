@@ -4,15 +4,9 @@
  * and the body cap.
  */
 import type { Agent } from "../agent.ts";
-import { readBodyCapped, refuseNonJsonBody } from "./body.ts";
+import { MAX_BODY_BYTES, readBodyCapped, refuseNonJsonBody } from "./body.ts";
 import { text } from "./respond.ts";
 import { sseResponse } from "./sse.ts";
-
-/**
- * Request body cap (1 MiB) — shared by every Prompt-bearing wire surface (the control plane's dispatch imports it), so
- * the two caps cannot drift apart.
- */
-export const MAX_BODY_BYTES = 1 << 20;
 
 /**
  * A valid example request body for the invoke handler — lives HERE, next to the shape check it must satisfy, so the
@@ -23,7 +17,7 @@ export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 /**
  * Fetch-shaped invoke handler.
  *
- * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/serve.ts`'s router
+ * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/router.ts`
  * — which is also the only layer that can answer the `OPTIONS` preflight, since this route registers only `POST`.
  */
 export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {

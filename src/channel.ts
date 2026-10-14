@@ -3,8 +3,7 @@
  * implements) and `session.ts` (the serving control plane). Pure types: importing a host, a framework, or a harness
  * here is forbidden, as in those two.
  */
-import type { Agent } from "./agent.ts";
-import type { SessionControl } from "./session.ts";
+import type { Agent } from "./protocol.ts";
 
 /** A mounted request handler (a channel's fetch, or a plain route like health). */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;
@@ -13,16 +12,12 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 export type Routes = Record<string, ChannelHandler>;
 
 /**
- * What the framework hands a channel at mount time: the assembled agent plus the resolved state ROOT (absolute;
- * `FASTAGENT_STATE_DIR` > `<root>/.state`).
+ * What the framework hands a channel at mount time: the assembled agent (SPEC v1: running, reading and stopping its
+ * sessions) plus the resolved state ROOT (absolute; `FASTAGENT_STATE_DIR` > `<root>/.state`).
  */
 export interface ChannelContext {
   agent: Agent;
   stateRoot: string;
-  /** The serving session-control hub: every serve has it, so a stop command reaches the live run through it.
-   *  `config.sessionControl` decides only whether the SAME hub is also published as `/control/*` (and wires its
-   *  write side). Absent only when an embedder mounts a service without one. */
-  control?: SessionControl;
 }
 
 /** A `channels/<name>.ts` route channel: receives mount context and returns its HTTP routes. */

@@ -22,7 +22,7 @@ it("an invoke of /<template> args runs the prompt template from prompts/", async
     },
   ]);
   const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
-  for await (const _event of agent.invoke({ session: "s" }, { text: "/digest today" })) {
+  for await (const _event of agent.invoke({ sessionId: "s", prompt: { text: "/digest today" } })) {
     // drain
   }
   expect(seen).toContain("EXPANDED-DIGEST-BODY today");

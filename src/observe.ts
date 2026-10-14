@@ -1,9 +1,9 @@
 /**
- * The turn trace: wrap an Agent to tee each turn's loop — prompt, reasoning, tool calls (name + args) with results,
- * reply, terminal — to the log at DEBUG level.
+ * The run trace: wrap an Agent to tee each invoke — prompt, reasoning, tool calls (name + args) with results, reply,
+ * outcome — to the log at DEBUG level. Everything but `invoke` passes through.
  */
-import type { Agent, AgentEvent, Json, Prompt, Scope } from "./agent.ts";
 import { log } from "./log.ts";
+import type { Agent, InvokeEvent, InvokeRequest, Json, RunOutcome } from "./protocol.ts";
 
 const PREVIEW = 200;
 
@@ -15,35 +15,72 @@ function oneLine(s: string): string {
 
 const preview = (v: Json): string => oneLine(typeof v === "string" ? v : JSON.stringify(v));
 
+function describe(outcome: RunOutcome): string {
+  if (outcome.status === "failed") return `failed: ${outcome.error.code}: ${outcome.error.message}`;
+  if (outcome.status === "canceled") return `canceled (${outcome.by})`;
+  return outcome.status;
+}
+
 export function logAgentLoop(agent: Agent, sink: (line: string) => void = (line) => log.debug(line)): Agent {
-  return {
-    async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-      const s = scope.session;
-      sink(`[agent] ▶ turn session=${s} ← ${oneLine(prompt.text)}`);
-      const toolName = new Map<string, string>(); // tool_ended carries no name — remember it from tool_started
-      let thinking = "";
-      let reply = "";
-      for await (const e of agent.invoke(scope, prompt)) {
-        if (e.type === "text") {
-          reply += e.delta;
-        } else if (e.type === "thinking") {
-          thinking += e.delta;
-        } else if (e.type === "tool_started") {
-          toolName.set(e.id, e.name);
+  const traced = (request: InvokeRequest): AsyncIterable<InvokeEvent> => {
+    const at = request.sessionId ?? "(new)";
+    let runId: string | undefined;
+    let thinking = "";
+    let reply = "";
+    const toolName = new Map<string, string>();
+    const observe = (e: InvokeEvent): void => {
+      switch (e.type) {
+        case "accepted":
+          runId = e.run.runId;
+          sink(
+            `[agent] ▶ run session=${e.sessionId} run=${runId}${e.duplicate ? " (duplicate)" : ""} ← ${oneLine(request.prompt.text)}`,
+          );
+          break;
+        case "rejected":
+          sink(`[agent] ■ rejected session=${at}: ${e.error.code}: ${e.error.message}`);
+          break;
+        case "message_delta":
+          if (e.channel === "text") reply += e.delta;
+          else thinking += e.delta;
+          break;
+        case "tool_started":
+          toolName.set(e.toolCallId, e.name);
           sink(`[agent]   tool → ${e.name}(${preview(e.args)})`);
-        } else if (e.type === "tool_ended") {
-          sink(`[agent]   tool ${e.isError ? "✗" : "✓"} ${toolName.get(e.id) ?? e.id} → ${preview(e.content)}`);
-        } else if (e.type === "retrying") {
+          break;
+        case "retry_scheduled":
           sink(`[agent]   retrying (${e.attempt}/${e.maxAttempts} in ${e.delayMs}ms): ${oneLine(e.reason)}`);
-        } else if (e.type === "completed") {
-          if (thinking.trim() !== "") sink(`[agent]   thinking: ${oneLine(thinking)}`);
-          sink(`[agent]   reply: ${oneLine(reply) || "(empty)"}`);
-          sink(`[agent] ■ completed session=${s}`);
-        } else if (e.type === "failed") {
-          sink(`[agent] ■ failed session=${s}: ${e.details} (retryable=${e.retryable})`);
+          break;
+        case "entry": {
+          if (e.entry.runId !== runId) break;
+          const data = e.entry.data as { toolCallId?: string; toolName?: string; isError?: boolean; text?: string };
+          if (e.entry.kind === "tool_result") {
+            const name = toolName.get(data.toolCallId ?? "") ?? data.toolName ?? data.toolCallId;
+            sink(`[agent]   tool ${data.isError ? "✗" : "✓"} ${name} → ${preview(data.text ?? "")}`);
+          }
+          if (e.entry.kind === "assistant_message" && reply === "") reply = data.text ?? "";
+          if (e.entry.kind === "run_ended") {
+            if (thinking.trim() !== "") sink(`[agent]   thinking: ${oneLine(thinking)}`);
+            sink(`[agent]   reply: ${oneLine(reply) || "(empty)"}`);
+            sink(`[agent] ■ ${describe((e.entry.data as { outcome: RunOutcome }).outcome)} run=${runId}`);
+          }
+          break;
         }
-        yield e;
       }
-    },
+    };
+    return {
+      [Symbol.asyncIterator]() {
+        const inner = agent.invoke(request)[Symbol.asyncIterator]();
+        return {
+          async next() {
+            const next = await inner.next();
+            if (!next.done) observe(next.value);
+            return next;
+          },
+          // Straight through: a caller that stops reading detaches at once, not after the next event.
+          return: async () => (await inner.return?.()) ?? { done: true, value: undefined },
+        };
+      },
+    };
   };
+  return { ...agent, invoke: traced };
 }

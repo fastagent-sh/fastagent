@@ -1,22 +1,43 @@
-// Harness-neutral Agent Handler contract, consumption helpers, channel kit, and time triggers.
-export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
-// VALUES, not types: each caller does something DIFFERENT with these codes (busy: retry with backoff, skip the
-// occurrence, or steer the live run instead of failing; aborted: settle a deliberate stop, never replay it;
-// missing_model: do not retry, give the session a model or the agent a default), which is why they are named at all.
-// Without an export an embedder copies the literal, and the copy is how the first-event rule goes silently wrong.
-export { ABORTED_CODE, MISSING_MODEL_CODE, SESSION_BUSY_CODE } from "./agent.ts";
-export { collect, AgentFailure, type CollectResult } from "./collect.ts";
+// Harness-neutral: the Agent Handler protocol (SPEC v1), consuming and serving it, the channel kit, and time triggers.
+export type {
+  AbortResult,
+  Agent,
+  AgentCommand,
+  AgentError,
+  AgentInfo,
+  Attachment,
+  Capabilities,
+  Entry,
+  ErrorCode,
+  FollowEvent,
+  ForkSource,
+  InvokeEvent,
+  InvokeRequest,
+  Json,
+  LiveEvent,
+  ModelDescriptor,
+  Prompt,
+  ReadResult,
+  Result,
+  RunKey,
+  RunOutcome,
+  RunSource,
+  RunStatus,
+  Session,
+  SessionEvent,
+  SessionSettings,
+  SessionState,
+  SessionSummary,
+  Usage,
+  WhenBusy,
+} from "./protocol.ts";
+export { AgentRejection, LIMITS } from "./protocol.ts";
+export { collect, type CollectedRun, RunNotCompleted, RunUnfinished } from "./protocol-collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
-export { createInvokeHandler } from "./channels/http.ts";
-// The control plane MOUNTS itself: `createAgentService` wires it when the config asks for it.
-export type { WireEvent } from "./channels/control.ts";
-export {
-  ControlRequestError,
-  connectAgent,
-  connectSessionControl,
-  type RemoteEndpointOptions,
-} from "./session-remote.ts";
+// The agent's API over HTTP: serve it inside an app, and call one that is served.
+export { createAgentHandler } from "./channels/protocol-http.ts";
+export { connectAgent, type RemoteAgentOptions } from "./protocol-remote.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 export type {

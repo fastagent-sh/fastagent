@@ -1,7 +1,7 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { INVOKE_EXAMPLE_BODY } from "../channels/http.ts";
+import { INVOKE_EXAMPLE_BODY } from "../channels/protocol-http.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import type { Agent } from "../agent.ts";
+import type { Agent } from "../protocol.ts";
 import type { ChannelHandler } from "../channel.ts";
 import {
   type AgentService,
@@ -30,11 +30,11 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean):
  * ONE place, because `dev` and `start` both do it and a mapping two call sites must each remember is one a third
  * will not.
  *
- * `--no-invoke` outranks `http.invoke`: a config value travels into a deployed image, so "do not publish a turn
- * endpoint on this tunnel" has to be sayable without editing the definition.
+ * `--no-api` outranks `http.api`: a config value travels into a deployed image, so "do not publish the agent's API
+ * on this tunnel" has to be sayable without editing the definition.
  */
-export function withRunOverrides<T extends MountableAgent>(opened: T, run: { invoke?: boolean }): T {
-  return run.invoke === false ? { ...opened, http: { ...opened.http, invoke: false } } : opened;
+export function withRunOverrides<T extends MountableAgent>(opened: T, run: { api?: boolean }): T {
+  return run.api === false ? { ...opened, http: { ...opened.http, api: false } } : opened;
 }
 
 /** What the CLI adds to the assembly: its shutdown grace, and exit on a connection that drops. */
@@ -89,11 +89,11 @@ export function bindLine(host: string | undefined, boundPort: number): string {
 /**
  * The startup lines for a serve of OUR surface: the bind report, and the curl the reader copies.
  *
- * `servesInvoke` is `AgentService.unverifiedRoutes`, never a guess from the route table: `http.invoke: false` leaves no
+ * `servesInvoke` is `AgentService.unverifiedRoutes`, never a guess from the route table: `http.api: false` leaves no
  * `/invoke` to curl, and a channel may serve that path with a protocol of its own — both would turn this line into
  * a copyable request that fails.
  */
-export function readyAddressLines(host: string | undefined, boundPort: number, servesInvoke: boolean): string[] {
+function readyAddressLines(host: string | undefined, boundPort: number, servesInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   return [
     bindLine(host, boundPort),
@@ -113,29 +113,25 @@ export function readyAddressLines(host: string | undefined, boundPort: number, s
  * not get by default: a bind off this machine, and `--tunnel`'s public URL.
  *
  * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
- * (`channels/serve.ts`), so a page the developer merely visits can drive this port from their browser and read the
+ * (`channels/router.ts`), so a page the developer merely visits can drive this port from their browser and read the
  * reply, loopback bind or not. Nobody opts into a default, so the one posture the decision costs is the one that
  * has to hear about it.
  *
  * WHAT IS EXPOSED is read off `AgentService.unverifiedRoutes`, never assumed and never guessed from the route table.
- * `POST /invoke` is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM,
- * `http.invoke: false` withholds it, and a channel may serve that path itself — in which case the caller it is
- * open to is the platform that signs its requests, not anyone at all. A warning naming an endpoint this process
+ * The agent's API is on most serves but not all: AgentCore answers the Runtime's `/invocations` behind IAM, and
+ * `http.api: false` withholds it. A warning naming an endpoint this process
  * does not serve is how an operator learns to skim past all of them — the same reason `preflightDeploy` takes
  * `publicUrl`.
  */
 export function announceControl(
-  service: Pick<AgentService, "controlPrefix" | "unverifiedRoutes" | "corsOrigins">,
+  service: Pick<AgentService, "planes" | "corsOrigins">,
   bind: { host?: string; tunnel: boolean },
 ): void {
-  const { controlPrefix, corsOrigins } = service;
-  if (controlPrefix) log.info(`[fastagent] session control on ${controlPrefix}/*`);
-  // What an unauthenticated caller of this port can do, worst first. From `unverifiedRoutes`, so a channel that serves
-  // `/invoke` itself is not described as our unauthenticated data plane — it has its own signature check.
-  const exposed = describeAnonymousSurface({
-    invoke: service.unverifiedRoutes.includes("POST /invoke"),
-    ...(controlPrefix ? { controlPrefix } : {}),
-  });
+  const { planes, corsOrigins } = service;
+  if (planes.api) log.info("[fastagent] agent API on /invoke, /sessions/*, /agent");
+  if (planes.control) log.info("[fastagent] control plane on /control/*");
+  // What an unauthenticated caller of this port can do, worst first.
+  const exposed = describeAnonymousSurface(planes);
   if (exposed.length === 0) return; // nothing of ours answers here (the AgentCore adapter's surface)
   const what = `${exposed.join(" and ")} ${exposed.length > 1 ? "answer" : "answers"}`;
   if (corsOrigins === undefined || corsOrigins.includes("*")) {

@@ -1,5 +1,4 @@
 /** `fastagent invoke <message> [agent]`: run ONE turn against the assembled agent, then exit. */
-import { randomUUID } from "node:crypto";
 import { createPiAgentFromDir } from "../../harnesses/pi/open.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { failStartup } from "../fail.ts";
@@ -16,10 +15,10 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   const { agent, models } = await createPiAgentFromDir(agentDir, { model: modelSpec }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
   await reportAuth(models, modelSpec, agentDir);
-  // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
-  // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
+  // No session named: the agent creates a new one, so nothing this runs collides with a session a serve holds.
+  // runInvokeStream maps events→IO: reply→stdout, tool/failure→stderr, exit 1 unless the run completed (CI gates on it).
   const exitCode = await runInvokeStream(
-    agent.invoke({ session: randomUUID() }, { text: message }),
+    agent.invoke({ prompt: { text: message } }),
     (text) => process.stdout.write(text),
     (line) => console.error(line),
   );

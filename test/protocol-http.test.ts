@@ -2,13 +2,16 @@
  * SPEC v1 over HTTP: the conformance suite through the remote client against a real server, and what only the binding
  * has to say (statuses, the receipt without a stream, `Last-Event-ID`, a remote `source`).
  */
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { protocolHttp } from "../src/channels/protocol-http.ts";
-import { router, serveNode } from "../src/channels/serve.ts";
+import { createAgentHandler, protocolHttp } from "../src/channels/protocol-http.ts";
+import { router } from "../src/channels/router.ts";
+import { serveNode } from "../src/channels/serve.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, AgentRejection, type FollowEvent, LIMITS } from "../src/protocol.ts";
-import { connectRemoteAgent } from "../src/protocol-remote.ts";
+import { connectAgent } from "../src/protocol-remote.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
@@ -29,7 +32,7 @@ async function serve(port: HarnessPort): Promise<string> {
   return `http://127.0.0.1:${await server.listening}`;
 }
 
-const remote = async (port: HarnessPort): Promise<Agent> => connectRemoteAgent({ url: await serve(port) });
+const remote = async (port: HarnessPort): Promise<Agent> => connectAgent({ url: await serve(port) });
 
 let store = new FakeStore();
 
@@ -68,7 +71,7 @@ describe("the HTTP binding", () => {
     expect(await res.json()).toMatchObject({
       error: { code: "invalid_request", message: expect.stringMatching(/source/) },
     });
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, source: { kind: "schedule" } })) {
       events.push(event);
@@ -87,7 +90,7 @@ describe("the HTTP binding", () => {
     const receipt = (await res.json()) as { type: string; run: { runId: string } };
     expect(receipt.type).toBe("accepted");
     fake.release();
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     await vi.waitFor(async () =>
       expect(await agent.sessions.get("s").runs.get({ runId: receipt.run.runId })).toMatchObject({ status: "done" }),
     );
@@ -95,7 +98,7 @@ describe("the HTTP binding", () => {
 
   it("names each entry in its SSE id, and Last-Event-ID resumes after it", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
     const page = await agent.sessions.get("s").read();
     if (!page.ok) throw new Error(page.error.message);
@@ -119,7 +122,7 @@ describe("the HTTP binding", () => {
   it("answers an unknown run with null and an unknown attachment with 404, and a busy session with 429", async () => {
     const fake = new FakeStore();
     const url = await serve(loopPort(fakeLoopHarness(fake)));
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
     const run = await fetch(`${url}/sessions/s/runs/no-such-run`);
     expect([run.status, await run.json()]).toEqual([200, null]);
@@ -136,6 +139,85 @@ describe("the HTTP binding", () => {
     await held.return?.();
   });
 
+  it("createAgentHandler answers no browser cross-origin unless told which origins may call", async () => {
+    const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+    const fromPage = { origin: "https://evil.example" };
+    const preflight = () =>
+      new Request("http://app/invoke", {
+        method: "OPTIONS",
+        headers: { ...fromPage, "access-control-request-method": "POST" },
+      });
+    const plain = createAgentHandler(agent);
+    const read = await plain(new Request("http://app/sessions", { headers: fromPage }));
+    expect(read.status).toBe(200);
+    expect(read.headers.get("access-control-allow-origin")).toBeNull();
+    const asked = await plain(preflight());
+    expect(asked.status).not.toBe(204);
+    expect(asked.headers.get("access-control-allow-origin")).toBeNull();
+
+    const allowed = createAgentHandler(agent, { corsOrigins: ["https://app.example"] });
+    const ours = await allowed(new Request("http://app/sessions", { headers: { origin: "https://app.example" } }));
+    expect(ours.headers.get("access-control-allow-origin")).toBe("https://app.example");
+    expect((await allowed(preflight())).headers.get("access-control-allow-origin")).toBeNull();
+    expect(() => createAgentHandler(agent, { corsOrigins: ["https://app.example/"] })).toThrow(/corsOrigins/);
+  });
+
+  it("the route table in api-reference lists exactly the routes the binding serves", () => {
+    // The table is what a non-TypeScript client builds from: a route missing there is one nobody can find, and a
+    // listed route the binding does not serve is a 404 someone will debug.
+    const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    const keys = (text: string) =>
+      new Set(
+        [...text.matchAll(/^\s*"?(GET|POST|PATCH|DELETE) +(\/[^\s"]*)/gm)].map(
+          ([, method, path]) => `${method} ${path}`,
+        ),
+      );
+    const doc = read("../docs/api-reference.md");
+    const start = doc.indexOf("POST   /invoke");
+    const table = doc.slice(start, doc.indexOf("```", start));
+    expect(start, "api-reference.md: the route table moved").toBeGreaterThan(-1);
+    const served = keys(read("../src/channels/protocol-http.ts"));
+    served.add("POST /invoke");
+    expect([...keys(table)].sort()).toEqual([...served].sort());
+  });
+
+  it("createAgentHandler serves the user plane, and /control only when asked", async () => {
+    const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+    const remove = new Request("http://app/control/sessions/none", { method: "DELETE" });
+    const without = await createAgentHandler(agent)(remove.clone());
+    expect(without.status).toBe(404);
+    expect(without.headers.get("content-type")).not.toMatch(/json/);
+    const withControl = await createAgentHandler(agent, { control: true })(remove.clone());
+    expect(await withControl.json()).toMatchObject({ error: { code: "not_found" } });
+    const invoked = await createAgentHandler(agent)(
+      new Request("http://app/invoke", invokeBody({ sessionId: "s", prompt: { text: "hi" } })),
+    );
+    expect(await invoked.text()).toContain('"kind":"run_ended"');
+  });
+
+  it("carries a fork's context to the harness, and refuses one it does not know", async () => {
+    const harness = fakeLoopHarness(new FakeStore());
+    const contexts: unknown[] = [];
+    const url = await serve(
+      loopPort({
+        ...harness,
+        create: (sessionId, onRecord, fork) => {
+          if (fork) contexts.push(fork.context);
+          return harness.create(sessionId, onRecord, fork);
+        },
+      }),
+    );
+    const agent = await connectAgent({ url });
+    await collect(agent.invoke({ sessionId: "room", prompt: { text: "hi" } }));
+    expect(await agent.sessions.create({ sessionId: "t", fork: { sessionId: "room", context: "recent" } })).toEqual({
+      ok: true,
+      sessionId: "t",
+    });
+    expect(contexts).toEqual(["recent"]);
+    const bogus = await fetch(`${url}/sessions`, invokeBody({ fork: { sessionId: "room", context: "all" } }));
+    expect(bogus.status).toBe(400);
+  });
+
   it("refuses an unknown field instead of dropping it", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const res = await fetch(`${url}/invoke`, invokeBody({ sessionId: "s", prompt: { text: "x" }, whenbusy: "reject" }));
@@ -145,7 +227,7 @@ describe("the HTTP binding", () => {
   it("a follow of a session with nothing new starts at once, and ends when its caller leaves", async () => {
     const fake = new FakeStore();
     const url = await serve(loopPort(fakeLoopHarness(fake)));
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
     const page = await agent.sessions.get("s").read();
     const last = page.ok ? page.entries.at(-1)?.id : undefined;
@@ -183,14 +265,14 @@ describe("the HTTP binding", () => {
 
   it("a connection lost before the receipt is settled by sending again with the key: one run, followed", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending() });
+    const agent = await connectAgent({ url, fetchFn: lostAfterSending() });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
       events.push(event);
     }
     expect(events[0]).toMatchObject({ type: "accepted", sessionId: "s", joined: false });
     expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
-    const runs = await connectRemoteAgent({ url });
+    const runs = await connectAgent({ url });
     expect(await runs.sessions.get("s").runs.get({ idempotencyKey: "k" })).toMatchObject({ status: "done" });
     const page = await runs.sessions.get("s").read();
     expect(page.ok ? page.entries.filter((e) => e.kind === "user_message") : []).toHaveLength(1);
@@ -206,7 +288,7 @@ describe("the HTTP binding", () => {
       }
       return fetch(input, init);
     };
-    const agent = await connectRemoteAgent({ url, fetchFn: lostBeforeSending });
+    const agent = await connectAgent({ url, fetchFn: lostBeforeSending });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
       events.push(event);
@@ -217,7 +299,7 @@ describe("the HTTP binding", () => {
 
   it("a connection lost twice leaves it unknown, never rejected", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending(2) });
+    const agent = await connectAgent({ url, fetchFn: lostAfterSending(2) });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
       events.push(event);
@@ -227,7 +309,7 @@ describe("the HTTP binding", () => {
 
   it("without a key, a connection lost before the receipt is not called rejected", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending() });
+    const agent = await connectAgent({ url, fetchFn: lostAfterSending() });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
     expect(events).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/unknown/) }]);
@@ -241,7 +323,7 @@ describe("the HTTP binding", () => {
       }
       return fetch(input, init);
     };
-    const agent = await connectRemoteAgent({ url, fetchFn: refusedConnection });
+    const agent = await connectAgent({ url, fetchFn: refusedConnection });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
     expect(events).toMatchObject([{ type: "rejected", error: { code: "unavailable", retryable: true } }]);
@@ -251,7 +333,7 @@ describe("the HTTP binding", () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const proxied: typeof fetch = async (input, init) =>
       String(input).endsWith("/agent") ? fetch(input, init) : new Response("<html>maintenance</html>", { status: 200 });
-    const agent = await connectRemoteAgent({ url, fetchFn: proxied });
+    const agent = await connectAgent({ url, fetchFn: proxied });
     const session = agent.sessions.get("s");
     expect(await session.read()).toMatchObject({ ok: false, error: { code: "internal" } });
     await expect(session.runs.get({ runId: "r" })).rejects.toBeInstanceOf(AgentRejection);
@@ -263,7 +345,7 @@ describe("the HTTP binding", () => {
     const url = await serve({ ...port, attachment: async () => ({ mimeType: "image/svg+xml", data: btoa("<svg/>") }) });
     const raw = await fetch(`${url}/sessions/s/attachments/e1%3A0`);
     expect(raw.headers.get("content-type")).toBe("application/octet-stream");
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     expect(await agent.sessions.get("s").attachment("e1:0")).toEqual({
       mimeType: "image/svg+xml",
       data: btoa("<svg/>"),
@@ -274,7 +356,7 @@ describe("the HTTP binding", () => {
     const down: typeof fetch = async () => {
       throw new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
     };
-    await expect(connectRemoteAgent({ url: "http://127.0.0.1:1", fetchFn: down })).rejects.toMatchObject({
+    await expect(connectAgent({ url: "http://127.0.0.1:1", fetchFn: down })).rejects.toMatchObject({
       code: "unavailable",
       retryable: true,
     });
@@ -286,13 +368,13 @@ describe("the HTTP binding", () => {
     const accepted = { type: "accepted", sessionId: "s", run: { runId: "r", status: "running" }, joined: false };
     const cutOff: typeof fetch = async (input, init) =>
       String(input).endsWith("/invoke") ? sse(`data: ${JSON.stringify(accepted)}\n\n`) : fetch(input, init);
-    const cut = await connectRemoteAgent({ url, fetchFn: cutOff });
+    const cut = await connectAgent({ url, fetchFn: cutOff });
     const events = [];
     for await (const event of cut.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
     expect(events.map((e) => e.type)).toEqual(["accepted", "serving_error"]);
     const garbage: typeof fetch = async (input, init) =>
       String(input).endsWith("/invoke") ? sse("data: null\n\n") : fetch(input, init);
-    const odd = await connectRemoteAgent({ url, fetchFn: garbage });
+    const odd = await connectAgent({ url, fetchFn: garbage });
     const oddEvents = [];
     for await (const event of odd.invoke({ sessionId: "s", prompt: { text: "x" } })) oddEvents.push(event);
     expect(oddEvents).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/not an event/) }]);
@@ -300,7 +382,7 @@ describe("the HTTP binding", () => {
 
   it("a reconnect resumes after the newest id it received, not the cursor in the URL it reopens", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
-    const agent = await connectRemoteAgent({ url });
+    const agent = await connectAgent({ url });
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
     const page = await agent.sessions.get("s").read();
     if (!page.ok) throw new Error(page.error.message);

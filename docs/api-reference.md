@@ -11,7 +11,7 @@ layered across subpaths by what each costs to import:
 
 | | harness-neutral | runtime-neutral | pulls |
 |---|---|---|---|
-| `/core`, `/session` | yes | yes | nothing |
+| `/core` | yes | yes | Effect only (the HTTP binding decodes with `effect/Schema`) |
 | `/node` | yes | no | the Node HTTP bridge and a cron |
 | `/pi` | no | no | the pi runtime |
 
@@ -19,77 +19,103 @@ FastAgent is pre-1.0. The Agent Handler contract is the stable design center; im
 
 ## Contract
 
+The Agent is the [Agent Handler protocol v1](SPEC-v1.md), which is normative; this is its shape.
+
 ```ts
 interface Agent {
-  invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent>;
+  invoke(request: InvokeRequest): AsyncIterable<InvokeEvent>;
+  sessions: {
+    create(options?: { sessionId?: string; fork?: ForkSource }): Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
+    list(): Promise<SessionSummary[]>;
+    get(sessionId: string): Session; // read, follow, attachment, abort, rewind, compact, update, delete, runs
+  };
+  info(): AgentInfo; // protocolVersion and capabilities
+  models(): Promise<ModelDescriptor[]>;
+  commands(): Promise<AgentCommand[]>;
 }
 
-interface Scope {
-  session: string;
+interface InvokeRequest {
+  sessionId?: string; // absent: the Agent creates a session and names it in the receipt
+  prompt: { text: string; images?: { mimeType: string; data: string }[] };
+  whenBusy?: "queue" | "steer" | "reject"; // default "queue"
+  idempotencyKey?: string; // the Caller's key for this message: a resend returns the same run
+  source?: RunSource; // in process only
 }
 
-interface Prompt {
-  text: string;
-  images?: ImageRef[];
-}
-
-interface ImageRef {
-  mimeType: string;
-  data: string; // base64
-}
+type InvokeEvent =
+  | { type: "accepted"; sessionId: string; run: RunStatus; joined: boolean; duplicate: boolean }
+  | { type: "rejected"; error: AgentError }
+  | SessionEvent; // entry, message_delta, tool_started, tool_progress, retry_scheduled, state, serving_error
 ```
 
-`AgentEvent`:
-
-```ts
-type AgentEvent =
-  | { type: "text"; delta: string }
-  | { type: "thinking"; delta: string }
-  | { type: "tool_started"; id: string; name: string; args: Json }
-  | { type: "tool_ended"; id: string; isError: boolean; content: Json }
-  | { type: "tool_progress"; id: string; text: string } // advisory status line
-  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string } // advisory backoff
-  | { type: "completed"; data?: Json }
-  | { type: "failed"; details: string; retryable: boolean; code?: string };
-```
-
-See [Agent Handler SPEC](SPEC.md) for normative behavior.
+An invoke's stream starts with `accepted` or `rejected`, then follows the run: its durable `entry` events
+(`user_message`, `assistant_message`, `tool_result`, …) and the live ones, and ends after the run's `run_ended` entry,
+whose `outcome` is `completed`, `failed`, `canceled`, `interrupted`, `max_tokens` or `intercepted`. A Caller that
+stops reading detaches; the run goes on, and `runs.cancel`, `abort` or `delete` stop it. Failures are values: an
+operation answers `{ ok: false, error }`, and an `AgentError` carries `code`, `message` and `retryable`.
 
 ## `collect`
 
 ```ts
-function collect(events: AsyncIterable<AgentEvent>): Promise<CollectResult>;
+function collect(events: AsyncIterable<InvokeEvent>): Promise<{ sessionId: string; runId: string; text: string }>;
 
-interface CollectResult {
-  text: string;
-  data?: Json;
-}
-
-class AgentFailure extends Error {
-  details: string;
-  retryable: boolean;
-  code?: string;
-}
+class AgentRejection extends Error { code: ErrorCode; retryable: boolean } // the invoke was refused: nothing ran
+class RunNotCompleted extends Error { outcome: RunOutcome; sessionId: string; runId: string } // it ended otherwise
+class RunUnfinished extends Error {} // the stream stopped before its run ended (the process or connection went away)
 ```
 
-Buffers text deltas until `completed`. Throws `AgentFailure` on `failed`. Throws a regular error if the stream ends without a terminal event.
+Returns the run's last `assistant_message` text when its outcome is `completed`, and throws one of the three
+otherwise. An `intercepted` run (a command took the message, and no model was called) is a `RunNotCompleted`.
 
 ## HTTP/host helpers
 
 ```ts
-function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response>;
+function createAgentHandler(
+  agent: Agent,
+  options?: { control?: boolean; corsOrigins?: string[] },
+): (req: Request) => Promise<Response>;
+function connectAgent(options: { url: string; fetchFn?: typeof fetch }): Promise<Agent>;
 ```
 
-Fetch-shaped HTTP/SSE handler. Accepts `POST` JSON:
+`createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §9](SPEC-v1.md#9-http-binding)): the
+user plane always, the control plane (`PATCH`/`DELETE /control/sessions/{s}`) only with `control: true`. Request
+bodies are JSON (`content-type: application/json`), decoded strictly: an unknown field is a 400. It sends no CORS
+headers and answers no preflight unless `corsOrigins` names the origins (exact, or `["*"]`) a page may call it from;
+otherwise cross-origin is the mounting app's decision. Event streams are
+Server-Sent Events, one JSON event per `data:` line, with comment heartbeats (`: ping`) so a client can tell a quiet
+run from a dead connection.
 
-```json
-{ "session": "s1", "text": "hello" }
+```
+POST   /invoke                            {sessionId?, prompt, whenBusy?, idempotencyKey?} → SSE
+POST   /sessions                          {sessionId?, fork?: {sessionId, entryId?, context?}}
+GET    /sessions                          list
+GET    /sessions/{s}                      ?after=&before=&limit= — state and a page of entries
+GET    /sessions/{s}/follow               ?after= — SSE; Last-Event-ID resumes
+GET    /sessions/{s}/attachments/{ref}
+POST   /sessions/{s}/abort
+POST   /sessions/{s}/rewind               {entryId}
+POST   /sessions/{s}/compact              {instructions?}
+GET    /sessions/{s}/runs                 ?idempotencyKey=
+GET    /sessions/{s}/runs/{r}
+GET    /sessions/{s}/runs/{r}/events      ?after= — SSE
+POST   /sessions/{s}/runs/{r}/cancel
+GET    /agent                             protocolVersion and capabilities
+GET    /agent/models
+GET    /agent/commands
+PATCH  /control/sessions/{s}              {name?, model?, thinkingLevel?}
+DELETE /control/sessions/{s}
 ```
 
-Returns Server-Sent Events with one JSON `AgentEvent` per `data:` line. The stream also carries
-SSE comment heartbeats (`: ping`, every 30s) so remote consumers can distinguish a quiet run from
-a dead connection — parse per the SSE spec (only `data:` lines carry events), not line-by-line
-JSON.
+`{s}` is percent-encoded: session ids are the Caller's and may contain `:` and `/`
+(`/sessions/telegram%3A-1001234567890`).
+
+`connectAgent` is the same `Agent` over that wire, for a web panel, a desktop app or another service. It imports
+nothing beyond the protocol. `fetchFn` is where a gateway's credential goes; it rides every request, the streams
+included. A connection lost before the receipt is settled by resending with the request's `idempotencyKey`, so set
+one when a run must not happen twice.
+
+**FastAgent authenticates nothing.** Put a gateway, an authenticating proxy, a private network or your own
+middleware in front of either; without one, a public port is a public remote control.
 
 ```ts
 // From `@fastagent-sh/fastagent/node` — the only runtime-specific entry, and the only one that
@@ -116,8 +142,8 @@ mounted prefix, and a path containing `?`, `#`, `.` or `..` segments. Paths are 
 `HEAD` is answered from the `GET` route unless you define one. A path that exists under another method answers 405;
 an unknown path, 404.
 
-A handler owning a whole prefix (the session control plane) is mounted beside the routes; `createAgentService`
-wires it and refuses a route inside it.
+The API's planes own prefixes (`/sessions`, `/agent`, `/control`) and are mounted beside the routes;
+`createAgentService` wires them and refuses a channel route inside a served one.
 
 ## pi assembly
 
@@ -142,12 +168,11 @@ Common options:
 | Option | Meaning |
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
-| `instructions` | String or function returning the system prompt. The function is evaluated once per invoke, never during construction; a thrown error becomes that turn's `failed` event. |
+| `instructions` | String or function returning the system prompt. The function is evaluated once per run, never during construction; a thrown error fails that run. |
 | `tools` | `MountedTool[]`: `AgentTool` with optional native Pi execution context. Serving/chat forward progress updates and context; direct CLI calls are sessionless. |
 | `skills` | Loaded Agent Skills. Pi lists them in the system prompt when `read` is active. |
 | `sessions` | `PiSessionRecordStore`. |
 | `cwd` | The working directory at L1 (default `process.cwd()`): where tools operate and what session records are keyed to. |
-| `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 | `authPath` / `credentialStore` | Where model credentials live: a credentials file, or your own `CredentialStore` ([Auth](#config-and-models)). One or neither, not both. |
 
@@ -187,17 +212,17 @@ function createAgentService(
               signal?: AbortSignal;
               onChannelClosed?: (name: string, error?: unknown) => void },
 ): Promise<{
-  handler: ChannelHandler;              // channels + control plane + health, composed
+  handler: ChannelHandler;              // channels + the agent's API planes + health, composed
   agent: Agent;
   routes: Routes;                        // what is served, for a startup line
   agentDir: string;
   channels: { routes: string[]; longConnections: string[] };
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
-                                          // took over or `http.invoke: false` withheld
+                                          // took over or `http.api: false` withheld
   schedules: () => readonly Schedule[];   // schedules/*.md as armed now ({ name, cron, tz?, prompt }); follows edits
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
-  controlPrefix?: string;                // "/control", when sessionControl is on
+  planes: { api: boolean; control: boolean }; // which of the agent's HTTP planes this handler serves
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
                                          // to stop, or does not stop within 5s
 }>;
@@ -313,12 +338,11 @@ its directory was), the edit is refused with that entry's error, a plain `Error`
 Removing that entry is always possible, and is how it is mended.
 
 The default model (`model` option > `FASTAGENT_MODEL` > `model` in `fastagent.config.ts`) is optional, here and in
-`createAgentService`. Without one the directory still opens, with its session control: `sessions.list()`,
-`entries()`, `state()` and `update()` work, and a session that records its model (pi writes it into every session it
-starts, and `update({ model })` sets it) runs on that model. A session with no model of its own fails its invoke with
-`failed { code: MISSING_MODEL_CODE ("missing_model"), retryable: false }` and leaves no record behind, including a
-new thread whose `parentSession` supplied no model; `update({ model })` gives it one. `compact` on such a session answers the same code. A model the config names but the
-registry does not know still fails the open. The CLI's `dev`, `start`, `invoke` and `chat` still
+`createAgentService`. Without one the directory still opens: `sessions.list()`, `read()` and `update()` work, and a
+session that records its model (pi writes it into every session it starts, and `update({ model })` sets it) runs on
+that model. A run on a session with no model of its own ends `failed` with code `missing_model` (not retryable);
+`update({ model })` gives the session one. A model the config names but the registry does not know is reported as a
+warning, and runs on sessions without a model of their own fail with the resolution error. The CLI's `dev`, `start`, `invoke` and `chat` still
 refuse to start without a default (`missing model`), since every new conversation they took would fail.
 
 ```ts
@@ -731,19 +755,13 @@ mode.
 `Provider`, `ProviderAuth` and `Model` are re-exported as types. Build a provider with `createProvider` from
 `@earendil-works/pi-ai`.
 
-## Sessions and leases
+## Sessions
 
 ```ts
 interface PiSessionRecordStore {
-  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
-  /** Read-only sibling for the observation plane: unknown session → undefined, never created. */
+  openOrCreate(sessionId: string): Promise<SessionManager>;
+  /** Read-only sibling: unknown session → undefined, never created. */
   openIfExists(sessionId: string): Promise<SessionManager | undefined>;
-}
-
-/** Where a NEW thread starts from. Read only on the create path; an existing session ignores it. */
-interface SessionInheritance {
-  parentSession: string;
-  branchHints?: string[];
 }
 
 function piInMemorySessionRecordStore(options?: { cwd?: string }): PiSessionRecordStore;
@@ -758,102 +776,37 @@ Session ids are the caller's and may contain any character (`-1001234567890`, `f
 encodes them into file names (`-1001234567890` → `s-1001234567890`). A new record is written as soon as it is
 created, so a crash before the first answer does not lose the question.
 
-Both backends support `SessionInheritance`: a new session named with a `parentSession` starts from that session's
-history.
+One process holds each session's one writer while the session is busy: a second message queues behind the running
+run (or steers it, or is rejected, as its `whenBusy` says). Running two processes over one session directory is not
+supported.
 
-Lease:
+## Working with sessions
+
+Every session operation is on the `Agent` ([SPEC v1 §5](SPEC-v1.md)), in process or over `connectAgent`:
 
 ```ts
-interface Lease {
-  tryAcquire(session: string): Release | null;
+const s1 = agent.sessions.get("s1");
+
+// Read: the state and a page of entries, newest page first; `limit: 0` reads the state alone.
+const page = await s1.read({ limit: 50 });
+if (page.ok) console.log(page.state.status, page.entries.length, page.prev);
+
+// Follow: the entries after a cursor, then live events. A reconnect passes the last entry id it saw.
+for await (const event of s1.follow({ after: lastEntryId })) {
+  if (event.type === "rejected") break; // an unknown session or cursor
+  console.log(event.type);
 }
 
-type Release = () => void;
-function inProcessLease(): Lease;
+await s1.abort(); // stops the running run and drops the queued ones
+await s1.rewind(entryId); // the next run continues from that entry; the old branch stays in the history
+await s1.compact({ instructions: "keep the decisions" });
+await s1.update({ name: "Deploy notes", model: "anthropic/claude-sonnet-4-5", thinkingLevel: "high" });
+await s1.delete();
+
+// A new session from another's history, up to an entry (or all of it). `context: "recent"` gives the model only the
+// copy's recent part: what a chat thread gets from its room.
+await agent.sessions.create({ sessionId: "s1-b", fork: { sessionId: "s1", entryId } });
 ```
-
-The lease is the same-session concurrency floor. A failed acquisition yields a retryable `failed` event.
-
-## Session control (observation plane)
-
-The optional serving extension beside `invoke`
-([design](design/session-control.md)): watch and reconnect to invoke-driven runs. Neutral types live
-in `@fastagent-sh/fastagent/session`; the pi implementation in `/pi`:
-
-```ts
-import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
-import { createPiAgent, createPiSessionControl, piInMemorySessionRecordStore } from "@fastagent-sh/fastagent/pi";
-
-const sessions = piInMemorySessionRecordStore();
-const { control, observer } = createPiSessionControl({ sessions });
-const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
-// This agent has no definition, so `control.commands()` is `[]` — true, not a gap. Over a DIRECTORY
-// agent, pass `commands: async () => …` returning one `AgentCommand` per name the definition
-// exposes, re-read per call; otherwise the list claims the definition's skills do not exist.
-// `createPiAgentFromDir` wires it for you.
-
-// Live events are NOT durable history: a subscription sees only what happens while it iterates,
-// so start watching BEFORE (or while) the run is driven — never after it drained.
-const stream = control.sessions.get("s1").events();
-const watching = (async () => {
-  for await (const ev of stream) {
-    console.log(ev.type); // run_started, message_delta, tool_started, …
-    if (ev.type === "run_settled") break; // events() has no natural end — the consumer decides
-  }
-})();
-// `ready` settles when the subscription EXISTS (it registers on the first pull, and remotely on the
-// server before the response headers), so nothing after it can be missed. Reconnecting clients await
-// it before reading history — see the reconnect recipe in docs/design/session-control.md §7. One
-// `events()` call is one subscription: iterate the returned stream once, and call it again to
-// resubscribe. Note the shape: the iteration runs BESIDE the work, never after it — a subscriber that
-// stops pulling is buffered by the server only up to a ceiling, then closed.
-await stream.ready;
-for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
-await watching;
-
-// What a `/` composer LISTS (read live, so a skill added while serving appears at once). A listing
-// only — the data plane takes prompts as text, so what typing `/triage` means is the client's.
-await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
-
-// After a disconnect, missed history comes from the durable plane, not the live stream — and the ORDER
-// is the contract (docs/design/session-control.md §7): resubscribe, await `ready`, THEN read, with the
-// reads running BESIDE a live iteration. Reading in front of one loses whatever is emitted meanwhile;
-// pausing the iteration to read buffers the subscriber server-side until its ceiling closes it.
-const s1 = control.sessions.get("s1"); // a pure binding: an id + the transport, nothing to dispose
-const resumed = s1.events();
-const draining = (async () => {
-  for await (const ev of resumed) console.log(ev.type);
-})();
-await resumed.ready;
-const { entries, leafEntryId } = await s1.entries({ since: cursor }); // backfill, beside `draining`
-const state = await s1.state(); // { status, name?, activeRunId?, leafEntryId? }
-// A user or tool entry that carried images lists them, without bytes, as `data.images: { ref, mimeType }[]`;
-// read one when you draw it.
-const image = await s1.image(ref); // { data (base64), mimeType } | undefined
-```
-
-`invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
-`SessionEvent` stream. A session's ACTIONS modulate the run an invoke is driving — acceptance is not
-outcome (`ok: true` = admitted; the result arrives as `run_settled`):
-
-```ts
-await s1.steer({ text: "use bun, not npm" });   // joins the run: { ok: true, runId, disposition: "queued" }
-await s1.followUp({ text: "then summarize" });  // FIFO queue
-await s1.abort();                                // invoke ends failed{code:"aborted"}, run_settled{aborted}
-```
-
-An accepted `steer`/`followUp` says what became of the prompt. `disposition: "queued"` means it waits in
-`state().pending` until the run takes it in. `"handled"` means an `input` handler in the definition's `extensions/`
-consumed it first: it never enters the conversation, and no `queue_changed` or `user_message` reports it.
-
-With steering or follow-ups, the invoke stream ends when the run settles (all queued continuations done). Actions
-on an idle session reject with `no_active_run`; an action that reached a run that was already settling rejects
-with `run_command_failed`. Both are `retryable: false`; check `state()` first. An accepted action can still lose
-the race: an `abort` may settle `completed`, and a `steer`/`followUp` may settle unconsumed. The settlement is what
-happened.
-
-An `abort` accepted before the run's first model request still stops that request, and any later one the run would
-make. Work that is not a model request, such as an extension command's handler, runs to its end.
 
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` for the definition's skills, the
 commands its `extensions/` register, and the machine's skills and prompt templates. `source` is `skill`, `extension`
@@ -870,171 +823,21 @@ client-side.
   `<name>:1`, `<name>:2`, and a prompt template an extension command shadows is left out. Listing loads the
   extensions (their factories run) without opening a session. A chat channel's `/stop` is handled by the channel,
   not listed here.
-- It is re-read on every call. `[]` means the agent exposes none. It rejects (with no stable code) when the
-  definition cannot be read at all.
+- It is re-read on every call. `[]` means the agent exposes none.
 
-`sessions.list()` returns `{ session, name?, createdAt, updatedAt, messageCount, preview? }` for every session in
-the deployment, keyed by the caller's id. Do not expose it through a multi-tenant facade. A store that cannot be
-enumerated rejects with `sessions_unavailable` (remotely: 503, code on `ControlRequestError.code`).
+`sessions.list()` returns every session in the deployment, keyed by the caller's id. Do not expose it through a
+multi-tenant facade. It reads every record on each call (about 20 ms for 100 sessions / 8 MB), so poll it at human
+intervals and follow an open conversation with `follow()`.
 
-`list()` reads every record on each call (about 20 ms for 100 sessions / 8 MB), so poll it at human intervals and
-follow an open conversation with `events()`.
-
-Writes run between runs, under the SAME lease (`session_busy` while a run is active, retryable at
-idle). A session's PROPERTIES are one patch — `update` validates every field before writing any, so a
-rejected patch leaves nothing behind, and one event reports the result:
-
-```ts
-await s1.update({ name: "Deploy notes" });                      // the list's label
-await s1.update({ model: "anthropic/claude-sonnet-4-5" });      // durable per-session override
-await s1.update({ thinkingLevel: "high" });
-await s1.update({ leafEntryId: entryId });                      // move the leaf → state_changed
-await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" }); // one call, one event
-```
-
-The writes themselves are separate journal entries, so a failure BETWEEN them (a full disk) answers
-`partial_update` naming what landed, after an event reporting the record as it now is — the one
-`ok: false` that carries durable work:
-
-```ts
-const r = await s1.update({ model: "anthropic/claude-opus-4-5", thinkingLevel: "high" });
-if (!r.ok && r.error.code === "partial_update") {
-  // `error.message` names the fields that landed; `state()` is what they now are. (The preceding
-  // `state_changed` may carry less: a model/level pair that cannot be resolved is logged, not reported.)
-  const now = await s1.state();
-  // Re-send only what is still missing. Blind retry re-applies what landed — which for `name` or
-  // `leafEntryId` means overwriting or moving back.
-  if (now.thinkingLevel !== "high") await s1.update({ thinkingLevel: "high" });
-}
-```
-
-Use `retryable` to decide whether to re-send, not `ok` alone. An unknown field rejects `unsupported_capability`,
-naming it; a wrong value type rejects `invalid_command`.
-
-`leafEntryId` is the write verb for the tree `entries()` publishes: it moves the session's active
-leaf, so the next turn hangs off it instead of the old one — which is also how sibling branches come
-to exist. An id that `entries()` did not publish rejects `invalid_command`. Gate each field on
-`capabilities().updatable`.
-
-The rest are whole-record or run-scoped calls:
-
-```ts
-await s1.compact({ instructions: "keep the decisions" }); // accept-fast: ok on admission; the
-// outcome arrives as compaction_finished{summary|error|aborted} (emitted after the lease frees;
-// aborted = a deliberate s1.abort() — not a failure)
-await control.sessions.fork({ from: "s1", at: entryId, into: "s1-b" }); // copy history into a NEW session
-await s1.delete();                                                       // irreversible
-```
-
-`fork` copies history into the session `into`. It is idempotent: repeating the same fork answers `ok: true` and
-writes nothing; `into` already holding a different history rejects `invalid_command`. Clone a session by forking
-at its own `leafEntryId`. There is no `create`: `invoke` creates sessions, and `update()` creates the record of an id that has none. `delete` ends the session's live
-`events()` streams.
-
-Overrides persist in the session and apply to every later turn, channels included. A thinking level the current
+Settings persist in the session and apply to every later run, channels included. A thinking level the current
 model does not support is clamped to the lowest supported level at or above it (below only if none is above), which
-can raise reasoning cost; the recorded preference returns when the session moves back to a capable model.
-`state()`, `state_changed` and execution all report the same resolved level.
-
-An id with no record (nothing has written it yet) takes properties too: `update({ model, thinkingLevel, name })`
-creates its record, and the session's first turn runs on them. That is how a client starts a new conversation at a chosen model or thinking level:
-
-```ts
-const draft = control.sessions.get(conversationId);
-(await draft.state()).thinkingLevel;            // what its first turn would run on now
-await draft.update({ thinkingLevel: "high" });  // then invoke as usual
-```
-
-From then on it is an existing session that has not run yet: listed with `messageCount: 0`, `state()` reports its
-recorded settings, `delete()` removes it, `compact()` answers `nothing_to_compact` and writes nothing, and it can be
-forked. A later `invoke` does not seed it from `scope.parentSession`. Writes that need a record (`compact`, `delete`,
-`fork`'s source) refuse an id with no record with `no_such_session`. Invalid payloads, and an id no client could
-address (`""`, `.`, `..`), reject `invalid_command` before acceptance, and nothing is created. `models()` lists the deployment's registry as a turn would resolve it now
-(an edited extension's models included), each entry described like `availableModelsFromDir`'s, with the `thinkingLevels` a session on that model accepts.
-`state().availableThinkingLevels` is the same list for the model the session is on, and `update({ thinkingLevel })`
-validates against it rather than recording an override the run would ignore. Every write
-requires the wiring the agent opener provides (`sessionControl: true`); a hub without it reports an
-empty `updatable`, `fork: false`, `delete: false`, and rejects with `unsupported_capability`.
-
-For agent assembly the store lives inside the opener, so ask the opener to wire the hub:
-
-```ts
-const { agent, sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
-```
-
-A serve (`serving: true`, which `createAgentService` passes) always gets a hub, because chat channels abort a turn
-through it. `sessionControl: true` adds the write side and, in a service, the `/control/*` routes.
-
-### Remote (HTTP + SSE)
-
-The same contract over the wire — for a Web panel, a desktop app, or any other remote client. Server
-side, set `sessionControl: true` and dev/start mount the routes.
-
-**fastagent authenticates nothing**, `/invoke` and `/control/*` included. Put a gateway, an authenticating proxy,
-a private network, or your own middleware in front; without one, a public port is a public remote control.
-
-```ts
-import { createAgentService } from "@fastagent-sh/fastagent";
-import { connectSessionControl } from "@fastagent-sh/fastagent/core";
-
-// Set `sessionControl: true` in fastagent.config.ts; the plane is then mounted on the service's
-// handler, owning the /control prefix. Routes, preflight, 404/405 and a failing handler all carry
-// CORS headers, and the default answers EVERY origin — `http.cors` is the only way to narrow it.
-// Every write must send content-type: application/json. SSE at /control/sessions/{id}/events.
-const service = await createAgentService("./my-agent");
-
-// Client side — the SAME SessionControl interface, isomorphic to local. Point `url` at whatever
-// fronts the serve (a gateway, an ssh -L tunnel), not at a public port; `fetchFn` is where a
-// gateway's credential goes, and it rides every request including the streams:
-const remote = await connectSessionControl({
-  url: "https://agent.example.com",
-  fetchFn: (input, init) =>
-    fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), authorization: await token() } }),
-});
-for await (const ev of remote.sessions.get("s1").events()) console.log(ev.type);
-```
-
-The DATA plane travels the same wire: `connectAgent({ url, fetchFn })` returns an `Agent` whose
-`invoke` drives `POST /invoke` — paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
-same two contracts local code uses. Disconnecting the invoke stream cancels the run. Both streams refuse
-an endpoint that accepts the connection and never answers — the events stream after 10s (a reconnecting
-client waits on it), `invoke` after 60s, since a
-scale-to-zero host holds the POST open while a machine boots; once connected, either stream fails after
-90s without bytes, heartbeats included. The invoke wire is
-text-only for now (images fail visibly there); `steer`/`followUp` carry full Prompts, images
-included — within the action body cap (1 MiB, with base64 inflation counted; oversized bodies get a
-413 naming the limit).
-
-The wire is RESTful and mechanical, so a non-TypeScript client is a `curl` away:
-
-```
-GET    /control/capabilities                   what this deployment allows
-GET    /control/commands                       the agent's skills
-GET    /control/models                         the models update({ model }) accepts now
-GET    /control/sessions                       list
-PUT    /control/sessions/{id}                  {from, at} — fork (idempotent)
-GET    /control/sessions/{id}                  state
-PATCH  /control/sessions/{id}                  {name?, model?, thinkingLevel?, leafEntryId?}
-DELETE /control/sessions/{id}
-GET    /control/sessions/{id}/entries          ?since=
-GET    /control/sessions/{id}/image            ?ref= — raw bytes of an entry's images[].ref
-GET    /control/sessions/{id}/events           SSE
-POST   /control/sessions/{id}/actions          {type: "steer"|"follow_up"|"abort"|"compact"}
-
-POST   /invoke                                 the DATA plane: {session, text} — SSE, starts a run
-```
-
-`{id}` is percent-encoded, so a Telegram group is `/control/sessions/telegram%3A-1001234567890` — session
-ids are opaque Caller strings and may contain `:` and `/`.
-
-The client consumes the transport envelope (`epoch`/`seq`): a sequence gap or a mid-stream failure, a server
-restart included, throws from the events iterator; recover with the reconnect steps above.
+can raise reasoning cost; the recorded preference returns when the session moves back to a capable model. `models()`
+lists the registry as a run would resolve it now, each with the `thinkingLevels` a session on it accepts.
 
 ## Subpath exports
 
 ```ts
-import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
-import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
+import { type Agent, collect, connectAgent, createAgentHandler, readBodyCapped } from "@fastagent-sh/fastagent/core";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { telegramChannel, telegramTransport } from "@fastagent-sh/fastagent/telegram";
 import { slackChannel, slackThreads, slackTransport } from "@fastagent-sh/fastagent/slack";
@@ -1048,5 +851,6 @@ environment's credentials when none is mounted). `*Threads(ctx)` reads the threa
 group turn served by this process it throws. The scaffolded `tools/<kind>-send.ts` and `tools/<kind>-threads.ts` are
 the reference uses.
 
-`/core` loads no third-party package, so a channel package can depend on it. The root entry exports everything. See
+`/core` loads no package beyond Effect and no Node built-in, so a channel package or a browser client can depend on
+it. The root entry exports everything. See
 [Telegram channel](telegram.md), [Slack channel](slack.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

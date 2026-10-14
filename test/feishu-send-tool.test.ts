@@ -3,12 +3,14 @@
  * so what differs per cloud (gateway, env prefix, credential isolation) runs for BOTH, and what does
  * not (the description contract, input validation, card/text encoding, transport reuse) runs once.
  */
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { Agent, AgentEvent } from "../src/agent.ts";
+import type { Agent } from "../src/agent.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
 import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { createPiAgentFromDefinition, type FastagentTool } from "../src/pi.ts";
 import { feishuChannel } from "../src/feishu.ts";
@@ -111,7 +113,7 @@ describe.each([
 
   it("uses the mounted channel's credentials and gateway, keeping both clouds isolated", async () => {
     const calls = stubOpenApi();
-    const ctx = { stateRoot: join(fx.cwd, ".state"), agent };
+    const ctx = { stateRoot: join(fx.cwd, ".state"), agent: asProtocolAgent(agent) };
     channel({
       appId: "cli_channel",
       appSecret: "channel-secret",
@@ -163,11 +165,16 @@ describe("scaffold feishu-send: the tool itself", () => {
       tools: [{ ...fx.tool, name: "feishu-send" }],
       ...(independentCwd ? { cwd: workspace } : {}),
     });
-    const events: AgentEvent[] = [];
-    for await (const event of embedded.invoke({ session: "embedded" }, { text: "Send the update." })) {
+    const events: InvokeEvent[] = [];
+    for await (const event of embedded.invoke({ sessionId: "embedded", prompt: { text: "Send the update." } })) {
       events.push(event);
     }
-    expect(events).toContainEqual(expect.objectContaining({ type: "tool_ended", isError: false }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "entry",
+        entry: expect.objectContaining({ kind: "tool_result", data: expect.objectContaining({ isError: false }) }),
+      }),
+    );
     expect(calls).toHaveLength(2);
     expect(calls.at(-1)).toMatchObject({
       url: "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",

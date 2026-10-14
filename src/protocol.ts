@@ -150,6 +150,13 @@ export type ReadResult =
 
 type CreateResult = { ok: true; sessionId: string } | { ok: false; error: AgentError };
 
+/** Where a new session starts from (§5). `context: "recent"` gives the model only the copy's recent part. */
+export interface ForkSource {
+  sessionId: string;
+  entryId?: string;
+  context?: "full" | "recent";
+}
+
 type UpdatableField = "name" | "model" | "thinkingLevel";
 
 export type SessionSettings = { name?: string; model?: string; thinkingLevel?: string };
@@ -188,7 +195,7 @@ export interface AgentCommand {
 export interface Agent {
   invoke(request: InvokeRequest): AsyncIterable<InvokeEvent>;
   sessions: {
-    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }): Promise<CreateResult>;
+    create(options?: { sessionId?: string; fork?: ForkSource }): Promise<CreateResult>;
     list(): Promise<SessionSummary[]>;
     get(sessionId: string): Session;
   };

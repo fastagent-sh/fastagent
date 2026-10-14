@@ -15,7 +15,7 @@ import { log } from "../../log.ts";
 //
 // Corruption-prevention floor only: it does not pick a UX.
 
-export type Release = () => void;
+type Release = () => void;
 
 export interface Lease {
   /** Try to acquire exclusive write access for the session (fail-fast). */

@@ -63,12 +63,12 @@ describe("createAgentService", () => {
     }
   });
 
-  it("http.invoke: false withholds the data plane, and frees its path for a channel", async () => {
-    // The OFF switch. Without it, upgrading published an anonymous, fully-tooled POST /invoke on the
-    // public URL of every deployment that had previously only exposed a signed webhook.
+  it("http.api: false withholds the agent's API, and frees its paths for a channel", async () => {
+    // The OFF switch: a deployment that should expose only a signed webhook must not also publish an anonymous,
+    // fully-tooled API on its public URL.
     const dir = await agentDir(
       { "channels/own.mjs": `export default () => ({ "POST /invoke": () => new Response("the channel's") });` },
-      `{ model: "openai-codex/gpt-5.5", http: { invoke: false } }`,
+      `{ model: "openai-codex/gpt-5.5", http: { api: false } }`,
     );
     const service = await createAgentService(dir);
     try {
@@ -103,12 +103,14 @@ describe("createAgentService", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-control-"));
     await writeFile(
       join(dir, "fastagent.config.ts"),
-      `export default { model: "openai-codex/gpt-5.5", sessionControl: true };\n`,
+      `export default { model: "openai-codex/gpt-5.5", http: { control: true } };\n`,
     );
     await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");
     const service = await createAgentService(dir);
-    expect(service.controlPrefix).toBe("/control");
-    expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(200);
+    expect(service.planes).toEqual({ api: true, control: true });
+    const deleted = await service.handler(new Request("http://h/control/sessions/none", { method: "DELETE" }));
+    expect(deleted.status).toBe(404);
+    expect(await deleted.json()).toMatchObject({ error: { code: "not_found" } });
     await service.close();
   });
 
@@ -154,25 +156,6 @@ describe("createAgentService", () => {
       (globalThis as unknown as { __faSlowReady?: () => void }).__faSlowReady?.();
       await expect(service.ready).rejects.toThrow(/closed before startup completed/);
       expect((await service.handler(new Request("http://h/health"))).status).toBe(503);
-    } finally {
-      await service.close();
-    }
-  });
-
-  it("does not mount a control plane the config did not ask for — the hub is still there for /stop", async () => {
-    // The two halves of what `sessionControl` used to mean: a serve always has the in-process hub (a chat channel's
-    // stop command reaches the live run through it), and publishing `/control/*` stays the explicit, bearer-guarded
-    // decision. Nothing is minted for a plane that is not served.
-    const dir = await agentDir({
-      "channels/probe.mjs": `export default ({ control }) => ({ "GET /has-control": () => new Response(String(!!control)) });`,
-    });
-    const service = await createAgentService(dir);
-    try {
-      expect((await service.handler(new Request("http://h/control/capabilities"))).status).toBe(404);
-      expect(service.controlPrefix).toBeUndefined();
-      // The half that is easy to lose silently: the channel still got the hub. Tightening `routesFor` to
-      // `publishControl` would leave every assertion above green while `/stop` stopped working.
-      expect(await (await service.handler(new Request("http://h/has-control"))).text()).toBe("true");
     } finally {
       await service.close();
     }

@@ -17,7 +17,16 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { nodeListener, router } from "../src/channels/serve.ts";
+import { createAgentHandler } from "../src/channels/protocol-http.ts";
+import { router } from "../src/channels/router.ts";
+import { nodeListener } from "../src/channels/serve.ts";
+import { loopPort } from "../src/loop-port.ts";
+import { servingAgent } from "../src/serving-layer.ts";
+import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
+
+/** The agent's API over a fake harness: what `createAgentHandler(agent)` hands an app. */
+const agentApi = () => createAgentHandler(servingAgent(loopPort(fakeLoopHarness(new FakeStore()))));
+const invokeBody = JSON.stringify({ sessionId: "s", prompt: { text: "hi" } });
 
 /** The handler shape every snippet bridges: reads the RAW body, answers with what it saw. */
 const echoRaw = async (req: Request) => new Response(`raw=[${await req.text()}]`);
@@ -46,12 +55,13 @@ const post = (url: string, body: string) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
 
 describe("embedding: Express", () => {
-  it("mounts a single route, exactly as documented", async () => {
-    // docs/embedding.md — `app.post("/chat", nodeListener(handler));`
+  it("mounts the agent's API under a prefix, exactly as documented", async () => {
+    // docs/embedding.md — `app.use("/agent", nodeListener(handler));`: app.use strips the prefix.
     const app = express();
-    app.post("/chat", nodeListener(echoRaw));
+    app.use("/agent", nodeListener(agentApi()));
     const base = await listen(app);
-    expect(await (await post(`${base}/chat`, '{"a":1}')).text()).toBe('raw=[{"a":1}]');
+    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"kind":"run_ended"');
+    expect((await fetch(`${base}/agent/agent`)).status).toBe(200);
   });
 
   it("mounts the whole route table under a prefix, on the app's own server", async () => {
@@ -130,15 +140,18 @@ describe("embedding: Fastify", () => {
     await app.register(async (scope) => {
       scope.removeAllContentTypeParsers();
       scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
-      scope.post("/chat", (req, reply) => {
+      scope.all("/agent/*", (req, reply) => {
         reply.hijack();
-        nodeListener(echoRaw)(req.raw, reply.raw);
+        req.raw.url = req.raw.url!.slice("/agent".length);
+        nodeListener(handler)(req.raw, reply.raw);
       });
     });
+    const handler = agentApi();
     await app.listen({ port: 0, host: "127.0.0.1" });
     started.push(() => app.close());
     const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
-    expect(await (await post(`${base}/chat`, '{"a":1}')).text()).toBe('raw=[{"a":1}]');
+    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"kind":"run_ended"');
+    expect((await fetch(`${base}/agent/agent`)).status).toBe(200);
   });
 
   it("keeping Fastify's default parsers eats the body, and says so", async () => {

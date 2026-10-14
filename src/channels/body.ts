@@ -1,5 +1,8 @@
 import { text } from "./respond.ts";
 
+/** Request body cap (1 MiB), shared by every Prompt-bearing wire surface so the caps cannot drift apart. */
+export const MAX_BODY_BYTES = 1 << 20;
+
 /**
  * Refuse a request to one of OUR routes that does not declare a JSON body — `undefined` when it does.
  *

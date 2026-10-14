@@ -29,9 +29,9 @@ export interface PiSessionRecordStore {
   /**
    * Copy `from`'s history up to entry `at` into a new record named `into`, stamped with `provenance` so a repeat of
    * the SAME fork can be recognised as one ({@link forkProvenance}) instead of becoming a second record or an
-   * overwrite.
+   * overwrite. `recent` bounds what the model sees of the copy with the inheritance window a chat thread gets.
    */
-  fork(from: string, at: string, into: string, provenance: string): Promise<void>;
+  fork(from: string, at: string, into: string, provenance: string, context?: "full" | "recent"): Promise<void>;
   delete(sessionId: string): Promise<boolean>;
 }
 
@@ -228,7 +228,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       }
       return rows;
     },
-    async fork(from, at, into, provenance) {
+    async fork(from, at, into, provenance, context = "full") {
       const parent = await openExisting(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port promises a NEW record, so the guarantee belongs here rather than in the one caller that happens to
@@ -241,7 +241,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
         // The name travels: a fork of "Deploy notes" that lists as untitled is a row a user cannot place.
         if (name) staged.appendSessionInfo(name);
         stampProvenance(staged, provenance);
-        copyBranchInto(parent, staged, at);
+        copyBranch(context)(parent, staged, at);
       });
     },
     async delete(sessionId) {
@@ -254,6 +254,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     },
   };
 }
+
+const copyBranch = (context: "full" | "recent") => (context === "recent" ? copyBranchForInheritance : copyBranchInto);
 
 /** The property write, for both backends: the ONE place that knows how pi records a property. */
 async function applyProperties(
@@ -466,7 +468,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // The SAME row builder the disk store uses, ordered the same way.
       return [...live].map(([session, record]) => summarize(session, record)).sort((a, b) => b.updatedAt - a.updatedAt);
     },
-    async fork(from, at, into, provenance) {
+    async fork(from, at, into, provenance, context = "full") {
       const parent = live.get(from);
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port's promise, not the caller's: registering over a live session would replace its history outright.
@@ -477,7 +479,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       const name = parent.getSessionName();
       if (name) staged.appendSessionInfo(name);
       stampProvenance(staged, provenance);
-      copyBranchInto(parent, staged, at);
+      copyBranch(context)(parent, staged, at);
       live.set(into, staged);
     },
     async delete(sessionId) {

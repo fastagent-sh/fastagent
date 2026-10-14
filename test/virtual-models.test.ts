@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { collect } from "../src/collect.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { availableModelsFromDir, createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -49,7 +49,7 @@ async function routedAgent() {
   };
   (globalThis as Record<string, unknown>)[key] = state;
   await mkdir(join(dir, "extensions"));
-  await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "router/auto", sessionControl: true };`);
+  await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "router/auto" };`);
   await writeFile(
     join(dir, "extensions/router.ts"),
     `
@@ -87,12 +87,12 @@ describe("Pi virtual models", () => {
     const opened = await routedAgent();
     // Described as the extension declares it, the same in both listings.
     const auto = { spec: "router/auto", name: "Automatic", thinkingLevels: ["off", "high"], contextWindow: 8000 };
-    expect(await opened.sessionControl!.models()).toContainEqual(auto);
+    expect(await opened.agent.models()).toContainEqual(auto);
     expect(await availableModelsFromDir(opened.dir)).toContainEqual(auto);
     expect(await opened.models.authStatus("router", "auto")).toMatchObject({ source: "virtual" });
     const results = await Promise.all([
-      collect(opened.agent.invoke({ session: "A" }, { text: "small" })),
-      collect(opened.agent.invoke({ session: "B" }, { text: "large" })),
+      collect(opened.agent.invoke({ sessionId: "A", prompt: { text: "small" } })),
+      collect(opened.agent.invoke({ sessionId: "B", prompt: { text: "large" } })),
     ]);
     expect(results.map((result) => result.text)).toEqual(["routed answer", "routed answer"]);
     opened.state.concurrent = false;
@@ -107,41 +107,45 @@ describe("Pi virtual models", () => {
         .messages.filter((message) => message.role === "assistant")
         .at(-1);
       expect(answer).toMatchObject({ provider: "faux", model: physical });
-      expect(await opened.sessionControl!.sessions.get(id).state()).toMatchObject({
-        model: "router/auto",
-        availableThinkingLevels: ["off", "high"],
-        usage: { contextWindow: window },
+      expect(await opened.agent.sessions.get(id).read({ limit: 0 })).toMatchObject({
+        state: { model: "router/auto", thinkingLevels: ["off", "high"], context: { window } },
       });
     }
     // B is disposed before A runs again: no disposed router or captured context remains in A's runtime.
-    await collect(opened.agent.invoke({ session: "A" }, { text: "small again" }));
+    await collect(opened.agent.invoke({ sessionId: "A", prompt: { text: "small again" } }));
     expect(routerState(await opened.sessions.openOrCreate("A")).data.state.count).toBe(2);
     const restarted = await createPiAgentFromDir(opened.dir);
-    await collect(restarted.agent.invoke({ session: "A" }, { text: "small after restart" }));
+    await collect(restarted.agent.invoke({ sessionId: "A", prompt: { text: "small after restart" } }));
     expect(routerState(await restarted.sessions.openOrCreate("A")).data.state.count).toBe(3);
-    const at = (await restarted.sessionControl!.sessions.get("A").state()).leafEntryId!;
-    expect(await restarted.sessionControl!.sessions.fork({ from: "A", at, into: "fork" })).toEqual({ ok: true });
-    await collect(restarted.agent.invoke({ session: "fork" }, { text: "small fork" }));
+    const read = await restarted.agent.sessions.get("A").read({ limit: 0 });
+    const at = read.ok ? read.state.leafEntryId : undefined;
+    expect(
+      await restarted.agent.sessions.create({ sessionId: "fork", fork: { sessionId: "A", entryId: at as string } }),
+    ).toEqual({ ok: true, sessionId: "fork" });
+    await collect(restarted.agent.invoke({ sessionId: "fork", prompt: { text: "small fork" } }));
     const fork = await restarted.sessions.openOrCreate("fork");
     expect(routerState(fork).data.state).toEqual({ owner: fork.getSessionId(), count: 4 });
   });
 
-  it("applies control-plane virtual selections and reports router failures as failed events", async () => {
+  it("applies virtual selections and reports router failures as a failed run", async () => {
     const opened = await routedAgent();
     opened.state.concurrent = false;
-    await collect(opened.agent.invoke({ session: "s" }, { text: "small" }));
-    const handle = opened.sessionControl!.sessions.get("s");
+    const say = (text: string) => collect(opened.agent.invoke({ sessionId: "s", prompt: { text } }));
+    await say("small");
+    const handle = opened.agent.sessions.get("s");
+    const state = async () => {
+      const read = await handle.read({ limit: 0 });
+      if (!read.ok) throw new Error(read.error.message);
+      return read.state;
+    };
     expect(await handle.update({ model: "faux/large" })).toEqual({ ok: true });
-    await collect(opened.agent.invoke({ session: "s" }, { text: "physical" }));
-    expect((await handle.state()).model).toBe("faux/large");
+    await say("physical");
+    expect((await state()).model).toBe("faux/large");
     expect(await handle.update({ model: "router/auto", thinkingLevel: "high" })).toEqual({ ok: true });
-    await collect(opened.agent.invoke({ session: "s" }, { text: "large" }));
-    expect(await handle.state()).toMatchObject({ model: "router/auto", thinkingLevel: "high" });
-    const events = [];
-    for await (const event of opened.agent.invoke({ session: "s" }, { text: "fail" })) events.push(event);
-    expect(events.at(-1)).toMatchObject({
-      type: "failed",
-      details: expect.stringContaining("router refused this request"),
+    await say("large");
+    expect(await state()).toMatchObject({ model: "router/auto", thinkingLevel: "high" });
+    await expect(say("fail")).rejects.toMatchObject({
+      outcome: { status: "failed", error: { message: expect.stringContaining("router refused this request") } },
     });
   });
 });

@@ -12,22 +12,24 @@ import {
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
-import type { Agent } from "../../agent.ts";
+import type { Agent, AgentCommand } from "../../protocol.ts";
+import { type LoopPortHooks, loopPort } from "../../loop-port.ts";
+import { servingAgent } from "../../serving-layer.ts";
+import { piLoopHarness } from "./loop-harness.ts";
+import { servedExtensionCommands } from "./agent-session-factory.ts";
 import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { log } from "../../log.ts";
-import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine } from "./machine.ts";
+import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine, withMachine } from "./machine.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
-import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
-import { type PiAgentSessionFactoryOptions, piAgentSessionFactory } from "./agent-session-factory.ts";
+import type { PiAgentSessionFactoryOptions } from "./agent-session-factory.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
-import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 
@@ -306,8 +308,9 @@ function contentSection({ agentDir, content }: { agentDir: string; content: read
 
 /** The assembly, as a value: what every rung builds and what the agent runs on. */
 export interface PiAssembly {
-  lease: Lease;
-  sessionFactory: PiAgentSessionFactory;
+  /** What binds a session to a record: everything but the store, which is `sessions`. */
+  binding: Omit<PiAgentSessionFactoryOptions, "sessions">;
+  sessions: PiSessionRecordStore;
   /** Extension-aware catalog for startup reporting and control-plane validation; never bound to a session. */
   modelRuntime: () => Promise<ModelRuntime>;
   /** A fresh runtime for every session, before loading its extensions. */
@@ -353,12 +356,8 @@ function assemblePi(opts: {
   cwd?: string;
   /** What authored tools see as `ctx.content`. */
   content?: readonly ResolvedContent[];
-  lease?: Lease;
 }): PiAssembly {
   const cwd = opts.cwd ?? process.cwd();
-  // Materialized here (not defaulted inside the L0) so the value carries the SAME lease instance the agent runs under
-  // — boundary mutations must contend on it.
-  const lease = opts.lease ?? inProcessLease();
   const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   const createModelRuntime = opts.models;
   // Not memoized here: the catalog is shared until the extensions' code changes, and rebuilt then (agent-models.ts).
@@ -369,21 +368,20 @@ function assemblePi(opts: {
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
-  const sessionFactory = piAgentSessionFactory({
-    sessions,
+  const binding: Omit<PiAgentSessionFactoryOptions, "sessions"> = {
     createModelRuntime,
     ...(opts.model ? { modelSpec: opts.model } : {}),
-    thinkingLevel: opts.thinkingLevel,
-    tools: opts.tools,
+    ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+    ...(opts.tools ? { tools: opts.tools } : {}),
     readDefinition: opts.readDefinition,
     cwd,
     content: opts.content ?? [],
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     excludedToolNames,
-  });
+  };
   return {
-    lease,
-    sessionFactory,
+    binding,
+    sessions,
     modelRuntime,
     createModelRuntime,
     resolveDefaultModel,
@@ -396,9 +394,79 @@ function assemblePi(opts: {
   };
 }
 
-/** The agent an assembly runs as: the L0 over its lease and session factory. */
-export function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent {
-  return createPiAgentFromSession({ lease: assembly.lease, observer, sessionFactory: assembly.sessionFactory });
+/**
+ * The agent an assembly runs as: SPEC v1 over one LoopPort, which holds each session's one writer while it is busy.
+ * `commands` is what a client may offer; `hooks` lets a serve count the work in flight.
+ */
+export function agentOf(
+  assembly: PiAssembly,
+  options: { commands?: () => Promise<AgentCommand[]>; hooks?: LoopPortHooks } = {},
+): Agent {
+  return servingAgent(
+    loopPort(
+      piLoopHarness({
+        ...assembly.binding,
+        sessions: assembly.sessions,
+        catalog: assembly.modelRuntime,
+        ...(options.commands ? { commands: options.commands } : {}),
+      }),
+      undefined,
+      options.hooks,
+    ),
+  );
+}
+
+/**
+ * The names a `/` composer completes: this agent's skills and prompt templates — the definition's, plus the ones its
+ * machine lends (machine.ts) — and the commands its `extensions/` register.
+ *
+ * `source` says how a name is INVOKED, which is the one thing a client needs from it: a `skill` is sent as
+ * `/skill:<name>`, an `extension` command and a `prompt` as `/<name>` (docs/design/session-control.md §5.1.1).
+ *
+ * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
+ * bound session runs on, so the menu cannot offer a name the next prompt would not expand. The same holds for
+ * extensions: `served` is what sessions load — the entry points `extensions/` holds now, asked through the same
+ * live-extensions check a session's load goes through (live-extensions.ts), and the runtime turns run on (asked only
+ * when there are extensions) — never a listing of its own.
+ */
+export async function agentCommands(
+  agentDir: string,
+  served: { extensionPaths: () => Promise<readonly string[]>; modelRuntime: () => Promise<ModelRuntime> },
+): Promise<AgentCommand[]> {
+  // The whole definition, read the way a turn reads it: a skill whose frontmatter broke simply is not in `skills`, and
+  // would vanish from the composer with no signal. The SAME findings a turn reports, so the per-directory memo sees
+  // one set from both readers instead of warning again after every menu request.
+  const own = await loadAgentDefinition(agentDir);
+  reportFindingsIfChanged(own.dir, own);
+  const machine = await readMachine(agentDir);
+  const prompts = withMachine(own.prompts, machine.prompts);
+  const extensionPaths = await served.extensionPaths();
+  const extensionCommands = await servedExtensionCommands({
+    cwd: agentDir,
+    modelRuntime: await served.modelRuntime(),
+    extensionPaths,
+  });
+  // pi dispatches an extension command before it expands a template, so a template it shadows never runs.
+  const shadowed = new Set(extensionCommands.map((command) => command.invocationName));
+  return [
+    ...withMachine(own.skills, machine.skills).map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      source: "skill",
+    })),
+    ...extensionCommands.map((command) => ({
+      name: command.invocationName,
+      ...(command.description ? { description: command.description } : {}),
+      source: "extension",
+    })),
+    ...prompts
+      .filter((prompt) => !shadowed.has(prompt.name))
+      .map((prompt) => ({
+        name: prompt.name,
+        ...(prompt.description ? { description: prompt.description } : {}),
+        source: "prompt",
+      })),
+  ];
 }
 
 /** L1 options. */
@@ -429,10 +497,6 @@ export interface CreatePiAgentOptions {
   sessions?: PiSessionRecordStore;
   /** Where tools operate and what session records are keyed to (default `process.cwd()`). */
   cwd?: string;
-  /** Single-writer lease. */
-  lease?: Lease;
-  /** Observation-plane tap (session control): every rich session event of every run. */
-  observer?: SessionObserver;
 }
 
 /** L1: assemble from typed parts. */
@@ -453,9 +517,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
       tools: options.tools,
       sessions: options.sessions,
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-      lease: options.lease,
     }),
-    options.observer,
   );
 }
 
@@ -490,9 +552,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   credentialStore?: CredentialStore;
 
   sessions?: PiSessionRecordStore;
-  lease?: Lease;
-  /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
-  observer?: SessionObserver;
 }
 
 /**
@@ -502,7 +561,7 @@ export interface CreatePiAgentFromDefinitionOptions {
  */
 export async function assemblePiFromDefinition(
   dir: string,
-  options: Omit<CreatePiAgentFromDefinitionOptions, "observer"> & { models?: AgentModels },
+  options: CreatePiAgentFromDefinitionOptions & { models?: AgentModels },
 ): Promise<{ assembly: PiAssembly; definition: LoadedDefinition }> {
   // The agent directory is the working directory: where tools operate and what session records are keyed to.
   const cwd = dir;
@@ -567,16 +626,20 @@ export async function assemblePiFromDefinition(
     extensionPaths: models.extensionPaths,
     cwd,
     content,
-    lease: options.lease,
   });
   return { assembly, definition };
 }
 
-/** L2: "point at a directory → agent": {@link assemblePiFromDefinition} under the L0. */
+/** L2: "point at a directory → agent": {@link assemblePiFromDefinition}, run as {@link agentOf}. */
 export async function createPiAgentFromDefinition(
   dir: string,
   options: CreatePiAgentFromDefinitionOptions,
 ): Promise<{ agent: Agent; definition: LoadedDefinition }> {
   const { assembly, definition } = await assemblePiFromDefinition(dir, options);
-  return { agent: agentOf(assembly, options.observer), definition };
+  return { agent: agentOf(assembly, { commands: () => directoryCommands(dir, assembly) }), definition };
+}
+
+/** What a client offers is what a run WOULD run: built through the same resource posture a run uses. */
+export function directoryCommands(dir: string, assembly: PiAssembly): Promise<AgentCommand[]> {
+  return agentCommands(dir, { extensionPaths: assembly.extensionPaths, modelRuntime: assembly.createModelRuntime });
 }

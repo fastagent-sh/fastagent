@@ -85,6 +85,16 @@ describe("config: loadConfig validation", () => {
     await expect(load(`export default { deploy: { apt: ["git"] } };`)).rejects.toThrow(
       /"deploy\.apt" is not a config key — apt packages are declared in context\.json's environment/,
     );
+    // The planes are `http.api` and `http.control`; the old switches name them.
+    await expect(load(`export default { sessionControl: true };`)).rejects.toThrow(
+      '"sessionControl" is not a config key — the control plane is "http.control"',
+    );
+    await expect(load(`export default { http: { invoke: false } };`)).rejects.toThrow(
+      '"http.invoke" is not a config key — the user plane, POST /invoke included, is "http.api"',
+    );
+    await expect(load(`export default { http: { control: "yes" } };`)).rejects.toThrow(
+      '"http.control" must be a boolean',
+    );
     // Content moved to its own file; the refusal says where.
     for (const key of ["content", "contexts"]) {
       await expect(load(`export default { ${key}: [] };`)).rejects.toThrow(

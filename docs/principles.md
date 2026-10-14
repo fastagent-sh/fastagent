@@ -22,7 +22,7 @@ The design choices are deliberate:
 |---|---|
 | **An agent beside your project** | `fastagent init <dir> --content <project>` creates the agent in a directory of its own and declares the project as what it works on; add `APPEND_SYSTEM.md`, `skills/`, `tools/`, and `channels/` there as needed. The project gets no writes, and its `AGENTS.md` stays one of its files, read by the agent when it works there. |
 | **Concepts before features** | Define the few primitives authors need to understand — definition, invoke, event, tool, skill, channel, session — before adding knobs. |
-| **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
+| **Small core, clear seams** | The stable center is the Agent: `invoke(request) => AsyncIterable<InvokeEvent>` and its sessions, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
 | **Typed edges** | Tools use Zod schemas, events have a closed shape, and invalid inputs fail at the boundary instead of becoming hidden prompt bugs. |
 | **Filesystem as source of truth** | The deployable definition is the directory: identity, tools, channels, schedules and its own `skills/`. No hidden registry dependency, no builder-machine state baked into the artifact. |
@@ -38,8 +38,8 @@ A feature is not real product surface until users can name it and reason about i
 | Concept | Meaning |
 |---|---|
 | **Agent Definition** | The directory that describes the agent: optional `SYSTEM.md` / `APPEND_SYSTEM.md`, `skills/`, `prompts/`, authored context, tools/channels, and config, including the content it declares; nothing a content entry holds is part of it. |
-| **Agent Handler** | The callable contract: `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. |
-| **Event** | The streamed output shape every channel can consume: text, thinking, tool lifecycle, completion, or failure. |
+| **Agent Handler** | The callable contract ([SPEC v1](SPEC-v1.md)): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions. |
+| **Event** | What a run reports: live text and tool activity, and durable entries ending in the run's outcome. |
 | **Tool** | A typed action the model can call, validated before execution. |
 | **Skill** | Reusable markdown expertise loaded from the definition, not from global machine state. |
 | **Channel** | An adapter that turns an external event — a webhook, a message, even the clock — into one or more invocations. |
@@ -63,7 +63,7 @@ The product restraint is intentional:
 Typed boundaries are product UX, not ceremony. FastAgent applies them where agents touch real systems:
 
 - **Typed tools.** `defineTool` takes a Zod input schema, turns it into model-facing JSON Schema, and validates model arguments before execution.
-- **Documented event contract.** `AgentEvent` is small and explicit, which makes channels, tests, and UI clients easier to build.
+- **Documented event contract.** `InvokeEvent` is small and explicit, which makes channels, tests, and UI clients easier to build.
 - **Fail early at boundaries.** Bad request bodies, bad tool arguments, and same-session concurrency conflicts surface as actionable errors.
 - **Types as public API.** The package re-exports the types authors need so integrations can be written without importing harness internals.
 
@@ -87,7 +87,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 FastAgent owns the **serving shape**:
 
 ```ts
-agent.invoke(scope, prompt) => AsyncIterable<AgentEvent>
+agent.invoke(request) => AsyncIterable<InvokeEvent>
 ```
 
 Everything else composes around that:

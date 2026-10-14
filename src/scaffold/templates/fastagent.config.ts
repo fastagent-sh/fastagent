@@ -20,9 +20,9 @@ export default {
   // need), `dev` loopback. `cors: ["https://your-app.example.com"]` pins which origins a browser may call
   // this serve from. The default is `*` on every bind — any page your users visit can call this port and
   // read the reply, a loopback bind included (it stops another machine, not your own browser).
-  // `invoke: false` withholds POST /invoke, for a serve meant to be reached only through its channels.
+  // `api: false` withholds the agent's API (POST /invoke, /sessions/*, /agent/*), for a serve meant to be reached
+  // only through its channels; `control: true` adds /control/* (rename, reconfigure, delete a session).
   http: { port: 8787 },
-  // sessionControl: true, // serve /control/* for remote observation + steering (a Web panel, a desktop app)
   // tools: [], // programmatically defined tools, appended after the coding ones — tools/ is the usual way
   // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
   // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s

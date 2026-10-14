@@ -692,7 +692,10 @@ interface Session {
 ```ts
 interface Agent {
   sessions: {
-    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }):
+    create(options?: {
+      sessionId?: string;
+      fork?: { sessionId: string; entryId?: string; context?: "full" | "recent" };
+    }):
       Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
     list(): Promise<SessionSummary[]>;
     get(sessionId: string): Session;
@@ -740,7 +743,8 @@ type AbortResult =
 
 - **`create`** names the session, or lets the service name it, and is the only way to fork: the new session starts with
   the source's history, up to `entryId` or all of it. A fork copies the history, not the runs: the new session's runs
-  are its own, so a run the fork point cuts through is not one of them. A session that already exists is a `conflict`.
+  are its own, so a run the fork point cuts through is not one of them. `context: "recent"` gives the model only the
+  recent part of that history (a chat thread starting from its room). A session that already exists is a `conflict`.
   An invoke into a session that does not exist yet creates it empty.
 - **`read`** returns the state and one page of history, after or before a cursor; `limit: 0` reads the state alone.
 - **`follow`** catches up on the history after a cursor, then continues with live events; without a cursor it starts
@@ -1019,7 +1023,7 @@ The entry points inside FastAgent call the protocol in process, like any other c
 
 | Caller | Calls |
 |---|---|
-| A channel | `invoke({ sessionId: the chat place, whenBusy: "queue", idempotencyKey: the platform's message id })`. A thread's first message creates its session with `sessions.create({ sessionId, fork })` from the chat's session, and treats `conflict` as already done. Its stop command calls `abort` |
+| A channel | `invoke({ sessionId: the chat place, whenBusy: "queue", idempotencyKey: the platform's message id })`. A thread's first message creates its session with `sessions.create({ sessionId, fork })` from the chat's session, `context: "recent"`, and treats `conflict` as already done. Its stop command calls `abort` |
 | A schedule | `invoke({ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: the occurrence })`: an occurrence on a busy session is skipped |
 | A wake-up | `invoke({ sessionId, whenBusy: "queue", idempotencyKey: the wake-up and its instant })`: one that fires into a busy session runs after the running run |
 

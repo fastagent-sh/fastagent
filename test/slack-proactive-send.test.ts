@@ -3,6 +3,7 @@
  * credential and `apiBaseUrl`, not a pipeline of its own over the environment. With no channel
  * mounted (`fastagent invoke`) it builds one from the env.
  */
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +63,7 @@ describe("Slack proactive delivery rides the channel's transport", () => {
     const dir = agentDir();
     slackChannel({ botToken: "xoxb-channel", signingSecret: "s", apiBaseUrl: "https://slack.test/api" })({
       stateRoot: join(dir, ".state"),
-      agent,
+      agent: asProtocolAgent(agent),
     });
 
     await expect(send(dir)).resolves.toMatchObject({ details: "sent message to Slack channel C1 (ts 1.0)" });

@@ -17,15 +17,15 @@ import {
   UPDATE_FIELDS,
 } from "../session.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
+import { type PrefixMount, parseRouteKey, withoutBody } from "./router.ts";
 import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES } from "./http.ts";
+import { MAX_BODY_BYTES } from "./body.ts";
 import { sseResponse } from "./sse.ts";
 import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
-export const CONTROL_PREFIX = "/control";
+const CONTROL_PREFIX = "/control";
 
 /** The one variable segment in this plane's paths: a percent-encoded session id. */
 const SESSION_SEGMENT = "{session}";
@@ -124,7 +124,7 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
       res = text("internal error\n", 500);
     }
     // CORS is NOT set here: the host router owns that verdict for every path it publishes, this prefix included
-    // (channels/serve.ts). A second writer of those headers is a second policy to keep in sync.
+    // (channels/router.ts). A second writer of those headers is a second policy to keep in sync.
     return res;
   };
 }
@@ -243,7 +243,7 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
    * Read a JSON body under the shared cap.
    *
    * No content-type gate here: this plane only ever rides the host router, which applies it to every route that
-   * authenticates nobody — this whole prefix included (channels/serve.ts).
+   * authenticates nobody — this whole prefix included (channels/router.ts).
    */
   const readJson = async (req: Request): Promise<{ value: unknown } | { error: Response }> => {
     const body = await readBodyCapped(req, ACTION_BODY_LIMIT);

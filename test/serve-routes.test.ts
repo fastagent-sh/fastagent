@@ -7,11 +7,11 @@ import {
   routeKeysConflict,
   pathUnderPrefix,
   router,
-  serveNode,
-} from "../src/channels/serve.ts";
+} from "../src/channels/router.ts";
+import { serveNode } from "../src/channels/serve.ts";
 
 describe("serve: who may call this from a browser", () => {
-  // THE cross-origin policy, tested where it lives (channels/serve.ts). Every route this process
+  // THE cross-origin policy, tested where it lives (channels/router.ts). Every route this process
   // serves is unauthenticated by design, and the default answers every origin — so what these cases
   // pin is the grant itself, and `http.cors` as the one way to take it back.
   /** What ran. The side effect is the finding: a refused page must not reach a handler at all. */

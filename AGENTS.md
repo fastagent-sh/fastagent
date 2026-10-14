@@ -43,9 +43,12 @@ src/
 │                           # portRequest / portCleanup / PortFailure
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
 ├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
-├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
+├── protocol-collect.ts     # the v1 buffered consumer: a run's answer, or RunNotCompleted / RunUnfinished saying why not
+├── run-text.ts             # a run's answer text as it streams: its deltas, plus entry text no delta carried
+├── legacy-agent.ts         # TEMPORARY: a v0.1 Agent over a v1 one, for the channels and the scheduler until they move
+├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + Effect only, no Node /
 │                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
-├── index.ts                # supported all-in-one entry (re-exports core + node + session + pi)
+├── index.ts                # supported all-in-one entry (re-exports core + node + pi)
 ├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                    # the CLI, built on clig.dev
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2
@@ -62,8 +65,8 @@ src/
 │   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
-├── session-remote.ts       # remote clients over /control/*: connectSessionControl + connectAgent
-├── protocol-remote.ts      # connectRemoteAgent: the SPEC v1 Agent over its HTTP binding, failures as values
+├── session-remote.ts       # v0.1's clients over the old /control/*: neither served nor exported (goes in 4c)
+├── protocol-remote.ts      # connectAgent: the SPEC v1 Agent over its HTTP binding, failures as values; imports nothing
 ├── sse-client.ts           # the client half of an event stream: the read budget, the connect, the SSE reader
 ├── observe.ts              # turn-trace logging around an Agent
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
@@ -100,11 +103,12 @@ src/
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts            # how route tables become a running server, split by WHO AUTHENTICATES THE CALLER:
+│   ├── router.ts           # how route tables become ONE Fetch handler, split by WHO AUTHENTICATES THE CALLER:
 │   │                       # ours (nobody) vs the channels' (their platform's signature), one table each so the
 │   │                       # answer cannot drift. Both guards on the first table live here — the JSON body gate
 │   │                       # and the one CORS decision (`*`, narrowed only by http.cors) — plus literal-path
-│   │                       # dispatch, prefix mounts, the totality boundary, the node:http binding
+│   │                       # dispatch and prefix mounts. Fetch-only: /core serves through it
+│   ├── serve.ts            # the node:http binding of a Fetch handler, behind the totality boundary
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened
 │                           # on the first envelope, an external clock, no resident connections
@@ -115,16 +119,17 @@ src/
 │   ├── busy.ts             # the process's work in flight (every leased session, channel work not yet at one),
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
-│   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
-│   ├── protocol-http.ts    # SPEC v1 over HTTP: the user plane (/invoke, /sessions, /agent) and /control as mounts,
+│   ├── http.ts             # v0.1's POST /invoke over HTTP/SSE (createInvokeHandler): neither served nor exported (goes in 4c)
+│   ├── protocol-http.ts    # SPEC v1 over HTTP: createAgentHandler, and the planes as mounts — the user plane
+│   │                       # (/invoke, /sessions, /agent) and /control,
 │   │                       # each code's status, request bodies decoded strictly (a remote `source` is refused)
-│   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
-│   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
+│   ├── control.ts          # v0.1's /control/* route table + SSE events, over SessionControl; no serve mounts it
+│   │                       # (goes in 4c)
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), harness-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
 │   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
-│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate serve.ts applies, responses)
+│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate router.ts applies, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop
@@ -151,7 +156,8 @@ src/
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
-│   │   └── stop-command.ts # the shared /stop parsing every chat channel accepts
+│   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
+│   │   └── thread-fork.ts  # a new thread starts as a fork of its room at the exchange it points into
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
@@ -236,17 +242,19 @@ src/
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
 └── harnesses/pi/           # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
-    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (lease, store, session factory, default model)
-    ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: lease, terminals, image prep,
-    │                       # the SPEC projection, the observation seam (RunControls + SessionObserver)
+    ├── create.ts           # the assembly ladder L1–L2 as a VALUE (binding, store, default model), run as `agentOf`
+    ├── turn-kit.ts         # the turn mechanism's pi-class-neutral half: terminals, image prep, the event projection.
+    │                       # Its lease and observer seam are v0.1's (see invoke-session.ts)
     ├── loop-harness.ts     # pi as a LoopHarness (loop-port.ts): the session's one SessionManager as its log, a fresh
     │                       # AgentSession per run bound to it, and what became of each message it was handed
-    ├── invoke-session.ts   # THE L0: one pi AgentSession per invoke, one settlement, the rich event vocabulary
-    ├── session-effects.ts  # scoped lease/session acquisition (SessionBusy is its own tag: control flow, not IO)
+    ├── invoke-session.ts   # v0.1's L0 (createPiAgentFromSession): no longer serves anything; loop-harness.ts still
+    │                       # imports its event projection. The L0, session-effects.ts and session-control.ts's hub go
+    │                       # in 4c, once those helpers move and session.ts's v0.1 event types with them
+    ├── session-effects.ts  # v0.1's lease/session acquisition, for the L0 above only
     ├── agent-session-factory.ts # the harness binding: assembly → one record per invoke (bindPiSession)
     ├── session-store.ts    # session records on pi's SessionManager: id encoding, publish-on-create
     ├── session-inheritance.ts # where a NEW thread starts from when it names a parent (participant-model.md §5)
-    ├── session-control.ts  # the pi control hub: observation projections + dispatch
+    ├── session-control.ts  # v0.1's control hub (dispatch: unused); its entry/usage projections are loop-harness.ts's
     ├── retry-event.ts      # pi's two retry events → the plane's retry_scheduled (run-scoped or not)
     ├── session-markers.ts  # which journal entries are POSITIONS, which are the plane's own bookkeeping, and
     │                       # which are conversation turns (vs the harness's own `system` entries)
@@ -299,7 +307,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The contract is harness-neutral.** `src/agent.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
 - **Per-invoke state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per invoke and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what satisfies v0.1 SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. Under SPEC v1, whose MUST 8 permits process affinity only while a run is active or queued, the serving layer may hold in memory only what a non-durable harness needs then: the queue's order, the running run, a steer's target, and the session's one log writer with its key index (caches of the durable log) ([agent-service.md §9.3](docs/design/agent-service.md#93-runs-and-durability)). Everything a caller reads afterwards (accepted runs, entries) is durable before it is reported, and an idle session holds nothing in process. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
-- **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (zero packages), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (no package but `effect`, no Node built-in; `src/protocol.ts` and `src/channel.ts` themselves import nothing), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
 - **The artifact carries the agent; the machine lends it an environment.** What a definition declares — its prompt files, `AGENTS.md`, `tools/`, `channels/`, `schedules/`, its own `skills/` — is the artifact and must come from the bundle, never from the builder's global state. What the box supplies is inherited, the way `bash` already inherits the `PATH`: pi's skills, prompt templates and harness settings (retry budget, compaction thresholds, cache warming) come from `~/.pi/agent` in every posture, including a container, whose environment is whatever its image was built with. The line is not "definition vs machine" but IDENTITY vs ENVIRONMENT — a system prompt from someone's laptop would make the agent theirs, so that one is overridden. Deploying ships the project scope; the environment is not compared against a deployment, the same way nobody is told their local `ffmpeg` is not in the image.

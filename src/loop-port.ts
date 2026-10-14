@@ -113,11 +113,14 @@ export interface LoopHarness {
   readonly capabilities: Omit<Capabilities, "durableQueue" | "durableRuns">;
   /** `onRecord` sees every record appended from now on, by the harness or by `LoopPort`, once it is durable. */
   open(sessionId: string, onRecord: (record: LogRecord) => void): Promise<LoopLog | undefined>;
-  /** A fork copies the source's conversation up to `entryId`, never its run markers: runs are not copied. */
+  /**
+   * A fork copies the source's conversation up to `entryId`, never its run markers: runs are not copied. `recent` bounds
+   * what the model is given of that copy, for a harness that manages context; one that does not copies it whole.
+   */
   create(
     sessionId: string,
     onRecord: (record: LogRecord) => void,
-    fork?: { from: LoopLog; entryId?: string },
+    fork?: { from: LoopLog; entryId?: string; context?: "full" | "recent" },
   ): Promise<LoopLog>;
   /** Called with the session's log closed. */
   delete(sessionId: string): Promise<void>;
@@ -266,12 +269,18 @@ const NOT_STARTED = failedRun("the run has not started");
 
 const PREVIEW_CHARS = 80;
 
+export interface LoopPortHooks {
+  /** Marks work in flight (a queued or running run, a compaction) for whoever asks if the process is idle. */
+  beginWork?: () => () => void;
+}
+
 export function loopPort(
   harness: LoopHarness,
   limits: LoopPortLimits = {
     queuedPerSession: LIMITS.queuedPerSession,
     inFlightPerProcess: LIMITS.inFlightPerProcess,
   },
+  hooks: LoopPortHooks = {},
 ): HarnessPort {
   const capabilities: Capabilities = { ...harness.capabilities, durableQueue: false, durableRuns: false };
   const listeners = new Map<string, Set<(event: SessionEvent) => void>>();
@@ -669,6 +678,9 @@ export function loopPort(
       if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, runId);
       const hold = Scope.makeUnsafe();
       yield* Scope.provide(RcMap.get(sessions, held.sessionId), hold);
+      // The run's hold is closed once, however the run ends, so its work ends with it.
+      const workDone = hooks.beginWork?.();
+      if (workDone) yield* Scope.addFinalizer(hold, Effect.sync(workDone));
       inFlight++;
       held.queue.push({ runId, message, ...(idempotencyKey === undefined ? {} : { idempotencyKey }), source, hold });
       pump(held);
@@ -804,12 +816,16 @@ export function loopPort(
             const source = yield* RcMap.get(sessions, fork.sessionId);
             const from = source.log;
             if (!from) return notFound(fork.sessionId);
-            const { entryId } = fork;
+            const { entryId, context } = fork;
             if (entryId !== undefined && !published(from.records()).entries.some((entry) => entry.id === entryId)) {
               return failure("not_found", `no entry ${entryId} in session ${fork.sessionId}`);
             }
             held.log = yield* port(() =>
-              harness.create(sessionId, onRecord(held), { from, ...(entryId === undefined ? {} : { entryId }) }),
+              harness.create(sessionId, onRecord(held), {
+                from,
+                ...(entryId === undefined ? {} : { entryId }),
+                ...(context === undefined ? {} : { context }),
+              }),
             );
             return { ok: true } as Result;
           }),
@@ -856,10 +872,12 @@ export function loopPort(
           );
           if (!started.ok) return started;
           const { log, compaction } = started;
+          const workDone = hooks.beginWork?.();
           return yield* port(() => log.compact(options, compaction.controller.signal)).pipe(
             // Not under the lock: `delete` waits for `done` while holding it.
             Effect.ensuring(
               Effect.gen(function* () {
+                workDone?.();
                 held.compaction = undefined;
                 yield* Deferred.succeed(compaction.done, undefined);
                 pump(held);

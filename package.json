@@ -46,10 +46,6 @@
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
     },
-    "./session": {
-      "types": "./dist/session.d.ts",
-      "default": "./dist/session.js"
-    },
     "./pi": {
       "types": "./dist/pi.d.ts",
       "default": "./dist/pi.js"

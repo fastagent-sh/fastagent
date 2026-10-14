@@ -94,17 +94,24 @@ Send one turn:
 ```bash
 curl -N -X POST localhost:8787/invoke \
   -H 'content-type: application/json' \
-  -d '{"session":"s1","text":"Summarize https://example.com in two bullets"}'
+  -d '{"sessionId":"s1","prompt":{"text":"Summarize https://example.com in two bullets"}}'
 ```
 
-The response is Server-Sent Events. Events include `text`, optional `thinking`, tool events, and exactly one terminal `completed` or `failed`.
+The response is Server-Sent Events ([SPEC v1](SPEC-v1.md)). It starts with `accepted` (or `rejected`, with the reason),
+streams `message_delta` text and `tool_started` while the run works, records each settled message, tool result and
+the ending as an `entry`, and ends with the `run_ended` entry, whose `outcome` says `completed`, `failed` or
+`canceled`.
 
 ```txt
-data: {"type":"tool_started","id":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
+data: {"type":"accepted","sessionId":"s1","run":{"runId":"9f…","messages":[{"entryId":"a1…"}],"status":"running","startedAt":1767225600000},"joined":false,"duplicate":false}
 
-data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"content":[{"type":"text","text":"# Example Domain …"}]}}
+data: {"type":"tool_started","runId":"9f…","toolCallId":"tool-1","name":"fetch_content","args":{"url":"https://example.com"}}
 
-data: {"type":"completed"}
+data: {"type":"entry","entry":{"id":"c3…","runId":"9f…","kind":"tool_result","data":{"toolCallId":"tool-1","toolName":"fetch_content","isError":false,"text":"# Example Domain …"},…}}
+
+data: {"type":"message_delta","runId":"9f…","channel":"text","delta":"- Example Domain is …"}
+
+data: {"type":"entry","entry":{"id":"e5…","runId":"9f…","kind":"run_ended","data":{"runId":"9f…","outcome":{"status":"completed"}},…}}
 ```
 
 Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions` in the agent directory), so a dev restart keeps conversation history.

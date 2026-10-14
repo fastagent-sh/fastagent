@@ -51,7 +51,10 @@ The protocol is not a wire protocol. §9 binds it to HTTP; ACP and other transpo
 interface Agent {
   invoke(request: InvokeRequest): AsyncIterable<InvokeEvent>;
   sessions: {
-    create(options?: { sessionId?: string; fork?: { sessionId: string; entryId?: string } }):
+    create(options?: {
+      sessionId?: string;
+      fork?: { sessionId: string; entryId?: string; context?: "full" | "recent" };
+    }):
       Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
     list(): Promise<SessionSummary[]>;
     get(sessionId: string): Session;
@@ -252,7 +255,10 @@ type AbortResult =
 - **`sessions.create`** names the session, or lets the Agent name it, and is the only way to fork: the new session
   starts with the source's history up to `entryId`, or all of it. A fork copies history, not runs, and copies only
   recorded entries when the source is running. An existing `sessionId` answers `conflict`, an unknown fork source
-  `not_found`, and a fork without `capabilities.fork` `unsupported`.
+  `not_found`, and a fork without `capabilities.fork` `unsupported`. `context: "recent"` copies the same history but
+  asks the Agent to give the model only its recent part, as it would bound a long session; a `compaction` entry may
+  record the bound. A chat thread starting from its room is the use: it knows what the room knew without paying for
+  all of it. An Agent that does not manage context treats it as `"full"`, the default.
 - **`sessions.list`** returns every session the Agent holds, or rejects with `unavailable` (§2).
 - **`read`** returns the state and one page of entries, after or before an entry cursor, oldest first within the page.
   Without a cursor it returns the newest page, so a client opening a session reads the latest entries and then follows

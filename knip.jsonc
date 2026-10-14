@@ -8,7 +8,6 @@
     "src/index.ts",
     "src/core.ts",
     "src/node.ts",
-    "src/session.ts",
     "src/pi.ts",
     "src/telegram.ts",
     "src/slack.ts",

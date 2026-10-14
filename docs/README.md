@@ -53,7 +53,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 ## Core concepts
 
 - **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, and markdown context. What it works on is declared as its content, whose files, `AGENTS.md` included, the agent reads there and never takes into its prompt.
-- **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
+- **The Agent is the contract.** Every channel or host drives an `Agent` ([SPEC v1](SPEC-v1.md)) through `invoke(request) => AsyncIterable<InvokeEvent>` and its sessions.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
 - **Small core, typed edges.** FastAgent uses a small callable contract, app-level composition, and validation at the boundaries.

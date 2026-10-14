@@ -184,7 +184,7 @@ for await (const e of session.runs.follow(runId, { after: lastEntryId })) { /* .
 - **会话的生命周期**：
   - invoke 一个不存在的会话会自动创建它；
   - 其他操作遇到不存在的会话返回 `not_found`；
-  - fork 只能通过 `sessions.create` 完成。
+  - fork 只能通过 `sessions.create` 完成。`fork.context: "recent"` 照样复制历史，但只让模型看到最近的一段（和长会话的限窗一样，可以记成一条 `compaction` entry）；聊天 thread 从 room 开出来时用它。不管理上下文的 Agent 按默认的 `"full"` 处理。
 
 ### 3. 能力声明：`info().capabilities`
 

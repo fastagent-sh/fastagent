@@ -39,11 +39,11 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 ## What FastAgent provides
 
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
+2. **A contract** — [Agent Handler SPEC v1](SPEC-v1.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose runs outlive their callers.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Clients** — HTTP routes a served agent can add for session control (`/control/*`: state, history, live events, steer and stop; opt-in with [`sessionControl`](configuration.md#config-file), and unauthenticated, so bind loopback or put a gateway in front), and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
+6. **Clients** — the agent's HTTP API on every serve ([SPEC v1](SPEC-v1.md): runs, session history, live events, abort; [`http.api`](configuration.md#config-file)), plus an opt-in control plane (`/control/*`: rename, reconfigure, delete; `http.control`). Both are unauthenticated, so bind loopback or put a gateway in front, and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
 7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
@@ -74,13 +74,13 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 Use FastAgent as a library, then mount the agent in your own route:
 
 ```ts
-import { createInvokeHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
+import { createAgentHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
 
 const { agent } = await createPiAgentFromDefinition("./agent", {
   model: "openai-codex/gpt-5.5",
 });
 
-export const POST = createInvokeHandler(agent);
+export const handler = createAgentHandler(agent); // POST /invoke, /sessions/*, /agent/*
 ```
 
 Your app still owns auth, database, routing, and deployment.

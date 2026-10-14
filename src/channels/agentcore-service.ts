@@ -1,5 +1,6 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
-import type { Agent } from "../agent.ts";
+import { scheduleCaller } from "../legacy-agent.ts";
+import type { Agent } from "../protocol.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
 import type { Routes } from "../channel.ts";
@@ -14,7 +15,7 @@ import { setWakeupsSink } from "../schedule/wakeups.ts";
 import { text } from "./respond.ts";
 import { activeWork, beginWork } from "./busy.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { router } from "./serve.ts";
+import { router } from "./router.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
 
@@ -103,18 +104,14 @@ export async function mountAgentcoreService(
   opened: MountableAgent,
   options: MountAgentcoreServiceOptions = {},
 ): Promise<AgentService> {
-  const { agentDir, stateRoot, sessionControl } = opened;
+  const { agentDir, stateRoot } = opened;
   const agent = options.wrapAgent?.(opened.agent) ?? opened.agent;
 
-  // NO control plane on this host, and `sessionControl: true` cannot change that. The only public way in is the
-  // forwarder's Function URL, which relays an arbitrary `rawPath` verbatim as a webhook envelope and attaches the
-  // ingress secret ITSELF (deploy/agentcore/forwarder.js), so every anonymous caller arrives as trusted ingress. A
-  // channel route survives that because it checks its platform's signature; `/control/*` has no such check.
-  //
-  // The recipe if it is ever wanted: a `kind: "control"` envelope on the IAM-gated `InvokeAgentRuntime`, which the
-  // forwarder never emits (the way `kind: "invoke"` runs a turn without the ingress secret). The envelope is
-  // request/response with a buffered body, so the long-lived `GET /control/sessions/{id}/events` stream a client
-  // renders from could not ride it.
+  // The agent's API is NOT on the public relay. The only public way in is the forwarder's Function URL, which relays
+  // an arbitrary `rawPath` verbatim as a webhook envelope and attaches the ingress secret ITSELF
+  // (deploy/agentcore/forwarder.js), so every anonymous caller arrives as trusted ingress. A channel route survives
+  // that because it checks its platform's signature; the API has no such check. It is reached through `kind: "api"`
+  // envelopes on the IAM-gated `InvokeAgentRuntime` instead, both planes, IAM being the gateway.
   //
   // Every config key that cannot mean anything on this host says so: silence is how an operator concludes a setting
   // took effect.
@@ -124,18 +121,13 @@ export async function mountAgentcoreService(
         "forwarder's Function URL (webhooks) and the Runtime's IAM-gated API, neither of which is a page.",
     );
   }
-  if (opened.http?.invoke !== undefined) {
-    log.warn(
-      "[fastagent] agentcore: http.invoke has no effect here — this host serves the Runtime's POST /invocations " +
-        "contract instead of our own /invoke, and reaching it already requires bedrock-agentcore:InvokeAgentRuntime.",
-    );
-  }
-  if (opened.publishControl) {
-    log.warn(
-      "[fastagent] agentcore: sessionControl is ON but /control/* is NOT served here — this host's only public " +
-        "ingress relays anonymous traffic as trusted, so the plane is not assembled behind it " +
-        "(docs/design/session-control.md §14)",
-    );
+  for (const key of ["api", "control"] as const) {
+    if (opened.http?.[key] !== undefined) {
+      log.warn(
+        `[fastagent] agentcore: http.${key} has no effect here — both planes are reached through "api" envelopes on ` +
+          "the Runtime's IAM-gated InvokeAgentRuntime, and IAM decides who may call them.",
+      );
+    }
   }
 
   // Started here, not deferred to an envelope. No resident timers: each instant arrives as its own fire from the
@@ -152,7 +144,7 @@ export async function mountAgentcoreService(
   const armed = scheduled;
 
   const lazyChannels = async (): Promise<RouteSurface> => {
-    const lazy = await routesFor(agentDir, agent, stateRoot, sessionControl, { http: { invoke: false } });
+    const lazy = await routesFor(agentDir, agent, stateRoot, { planes: { api: false, control: false } });
     if (lazy.longConnections.length > 0) {
       throw new Error(
         `long-connection channel(s) ${lazy.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +
@@ -160,7 +152,7 @@ export async function mountAgentcoreService(
       );
     }
     // CHANNELS ONLY — nothing unverified rides the public relay. `lazy.unverified` (here just `GET /health`) is dropped
-    // with the control plane, for the same reason: what arrives through that URL is anonymous.
+    // for that reason: what arrives through that URL is anonymous.
     return { routes: lazy.selfVerifying };
   };
 
@@ -187,7 +179,8 @@ export async function mountAgentcoreService(
     channels: { routes: [], longConnections: [] },
     // NONE: the adapter's two paths are IAM-gated and the channels behind them verify their own platform.
     unverifiedRoutes: [],
-    // No `controlPrefix`: it is not served here, so nothing may report a prefix a caller could dial.
+    // Neither plane answers anonymously here: both ride IAM-gated envelopes.
+    planes: { api: false, control: false },
     schedules: () => armed.current(),
     ready: Promise.resolve(), // nothing to open: no port of our own, no resident connections
     async close() {
@@ -227,7 +220,10 @@ export function mountAgentcore(options: {
       return skip(`not an instant of its cron "${schedule.cron}" any more`);
     }
     const outcome = await Effect.runPromise(
-      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
+      // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
+      fireScheduleOnce({ agent: scheduleCaller(agent, "schedule"), stateRoot, schedule, slot: occurrence }).pipe(
+        Effect.mapError((e) => e.cause),
+      ),
     ).catch((cause: unknown) => {
       // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
       // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.

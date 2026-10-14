@@ -8,14 +8,15 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   collect,
+  RunNotCompleted,
   createPiAgent,
   createPiAgentFromDefinition,
   defineTool,
   type CreatePiAgentFromDefinitionOptions,
-  type AgentEvent,
   z,
 } from "../src/index.ts";
 import { CODING_TOOL_NAMES, assemblePiFromDefinition, piAllCodingTools } from "../src/harnesses/pi/create.ts";
+import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
 import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/paths.ts";
@@ -199,7 +200,7 @@ describe("definition: loadAgentDefinition", () => {
       },
     ]);
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
-    await collect(agent.invoke({ session: "skill" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "skill", prompt: { text: "hi" } }));
     expect(prompt).toContain("<name>pdf</name>");
     expect(prompt).toContain("PDF files"); // description disclosed at stage 1
     expect(prompt).not.toContain("pypdf"); // body NOT disclosed until the skill activates
@@ -221,7 +222,7 @@ describe("create: the prompt pi builds from the definition", () => {
       model: "faux/faux-1",
       ...options,
     });
-    await collect(agent.invoke({ session: "p" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "p", prompt: { text: "hi" } }));
     return seen;
   }
   const lookup = defineTool({
@@ -310,7 +311,7 @@ describe("create: the prompt pi builds from the definition", () => {
     faux.setResponses([fauxAssistantMessage("ok")]);
     const { agent } = await createPiAgentFromDefinition(dir, { ...options, providers: [faux.provider] });
     await rm(join(dir, "SYSTEM.md"));
-    await expect(collect(agent.invoke({ session: "gone" }, { text: "hi" }))).rejects.toThrow(
+    await expect(collect(agent.invoke({ sessionId: "gone", prompt: { text: "hi" } }))).rejects.toThrow(
       /coding tools were replaced/,
     );
   });
@@ -349,7 +350,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(definition.skills).toHaveLength(1);
     expect(definition.diagnostics).toHaveLength(0);
 
-    const { text } = await collect(agent.invoke({ session: "s" }, { text: "write a haiku" }));
+    const { text } = await collect(agent.invoke({ sessionId: "s", prompt: { text: "write a haiku" } }));
     expect(text).toContain("haiku-bot");
     // definition content actually reached the system prompt; base inherited from pi; tool list includes read
     expect(seenSystemPrompt).toContain("Haiku Bot");
@@ -380,9 +381,9 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
     expect(instructions).not.toHaveBeenCalled();
 
-    await collect(agent.invoke({ session: "dynamic" }, { text: "first" }));
+    await collect(agent.invoke({ sessionId: "dynamic", prompt: { text: "first" } }));
     expect(instructions).toHaveBeenCalledTimes(1);
-    await collect(agent.invoke({ session: "dynamic" }, { text: "second" }));
+    await collect(agent.invoke({ sessionId: "dynamic", prompt: { text: "second" } }));
     expect(instructions).toHaveBeenCalledTimes(2);
     expect(seen[0]).toContain("Instruction 1");
     expect(seen[1]).toContain("Instruction 2");
@@ -397,10 +398,14 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
         throw new Error("instructions unavailable");
       });
     const agent = createPiAgent({ model: "faux/faux-1", providers: [faux.provider], instructions });
-    const failed: AgentEvent[] = [];
-    for await (const event of agent.invoke({ session: "dynamic-failure" }, { text: "first" })) failed.push(event);
-    expect(failed).toMatchObject([{ type: "failed", details: "instructions unavailable" }]);
-    expect((await collect(agent.invoke({ session: "dynamic-failure" }, { text: "second" }))).text).toBe("recovered");
+    await expect(
+      collect(agent.invoke({ sessionId: "dynamic-failure", prompt: { text: "first" } })),
+    ).rejects.toMatchObject({
+      outcome: { status: "failed", error: { message: "instructions unavailable" } },
+    });
+    expect((await collect(agent.invoke({ sessionId: "dynamic-failure", prompt: { text: "second" } }))).text).toBe(
+      "recovered",
+    );
     expect(instructions).toHaveBeenCalledTimes(2);
   });
 
@@ -418,7 +423,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       model: "faux/faux-1",
       instructions: "You are a support bot.",
     });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\n\n<cwd>")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no harness identity forced on a hand-built agent
@@ -451,7 +456,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       ],
     });
 
-    await collect(agent.invoke({ session: "s" }, { text: "enable bash" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "enable bash" } }));
     expect(activated).toEqual([]);
     expect(offeredAfter).toEqual(["try_enable_bash"]);
   });
@@ -474,7 +479,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
         skills,
         tools: read ? createReadOnlyTools(fixtureDir) : [],
       });
-      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
       expect(seen, `read: ${read}`).toContain("P");
       expect(seen?.match(/<available_skills>/g) ?? [], `read: ${read}`).toHaveLength(read ? 1 : 0);
       expect(seen?.match(/<cwd>/g)).toHaveLength(1);
@@ -492,7 +497,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
         },
       ]);
       const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions });
-      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
       // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
       // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
       const label = String(instructions);
@@ -543,7 +548,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     ]);
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     // The edit an agent might make to itself mid-conversation: new standing instructions + a new skill.
     await writeFile(join(dir, "APPEND_SYSTEM.md"), "Sign as FINAL-PERSONA.\n");
     await mkdir(join(dir, "skills", "late-skill"), { recursive: true });
@@ -551,7 +556,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
       join(dir, "skills", "late-skill", "SKILL.md"),
       "---\nname: late-skill\ndescription: added after boot\n---\nBody.\n",
     );
-    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
 
     expect(seen[0]).toContain("DRAFT-PERSONA");
     expect(seen[0]).not.toContain("late-skill");
@@ -578,9 +583,9 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     ]);
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
     await writeFile(join(dir, "SYSTEM.md"), "You are FINAL-BOT.\n");
-    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
 
     expect(seen[0]).toContain("DRAFT-BOT");
     expect(seen[0]).not.toContain("operating inside pi"); // SYSTEM.md replaces pi's default prompt
@@ -594,7 +599,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { faux } = makeFaux();
     faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("two")]);
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     // The agent (or author) writes a skill with broken frontmatter mid-conversation. The loader
     // returns this as a diagnostic (data, not a throw) — the live path must re-report it.
@@ -602,14 +607,14 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     await writeFile(join(dir, "skills", "broken", "SKILL.md"), "no frontmatter at all\n");
     const warn = vi.spyOn(log, "warn");
     try {
-      const { text } = await collect(agent.invoke({ session: "s" }, { text: "again" }));
+      const { text } = await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } }));
       expect(text).toBe("two"); // non-fatal: the turn still completes
       const brokenWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes("broken")).length;
       expect(brokenWarns()).toBeGreaterThan(0);
 
       // …but an UNCHANGED finding set does not re-warn on the next turn (no per-turn log spam).
       faux.appendResponses([() => fauxAssistantMessage("three")]);
-      await collect(agent.invoke({ session: "s" }, { text: "once more" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "once more" } }));
       expect(brokenWarns()).toBe(1);
     } finally {
       warn.mockRestore();
@@ -627,20 +632,16 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
       const { faux } = makeFaux();
       faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("recovered")]);
       const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
-      await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+      await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
       await chmod(system, 0o000); // the live re-read now throws (unreadable SYSTEM.md)
-      const events: string[] = [];
-      let details = "";
-      for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
-        events.push(e.type);
-        if (e.type === "failed") details = e.details;
-      }
-      expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
-      expect(details).toMatch(/SYSTEM\.md/);
+      // A failed run, never a thrown iteration error: the read failure is the run's outcome.
+      const failed = await collect(agent.invoke({ sessionId: "s", prompt: { text: "again" } })).catch((e) => e);
+      expect(failed).toBeInstanceOf(RunNotCompleted);
+      expect((failed as RunNotCompleted).message).toMatch(/SYSTEM\.md/);
 
       await chmod(system, 0o644); // the next good edit heals it — same agent, no restart
-      const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
+      const { text } = await collect(agent.invoke({ sessionId: "s", prompt: { text: "back" } }));
       expect(text).toBe("recovered");
     },
   );
@@ -719,7 +720,7 @@ describe("create L2: the agent directory is the working directory", () => {
       providers: [faux.provider],
     });
     const events = [];
-    for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
+    for await (const e of agent.invoke({ sessionId: "s", prompt: { text: "hi" } })) events.push(e);
     expect(JSON.stringify(events)).toContain("READ-FROM-DEFINITION-DIR");
     expect(systemPrompt).toContain(`<cwd>\n${definitionDir}\n</cwd>`);
     expect(systemPrompt).toContain("FROM-OWN-AGENTS");
@@ -738,7 +739,7 @@ describe("create L2: explicit tools replace the coding defaults", () => {
       tools: piAllCodingTools(dir).filter((tool) => tool.name === "read"),
     });
 
-    const session = await assembly.sessionFactory("s");
+    const session = await piAgentSessionFactory({ ...assembly.binding, sessions: assembly.sessions })("s");
     // ACTIVE is the property that matters: what the model is offered and may call. The registry may
     // hold more than we passed — pi 0.84.3 keeps its own `powershell` there — but nothing we omitted
     // is ever ACTIVATED, and that is the guarantee. What the model actually receives is asserted in
@@ -770,7 +771,7 @@ describe("create L2: explicit tools replace the coding defaults", () => {
       tools: piAllCodingTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
       base: "You read and search files.",
     });
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(prompt.startsWith("You read and search files.")).toBe(true);
     expect(prompt).not.toContain("executing commands");

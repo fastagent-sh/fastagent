@@ -393,8 +393,8 @@ that imports it; keep package versions aligned.
 
 - For the whole service, use `createAgentService(agentDir)`, mount its Fetch `handler`, await `ready`,
   and close the service on application shutdown. This includes discovered channels and scheduling.
-- For invocation only, use `createPiAgentFromDefinition` / `createPiAgentFromDir` and
-  `createInvokeHandler(agent)`, or consume `agent.invoke` directly. An invoke handler alone does not
+- For the agent's API only, use `createPiAgentFromDefinition` / `createPiAgentFromDir` and
+  `createAgentHandler(agent)`, or consume `agent.invoke` directly. The API handler alone does not
   mount native channels or start schedules.
 
 The application owns authentication, users, session ownership, database, and deployment. Preserve raw
