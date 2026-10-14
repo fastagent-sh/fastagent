@@ -432,6 +432,49 @@ describe("serving layer", () => {
     }
   });
 
+  it("what a lagging subscriber cannot read back is kept: the error that ends a run, and the latest state", async () => {
+    const saved = { ...LIVE_BACKLOG };
+    LIVE_BACKLOG.events = 2;
+    try {
+      const store = new FakeStore();
+      const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+      const session = agent.sessions.get("s");
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
+      const follow = session.follow()[Symbol.asyncIterator]();
+      await follow.next();
+      // Not read while this run writes, so both the invoke's stream and the follow fall behind before its end.
+      const invoked = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
+      const receipt = await invoked.next();
+      const runId = receipt.done || receipt.value.type !== "accepted" ? "" : receipt.value.run.runId;
+      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("running"));
+      // A run queued behind holds the session, so nothing closes the refused run's end for it in the log.
+      const next = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+      store.refuseNext = "run_ended";
+      store.release();
+      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("done"));
+      const rest = [];
+      for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
+      expect(rest.at(-1)).toMatchObject({ type: "serving_error" });
+      expect(rest.some((e) => e.type === "entry" && e.entry.kind === "run_ended")).toBe(false);
+      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("running"));
+      store.release();
+      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("done"));
+      const followed: FollowEvent[] = [];
+      for (;;) {
+        const next = await Promise.race([
+          follow.next(),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 200)),
+        ]);
+        if (!next || next.done) break;
+        followed.push(next.value);
+      }
+      await follow.return?.();
+      expect(followed.filter((e) => e.type === "state").at(-1)).toMatchObject({ state: { status: "idle" } });
+    } finally {
+      Object.assign(LIVE_BACKLOG, saved);
+    }
+  });
+
   it("an entry written between subscribing and the first read is delivered once", async () => {
     const port = loopPort(fakeLoopHarness(new FakeStore()));
     let first = true;

@@ -108,19 +108,31 @@ const endsRun =
 const utf8 = new TextEncoder();
 
 /** The entries a subscriber has been given, and the last of them: where a read of what it missed starts. */
+/**
+ * Where a subscriber's next read of the log starts, and what keeps an entry from reaching it twice. An entry can come
+ * both from a read and from the live queue only while that read overlaps the queue, so only the latest read's ids are
+ * kept, and dropped once a live entry newer than all of them arrives: live entries come in append order.
+ */
 interface Delivered {
   last: string | undefined;
-  /** False for an entry already given. */
-  add(entry: Entry): boolean;
+  /** An entry given from a read of the log. `fresh` starts a new read. */
+  read(entry: Entry, fresh?: boolean): void;
+  /** Whether a live entry is new to this subscriber. */
+  live(entry: Entry): boolean;
 }
 
 function deliveredFrom(cursor: string | undefined): Delivered {
-  const ids = new Set<string>();
+  let fromRead = new Set<string>();
   const delivered: Delivered = {
     last: cursor,
-    add(entry) {
-      if (ids.has(entry.id)) return false;
-      ids.add(entry.id);
+    read(entry, fresh) {
+      if (fresh) fromRead = new Set();
+      fromRead.add(entry.id);
+      delivered.last = entry.id;
+    },
+    live(entry) {
+      if (fromRead.has(entry.id)) return false;
+      fromRead = new Set();
       delivered.last = entry.id;
       return true;
     },
@@ -160,8 +172,16 @@ export function servingAgent(port: HarnessPort): Agent {
         const backlog = yield* Queue.unbounded<{ event?: SessionEvent; bytes: number }>();
         let bytes = 0;
         let behind = false;
+        /** The newest `state` while behind: a status, so the latest is all a subscriber needs, and the log has none. */
+        let missedState: SessionEvent | undefined;
         const unwatch = port.watch(sessionId, (event) => {
-          if (behind) return;
+          if (behind) {
+            // Entries come back from the log and deltas are allowed lost (SPEC v1 §5). An error is neither: it can be
+            // what ends a run's stream (a `run_ended` the storage refused), so it is never dropped.
+            if (event.type === "serving_error") Queue.offerUnsafe(backlog, { event, bytes: 0 });
+            if (event.type === "state") missedState = event;
+            return;
+          }
           const size = utf8.encode(JSON.stringify(event)).byteLength;
           if (Queue.sizeUnsafe(backlog) >= LIVE_BACKLOG.events || bytes + size > LIVE_BACKLOG.bytes) {
             behind = true;
@@ -174,22 +194,32 @@ export function servingAgent(port: HarnessPort): Agent {
           bytes += size;
           Queue.offerUnsafe(backlog, { event, bytes: size });
         });
-        /** The live events, deduplicated against `delivered`, which the caller's own back-fill has filled. */
+        /** The live events, after the entries `delivered` was given by the caller's own back-fill. */
         const live = (
           delivered: Delivered,
-          refill: (after: string | undefined) => Effect.Effect<readonly Entry[], unknown>,
+          refill: (after: string | undefined) => Stream.Stream<Entry, unknown>,
         ): Stream.Stream<SessionEvent> =>
           Stream.fromQueue(backlog).pipe(
-            Stream.flatMap((queued) => {
+            Stream.flatMap((queued): Stream.Stream<SessionEvent, unknown> => {
               bytes -= queued.bytes;
-              if (queued.event) return Stream.succeed(queued.event);
+              const { event } = queued;
+              if (event) {
+                return event.type !== "entry" || delivered.live(event.entry) ? Stream.succeed(event) : Stream.empty;
+              }
               // Resumed before the read, so an entry appended in between is in the queue, the read, or both.
               behind = false;
-              return Stream.fromEffect(refill(delivered.last)).pipe(
-                Stream.flatMap((entries) => Stream.fromIterable(entries.map(entryEvent))),
+              const state = missedState;
+              missedState = undefined;
+              let fresh = true;
+              return refill(delivered.last).pipe(
+                Stream.map((entry): SessionEvent => {
+                  delivered.read(entry, fresh);
+                  fresh = false;
+                  return entryEvent(entry);
+                }),
+                Stream.concat(state ? Stream.succeed(state) : Stream.empty),
               );
             }),
-            Stream.filter((event) => event.type !== "entry" || delivered.add(event.entry)),
             Stream.catchCause((cause) =>
               failedStream(portFailed("reading back what a subscriber missed", portError(cause))),
             ),
@@ -222,11 +252,11 @@ export function servingAgent(port: HarnessPort): Agent {
         return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(runId))) };
       }
       const delivered = deliveredFrom(after);
-      for (const entry of backfill.entries) delivered.add(entry);
+      for (const [i, entry] of backfill.entries.entries()) delivered.read(entry, i === 0);
       const refill = (from: string | undefined) =>
-        fromPort(() => port.runEntries(sessionId, runId, from)).pipe(
-          Effect.flatMap((page) =>
-            page.ok ? Effect.succeed(page.entries) : Effect.fail(new AgentRejection(page.error)),
+        Stream.fromEffect(fromPort(() => port.runEntries(sessionId, runId, from))).pipe(
+          Stream.flatMap((page) =>
+            page.ok ? Stream.fromIterable(page.entries) : Stream.fail(new AgentRejection(page.error)),
           ),
         );
       const fresh = live(delivered, refill).pipe(Stream.filter(belongsTo(runId)));
@@ -289,31 +319,28 @@ export function servingAgent(port: HarnessPort): Agent {
           const first = yield* load(after ?? null);
           if (!first.ok) return Stream.succeed<FollowEvent>({ type: "rejected", error: first.error });
           type Loaded = Extract<PortRead, { ok: true }>;
-          const backfill = Stream.paginate<Loaded | string, SessionEvent, unknown>(first, (state) =>
-            Effect.gen(function* () {
-              const page = typeof state === "string" ? yield* load(state) : state;
-              if (!page.ok) return yield* Effect.fail(new AgentRejection(page.error));
-              for (const entry of page.entries) delivered.add(entry);
-              const last = page.entries.at(-1);
-              return [
-                page.entries.map(entryEvent),
-                page.more.after && last ? Option.some<Loaded | string>(last.id) : Option.none<Loaded | string>(),
-              ] as const;
+          /** The entries from a page already loaded, or from a cursor, one page at a time. */
+          const pages = (start: { page: Loaded } | { cursor: string | null }): Stream.Stream<Entry, unknown> =>
+            Stream.paginate<{ page: Loaded } | { cursor: string | null }, Entry, unknown>(start, (state) =>
+              Effect.gen(function* () {
+                const page = "page" in state ? state.page : yield* load(state.cursor);
+                if (!page.ok) return yield* Effect.fail(new AgentRejection(page.error));
+                const last = page.entries.at(-1);
+                return [
+                  page.entries,
+                  page.more.after && last ? Option.some({ cursor: last.id }) : Option.none(),
+                ] as const;
+              }),
+            );
+          let fresh = true;
+          const backfill = pages({ page: first }).pipe(
+            Stream.map((entry): SessionEvent => {
+              delivered.read(entry, fresh);
+              fresh = false;
+              return entryEvent(entry);
             }),
           );
-          const refill = (from: string | undefined) =>
-            Effect.gen(function* () {
-              const entries: Entry[] = [];
-              let cursor = from ?? null;
-              for (;;) {
-                const page = yield* load(cursor);
-                if (!page.ok) return yield* Effect.fail(new AgentRejection(page.error));
-                entries.push(...page.entries);
-                const last = page.entries.at(-1);
-                if (!page.more.after || !last) return entries;
-                cursor = last.id;
-              }
-            });
+          const refill = (from: string | undefined) => pages({ cursor: from ?? null });
           return Stream.concat(backfill, live(delivered, refill)) as Stream.Stream<FollowEvent, unknown>;
         }).pipe(Effect.catchCause((cause) => Effect.succeed(followFailed(portError(cause))))),
       ).pipe(Stream.catchCause((cause) => followFailed(portError(cause)))),
