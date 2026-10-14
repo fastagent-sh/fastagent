@@ -42,8 +42,8 @@ export interface StartOptions {
   bind?: string;
   model?: string;
   tunnel?: boolean;
-  /** false ⇔ `--no-invoke`: withhold `POST /invoke` for THIS run (`http.invoke` is the persistent form). */
-  invoke?: boolean;
+  /** false ⇔ `--no-api`: withhold the agent's API for THIS run (`http.api` is the persistent form). */
+  api?: boolean;
   input?: boolean;
 }
 

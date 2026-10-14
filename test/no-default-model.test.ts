@@ -2,6 +2,7 @@
  * An agent with no default model still opens: its conversations are readable and a session that records its model
  * runs on it. Only a session with no model of its own is refused, at invoke, with `missing_model` (#706).
  */
+import { collect } from "../src/protocol-collect.ts";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,13 +112,15 @@ describe("an agent with no default model", () => {
     });
   });
 
-  it("createPiAgentFromDir opens a directory whose config sets no model, with its session control", async () => {
+  it("createPiAgentFromDir opens a directory whose config sets no model, and a run there fails missing_model", async () => {
     vi.stubEnv("FASTAGENT_MODEL", undefined);
     const dir = await mkdtemp(join(tmpdir(), "fa-no-model-"));
     await writeFile(join(dir, "fastagent.config.ts"), "export default {};");
-    const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+    const opened = await createPiAgentFromDir(dir, {});
     expect(opened.modelSpec).toBeUndefined();
-    expect(opened.sessionControl).toBeDefined();
-    expect(await opened.sessionControl?.sessions.list()).toEqual([]);
+    expect(await opened.agent.sessions.list()).toEqual([]);
+    await expect(collect(opened.agent.invoke({ sessionId: "s", prompt: { text: "hi" } }))).rejects.toMatchObject({
+      outcome: { status: "failed", error: { code: "missing_model" } },
+    });
   });
 });

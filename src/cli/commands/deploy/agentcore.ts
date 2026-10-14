@@ -82,12 +82,11 @@ export const agentcoreHost: HostDeploy = {
       );
     }
     // Host capability limit, stated before the image is built rather than left to a line in CloudWatch.
-    if (config.sessionControl === true) {
+    if (config.http?.api !== undefined || config.http?.control !== undefined) {
       console.error(
-        `[fastagent] warn: sessionControl: true has no effect on AgentCore — /control/* is not served here. This ` +
-          `host's only public ingress relays anonymous traffic to the container as trusted (the forwarder holds the ` +
-          `ingress secret and attaches it), and the plane has nothing of its own to verify. Steer sessions from a ` +
-          `host that serves it behind your own auth (docs/design/session-control.md §14).`,
+        "[fastagent] warn: http.api and http.control have no effect on AgentCore — the agent's API is reached through " +
+          '"api" envelopes on the Runtime\'s IAM-gated InvokeAgentRuntime, both planes, and IAM decides who may call ' +
+          "them. The public ingress relays only to the channels.",
       );
     }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container

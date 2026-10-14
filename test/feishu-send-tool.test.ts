@@ -3,6 +3,7 @@
  * so what differs per cloud (gateway, env prefix, credential isolation) runs for BOTH, and what does
  * not (the description contract, input validation, card/text encoding, transport reuse) runs once.
  */
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +112,7 @@ describe.each([
 
   it("uses the mounted channel's credentials and gateway, keeping both clouds isolated", async () => {
     const calls = stubOpenApi();
-    const ctx = { stateRoot: join(fx.cwd, ".state"), agent };
+    const ctx = { stateRoot: join(fx.cwd, ".state"), agent: asProtocolAgent(agent) };
     channel({
       appId: "cli_channel",
       appSecret: "channel-secret",

@@ -9,6 +9,8 @@
 import type { AssistantMessage, Models } from "@earendil-works/pi-ai";
 import type { AgentSession, SessionEntry as PiSessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { warnWhenChanged } from "./report.ts";
 import type {
   HandedMessage,
   LogRecord,
@@ -137,6 +139,11 @@ function answeredOutcome(message: AssistantMessage): LoopOutcome {
   return { status: "failed", error: { ...agentError("model_error", terminal.details), retryable: terminal.retryable } };
 }
 
+interface Settings {
+  models: Models;
+  defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel };
+}
+
 interface Handed extends HandedMessage {
   /** Whether its fate has been said. */
   said?: true;
@@ -162,8 +169,21 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
   const { sessions } = options;
   const bind = piSessionBinder(options);
 
-  const settingsOf = async () => {
-    const models = await options.catalog();
+  /**
+   * The registry and the default pair as a run would resolve them now, or undefined when the registry cannot be built
+   * (`extensions/` unreadable). Each fault is said when it appears or changes, not by every read that meets it.
+   */
+  const settingsOf = async (): Promise<Settings | undefined> => {
+    let models: Models;
+    try {
+      models = await options.catalog();
+      warnWhenChanged(`${options.cwd}: registry`, []);
+    } catch (error) {
+      warnWhenChanged(`${options.cwd}: registry`, [
+        `[fastagent] the model registry cannot be built (sessions report no model): ${String(error)}`,
+      ]);
+      return undefined;
+    }
     return {
       models,
       defaults: { ...withDefault(models), thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL },
@@ -172,9 +192,13 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
   const withDefault = (models: Models): { model?: AnyModel } => {
     if (!options.modelSpec) return {};
     try {
-      return { model: resolveModel(models, options.modelSpec) };
+      const model = resolveModel(models, options.modelSpec);
+      warnWhenChanged(`${options.cwd}: default model`, []);
+      return { model };
     } catch (error) {
-      log.warn(`[fastagent] the configured default model does not resolve: ${String(error)}`);
+      warnWhenChanged(`${options.cwd}: default model`, [
+        `[fastagent] the configured default model does not resolve: ${String(error)}`,
+      ]);
       return {};
     }
   };
@@ -215,11 +239,31 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     };
     let closed = false;
 
+    /** Total: a registry that cannot be built, or an entry chain that cannot be walked, leaves the pair out. */
     const state = (): Omit<SessionState, "status" | "run" | "queued"> => {
       const name = record.getSessionName();
-      const path = activePath(record);
-      const resolved = resolveSessionSettings(path, settings.models, settings.defaults);
-      const usage = sessionUsage(path as unknown as PiSessionEntry[], record, resolved?.model.contextWindow);
+      let resolved: ReturnType<typeof resolveSessionSettings>;
+      let usage: ReturnType<typeof sessionUsage>;
+      try {
+        const path = activePath(record);
+        resolved = settings && resolveSessionSettings(path, settings.models, settings.defaults);
+        // A virtual model's window is its router's choice: the physical model of the newest answer says which.
+        const selected = resolved?.model;
+        const latest =
+          selected?.api === "pi-virtual"
+            ? record
+                .buildSessionContext()
+                .messages.filter(
+                  (m) => m.role === "assistant" && m.stopReason !== "error" && m.stopReason !== "aborted",
+                )
+                .at(-1)
+            : undefined;
+        const physical =
+          latest?.role === "assistant" ? settings?.models.getModel(latest.provider, latest.model) : undefined;
+        usage = sessionUsage(path as unknown as PiSessionEntry[], record, (physical ?? selected)?.contextWindow);
+      } catch (error) {
+        log.warn(`[fastagent] session ${sessionId}: state unreadable (entry chain): ${String(error)}`);
+      }
       const branch = record.getBranch();
       const leaf = [...branch].reverse().find(isRecord);
       return {
@@ -516,14 +560,21 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
       // override this update for every later run too.
       update: async (patch: SessionSettings) => {
         settings = await settingsOf();
+        const now = settings;
+        if (!now && (patch.model !== undefined || patch.thinkingLevel !== undefined)) {
+          return failure(
+            "unavailable",
+            "the model registry cannot be built now, so a model or level cannot be checked",
+          );
+        }
         let model: AnyModel | undefined;
-        if (patch.model !== undefined) {
-          model = modelBySpec(settings.models, patch.model);
+        if (patch.model !== undefined && now) {
+          model = modelBySpec(now.models, patch.model);
           if (!model) return invalid(`unknown model "${patch.model}": models() lists the accepted models`);
         }
         if (patch.name !== undefined && patch.name.trim() === "") return invalid("a session name cannot be empty");
-        if (patch.thinkingLevel !== undefined) {
-          const target = model ?? resolveSessionSettings(activePath(record), settings.models, settings.defaults)?.model;
+        if (patch.thinkingLevel !== undefined && now) {
+          const target = model ?? resolveSessionSettings(activePath(record), now.models, now.defaults)?.model;
           const problem = thinkingLevelProblem(patch.thinkingLevel, target);
           if (problem) return invalid(problem);
         }

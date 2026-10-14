@@ -80,7 +80,8 @@ Feishu's signature). FastAgent adds no authentication to channel routes, and doe
 requirement or CORS policy of its own routes to them. A custom channel that verifies nothing can be driven by
 anyone, including a web page.
 
-`POST /invoke` is reserved: a channel declaring it makes `dev` / `start` fail (unless `http.invoke: false`). Rename
+The agent's API is reserved: a channel route at `POST /invoke`, under `/sessions` or `/agent`, or under `/control`
+when that plane is on, makes `dev` / `start` fail (unless `http.api: false`, or `http.control` off). Rename
 a channel file to e.g. `telegram.ts.disabled` to keep it without mounting it. A channel that fails to load, or
 collides with another channel's route, makes `dev` / `start` fail.
 

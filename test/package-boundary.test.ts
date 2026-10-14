@@ -278,7 +278,8 @@ describe("channels/kit is defined by who imports it", () => {
       .filter((f) => f.endsWith(".ts"))
       .flatMap((file) =>
         importersOf(file)
-          .filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p))
+          // legacy-agent.ts is the temporary v0.1 adapter the channels still go through; it goes when they move to v1.
+          .filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p) && p !== "legacy-agent.ts")
           .map((p) => `${file} ← ${p}`),
       );
     expect(offenders).toEqual([]);
@@ -320,6 +321,8 @@ describe("the contracts depend on nothing", () => {
       "effect/Effect",
       "effect/Exit",
       "effect/Fiber",
+      "effect/Result",
+      "effect/Schema",
       "effect/Scope",
     ]);
     // ...and neither neutral layer names a harness (the harness-neutrality suite above covers this

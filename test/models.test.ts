@@ -559,20 +559,20 @@ describe("models.json while the agent runs (session control)", () => {
       });
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/a" };`);
     await writeFile(join(dir, "models.json"), gateway(["a"]));
-    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
-    const listed = async () =>
-      (await sessionControl!.models()).map((m) => m.spec).filter((spec) => spec.startsWith("mygw/"));
+    const { agent } = await createPiAgentFromDir(dir, {});
+    for (const id of ["s", "t"]) await agent.sessions.create({ sessionId: id });
+    const listed = async () => (await agent.models()).map((m) => m.spec).filter((spec) => spec.startsWith("mygw/"));
     expect(await listed()).toEqual(["mygw/a"]);
 
     await writeFile(join(dir, "models.json"), gateway(["a", "b"]));
     expect(await listed()).toEqual(["mygw/a", "mygw/b"]);
-    expect(await sessionControl!.sessions.get("s").update({ model: "mygw/b" })).toEqual({ ok: true });
-    expect((await sessionControl!.sessions.get("s").state()).model).toBe("mygw/b");
+    expect(await agent.sessions.get("s").update({ model: "mygw/b" })).toEqual({ ok: true });
+    expect(await agent.sessions.get("s").read({ limit: 0 })).toMatchObject({ ok: true, state: { model: "mygw/b" } });
 
     // Removed: no longer offered for a new selection.
     await writeFile(join(dir, "models.json"), gateway(["a"]));
     expect(await listed()).toEqual(["mygw/a"]);
-    expect((await sessionControl!.sessions.get("t").update({ model: "mygw/b" })).ok).toBe(false);
+    expect((await agent.sessions.get("t").update({ model: "mygw/b" })).ok).toBe(false);
   });
 
   it("a default the files never resolved holds no edit back: there was nothing a turn could run on to keep", async () => {
@@ -607,13 +607,17 @@ describe("models.json while the agent runs (session control)", () => {
       });
     await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/a" };`);
     await writeFile(join(dir, "models.json"), gateway("mygw"));
-    const { sessionControl } = await createPiAgentFromDir(dir, { sessionControl: true });
+    const { agent } = await createPiAgentFromDir(dir, {});
+    await agent.sessions.create({ sessionId: "s" });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await writeFile(join(dir, "models.json"), gateway("othergw"));
       for (let i = 0; i < 2; i++) {
-        expect((await sessionControl!.sessions.get("s").state()).model).toBe("mygw/a");
-        expect((await sessionControl!.models()).map((m) => m.spec)).toContain("mygw/a");
+        expect(await agent.sessions.get("s").read({ limit: 0 })).toMatchObject({
+          ok: true,
+          state: { model: "mygw/a" },
+        });
+        expect((await agent.models()).map((m) => m.spec)).toContain("mygw/a");
       }
       const said = errors.mock.calls.map((call) => call.join(" ")).filter((line) => /cannot be used/.test(line));
       expect(said).toHaveLength(1);

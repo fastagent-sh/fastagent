@@ -43,12 +43,9 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-The mount context also carries `control?: SessionControl` — the session-control hub, for channel features
-that act on a live run (the built-in channels map a user "stop" onto
-`control.sessions.get(session).abort()`). Every serve has it; `config.sessionControl` decides only whether
-that same hub is ALSO published as `/control/*`, and it is what wires the hub's write side (a model change,
-a fork, a delete answer `unsupported_capability` without it). An embedder can still mount a service without
-one, so degrade visibly, never silently.
+The mount context's `agent` is the [SPEC v1](SPEC-v1.md) Agent: besides `invoke`, it reaches a session's live
+run (the built-in channels map a user "stop" onto `agent.sessions.get(session).abort()`), its history and its
+settings, whether or not this serve publishes the HTTP planes.
 
 `fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`. A function export is called synchronously with the assembled agent and must return a non-empty `Routes` object; an object export must implement `{ name, connect(ctx, signal) }` and return `{ ready, closed }`. `ready` settles once the first usable connection is up; when the signal aborts before that, it must still settle (resolution then means cancellation — the server skips ready-side effects once the signal is aborted — and it must never hang). `closed` resolves after abort-driven shutdown and rejects on terminal transport failure. Long-connection adapters own reconnects and translate the framework's `AbortSignal` into their transport's close operation. Any enabled channel that fails to load fails serving. Rename a file to `<name>.ts.disabled` when it should remain present but disabled.
 

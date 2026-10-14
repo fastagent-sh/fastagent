@@ -139,7 +139,7 @@ if (process.argv[1] === "fail") {
 const service = await openStartService(${JSON.stringify(agent)}, { input: false });
 try {
   const events = [];
-  for await (const event of service.agent.invoke({ session: "deployed-conversation" }, { text: "Read my context" })) events.push(event);
+  for await (const event of service.agent.invoke({ sessionId: "deployed-conversation", prompt: { text: "Read my context" } })) events.push(event);
   // Where \`prepareStartWorkspace\` pointed the machinery: the storage, beside the replaced definition.
   const { realpathSync } = await import("node:fs");
   console.log(JSON.stringify({ events, state: process.env.FASTAGENT_STATE_DIR, mise: process.env.MISE_DATA_DIR, content: realpathSync("content") }));
@@ -158,7 +158,7 @@ try {
       { env, timeout: CHILD_TIMEOUT_MS },
     );
     const reported = JSON.parse(out.stdout.trim().split("\n").at(-1)!) as {
-      events: { type: string; content?: unknown }[];
+      events: { type: string; entry?: { kind: string; data: { text?: string; outcome?: unknown } } }[];
       state: string;
       mise: string;
       content: string;
@@ -172,11 +172,11 @@ try {
       mise: join(root, ".state", "mise"),
       content: join(await realpath(root), "content"),
     });
-    expect(events.at(-1)).toEqual({ type: "completed" });
-    const result = events.find((event) => event.type === "tool_ended");
-    expect(JSON.stringify(result)).toContain("deployed-conversation");
+    expect(events.at(-1)?.entry).toMatchObject({ kind: "run_ended", data: { outcome: { status: "completed" } } });
+    const result = events.find((event) => event.entry?.kind === "tool_result")?.entry?.data.text ?? "";
+    expect(result).toContain("deployed-conversation");
     // The tool's working directory is the deployed definition on the storage, not the image's copy.
-    expect(JSON.stringify(result)).toContain(`"cwd":"${join(root, "definition")}"`);
+    expect(result).toContain(`"cwd":"${join(root, "definition")}"`);
     expect(await readFile(join(root, ".secrets/auth.json"), "utf8")).toBe(rotated);
     expect(requests).toBe(2);
     expect(await readFile(attempts, "utf8")).toBe("failed\nretry\n");

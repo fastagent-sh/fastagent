@@ -187,17 +187,17 @@ function createAgentService(
               signal?: AbortSignal;
               onChannelClosed?: (name: string, error?: unknown) => void },
 ): Promise<{
-  handler: ChannelHandler;              // channels + control plane + health, composed
+  handler: ChannelHandler;              // channels + the agent's API planes + health, composed
   agent: Agent;
   routes: Routes;                        // what is served, for a startup line
   agentDir: string;
   channels: { routes: string[]; longConnections: string[] };
   unverifiedRoutes: readonly string[];     // the route keys fastagent itself serves here
                                           // ("POST /invoke", "GET /health"), minus what a channel
-                                          // took over or `http.invoke: false` withheld
+                                          // took over or `http.api: false` withheld
   schedules: () => readonly Schedule[];   // schedules/*.md as armed now ({ name, cron, tz?, prompt }); follows edits
   ready: Promise<void>;             // settles when long connections are up; rejects if one cannot
-  controlPrefix?: string;                // "/control", when sessionControl is on
+  planes: { api: boolean; control: boolean }; // which of the agent's HTTP planes this handler serves
   close(): Promise<void>;                // stop long connections and schedules; rejects if one fails
                                          // to stop, or does not stop within 5s
 }>;

@@ -31,11 +31,6 @@ export interface FastagentConfig {
     /** Default port for `dev` / `start` (`DEFAULT_HTTP_PORT` when unset). */
     port?: number;
   };
-  /**
-   * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch — steer/abort/compact +
-   * session properties and lifecycle) for remote consumers.
-   */
-  sessionControl?: boolean;
   /** How the agent is deployed, where a host needs to be told. */
   deploy?: {
     /** `deploy agentcore` only. */
@@ -106,12 +101,12 @@ async function loadConfigFile(path: string): Promise<FastagentConfig> {
   for (const key of ["content", "contexts"]) {
     if (key in c) throw new Error(`${path}: "${key}" is not a config key — content is declared in ${CONTEXT_FILE}`);
   }
-  refuseUnknownKeys(c, ["model", "thinkingLevel", "tools", "http", "deploy", "sessionControl"], "", path);
+  if ("sessionControl" in c) {
+    throw new Error(`${path}: "sessionControl" is not a config key — the control plane is "http.control"`);
+  }
+  refuseUnknownKeys(c, ["model", "thinkingLevel", "tools", "http", "deploy"], "", path);
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
-  }
-  if (c.sessionControl !== undefined && typeof c.sessionControl !== "boolean") {
-    throw new Error(`${path}: "sessionControl" must be a boolean`);
   }
   if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(c.thinkingLevel as string)) {
     throw new Error(`${path}: "thinkingLevel" must be one of ${[...THINKING_LEVELS].join(", ")}`);
@@ -139,9 +134,16 @@ async function loadConfigFile(path: string): Promise<FastagentConfig> {
   if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
     throw new Error(`${path}: "http" must be an object`);
   }
-  refuseUnknownKeys(c.http ?? {}, ["port", "cors", "invoke"], "http.", path);
-  if (c.http?.invoke !== undefined && typeof c.http.invoke !== "boolean") {
-    throw new Error(`${path}: "http.invoke" must be a boolean`);
+  if (c.http && "invoke" in c.http) {
+    throw new Error(
+      `${path}: "http.invoke" is not a config key — the user plane, POST /invoke included, is "http.api"`,
+    );
+  }
+  refuseUnknownKeys(c.http ?? {}, ["port", "cors", "api", "control"], "http.", path);
+  for (const key of ["api", "control"] as const) {
+    if (c.http?.[key] !== undefined && typeof c.http[key] !== "boolean") {
+      throw new Error(`${path}: "http.${key}" must be a boolean`);
+    }
   }
   if (c.http?.cors !== undefined) assertCorsOrigins(c.http.cors, `${path}: "http.cors"`);
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {

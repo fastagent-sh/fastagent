@@ -43,6 +43,9 @@ src/
 │                           # portRequest / portCleanup / PortFailure
 ├── once.ts                 # work that runs once per process, its outcome shared (shutdown, AgentCore activation)
 ├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
+├── protocol-collect.ts     # the v1 buffered consumer: a run's answer, or RunNotCompleted / RunUnfinished saying why not
+├── run-text.ts             # a run's answer text as it streams: its deltas, plus entry text no delta carried
+├── legacy-agent.ts         # TEMPORARY: a v0.1 Agent over a v1 one, for the channels and the scheduler until they move
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
 │                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
 ├── index.ts                # supported all-in-one entry (re-exports core + node + session + pi)
@@ -151,7 +154,8 @@ src/
 │   │   ├── tasks.ts        # side-task tracking (ACK-independent work); drain is observation only
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
-│   │   └── stop-command.ts # the shared /stop parsing every chat channel accepts
+│   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
+│   │   └── thread-fork.ts  # a new thread starts as a fork of its room at the exchange it points into
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy

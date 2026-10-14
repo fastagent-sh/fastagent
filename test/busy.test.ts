@@ -1,4 +1,10 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { activeWork, beginWork } from "../src/channels/busy.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
@@ -87,5 +93,49 @@ describe("channels/busy: the process-wide in-flight signal", () => {
     await tracker.drain();
     await until(() => activeWork() === base);
     expect(activeWork()).toBe(base);
+  });
+});
+
+describe("an opened agent's runs", () => {
+  it("count as work in flight from the moment a run starts until it ends", async () => {
+    // Without it, /ping says Healthy and `dev` restarts mid-run: the host reclaims a container that is still working.
+    const held: ServerResponse[] = [];
+    const server = createServer((_req, res) => {
+      held.push(res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      const dir = await mkdtemp(join(tmpdir(), "fa-open-busy-"));
+      await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "held/held" };\n`);
+      await writeFile(
+        join(dir, "models.json"),
+        JSON.stringify({
+          providers: {
+            held: {
+              baseUrl: `http://127.0.0.1:${port}/v1`,
+              api: "openai-completions",
+              apiKey: "test",
+              models: [{ id: "held" }],
+            },
+          },
+        }),
+      );
+      const { agent } = await createPiAgentFromDir(dir);
+      const base = activeWork();
+      const run = collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } })).catch((e: unknown) => e);
+      await until(() => held.length > 0);
+      expect(activeWork()).toBeGreaterThan(base);
+      for (const res of held) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "refused", type: "bad_request" } }));
+      }
+      await run;
+      await until(() => activeWork() === base);
+      expect(activeWork()).toBe(base);
+    } finally {
+      for (const res of held) res.destroy();
+      server.close();
+    }
   });
 });

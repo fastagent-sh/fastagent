@@ -38,8 +38,7 @@ import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { dotEnvPath, loadEnvValues } from "../env.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
-import { DEFAULT_HTTP_PORT, describeAnonymousSurface } from "../service.ts";
-import { CONTROL_PREFIX } from "../channels/control.ts";
+import { DEFAULT_HTTP_PORT, describeAnonymousSurface, planesOf } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
 import { checkPackages, MISE_PACKAGE_NAMES, miseBinary, packageSpecs } from "../environment/mise.ts";
 
@@ -295,10 +294,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // What the PUBLIC host URL answers with no authentication of ours, NAMED FROM WHAT WILL ACTUALLY MOUNT, never from
   // the host alone: listing an endpoint this deployment does not
   // serve is how an operator learns to skim past every deploy warning — the same reason `publicUrl` exists.
-  const unauthenticated = describeAnonymousSurface({
-    invoke: config.http?.invoke !== false,
-    ...(config.sessionControl === true ? { controlPrefix: CONTROL_PREFIX } : {}),
-  });
+  const unauthenticated = describeAnonymousSurface(planesOf(config.http));
   if (publicUrl && unauthenticated.length > 0) {
     report.warn(
       `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +

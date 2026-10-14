@@ -4,9 +4,12 @@
  */
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Agent } from "../../protocol.ts";
+import { servingAgent } from "../../serving-layer.ts";
+import { loopPort } from "../../loop-port.ts";
+import { beginWork } from "../../channels/busy.ts";
+import { piLoopHarness } from "./loop-harness.ts";
+import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import {
   CONTEXT_FILE,
   AGENT_MODEL_CATALOG_FILE,
@@ -15,11 +18,9 @@ import {
   resolveSessionsDir,
   resolveStateRoot,
 } from "../../paths.ts";
-import type { AgentCommand, ModelDescriptor, SessionControl } from "../../session.ts";
+import type { AgentCommand, ModelDescriptor } from "../../session.ts";
 import { describeModels } from "./session-settings.ts";
-import { type IndirectTool, type PiAssembly, agentOf, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
-import type { SessionObserver } from "./turn-kit.ts";
-import { createPiSessionControl } from "./session-control.ts";
+import { type IndirectTool, type PiAssembly, assemblePiFromDefinition, resolveAgentTools } from "./create.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import { refuseBrokenDeclarations } from "../../loader.ts";
 import { declaredVariables } from "../../environment/declare.ts";
@@ -121,14 +122,6 @@ export interface CreatePiAgentFromDirOptions {
    * actually honored.
    */
   serving?: boolean;
-  /**
-   * Wire the control plane's BOUNDARY (model changes, fork, delete) and publish it. A serve always gets the hub
-   * itself — stopping the running turn is a chat command, not a management endpoint — so this is the answer to
-   * "may a remote caller steer and rewrite this deployment", nothing else. Defaults to `config.sessionControl`.
-   */
-  sessionControl?: boolean;
-  /** Additional raw tap with the FULL vocabulary. */
-  observer?: SessionObserver;
 }
 
 /**
@@ -361,11 +354,6 @@ export async function createPiAgentFromDir(
   /** The credential store and registry the agent runs on — what the startup report describes. */
   models: AgentModels;
   sessions: PiSessionRecordStore;
-  /** The observation plane over this agent's sessions; present on every serve (a channel's stop command reaches the
-   *  live run through it). Its boundary is wired only when {@link publishControl}. */
-  sessionControl?: SessionControl;
-  /** Whether that plane is also served as `/control/*` — `config.sessionControl`. */
-  publishControl: boolean;
   /** What the serve publishes — `config.http`, handed to the assembly as-is (MountableAgent). */
   http?: HttpSurface;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. */
@@ -402,62 +390,30 @@ export async function createPiAgentFromDir(
   const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: agentDir });
   // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
   const { assembly, definition } = await assembleFront(front, { tools: mountedTools, sessions });
-  // The hub is wired HERE because the store is created here (an external `createPiSessionControl` cannot exist before
-  // the store does).
-  const caller = options.observer;
-  // TWO decisions, not one. The hub is in-process bookkeeping over the run observer: a serve gets it unconditionally,
-  // because `/stop` in a chat is an ordinary thing to ask for and reaching the live run is the only way to answer it.
-  // Publishing `/control/*` — steer, rewrite, delete, unauthenticated at whatever URL this serves on — is the
-  // separate decision `config.sessionControl` makes, and it is the only one that also wires the boundary.
-  const publish = options.sessionControl ?? config.sessionControl === true;
-  const wantControl = publish || options.serving === true;
-  let hub: ReturnType<typeof createPiSessionControl> | undefined;
-  if (wantControl) {
-    // The plane resolves the registry and the default pair through the SAME function a turn's binding does, at each
-    // use (the definition's extensions can change both). Resolved once here as well, only when the boundary is wired,
-    // so a default model that does not resolve stops the open rather than the first control call.
-    if (publish) await assembly.resolveDefaultModel();
-    const boundary = publish
-      ? {
-          lease: assembly.lease,
-          sessionFactory: assembly.sessionFactory,
-          models: assembly.modelRuntime,
-          defaultModel: (registry: Models) => (modelSpec ? resolveModel(registry, modelSpec) : undefined),
-          thinkingLevel: assembly.thinkingLevel,
-        }
-      : undefined;
-    hub = createPiSessionControl({
-      sessions,
-      boundary,
-      // What a client offers is what a turn WOULD run, which since this agent inherits its machine is not the
-      // definition alone. Built through the same resource posture the turn uses, so the menu cannot list a name
-      // the prompt would not expand — a second reading of "which skills exist" is how those two come to disagree.
-      commands: () =>
-        agentCommands(agentDir, {
-          extensionPaths: assembly.extensionPaths,
-          modelRuntime: assembly.createModelRuntime,
-        }),
-      // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub and never cross the
-      // data plane's observer seam.
-      tap: caller ? (session, event) => caller(session, event) : undefined,
-    });
-  }
-  const observer: SessionObserver | undefined = hub
-    ? caller
-      ? (session, event, run) => {
-          hub.observer(session, event, run);
-          caller(session, event, run);
-        }
-      : hub.observer
-    : caller;
-  const agent = agentOf(assembly, observer);
+  // ONE LoopPort per opened directory: it holds each session's one writer while the session is busy.
+  const agent = servingAgent(
+    loopPort(
+      piLoopHarness({
+        ...assembly.binding,
+        sessions,
+        catalog: assembly.modelRuntime,
+        // What a client offers is what a run WOULD run, which since this agent inherits its machine is not the
+        // definition alone: built through the same resource posture a run uses.
+        commands: () =>
+          agentCommands(agentDir, {
+            extensionPaths: assembly.extensionPaths,
+            modelRuntime: assembly.createModelRuntime,
+          }),
+      }),
+      undefined,
+      { beginWork },
+    ),
+  );
   return {
     agent,
     definition,
     sessions,
-    sessionControl: hub?.control,
-    publishControl: publish,
-    http: config.http,
+    ...(config.http ? { http: config.http } : {}),
     agentDir,
     content,
     config,

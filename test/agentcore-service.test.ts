@@ -192,17 +192,17 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("names every config key that cannot mean anything here, not just sessionControl", async () => {
+  it("names every config key that cannot mean anything here", async () => {
     // Silence is how an operator concludes a setting took effect. `http.cors` has no browser to serve
-    // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.invoke`
-    // has no `/invoke` to withhold (this host serves `POST /invocations`).
-    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], invoke: false } }`);
+    // (the ingress is the forwarder's URL and the Runtime's IAM API, neither is a page); `http.api`
+    // has no `/invoke` to withhold (this host carries the API in "api" envelopes).
+    const dir = await agentDir({}, `{ model: "openai-codex/gpt-5.5", http: { cors: ["*"], api: false } }`);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const service = await mountAgentcoreService(await open(dir));
     try {
       const said = warn.mock.calls.flat().join(" ");
       expect(said).toMatch(/http\.cors has no effect here/);
-      expect(said).toMatch(/http\.invoke has no effect here/);
+      expect(said).toMatch(/http\.api has no effect here/);
     } finally {
       warn.mockRestore();
       await service.close();
@@ -222,18 +222,16 @@ describe("mountAgentcoreService", () => {
     // does not get the same treatment (nobody asks, and a buffered envelope cannot carry its SSE).
     const dir = await agentDir(
       { "channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("channel") });` },
-      `{ model: "openai-codex/gpt-5.5", sessionControl: true }`,
+      `{ model: "openai-codex/gpt-5.5", http: { control: true } }`,
     );
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     process.env.FASTAGENT_INGRESS_SECRET = "s3cret";
     const service = await mountAgentcoreService(await open(dir));
     try {
-      expect(service.controlPrefix).toBeUndefined();
-      // …so the startup report has nothing of ours to warn about here either. The advice it would
-      // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
-      // host: the real ingress is the forwarder's Function URL.
+      // Nothing of ours on the outer surface: the planes are reached through "api" envelopes, behind IAM.
+      expect(service.planes).toEqual({ api: false, control: false });
       expect(service.unverifiedRoutes).not.toContain("POST /invoke");
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/sessionControl is ON but \/control\/\* is NOT served here/);
+      expect(warn.mock.calls.flat().join(" ")).toMatch(/http\.control has no effect here/);
 
       /** What the forwarder sends for ANY public request to the Function URL. */
       const relay = (path: string, method = "GET") =>
@@ -261,10 +259,10 @@ describe("mountAgentcoreService", () => {
     }
   });
 
-  it("without sessionControl there is no plane to reach", async () => {
+  it("by default there is no plane on the outer surface either", async () => {
     const service = await mountAgentcoreService(await open(await agentDir()));
     try {
-      expect(service.controlPrefix).toBeUndefined();
+      expect(service.planes).toEqual({ api: false, control: false });
       // …so the startup report has nothing of ours to warn about here either. The advice it would
       // otherwise print ("--bind 127.0.0.1", "firewall the port") names a port nobody dials on this
       // host: the real ingress is the forwarder's Function URL.

@@ -1136,20 +1136,19 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
     // that does not exist is how an operator learns to skim past every deploy warning.
     expect(unauthenticated(await call(dir, { model: "openai/gpt-4o-mini" }, { publicUrl: false }))).toEqual([]);
 
-    // The same rule applied to the definition, not just the host: `http.invoke: false` withholds the
-    // one endpoint this warning would otherwise name, so with no control plane either there is
-    // nothing left to warn about.
-    const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false } });
+    // The same rule applied to the definition, not just the host: `http.api: false` withholds the
+    // API this warning would otherwise name, so with no control plane either there is nothing left to warn about.
+    const withheld = await call(dir, { model: "openai/gpt-4o-mini", http: { api: false } });
     expect(unauthenticated(withheld)).toEqual([]);
     // With the control plane on, the warning stands — naming only what is actually served.
     const controlOnly = unauthenticated(
-      await call(dir, { model: "openai/gpt-4o-mini", http: { invoke: false }, sessionControl: true }),
+      await call(dir, { model: "openai/gpt-4o-mini", http: { api: false, control: true } }),
     );
     expect(controlOnly).toHaveLength(1);
     expect(controlOnly[0]?.text).toContain("/control/*");
     expect(controlOnly[0]?.text).not.toContain("POST /invoke");
 
-    const on = await call(dir, { model: "openai/gpt-4o-mini", sessionControl: true });
+    const on = await call(dir, { model: "openai/gpt-4o-mini", http: { control: true } });
     expect(on.ok).toBe(true);
     if (on.ok) {
       // Only what the DEFINITION declared: fastagent mints no credential of its own any more.

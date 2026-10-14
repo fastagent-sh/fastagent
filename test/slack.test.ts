@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,7 +213,7 @@ function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRo
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent, stateRoot, control })["POST /slack"]!;
+  })({ agent: asProtocolAgent(agent, control), stateRoot })["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };
@@ -344,7 +345,7 @@ describe("Slack channel construction", () => {
   it("refuses a rotating bot token at startup, naming the upgrade, instead of failing 12 hours later", () => {
     expect(() =>
       slackChannel({ botToken: "xoxe.xoxb-rotating", signingSecret: SECRET })({
-        agent: replyingAgent().agent,
+        agent: asProtocolAgent(replyingAgent().agent),
         stateRoot: root(),
       }),
     ).toThrow(/rotating Slack bot token.*If token rotation is on/);
@@ -1024,7 +1025,7 @@ describe("Slack stop command", () => {
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
   });
 
-  it("maps no_active_run to the idle notice and degrades visibly without a control hub", async () => {
+  it("maps an idle session to the idle notice", async () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -1032,12 +1033,7 @@ describe("Slack stop command", () => {
     const withHub = mount(agent, {}, root(), control);
     await withHub.handler(signedRequest(message("11.0", { channel: "D1", channel_type: "im", text: "cancel" })));
     await withHub.turnsIdle();
-    const noHub = mount(agent, {}, root());
-    await noHub.handler(signedRequest(message("12.0", { channel: "D1", channel_type: "im", text: "stop" })));
-    await noHub.turnsIdle();
     expect(invoked).toEqual([]);
-    const texts = slackBodies(fetchMock, "chat.postMessage").map((b) => String(b.text));
-    expect(texts[0]).toBe("Nothing is running.");
-    expect(texts[1]).toContain("Stop isn't available");
+    expect(slackBodies(fetchMock, "chat.postMessage").map((b) => String(b.text))).toEqual(["Nothing is running."]);
   });
 });

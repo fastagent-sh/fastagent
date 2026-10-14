@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { asProtocolAgent } from "./protocol-agent.ts";
+import type { Agent as ProtocolAgent } from "../src/protocol.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -191,19 +193,20 @@ function buildChannel(
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
+  const protocol = asProtocolAgent(opts2Agent(opts) ?? agent, control);
   const routes = buildFeishuChannel({
     appId: "app",
     appSecret: "secret",
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control });
+  })({ agent: protocol, stateRoot: root });
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
   if (maybeIdle) channelIdles.add(maybeIdle);
   const idle = maybeIdle ?? (async () => {});
-  return { handler, agent, calls, root, home: join(root, "channels", "feishu"), idle };
+  return { handler, agent, protocol, calls, root, home: join(root, "channels", "feishu"), idle };
 }
 // buildChannel accepts a custom agent through opts via this side-channel to keep the signature small.
 let injectedAgent: Agent | undefined;
@@ -283,7 +286,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
     })({
-      agent,
+      agent: asProtocolAgent(agent),
       stateRoot: root,
     });
     const handler = routes["POST /feishu"];
@@ -427,7 +430,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
+    const ctx = { agent: {} as ProtocolAgent, stateRoot: "/tmp/unused-feishu-construction" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
@@ -443,7 +446,7 @@ describe("construction fails closed", () => {
     const { agent } = replyingAgent();
     expect(() =>
       buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({
-        agent,
+        agent: asProtocolAgent(agent),
         stateRoot: "rel",
       }),
     ).toThrow(/stateRoot/);
@@ -654,7 +657,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: restarted.agent, stateRoot: first.root });
+    })({ agent: asProtocolAgent(restarted.agent), stateRoot: first.root });
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
     const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -829,7 +832,7 @@ describe("turn flow", () => {
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
     })({
-      agent,
+      agent: asProtocolAgent(agent),
       stateRoot: join(agentDir, ".state"),
     })["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
@@ -1751,7 +1754,16 @@ describe("turn flow", () => {
           },
         }),
     });
-    const { handler, calls, idle } = buildChannel({ appId: "cli_self" });
+    const { handler, protocol, calls, idle } = buildChannel({ appId: "cli_self" });
+    // The room already holds the exchange the card answered: the thread forks from it.
+    for await (const _ of protocol.invoke({
+      sessionId: "feishu:oc_1",
+      prompt: { text: "(msg om_original_ask) 加一个" },
+    })) {
+    }
+    const room = await protocol.sessions.get("feishu:oc_1").read();
+    const exchangeEnd = room.ok ? room.entries.at(-1)?.id : undefined;
+    expect(exchangeEnd).toBeDefined();
     await flush(); // the group mention only matches once bot/v3/info has resolved this bot's open_id
     await handler(
       feishuRequest(
@@ -1767,7 +1779,7 @@ describe("turn flow", () => {
     );
     await idle();
 
-    const prompt = calls[0]?.prompt.text ?? "";
+    const prompt = calls.at(-1)?.prompt.text ?? "";
     expect(prompt).toContain("SVG 足球页面"); // the card is READ, not reported as unreadable
     expect(prompt).not.toContain("[interactive message]");
     expect(prompt).toContain("from you, the agent"); // its own message, not "user cli_self"
@@ -1775,12 +1787,12 @@ describe("turn flow", () => {
     expect(prompt).toContain("[reply chain above it, oldest first:");
     expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
     expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
-    // …and the scope names the thread's LINEAGE: the room it branched from, plus the ids that can
-    // locate the branch point in the room's session — the referent (whose id is unfindable there:
-    // the card was sent after its turn) and then the chain, whose ids DID pass through room turns.
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_on_card");
-    expect(calls[0]?.scope.parentSession).toBe("feishu:oc_1");
-    expect(calls[0]?.scope.branchHints).toEqual(["om_bot_card", "om_original_ask"]);
+    // …and the thread starts as a fork of the room at the exchange it points INTO: the referent's id is unfindable
+    // there (the card was sent after its turn), so the chain's ask, which DID pass through a room turn, places it.
+    expect(calls.at(-1)?.scope.session).toBe("feishu:oc_1:omt_on_card");
+    expect(protocol.forks).toEqual([
+      { sessionId: "feishu:oc_1:omt_on_card", fork: { sessionId: "feishu:oc_1", entryId: exchangeEnd } },
+    ]);
   });
 
   it("a main-timeline turn carries no lineage — the room branched from nothing", async () => {
@@ -2527,7 +2539,7 @@ describe("turn flow", () => {
     );
     const { agent, calls } = replyingAgent("recovered");
     const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      agent,
+      agent: asProtocolAgent(agent),
       stateRoot: root,
     })["POST /feishu"];
     const idle = (handler as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
@@ -2637,7 +2649,7 @@ describe("the Lark compatibility profile", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent, stateRoot: root });
+    })({ agent: asProtocolAgent(agent), stateRoot: root });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -2660,7 +2672,7 @@ describe("the Lark compatibility profile", () => {
   });
 
   it("mount failures name each public factory", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
+    const ctx = { agent: {} as ProtocolAgent, stateRoot: "/tmp/unused-feishu-factory-name" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
       /feishuChannel/,
     );
@@ -2717,7 +2729,7 @@ describe("feishu stop command", () => {
     expect(calls).toHaveLength(0); // a control action, never a turn
   });
 
-  it("no hub degrades to the visible not-enabled notice; 'stop it' stays a normal turn", async () => {
+  it("an idle session says nothing is running; 'stop it' stays a normal turn", async () => {
     const net = feishuFetch();
     const { handler, calls, idle } = buildChannel();
     expect((await handler(feishuRequest(messageEvent({ id: "om_s1", text: "stop" })))).status).toBe(200);
@@ -2726,6 +2738,6 @@ describe("feishu stop command", () => {
     await idle();
     expect(calls).toHaveLength(1); // only "stop it" became a turn
     const bodies = net.calls("/im/v1/messages", "POST").map((c) => JSON.stringify(c.body));
-    expect(bodies.some((b) => b.includes("Stop isn't available"))).toBe(true);
+    expect(bodies.some((b) => b.includes("Nothing is running."))).toBe(true);
   });
 });

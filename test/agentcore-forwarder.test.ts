@@ -653,10 +653,10 @@ describe("the forwarder speaks the protocol module's spelling", () => {
 
   it("emits every FORWARDER kind, and none of the IAM door's", () => {
     // The split this asserts is the adapter's authentication boundary: the forwarder mints the ingress
-    // secret, so a kind it can emit is a kind an anonymous caller can reach. `invoke` is therefore NOT
-    // emitted here — it exists only for a direct InvokeAgentRuntime call, where AWS has already said who the
+    // secret, so a kind it can emit is a kind an anonymous caller can reach. `api` is therefore NOT
+    // emitted here: it exists only for a direct InvokeAgentRuntime call, where AWS has already said who the
     // caller is.
-    const iamDoor = new Set(["invoke"]);
+    const iamDoor = new Set(["api"]);
     for (const kind of ENVELOPE_KINDS) {
       if (iamDoor.has(kind)) expect(src).not.toContain(`kind: "${kind}"`);
       else expect(src).toContain(`kind: "${kind}"`);

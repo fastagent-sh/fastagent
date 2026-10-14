@@ -1,43 +1,72 @@
-/** Render an Agent event stream to two sinks plus an exit code. */
-import type { AgentEvent } from "../agent.ts";
+/** Render an invoke stream to two sinks plus an exit code: 0 only for a run that ended `completed`. */
+import type { InvokeEvent, RunOutcome } from "../protocol.ts";
+import { runText } from "../run-text.ts";
+
+function failure(outcome: RunOutcome): string | undefined {
+  switch (outcome.status) {
+    case "completed":
+      return undefined;
+    case "failed":
+      return `${outcome.error.code}: ${outcome.error.message}${outcome.error.retryable ? " (retryable)" : ""}`;
+    case "canceled":
+      return `canceled (${outcome.by})`;
+    default:
+      return outcome.status;
+  }
+}
 
 export async function runInvokeStream(
-  events: AsyncIterable<AgentEvent>,
+  events: AsyncIterable<InvokeEvent>,
   out: (text: string) => void,
   err: (line: string) => void,
 ): Promise<number> {
-  const toolName = new Map<string, string>(); // tool_ended carries no name — remember it from tool_started
-  let exitCode = 0;
+  const toolName = new Map<string, string>(); // a tool result carries the id; its name came with tool_started
+  let runId: string | undefined;
+  const textOf = runText(() => runId);
   for await (const event of events) {
+    const text = event.type === "message_delta" || event.type === "entry" ? textOf(event) : "";
+    if (text !== "") out(text);
     switch (event.type) {
-      case "text":
-        out(event.delta);
+      case "accepted":
+        runId = event.run.runId;
         break;
+      case "rejected":
+        err(`[fastagent] rejected: ${event.error.code}: ${event.error.message}`);
+        return 1;
       case "tool_started":
-        toolName.set(event.id, event.name);
+        toolName.set(event.toolCallId, event.name);
         err(`[tool] ${event.name}`);
         break;
       case "tool_progress":
-        err(`[tool] ${toolName.get(event.id) ?? event.id} › ${clipStatus(event.text)}`);
+        err(`[tool] ${toolName.get(event.toolCallId) ?? event.toolCallId} › ${clipStatus(event.text)}`);
         break;
-      case "tool_ended":
-        if (event.isError) err(`[tool] ${toolName.get(event.id) ?? event.id} failed`);
-        break;
-      case "retrying":
+      case "retry_scheduled":
         // Operator-facing: include the reason (channels show a neutral customer line instead).
         err(
           `[fastagent] transient failure — retrying (${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms): ${event.reason}`,
         );
         break;
-      case "failed":
-        err(`[fastagent] failed: ${event.details}${event.retryable ? " (retryable)" : ""}`);
-        exitCode = 1;
+      case "serving_error":
+        err(`[fastagent] ${event.message}`);
         break;
-      case "completed":
-        break; // terminal success — nothing to render (structured data, if any, is not a CLI concern)
+      case "entry": {
+        if (event.entry.runId !== runId) break;
+        const data = event.entry.data as { toolCallId?: string; isError?: boolean; outcome?: RunOutcome };
+        if (event.entry.kind === "tool_result" && data.isError) {
+          err(`[tool] ${toolName.get(data.toolCallId ?? "") ?? data.toolCallId} failed`);
+        }
+        if (event.entry.kind === "run_ended") {
+          const failed = failure(data.outcome as RunOutcome);
+          if (failed === undefined) return 0;
+          err(`[fastagent] failed: ${failed}`);
+          return 1;
+        }
+        break;
+      }
     }
   }
-  return exitCode;
+  err("[fastagent] the stream ended before the run did");
+  return 1;
 }
 
 /** How much of a status line a terminal gets, in code points. */

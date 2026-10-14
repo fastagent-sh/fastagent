@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -68,7 +69,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
           yield { type: "completed" };
         },
       };
-      const run = module.connect({ agent, stateRoot: root }, new AbortController().signal);
+      const run = module.connect({ agent: asProtocolAgent(agent), stateRoot: root }, new AbortController().signal);
       await run.ready;
       expect(accepted).toBeTypeOf("function");
       await accepted?.(event);
@@ -103,7 +104,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
         yield { type: "completed" };
       },
     };
-    module.connect({ agent, stateRoot: root }, new AbortController().signal);
+    module.connect({ agent: asProtocolAgent(agent), stateRoot: root }, new AbortController().signal);
     const home = join(root, "channels", "feishu");
     await mkdir(join(home, "turns.json.tmp")); // saveStateFile(writeFile) fails with EISDIR before the ACK
 

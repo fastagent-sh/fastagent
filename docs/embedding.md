@@ -114,8 +114,9 @@ await service.close();    // stops long connections and schedules
 bound, no signal handlers are installed, nothing calls `process.exit`. Like them, it enters the agent's
 [environment](configuration.md#environment): the declared packages are installed where they have no install yet,
 and put first on this process's `PATH`, which the agent's commands inherit, and an environment FastAgent
-refuses fails the call. Two agents opened in one process share that `PATH`. With `sessionControl` on,
-`service.controlPrefix` names the prefix the plane owns (`/control`) so your app can route around it.
+refuses fails the call. Two agents opened in one process share that `PATH`. `service.planes` says which of
+the agent's HTTP planes it serves (`api`: `/invoke`, `/sessions`, `/agent`; `control`: `/control`), so your app
+can route around them.
 
 **Nothing fastagent serves is authenticated** — `POST /invoke` and `/control/*` alike. Mount the handler behind
 your own middleware. The cross-origin default is `*`: any page your users visit can call it and read the reply

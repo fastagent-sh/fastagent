@@ -220,7 +220,7 @@ credential file it uses, normally `.secrets/production/auth.json`. `-g`, or runn
 ## `fastagent dev`
 
 ```bash
-fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-invoke] [--no-input]
+fastagent dev [agent] [--port N] [--bind addr] [--model provider/modelId] [--no-watch] [--tunnel] [--no-api] [--no-input]
 ```
 
 Serves the agent locally. `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`, skills and prompt templates are re-read
@@ -339,7 +339,7 @@ from the machine's skill directories. `--update` overwrites an existing one.
 ## `fastagent start`
 
 ```bash
-fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-invoke] [--no-input]
+fastagent start [agent] [--port N] [--bind addr] [--model provider/modelId] [--tunnel] [--no-api] [--no-input]
 ```
 
 Serves without watch. Binds all interfaces by default.
@@ -347,7 +347,7 @@ Serves without watch. Binds all interfaces by default.
 ```txt
 port:     --port > PORT > fastagent.config.ts http.port > 8787
 bind:     --bind > all interfaces
-/invoke:  --no-invoke > fastagent.config.ts http.invoke > served
+api:      --no-api > fastagent.config.ts http.api > served
 state:    FASTAGENT_STATE_DIR   > <agent dir>/.state/production
 secrets:  FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production
 content:  <agent dir>/content/<name> (clones; a host has no context.local.json)
@@ -361,7 +361,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
-| `--no-invoke` | `dev`, `start` | Do not serve `POST /invoke` on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
+| `--no-api` | `dev`, `start` | Do not serve the agent's API (`POST /invoke`, `/sessions/*`, `/agent/*`) on this run, whatever the config says. For a `dev --tunnel` session whose only intended ingress is signed channel webhooks. |
 | `--no-input` | `dev`, `start`, `invoke`, `login`, `deploy` | Never prompt; missing input is an error naming the flag to pass. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
 | `--json` | `info`, `schedules list`, `content list` | Machine-readable output. |

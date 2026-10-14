@@ -308,6 +308,9 @@ function contentSection({ agentDir, content }: { agentDir: string; content: read
 export interface PiAssembly {
   lease: Lease;
   sessionFactory: PiAgentSessionFactory;
+  /** What binds a session to a record: the same options `sessionFactory` was built from. */
+  binding: Omit<PiAgentSessionFactoryOptions, "sessions">;
+  sessions: PiSessionRecordStore;
   /** Extension-aware catalog for startup reporting and control-plane validation; never bound to a session. */
   modelRuntime: () => Promise<ModelRuntime>;
   /** A fresh runtime for every session, before loading its extensions. */
@@ -369,21 +372,23 @@ function assemblePi(opts: {
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
-  const sessionFactory = piAgentSessionFactory({
-    sessions,
+  const binding: Omit<PiAgentSessionFactoryOptions, "sessions"> = {
     createModelRuntime,
     ...(opts.model ? { modelSpec: opts.model } : {}),
-    thinkingLevel: opts.thinkingLevel,
-    tools: opts.tools,
+    ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+    ...(opts.tools ? { tools: opts.tools } : {}),
     readDefinition: opts.readDefinition,
     cwd,
     content: opts.content ?? [],
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     excludedToolNames,
-  });
+  };
+  const sessionFactory = piAgentSessionFactory({ ...binding, sessions });
   return {
     lease,
     sessionFactory,
+    binding,
+    sessions,
     modelRuntime,
     createModelRuntime,
     resolveDefaultModel,
@@ -397,7 +402,7 @@ function assemblePi(opts: {
 }
 
 /** The agent an assembly runs as: the L0 over its lease and session factory. */
-export function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent {
+function agentOf(assembly: PiAssembly, observer?: SessionObserver): Agent {
   return createPiAgentFromSession({ lease: assembly.lease, observer, sessionFactory: assembly.sessionFactory });
 }
 

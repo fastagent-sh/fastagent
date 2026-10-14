@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
 import { runInvokeStream } from "../src/cli/invoke-stream.ts";
+import type { InvokeEvent, Json, RunOutcome } from "../src/protocol.ts";
 
-async function* stream(...events: AgentEvent[]): AsyncIterable<AgentEvent> {
+const runId = "r1";
+let n = 0;
+const entry = (kind: string, data: Json): InvokeEvent => ({
+  type: "entry",
+  entry: { id: `e${++n}`, timestamp: 0, runId, kind, data },
+});
+const accepted: InvokeEvent = {
+  type: "accepted",
+  sessionId: "s",
+  run: { runId, messages: [{}], status: "running", startedAt: 0 },
+  joined: false,
+  duplicate: false,
+};
+const delta = (text: string): InvokeEvent => ({ type: "message_delta", runId, channel: "text", delta: text });
+const started = (id: string, name: string, args: Json = {}): InvokeEvent => ({
+  type: "tool_started",
+  runId,
+  toolCallId: id,
+  name,
+  args,
+});
+const progress = (id: string, text: string): InvokeEvent => ({ type: "tool_progress", runId, toolCallId: id, text });
+const result = (id: string, isError: boolean) => entry("tool_result", { toolCallId: id, isError, text: "" });
+const ended = (outcome: RunOutcome = { status: "completed" }) =>
+  entry("run_ended", { runId, outcome: outcome as unknown as Json });
+
+async function* stream(...events: InvokeEvent[]): AsyncIterable<InvokeEvent> {
   for (const e of events) yield e;
 }
 /** Capture the two sinks runInvokeStream writes to (out = reply text, err = diagnostics). */
@@ -13,42 +39,50 @@ function sinks() {
 }
 
 describe("runInvokeStream", () => {
-  it("streams text to out and exits 0 on completed (err stays empty)", async () => {
+  it("streams text to out and exits 0 on a completed run (err stays empty)", async () => {
     const s = sinks();
-    const code = await runInvokeStream(
-      stream({ type: "text", delta: "Red, " }, { type: "text", delta: "blue" }, { type: "completed" }),
-      s.outFn,
-      s.errFn,
-    );
+    const code = await runInvokeStream(stream(accepted, delta("Red, "), delta("blue"), ended()), s.outFn, s.errFn);
     expect(code).toBe(0);
     expect(s.out.join("")).toBe("Red, blue");
     expect(s.err).toEqual([]);
   });
 
-  it("a failed turn exits 1 with the reason on err — the CI-gating guarantee", async () => {
+  it("a run whose answer arrives as an entry only (no deltas) still prints it", async () => {
     const s = sinks();
+    await runInvokeStream(stream(accepted, entry("assistant_message", { text: "late" }), ended()), s.outFn, s.errFn);
+    expect(s.out.join("")).toBe("late");
+  });
+
+  it("a failed run exits 1 with the reason on err — the CI-gating guarantee", async () => {
+    const s = sinks();
+    const error = { code: "model_error", message: "boom", retryable: true };
     const code = await runInvokeStream(
-      stream({ type: "text", delta: "hmm" }, { type: "failed", details: "boom", retryable: true }),
+      stream(accepted, delta("hmm"), ended({ status: "failed", error })),
       s.outFn,
       s.errFn,
     );
     expect(code).toBe(1);
-    expect(s.err.join("\n")).toMatch(/failed: boom \(retryable\)/);
+    expect(s.err.join("\n")).toMatch(/failed: model_error: boom \(retryable\)/);
     expect(s.out.join("")).toBe("hmm"); // text still went to out, never err
   });
 
-  it("a tool that errors inside a completed turn surfaces on err, by name", async () => {
+  it("a rejected invoke and a stream that ends before its run both exit 1", async () => {
+    const s = sinks();
+    const rejected: InvokeEvent = { type: "rejected", error: { code: "busy", message: "busy", retryable: true } };
+    expect(await runInvokeStream(stream(rejected), s.outFn, s.errFn)).toBe(1);
+    expect(await runInvokeStream(stream(accepted, delta("x")), s.outFn, s.errFn)).toBe(1);
+    expect(s.err.join("\n")).toMatch(/rejected: busy/);
+    expect(s.err.join("\n")).toMatch(/ended before the run did/);
+  });
+
+  it("a tool that errors inside a completed run surfaces on err, by name", async () => {
     const s = sinks();
     const code = await runInvokeStream(
-      stream(
-        { type: "tool_started", id: "t1", name: "lookup", args: {} },
-        { type: "tool_ended", id: "t1", isError: true, content: "404" },
-        { type: "completed" },
-      ),
+      stream(accepted, started("t1", "lookup"), result("t1", true), ended()),
       s.outFn,
       s.errFn,
     );
-    expect(code).toBe(0); // the TURN completed — only the tool errored
+    expect(code).toBe(0); // the RUN completed — only the tool errored
     expect(s.err.join("\n")).toMatch(/\[tool\] lookup/); // started
     expect(s.err.join("\n")).toMatch(/lookup failed/); // and its error, named from the matching tool_started
   });
@@ -57,10 +91,11 @@ describe("runInvokeStream", () => {
     const s = sinks();
     await runInvokeStream(
       stream(
-        { type: "tool_started", id: "t1", name: "bash", args: { command: "npm test" } },
-        { type: "tool_progress", id: "t1", text: "42 passed" },
-        { type: "tool_ended", id: "t1", isError: false, content: "ok" },
-        { type: "completed" },
+        accepted,
+        started("t1", "bash", { command: "npm test" }),
+        progress("t1", "42 passed"),
+        result("t1", false),
+        ended(),
       ),
       s.outFn,
       s.errFn,
@@ -74,10 +109,11 @@ describe("runInvokeStream", () => {
     const snakes = "\u{1F40D}".repeat(119);
     await runInvokeStream(
       stream(
-        { type: "tool_started", id: "t1", name: "bash", args: {} },
-        { type: "tool_progress", id: "t1", text: `${snakes}ab${"x".repeat(50_000)}` },
-        { type: "tool_progress", id: "t1", text: `${snakes}a` }, // exactly the width: kept whole
-        { type: "completed" },
+        accepted,
+        started("t1", "bash"),
+        progress("t1", `${snakes}ab${"x".repeat(50_000)}`),
+        progress("t1", `${snakes}a`), // exactly the width: kept whole
+        ended(),
       ),
       s.outFn,
       s.errFn,
@@ -87,15 +123,7 @@ describe("runInvokeStream", () => {
 
   it("a successful tool is not reported as a failure", async () => {
     const s = sinks();
-    await runInvokeStream(
-      stream(
-        { type: "tool_started", id: "t1", name: "lookup", args: {} },
-        { type: "tool_ended", id: "t1", isError: false, content: "ok" },
-        { type: "completed" },
-      ),
-      s.outFn,
-      s.errFn,
-    );
+    await runInvokeStream(stream(accepted, started("t1", "lookup"), result("t1", false), ended()), s.outFn, s.errFn);
     expect(s.err.join("\n")).not.toMatch(/failed/);
   });
 });

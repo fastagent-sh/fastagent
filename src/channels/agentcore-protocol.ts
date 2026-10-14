@@ -10,7 +10,7 @@ export const RESERVED_PATHS = {
 } as const;
 
 /** Every kind the container's `POST /invocations` dispatches on. */
-export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke", "probe"] as const;
+export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "api", "wake-poke", "probe"] as const;
 
 /**
  * Did this envelope come from the FORWARDER, rather than from some other principal holding
@@ -20,8 +20,8 @@ export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "invoke", "wake-poke"
  * (`envelope.wake.url`) is where the container later POSTs its wake alarms, carrying `FASTAGENT_WAKE_SECRET` — so a
  * principal who could set it would redirect that callback and collect the secret along with every pending wake-up.
  *
- * The other thing it gates — the non-`invoke` kinds — is DEPTH, not a boundary. Every one of them is weaker than
- * the `invoke` the same caller may already send: `schedule-fire` runs a prompt the definition wrote down,
+ * The other thing it gates — the kinds other than `api` — is DEPTH, not a boundary. Every one of them is weaker than
+ * the `api` the same caller may already send: `schedule-fire` runs a prompt the definition wrote down,
  * `webhook` reaches only channel routes that verify their own platform's signature, `wake-poke` wakes, `probe`
  * reports. IAM is what decides who gets to ask at all.
  *
@@ -32,27 +32,24 @@ export function fromForwarder(envelope: { auth?: unknown } | undefined, expected
   return secretEquals(envelope?.auth, expected);
 }
 
+/** An HTTP request carried inside an envelope, byte-exact. */
+export interface CarriedRequest {
+  method: string;
+  path: string;
+  /** Raw query string, no leading `?`. */
+  query?: string;
+  headers?: Record<string, string>;
+  /** The body, base64 (byte-exact). */
+  bodyB64?: string;
+}
+
 /** What the forwarder Lambda / EventBridge deliver in the `/invocations` payload. */
 export type AgentcoreEnvelope = {
   /** Shared secret proving this envelope came from the forwarder (FASTAGENT_INGRESS_SECRET). */
   auth?: string;
   wake?: { url: string };
-} & (
-  | {
-      kind: "webhook";
-      /** Original webhook request line, verbatim. */
-      method: string;
-      path: string;
-      /**
-       * Original raw query string (no leading `?`) — "verbatim" includes it; a channel reading
-       * `request.url.searchParams` must see what the webhook sender sent.
-       */
-      query?: string;
-      /** Original headers — signature material (secret tokens, Feishu signatures) rides here. */
-      headers?: Record<string, string>;
-      /** Original body, base64 (webhook bodies are JSON but the tunnel must be byte-exact). */
-      bodyB64?: string;
-    }
+} /** A platform's webhook, verbatim: its headers carry the signature material its channel checks. */ & (
+  | ({ kind: "webhook" } & CarriedRequest)
   | {
       kind: "schedule-fire";
       name: string;
@@ -63,7 +60,11 @@ export type AgentcoreEnvelope = {
        */
       occurrence: string;
     }
-  | { kind: "invoke"; session: string; text: string }
+  /**
+   * A request to the agent's own API (SPEC v1 §9, both planes), from an IAM principal: IAM is this host's gateway
+   * (agent-service.md §7.7). The forwarder never emits it.
+   */
+  | ({ kind: "api" } & CarriedRequest)
   /**
    * An EventBridge wake-up poke: the invocation ITSELF is the payload — it wakes the container, whose boot drain / 30s
    * wake pump then fires whatever is due.

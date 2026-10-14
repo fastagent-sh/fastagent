@@ -266,12 +266,18 @@ const NOT_STARTED = failedRun("the run has not started");
 
 const PREVIEW_CHARS = 80;
 
+export interface LoopPortHooks {
+  /** Marks work in flight (a queued or running run, a compaction) for whoever asks if the process is idle. */
+  beginWork?: () => () => void;
+}
+
 export function loopPort(
   harness: LoopHarness,
   limits: LoopPortLimits = {
     queuedPerSession: LIMITS.queuedPerSession,
     inFlightPerProcess: LIMITS.inFlightPerProcess,
   },
+  hooks: LoopPortHooks = {},
 ): HarnessPort {
   const capabilities: Capabilities = { ...harness.capabilities, durableQueue: false, durableRuns: false };
   const listeners = new Map<string, Set<(event: SessionEvent) => void>>();
@@ -669,6 +675,9 @@ export function loopPort(
       if (idempotencyKey !== undefined) held.keys.set(idempotencyKey, runId);
       const hold = Scope.makeUnsafe();
       yield* Scope.provide(RcMap.get(sessions, held.sessionId), hold);
+      // The run's hold is closed once, however the run ends, so its work ends with it.
+      const workDone = hooks.beginWork?.();
+      if (workDone) yield* Scope.addFinalizer(hold, Effect.sync(workDone));
       inFlight++;
       held.queue.push({ runId, message, ...(idempotencyKey === undefined ? {} : { idempotencyKey }), source, hold });
       pump(held);
@@ -856,10 +865,12 @@ export function loopPort(
           );
           if (!started.ok) return started;
           const { log, compaction } = started;
+          const workDone = hooks.beginWork?.();
           return yield* port(() => log.compact(options, compaction.controller.signal)).pipe(
             // Not under the lock: `delete` waits for `done` while holding it.
             Effect.ensuring(
               Effect.gen(function* () {
+                workDone?.();
                 held.compaction = undefined;
                 yield* Deferred.succeed(compaction.done, undefined);
                 pump(held);

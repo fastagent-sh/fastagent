@@ -26,12 +26,13 @@ const BIND: FlagSpec = {
   flags: "--bind <addr>",
   description: "bind address (dev defaults to 127.0.0.1; start defaults to all interfaces, which containers need)",
 };
-const NO_INVOKE: FlagSpec = {
-  flags: "--no-invoke",
+const NO_API: FlagSpec = {
+  flags: "--no-api",
   description:
-    "do not serve POST /invoke on this run — it is unauthenticated and runs a turn with the agent's full tools, so " +
-    "a serve meant to be reached only through its channels' signed webhooks should withhold it " +
-    "(fastagent.config.ts http.invoke: false is the same choice, but it travels into a deployed image)",
+    "do not serve the agent's API (POST /invoke, /sessions, /agent) on this run — it is unauthenticated, runs the " +
+    "agent with its full tools and reads every session, so a serve meant to be reached only through its channels' " +
+    "signed webhooks should withhold it (fastagent.config.ts http.api: false is the same choice, but it travels into " +
+    "a deployed image)",
 };
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
@@ -92,7 +93,7 @@ const dev: CommandSpec = {
     MODEL,
     { flags: "--no-watch", description: "serve once, no file-watching" },
     TUNNEL,
-    NO_INVOKE,
+    NO_API,
     NO_INPUT,
   ],
   examples: [
@@ -106,7 +107,7 @@ const dev: CommandSpec = {
       model: f.model as string | undefined,
       watch: f.watch !== false,
       tunnel: f.tunnel === true,
-      ...(f.invoke === false ? { invoke: false as const } : {}),
+      ...(f.api === false ? { api: false as const } : {}),
       input: f.input !== false,
     }),
 };
@@ -219,7 +220,7 @@ const start: CommandSpec = {
     "is the agent), just no file-watching. No build step: start reads the definition directly; " +
     "model/http come from fastagent.config.ts (frozen by git).",
   args: [AGENT_ARG],
-  flags: [PORT, BIND, MODEL, TUNNEL, NO_INVOKE, NO_INPUT],
+  flags: [PORT, BIND, MODEL, TUNNEL, NO_API, NO_INPUT],
   examples: [
     { cmd: "fastagent start" },
     { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
@@ -228,7 +229,7 @@ const start: CommandSpec = {
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
     "  bind:     --bind > all interfaces (dev: 127.0.0.1)\n" +
-    "  /invoke:  --no-invoke > fastagent.config.ts http.invoke > served\n" +
+    "  API:      --no-api > fastagent.config.ts http.api > served\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state/production\n" +
     "            mutable state (sessions, channels, schedules); use a mounted\n" +
     "            volume so a redeploy never wipes it\n" +
@@ -248,7 +249,7 @@ const start: CommandSpec = {
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       tunnel: f.tunnel === true,
-      ...(f.invoke === false ? { invoke: false as const } : {}),
+      ...(f.api === false ? { api: false as const } : {}),
       input: f.input !== false,
     }),
 };

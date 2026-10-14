@@ -25,6 +25,9 @@ import { text } from "./respond.ts";
 import { type PrefixMount, parseRouteKey, withoutBody } from "./serve.ts";
 import { sseResponse } from "./sse.ts";
 
+/** A valid request body for `POST /invoke`: the CLI's "try it" line, next to the decoder it must satisfy. */
+export const INVOKE_EXAMPLE_BODY = '{"sessionId":"dev","prompt":{"text":"hello"}}';
+
 /** SPEC v1 §7.1: each code's HTTP status. An unknown code is a server fault. */
 const STATUS: Record<string, number> = {
   invalid_request: 400,

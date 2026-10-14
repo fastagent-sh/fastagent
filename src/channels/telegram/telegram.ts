@@ -5,6 +5,7 @@
 import { isAbsolute, join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
+import { legacyAgent } from "../../legacy-agent.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
@@ -75,7 +76,9 @@ export function telegramChannel({
   botUsername,
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
-  return ({ agent, stateRoot, control }) => {
+  return ({ agent: protocolAgent, stateRoot }) => {
+    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
+    const agent = legacyAgent(protocolAgent, { kind: "channel", name: "telegram" });
     // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
     if (!secretToken) {
       throw new Error(
@@ -266,7 +269,7 @@ export function telegramChannel({
       const replyTo = m.chat.type !== "private" && sameTarget ? m.message_id : undefined;
       // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
       if (telegramStop(update, { botUsername: mentionName, botId })) {
-        const feedback = await dispatchStop(control, session, "[telegram]");
+        const feedback = await dispatchStop(protocolAgent, session, "[telegram]");
         await sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }).catch((e) =>
           log.warn(`[telegram] stop feedback failed: ${String(e)}`),
         );

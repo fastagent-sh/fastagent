@@ -1,9 +1,9 @@
 /**
  * SHARED user-facing stop command: the chat channels (telegram, feishu/lark, slack) map an explicit "stop" ask onto
- * the session control plane's `abort`.
+ * the session's `abort`.
  */
 import { log } from "../../log.ts";
-import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../../session.ts";
+import type { Agent } from "../../protocol.ts";
 
 /** Bare stop word for summon-body matching (Slack/Feishu); Telegram uses its native `/stop` command. */
 export function isStopText(text: string): boolean {
@@ -12,21 +12,17 @@ export function isStopText(text: string): boolean {
 
 const STOPPED_NOTICE = "⏹ Stopped.";
 const NOTHING_RUNNING_NOTICE = "Nothing is running.";
-// A serve always builds the hub, so this is only reachable when an embedder mounted a service without one — never by
-// a configuration an author can change, which is why it no longer names a setting to turn on.
-const STOP_UNAVAILABLE_NOTICE = "⚠️ Stop isn't available on this deployment.";
 
 /** Dispatch `abort` for the session and map the outcome to the customer-facing line. */
-export async function dispatchStop(
-  control: SessionControl | undefined,
-  session: string,
-  label: string,
-): Promise<string> {
-  if (!control) return STOP_UNAVAILABLE_NOTICE;
+export async function dispatchStop(agent: Agent, session: string, label: string): Promise<string> {
   try {
-    const result = await control.sessions.get(session).abort();
-    if (result.ok) return STOPPED_NOTICE;
-    if (result.error.code === NO_ACTIVE_RUN_CODE) return NOTHING_RUNNING_NOTICE;
+    const result = await agent.sessions.get(session).abort();
+    if (result.ok) {
+      const { runId, queued, compaction } = result.stopped;
+      return runId !== undefined || queued.length > 0 || compaction ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
+    }
+    // A session nothing has run in yet has nothing to stop.
+    if (result.error.code === "not_found") return NOTHING_RUNNING_NOTICE;
     log.warn(`${label} stop rejected for ${session}: ${result.error.code} — ${result.error.message}`);
     return `⚠️ Could not stop (${result.error.code}).`;
   } catch (error) {

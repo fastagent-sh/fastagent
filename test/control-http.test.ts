@@ -1076,43 +1076,6 @@ describe("session control over HTTP", () => {
     expect(seen).toEqual(["run_started"]);
   });
 
-  it("mountSessionControl merges routes and refuses a channel route under the plane's prefix", async () => {
-    const { assertNoControlPlaneCollision, mountSessionControl } = await import("../src/service.ts");
-    {
-      const { control } = await fauxControlledAgent([]);
-      const base = { "GET /health": () => new Response("ok") };
-      const mounted = mountSessionControl(base, control);
-      // The plane is a MOUNT, not a route entry: routes stay the channel's literal paths, and the
-      // plane arrives beside them owning a prefix. That separation is what keeps every collision
-      // check a comparison instead of a prediction about the matcher.
-      expect(Object.keys(mounted.routes)).toEqual(["GET /health"]);
-      expect(mounted.mounts.map((m) => m.prefix)).toEqual(["/control"]);
-      // Collision is PREFIX-level: the plane owns everything under it, so a channel route landing
-      // anywhere beneath is shadowed — including a path the plane does not itself serve.
-      expect(() => mountSessionControl({ "/control/sessions": () => new Response("x") }, control)).toThrow(
-        /collide with the session control plane/,
-      );
-      // A path the plane does NOT serve is the sharper case: string equality misses it, and the
-      // channel then goes dark against the plane's own 404 with nothing reported.
-      expect(() => mountSessionControl({ "GET /control/mine": () => new Response("x") }, control)).toThrow(
-        /collide with the session control plane/,
-      );
-      // BOTH mount points enforce it through one function — agentcore's lazy path loads its channels
-      // after the boot-time check ran against an empty base, so it must ask again, not re-implement.
-      expect(() =>
-        assertNoControlPlaneCollision({ "GET /control/mine": () => new Response("x") }, mounted.mounts[0]!),
-      ).toThrow(/collide with the session control plane/);
-      expect(() =>
-        assertNoControlPlaneCollision({ "POST /telegram": () => new Response("x") }, mounted.mounts[0]!),
-      ).not.toThrow();
-      expect(mounted.controlPrefix).toBe("/control");
-      // Without a hub: passthrough, nothing mounted.
-      const off = mountSessionControl(base, undefined);
-      expect(off.routes).toBe(base);
-      expect(off.controlPrefix).toBeUndefined();
-    }
-  });
-
   it("a malformed id segment is a 404 from the PLANE, not a throw past its boundary", async () => {
     // `decodeURIComponent` throws on a bad escape, and the match runs BEFORE the try that guards the
     // handlers — so this used to leave the boundary entirely: a rejected promise for an embedder

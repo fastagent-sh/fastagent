@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { asProtocolAgent } from "./protocol-agent.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,9 +125,8 @@ const telegramChannel = (
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
   const handler = buildTelegramChannel(opts)({
-    agent,
+    agent: asProtocolAgent(agent, control),
     stateRoot: root,
-    control,
   })["POST /telegram"]!;
   // Register the turn-queue idle so flush() awaits this channel's fire-and-forget turns deterministically.
   const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -215,7 +215,7 @@ describe("durable group buffer (single-process restarts)", () => {
     stateDirs.push(root);
     const { agent } = replyingAgent("ok");
     const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })({
-      agent,
+      agent: asProtocolAgent(agent),
       stateRoot: root,
     })["POST /telegram"]!;
     expect((await ch(tgRequest(group(1, "hello state root")))).status).toBe(200);
@@ -230,7 +230,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const { agent } = replyingAgent("ok");
     expect(() =>
       buildTelegramChannel({ secretToken: SECRET, botToken: "1:A" })({
-        agent,
+        agent: asProtocolAgent(agent),
         stateRoot: "rel",
       }),
     ).toThrow(/stateRoot/);
@@ -2034,7 +2034,7 @@ describe("telegram /stop command", () => {
     expect(sent.some((b) => b.text === "⏹ Stopped.")).toBe(true);
   });
 
-  it("/stop@otherbot is not ours; idle and hub-less outcomes stay visible", async () => {
+  it("/stop@otherbot is not ours; an idle session's outcome stays visible", async () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -2046,13 +2046,10 @@ describe("telegram /stop command", () => {
     expect(invoked).toHaveLength(1);
     await ch(tgRequest(stopUpdate("/stop@mybot")));
     expect(aborted).toEqual(["telegram:42"]); // the default session is branded with the channel kind
-    const noHub = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT" });
-    await noHub(tgRequest(stopUpdate("/stop")));
     const sent = (fetchMock.mock.calls as unknown as [string, RequestInit][]).map(
       ([, init]) => JSON.parse(String(init.body)) as { text?: string },
     );
     expect(sent.some((b) => b.text === "Nothing is running.")).toBe(true);
-    expect(sent.some((b) => String(b.text).includes("Stop isn't available"))).toBe(true);
   });
 
   // A `/stop` ADDRESSED to this bot is the command; an unaddressed one in a group is not (see
