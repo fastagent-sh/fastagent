@@ -38,7 +38,7 @@ export function routeKeysConflict(a: string, b: string): boolean {
   return ka.method === undefined || kb.method === undefined || ka.method === kb.method;
 }
 
-/** A handler owning a path prefix and everything beneath it — the session control plane is the one user. */
+/** A handler owning a path prefix and everything beneath it: a plane that routes its own paths. */
 export interface PrefixMount {
   /** Absolute, no trailing slash, and not `/` (`/control`). */
   prefix: string;
@@ -133,7 +133,7 @@ export interface RouterSurface {
   unverified?: Routes;
   /** Routes that verify their own caller (a channel's platform signature, a host's IAM). Neither guard applies. */
   selfVerifying?: Routes;
-  /** Prefix-owning handlers. Always treated as unverified — the control plane is the only one. */
+  /** Prefix-owning handlers (the control plane, and the protocol's `/sessions` and `/agent`). Always unverified. */
   mounts?: readonly PrefixMount[];
   /** `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. */
   corsOrigins?: readonly string[];
@@ -196,7 +196,7 @@ export function router(surface: RouterSurface): ChannelHandler {
     if (key in unverified) unguarded.add(normalised);
   }
 
-  /** Does this route authenticate nobody? Every mount does (the control plane), plus what we registered ourselves. */
+  /** Does this route authenticate nobody? Every mount does, plus what we registered ourselves. */
   const authenticatesNobody = (method: string, path: string): boolean =>
     mounts.some((mount) => pathUnderPrefix(path, mount.prefix)) ||
     unguarded.has(`${method} ${path}`) ||

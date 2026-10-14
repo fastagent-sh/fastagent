@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type LoopHarness, type LoopLog, type LoopRun, loopPort } from "../src/loop-port.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
 import { AgentRejection, type FollowEvent, type InvokeEvent, LIMITS, agentError, failure } from "../src/protocol.ts";
-import { servingAgent } from "../src/serving-layer.ts";
+import { LIVE_BACKLOG, servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
@@ -390,6 +390,121 @@ describe("serving layer", () => {
     const agent = servingAgent({ ...port, getRun: untouchable, attachment: untouchable });
     expect(await agent.sessions.get("..").runs.get({ runId: "r" })).toBeUndefined();
     expect(await agent.sessions.get(".").attachment("ref")).toBeUndefined();
+  });
+
+  it("a subscriber that falls behind reads what it missed from the log: every entry once, and the run's end", async () => {
+    const saved = { ...LIVE_BACKLOG };
+    LIVE_BACKLOG.events = 3;
+    try {
+      const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
+      const session = agent.sessions.get("s");
+      const follow = session.follow()[Symbol.asyncIterator]();
+      const followed: FollowEvent[] = [(await follow.next()).value as FollowEvent];
+      // Not read while the next runs write: this subscriber and the invoke's own both fall behind.
+      const invoked = agent.invoke({ sessionId: "s", prompt: { text: "second" } })[Symbol.asyncIterator]();
+      const receipt = await invoked.next();
+      for (const text of ["third", "fourth"]) {
+        for await (const _ of agent.invoke({ sessionId: "s", prompt: { text } })) void _;
+      }
+      const rest = [];
+      for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
+      expect(receipt.value).toMatchObject({ type: "accepted" });
+      expect(rest.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+      const page = await session.read({ limit: 500 });
+      const all = page.ok ? page.entries.map((e) => e.id) : [];
+      while (followed.filter((e) => e.type === "entry").length < all.length) {
+        followed.push((await follow.next()).value as FollowEvent);
+      }
+      // Caught up, it is live again.
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "fifth" } })) void _;
+      const after = await session.read({ limit: 500 });
+      const everything = after.ok ? after.entries.map((e) => e.id) : [];
+      while (followed.filter((e) => e.type === "entry").length < everything.length) {
+        followed.push((await follow.next()).value as FollowEvent);
+      }
+      await follow.return?.();
+      expect(all.length).toBeLessThan(everything.length);
+      expect(followed.filter((e) => e.type === "serving_error")).toEqual([]);
+      expect(followed.flatMap((e) => (e.type === "entry" ? [e.entry.id] : []))).toEqual(everything);
+    } finally {
+      Object.assign(LIVE_BACKLOG, saved);
+    }
+  });
+
+  it("what a lagging subscriber cannot read back is kept: the error that ends a run, and the latest state", async () => {
+    const saved = { ...LIVE_BACKLOG };
+    LIVE_BACKLOG.events = 2;
+    try {
+      const store = new FakeStore();
+      const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+      const session = agent.sessions.get("s");
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
+      const follow = session.follow()[Symbol.asyncIterator]();
+      await follow.next();
+      // Not read while this run writes, so both the invoke's stream and the follow fall behind before its end.
+      const invoked = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
+      const receipt = await invoked.next();
+      const runId = receipt.done || receipt.value.type !== "accepted" ? "" : receipt.value.run.runId;
+      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("running"));
+      // A run queued behind holds the session, so nothing closes the refused run's end for it in the log.
+      const next = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+      store.refuseNext = "run_ended";
+      store.release();
+      await vi.waitFor(async () => expect((await session.runs.get({ runId }))?.status).toBe("done"));
+      const rest = [];
+      for (let next = await invoked.next(); !next.done; next = await invoked.next()) rest.push(next.value);
+      expect(rest.at(-1)).toMatchObject({ type: "serving_error" });
+      expect(rest.some((e) => e.type === "entry" && e.entry.kind === "run_ended")).toBe(false);
+      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("running"));
+      store.release();
+      await vi.waitFor(async () => expect((await session.runs.get({ runId: next.run.runId }))?.status).toBe("done"));
+      const followed: FollowEvent[] = [];
+      for (;;) {
+        const next = await Promise.race([
+          follow.next(),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 200)),
+        ]);
+        if (!next || next.done) break;
+        followed.push(next.value);
+      }
+      await follow.return?.();
+      expect(followed.filter((e) => e.type === "state").at(-1)).toMatchObject({ state: { status: "idle" } });
+    } finally {
+      Object.assign(LIVE_BACKLOG, saved);
+    }
+  });
+
+  it("an entry written between subscribing and the first read is delivered once", async () => {
+    const port = loopPort(fakeLoopHarness(new FakeStore()));
+    let first = true;
+    const agent = servingAgent({
+      ...port,
+      read: async (sessionId, page) => {
+        if (first) {
+          first = false;
+          await port.submit(sessionId, { text: "meanwhile" }, { whenBusy: "queue", source: { kind: "api" } });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return port.read(sessionId, page);
+      },
+    });
+    await agent.sessions.create({ sessionId: "s" });
+    const follow = agent.sessions.get("s").follow()[Symbol.asyncIterator]();
+    const ids: string[] = [];
+    for (;;) {
+      const next = await Promise.race([
+        follow.next(),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 200)),
+      ]);
+      if (!next) break;
+      if (!next.done && next.value.type === "entry") ids.push(next.value.entry.id);
+    }
+    await follow.return?.();
+    const page = await port.read("s", { after: null, limit: 500 });
+    const all = page.ok ? page.entries.map((e) => e.id) : [];
+    expect(all.length).toBeGreaterThan(0);
+    expect(ids).toEqual(all);
   });
 
   it("stops a page at the byte budget, keeping the entries nearest its cursor", async () => {

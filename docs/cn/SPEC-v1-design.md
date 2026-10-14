@@ -155,6 +155,8 @@ for await (const e of session.runs.follow(runId, { after: lastEntryId })) { /* .
 | 实时跟随 | `GET /sessions/{s}/follow`：SSE 的 `id` 就是 entry id，浏览器断线后用 `Last-Event-ID` 自动续上 |
 | 查询 run | `GET /sessions/{s}/runs/{r}`：查不到时返回 `200 null`，不用 `404`，避免和"路由不存在"混淆 |
 
+连接在收到回执之前断开时，无法知道 run 有没有被接受：服务端只在 run 落盘之后才回复。带 `idempotencyKey` 时，带着 key 重发一次就能确定：服务端认得这个 key 就返回那个 run，不认得就开始一个新 run。不能只用 `runs.get` 去查，因为服务端可能还在处理第一个请求，查的时候没有、查完之后才被接受；不带 key 时，客户端不能把这次 invoke 报成 `rejected`，因为 `rejected` 的意思是"什么都没记录"，调用方会因此重发。
+
 ---
 
 ## 四、开发者角度：实现一个 Agent 或接入一个 harness
