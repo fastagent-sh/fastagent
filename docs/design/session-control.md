@@ -526,7 +526,7 @@ and reconnecting means calling `events()` again.
 buffered by the SERVER, per subscriber and with a ceiling (10,000 events / 8 MiB in the pi hub); a
 subscriber past it is closed, which is exactly the loss the recipe exists to prevent. So the two reads
 belong on a task beside a live iteration, not in front of one — the
-[api-reference example](../api-reference.md#session-control-observation-plane) has that shape. The overlap that
+[api-reference example](../api-reference.md#working-with-sessions) has that shape. The overlap that
 follows is display-level: durable records may appear both in the replay and in the live stream, and
 live-only events have no entry id to deduplicate against. The exception is `user_message`, which carries
 the `entryId` of a record already readable when the event arrives. Live events are not the durable history API; a product that needs replayable run

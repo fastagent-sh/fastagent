@@ -113,7 +113,7 @@ function readyAddressLines(host: string | undefined, boundPort: number, servesIn
  * not get by default: a bind off this machine, and `--tunnel`'s public URL.
  *
  * The cross-origin one is UNCONDITIONAL, including on a loopback `dev`, because the grant is. `*` is the default
- * (`channels/serve.ts`), so a page the developer merely visits can drive this port from their browser and read the
+ * (`channels/router.ts`), so a page the developer merely visits can drive this port from their browser and read the
  * reply, loopback bind or not. Nobody opts into a default, so the one posture the decision costs is the one that
  * has to hear about it.
  *

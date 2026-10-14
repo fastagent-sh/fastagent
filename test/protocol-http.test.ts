@@ -2,6 +2,7 @@
  * SPEC v1 over HTTP: the conformance suite through the remote client against a real server, and what only the binding
  * has to say (statuses, the receipt without a stream, `Last-Event-ID`, a remote `source`).
  */
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createAgentHandler, protocolHttp } from "../src/channels/protocol-http.ts";
 import { router } from "../src/channels/router.ts";
@@ -136,6 +137,25 @@ describe("the HTTP binding", () => {
     expect(await busy.json()).toMatchObject({ error: { code: "busy", retryable: true } });
     fake.release();
     await held.return?.();
+  });
+
+  it("the route table in api-reference lists exactly the routes the binding serves", () => {
+    // The table is what a non-TypeScript client builds from: a route missing there is one nobody can find, and a
+    // listed route the binding does not serve is a 404 someone will debug.
+    const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    const keys = (text: string) =>
+      new Set(
+        [...text.matchAll(/^\s*"?(GET|POST|PATCH|DELETE) +(\/[^\s"]*)/gm)].map(
+          ([, method, path]) => `${method} ${path}`,
+        ),
+      );
+    const doc = read("../docs/api-reference.md");
+    const start = doc.indexOf("POST   /invoke");
+    const table = doc.slice(start, doc.indexOf("```", start));
+    expect(start, "api-reference.md: the route table moved").toBeGreaterThan(-1);
+    const served = keys(read("../src/channels/protocol-http.ts"));
+    served.add("POST /invoke");
+    expect([...keys(table)].sort()).toEqual([...served].sort());
   });
 
   it("createAgentHandler serves the user plane, and /control only when asked", async () => {

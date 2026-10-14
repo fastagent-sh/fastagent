@@ -124,7 +124,7 @@ function planeApp(routes: PlaneRoutes): ChannelHandler {
       res = text("internal error\n", 500);
     }
     // CORS is NOT set here: the host router owns that verdict for every path it publishes, this prefix included
-    // (channels/serve.ts). A second writer of those headers is a second policy to keep in sync.
+    // (channels/router.ts). A second writer of those headers is a second policy to keep in sync.
     return res;
   };
 }
@@ -243,7 +243,7 @@ export function controlPlaneRoutes(control: SessionControl): PlaneRoutes {
    * Read a JSON body under the shared cap.
    *
    * No content-type gate here: this plane only ever rides the host router, which applies it to every route that
-   * authenticates nobody — this whole prefix included (channels/serve.ts).
+   * authenticates nobody — this whole prefix included (channels/router.ts).
    */
   const readJson = async (req: Request): Promise<{ value: unknown } | { error: Response }> => {
     const body = await readBodyCapped(req, ACTION_BODY_LIMIT);

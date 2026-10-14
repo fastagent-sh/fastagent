@@ -15,7 +15,7 @@ Channels consume only the harness-neutral [Agent contract](SPEC.md). The same ch
 ## Mental model
 
 ```txt
-external event → channel adapter → agent.invoke(scope, prompt) → channel response/action
+external event → channel adapter → agent.invoke(request) → channel response/action
 ```
 
 A channel decides:
@@ -232,7 +232,7 @@ export default defineChannel({
   channel: (secrets) =>
     acmeChannel({
       secret: secrets.ACME_SECRET,
-      on: (event) => ({ session: event.user, text: event.text }),
+      on: (event) => ({ session: event.user, text: event.text, deliveryId: event.deliveryId }),
     }),
 });
 ```

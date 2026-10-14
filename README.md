@@ -107,13 +107,15 @@ There is no FastAgent build step: the agent folder is the deployable unit.
 ## Embed in an app
 
 ```ts
-import { createInvokeHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
+import { createAgentHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
 
 const { agent } = await createPiAgentFromDefinition("./agent", {
   model: "openai-codex/gpt-5.5",
 });
 
-export const POST = createInvokeHandler(agent); // Fetch-shaped handler
+// A Fetch handler for the agent's API: POST /invoke, /sessions/*, /agent/*. Mount it where its paths are the
+// request's (docs/embedding.md shows each framework).
+export const handler = createAgentHandler(agent);
 ```
 
 No directory? Assemble from typed parts:
@@ -176,20 +178,19 @@ you register a custom provider.
 
 | Area | Examples | Stability |
 |---|---|---|
-| Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
+| Contract | `Agent`, `InvokeEvent`, `collect` ([SPEC v1](docs/SPEC-v1.md)) | Stable within SPEC v1 |
 | Directory → service | `createAgentService` (pi opener), `mountAgentService` + `MountableAgent` (neutral assembly), `AgentService` | The supported way to mount an agent directory in an app |
-| Mounting | `createInvokeHandler`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
+| Serving and calling | `createAgentHandler`, `connectAgent`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
 | Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |
 | pi assembly | `createPiAgentFromDir`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Tool/channel authoring | `defineTool`, `z`, `ChannelModule` | Usable now, may tighten before 1.0 |
-| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Lease`, `Provider` | Public because options reference them |
+| Injection ports | `PiSessionRecordStore`, `piSessionRecordStore`, `piInMemorySessionRecordStore`, `Provider` | Public because options reference them |
 | Not exported | The assembly's parts — `router`, `createControlPlane`, `loadTools`/`loadChannels`/`loadSchedules`, `createScheduler` — and prompt/config internals | `createAgentService` does this; no compatibility promise |
 
 Subpath entry points (`./package.json` is also exported, for tools that read the version):
 
-- `@fastagent-sh/fastagent/core` — harness-neutral contract, consumption helpers, channel kit, schedules, and the session-control clients (`connectSessionControl`, `connectAgent`). **Zero third-party dependencies**, enforced by test;
+- `@fastagent-sh/fastagent/core` — the harness-neutral protocol, `collect`, the agent's API as a handler (`createAgentHandler`) and as a client (`connectAgent`), the channel kit and schedules. **No package beyond Effect and no Node built-in**, enforced by test;
 - `@fastagent-sh/fastagent/node` — the harness-neutral pieces that need a Node runtime: `mountAgentService` (the assembly), `serveNode` / `nodeListener` (the `node:http` ↔ Fetch binding);
-- `@fastagent-sh/fastagent/session` — the harness-neutral session-control contract (types and error codes);
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
 - `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;

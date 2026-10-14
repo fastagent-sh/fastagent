@@ -79,26 +79,26 @@ A channel adapter should depend on the harness-neutral `@fastagent-sh/fastagent/
 
 | Export | Use |
 |---|---|
-| `Agent` | the agent type |
+| `Agent`, `InvokeEvent`, `Entry`, `RunOutcome` | the agent and what its runs report ([SPEC v1](SPEC-v1.md)) |
 | `ChannelModule`, `Routes`, `ChannelHandler` | HTTP route module and route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
-| `collect` | buffer a turn into `{ text, data }` |
-| `AgentFailure` | distinguish failed turns when using `collect` |
+| `collect` | buffer a run into its answer `{ sessionId, runId, text }` |
+| `AgentRejection`, `RunNotCompleted`, `RunUnfinished` | why `collect` has no answer: refused, ended otherwise, or cut off |
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
-Do not import from `src/harnesses/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract, and `/core` loads no third-party package at all — which is what makes it the right dependency for a channel package.
+Do not import from `src/harnesses/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract, and `/core` loads no package beyond Effect and no Node built-in — which is what makes it the right dependency for a channel package.
 
 ## Minimal adapter
 
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
+import { type ChannelModule, collect, RunNotCompleted, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
 
 export interface AcmeChannelOptions {
   secret: string;
-  on(event: AcmeEvent): { session: string; text: string } | null;
+  on(event: AcmeEvent): { session: string; text: string; deliveryId: string } | null;
 }
 
 // Policy options in, a ChannelModule out: the framework (or an embedder) supplies { agent, stateRoot }.
@@ -125,11 +125,14 @@ export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
       if (!intent) return new Response(null, { status: 204 });
 
       try {
-        const result = await collect(agent.invoke({ session: intent.session }, { text: intent.text }));
-        return Response.json({ text: result.text, data: result.data ?? null });
+        // The delivery id as the idempotency key: a platform's redelivery returns the same run, not a second one.
+        const result = await collect(
+          agent.invoke({ sessionId: intent.session, prompt: { text: intent.text }, idempotencyKey: intent.deliveryId }),
+        );
+        return Response.json({ text: result.text });
       } catch (error) {
-        if (error instanceof AgentFailure) {
-          return Response.json({ error: error.details, retryable: error.retryable }, { status: 502 });
+        if (error instanceof RunNotCompleted) {
+          return Response.json({ outcome: error.outcome }, { status: 502 });
         }
         throw error;
       }
@@ -145,7 +148,7 @@ This request/reply shape is appropriate when the external system expects the res
 Many webhook providers require a quick ACK. In that case, return 2xx first and run the turn on the process event loop:
 
 ```ts
-void collect(agent.invoke({ session }, { text })).then(
+void collect(agent.invoke({ sessionId: session, prompt: { text }, idempotencyKey: deliveryId })).then(
   () => console.error(`[acme] turn done: session=${session}`),
   (error) => console.error(`[acme] turn failed: session=${session}: ${String(error)}`),
 );
@@ -153,7 +156,7 @@ void collect(agent.invoke({ session }, { text })).then(
 return new Response(null, { status: 202 });
 ```
 
-If you do this, document the limitation: post-ACK work is lost when the process exits unless your adapter or host persists intents and retries them.
+If you do this, document the limitation: post-ACK work is lost when the process exits unless your adapter or host persists intents and retries them. Resending with the same `idempotencyKey` is safe: an accepted run is returned, not run again.
 
 ## Streaming adapters
 
@@ -161,21 +164,24 @@ For chat systems, consume the raw event stream instead of `collect`:
 
 ```ts
 let answer = "";
-for await (const event of agent.invoke({ session }, { text })) {
-  if (event.type === "text") {
+for await (const event of agent.invoke({ sessionId: session, prompt: { text } })) {
+  if (event.type === "rejected") return sendError(event.error.message);
+  if (event.type === "message_delta" && event.channel === "text") {
     answer += event.delta;
     await updateLivePreview(answer);
   } else if (event.type === "tool_started") {
     await updateLivePreview(`Running ${event.name}…`);
-  } else if (event.type === "failed") {
-    await sendError(event.details);
-    return;
+  } else if (event.type === "entry" && event.entry.kind === "assistant_message") {
+    answer = String((event.entry.data as { text?: string }).text ?? answer); // the settled text wins
+  } else if (event.type === "entry" && event.entry.kind === "run_ended") {
+    const { outcome } = event.entry.data as { outcome: RunOutcome };
+    return outcome.status === "completed" ? sendFinal(answer) : sendError(`the run ended ${outcome.status}`);
   }
 }
-await sendFinal(answer);
 ```
 
-Never fold `thinking` into the final answer. It is process/observability output, not user-facing answer text.
+Live deltas are best-effort, and a stream joined late may carry none: the `assistant_message` entry is the answer.
+Never fold `thinking` deltas into it. They are process/observability output, not user-facing answer text.
 
 ## Design checklist
 
@@ -187,14 +193,15 @@ A channel adapter should:
 - return explicit 4xx responses for invalid input,
 - surface post-ACK failures in operator logs,
 - choose clear session IDs and document same-session behavior,
-- tolerate `failed` terminal events,
-- cancel or stop work when the client disconnects if the protocol supports it,
+- handle every run outcome, not only `completed`,
+- stop work it no longer wants with `runs.cancel` or `abort`: a Caller that stops reading only detaches,
 - avoid importing harness-specific code,
 - keep provider SDK dependencies out of `@fastagent-sh/fastagent` unless the adapter is first-party and lightweight.
 
 ## Sessions and concurrency
 
-Channels choose the `session` string. The harness enforces one in-flight turn per session. A concurrent turn on the same session fails fast with a retryable `failed` event.
+Channels choose the `sessionId`. A session runs one run at a time: a message that arrives while it is running queues
+behind the run by default (`whenBusy: "steer"` joins the running run instead, `"reject"` refuses it as `busy`).
 
 Good session choices depend on the external system:
 
@@ -235,7 +242,7 @@ export default defineChannel({
   channel: (secrets) =>
     acmeChannel({
       secret: secrets.ACME_WEBHOOK_SECRET,
-      on: (event) => ({ session: event.id, text: event.text }),
+      on: (event) => ({ session: event.id, text: event.text, deliveryId: event.deliveryId }),
     }),
 });
 ```

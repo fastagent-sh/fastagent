@@ -17,7 +17,7 @@ export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
 /**
  * Fetch-shaped invoke handler.
  *
- * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/serve.ts`'s router
+ * No CORS here: who may call this from a browser is decided once, before dispatch, in `channels/router.ts`
  * — which is also the only layer that can answer the `OPTIONS` preflight, since this route registers only `POST`.
  */
 export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {

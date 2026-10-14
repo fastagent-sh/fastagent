@@ -65,8 +65,8 @@ src/
 │   feishu.ts, lark.ts
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
-├── session-remote.ts       # remote clients over /control/*: connectSessionControl + connectAgent
-├── protocol-remote.ts      # connectRemoteAgent: the SPEC v1 Agent over its HTTP binding, failures as values
+├── session-remote.ts       # v0.1's clients over the old /control/*: neither served nor exported (goes in 4c)
+├── protocol-remote.ts      # connectAgent: the SPEC v1 Agent over its HTTP binding, failures as values; imports nothing
 ├── sse-client.ts           # the client half of an event stream: the read budget, the connect, the SSE reader
 ├── observe.ts              # turn-trace logging around an Agent
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
@@ -103,11 +103,12 @@ src/
 ├── version.ts              # package version (deploy pins it into the image)
 ├── scaffold/               # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── serve.ts            # how route tables become a running server, split by WHO AUTHENTICATES THE CALLER:
+│   ├── router.ts           # how route tables become ONE Fetch handler, split by WHO AUTHENTICATES THE CALLER:
 │   │                       # ours (nobody) vs the channels' (their platform's signature), one table each so the
 │   │                       # answer cannot drift. Both guards on the first table live here — the JSON body gate
 │   │                       # and the one CORS decision (`*`, narrowed only by http.cors) — plus literal-path
-│   │                       # dispatch, prefix mounts, the totality boundary, the node:http binding
+│   │                       # dispatch and prefix mounts. Fetch-only: /core serves through it
+│   ├── serve.ts            # the node:http binding of a Fetch handler, behind the totality boundary
 │   ├── agentcore-service.ts # the AgentCore serving assembly (same product as service.ts, built for that
 │                           # host): channels discovered on trusted ingress, the whole definition opened
 │                           # on the first envelope, an external clock, no resident connections
@@ -118,8 +119,9 @@ src/
 │   ├── busy.ts             # the process's work in flight (every leased session, channel work not yet at one),
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
-│   ├── http.ts             # v0.1's POST /invoke over HTTP/SSE: createInvokeHandler only; no serve mounts it (goes in 4c)
-│   ├── protocol-http.ts    # SPEC v1 over HTTP: the user plane (/invoke, /sessions, /agent) and /control as mounts,
+│   ├── http.ts             # v0.1's POST /invoke over HTTP/SSE (createInvokeHandler): neither served nor exported (goes in 4c)
+│   ├── protocol-http.ts    # SPEC v1 over HTTP: createAgentHandler, and the planes as mounts — the user plane
+│   │                       # (/invoke, /sessions, /agent) and /control,
 │   │                       # each code's status, request bodies decoded strictly (a remote `source` is refused)
 │   ├── control.ts          # v0.1's /control/* route table + SSE events, over SessionControl; no serve mounts it
 │   │                       # (goes in 4c)
@@ -127,7 +129,7 @@ src/
 │   ├── discover.ts         # channels/ filesystem discovery (ChannelModule → Routes), harness-neutral
 │   ├── define-channel.ts   # the channel file's authoring surface: declare secrets, receive their values
 │   │                       # (the only way a CUSTOM channel's credentials can reach a deploy)
-│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate serve.ts applies, responses)
+│   ├── body.ts, respond.ts # channel-authoring kit (body cap, the JSON content-type gate router.ts applies, responses)
 │   ├── secret.ts           # the ONE constant-time comparison every shared-secret gate reads through
 │   ├── wait-health.ts      # readiness probe for a server THIS process reaches directly (not a public URL)
 │   ├── registration.ts     # the shared registrar outcome (registered|manual|failed) + the ONE retry loop

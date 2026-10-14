@@ -59,7 +59,6 @@ export {
   piSessionRecordStore,
   type PiSessionRecordStore,
 } from "./harnesses/pi/session-store.ts";
-export type { SessionInheritance } from "./harnesses/pi/session-inheritance.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./harnesses/pi/auth.ts";
 export { createPiModels, type CreatePiModelsOptions } from "./harnesses/pi/agent-models.ts";
