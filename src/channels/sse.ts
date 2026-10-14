@@ -6,7 +6,12 @@ export const SSE_HEARTBEAT_MS = 30_000;
 const encoder = new TextEncoder();
 const heartbeat = encoder.encode(": ping\n\n");
 
-export function sseResponse<T>(events: AsyncIterable<T>, project: (event: T) => unknown = (event) => event): Response {
+/** `idOf` names an event's SSE `id`, which a reconnecting browser sends back as `Last-Event-ID`. */
+export function sseResponse<T>(
+  events: AsyncIterable<T>,
+  project: (event: T) => unknown = (event) => event,
+  idOf: (event: T) => string | undefined = () => undefined,
+): Response {
   const iterator = events[Symbol.asyncIterator]();
   // Subscribe before headers; synchronous startup errors belong to the HTTP error boundary.
   let pending: Promise<IteratorResult<T>> | undefined = Promise.resolve(iterator.next());
@@ -38,7 +43,10 @@ export function sseResponse<T>(events: AsyncIterable<T>, project: (event: T) => 
           stop();
           controller.close();
         } else {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(project(next.value))}\n\n`));
+          const id = idOf(next.value);
+          // An id is one line: a newline in it would end the field and start another.
+          const field = id === undefined ? "" : `id: ${id.replace(/[\r\n]/g, "")}\n`;
+          controller.enqueue(encoder.encode(`${field}data: ${JSON.stringify(project(next.value))}\n\n`));
         }
       } catch (error) {
         if (closed) return;

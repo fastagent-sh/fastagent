@@ -167,7 +167,7 @@ export interface Capabilities {
   usage: boolean;
 }
 
-interface AgentInfo {
+export interface AgentInfo {
   protocolVersion: "1.0";
   capabilities: Capabilities;
 }

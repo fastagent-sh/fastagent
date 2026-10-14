@@ -63,6 +63,8 @@ src/
 ├── bind.ts                 # the ONE reading of a bind address, as the six different questions it is
 ├── log.ts                  # leveled logging singleton (dev=debug, start=info)
 ├── session-remote.ts       # remote clients over /control/*: connectSessionControl + connectAgent
+├── protocol-remote.ts      # connectRemoteAgent: the SPEC v1 Agent over its HTTP binding, failures as values
+├── sse-client.ts           # the client half of an event stream: the read budget, the connect, the SSE reader
 ├── observe.ts              # turn-trace logging around an Agent
 ├── tunnel.ts               # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts       # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
@@ -114,6 +116,8 @@ src/
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
 │   ├── http.ts             # the DATA plane: POST /invoke, HTTP/SSE (consumes only the Agent contract)
+│   ├── protocol-http.ts    # SPEC v1 over HTTP: the user plane (/invoke, /sessions, /agent) and /control as mounts,
+│   │                       # each code's status, request bodies decoded strictly (a remote `source` is refused)
 │   ├── control.ts          # session-control transport: the /control/* route table + SSE events. PURE control —
 │   │                       # running a turn is http.ts's, and NOTHING fastagent serves authenticates
 │   ├── sse.ts              # Fetch-only response lifecycle shared by invoke and observation

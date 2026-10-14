@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type LoopHarness, type LoopLog, type LoopRun, loopPort } from "../src/loop-port.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
 import { AgentRejection, type FollowEvent, type InvokeEvent, LIMITS, agentError, failure } from "../src/protocol.ts";
-import { servingAgent } from "../src/serving-layer.ts";
+import { LIVE_BACKLOG, servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
@@ -390,6 +390,24 @@ describe("serving layer", () => {
     const agent = servingAgent({ ...port, getRun: untouchable, attachment: untouchable });
     expect(await agent.sessions.get("..").runs.get({ runId: "r" })).toBeUndefined();
     expect(await agent.sessions.get(".").attachment("ref")).toBeUndefined();
+  });
+
+  it("a subscriber that falls behind is told so and ended, rather than buffered without bound", async () => {
+    const saved = { ...LIVE_BACKLOG };
+    LIVE_BACKLOG.events = 3;
+    try {
+      const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "first" } })) void _;
+      const follow = agent.sessions.get("s").follow()[Symbol.asyncIterator]();
+      await follow.next();
+      for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "second" } })) void _;
+      const rest: FollowEvent[] = [];
+      for (let next = await follow.next(); !next.done; next = await follow.next()) rest.push(next.value);
+      expect(rest.at(-1)).toMatchObject({ type: "serving_error", message: expect.stringMatching(/fell behind/) });
+      expect(rest.filter((e) => e.type === "entry").length).toBeLessThan(6);
+    } finally {
+      Object.assign(LIVE_BACKLOG, saved);
+    }
   });
 
   it("stops a page at the byte budget, keeping the entries nearest its cursor", async () => {

@@ -3,6 +3,7 @@
  * owns what is the same for every harness: naming sessions, the request rules a type cannot carry, the invoke stream
  * (a receipt, then the run replayed from its first entry), `follow`, and pages of `read`.
  */
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -107,6 +108,9 @@ const endsRun =
 
 const utf8 = new TextEncoder();
 
+/** How far one subscriber may fall behind the live events, in events and in UTF-8 JSON bytes. */
+export const LIVE_BACKLOG = { events: 10_000, bytes: 8 << 20 };
+
 /** A page trimmed to the byte budget from the side away from its cursor, keeping at least one entry. */
 function withinBudget(entries: Entry[], keepNewest: boolean): Entry[] {
   const ordered = keepNewest ? [...entries].reverse() : entries;
@@ -121,17 +125,45 @@ function withinBudget(entries: Entry[], keepNewest: boolean): Entry[] {
 }
 
 export function servingAgent(port: HarnessPort): Agent {
-  /** Subscribed before anything is read, so nothing appended in between is missed. */
+  /**
+   * Subscribed before anything is read, so nothing appended in between is missed. Bounded: a subscriber that falls
+   * further behind than {@link LIVE_BACKLOG} is told so and ended, rather than holding the process's memory or quietly
+   * missing events; it resumes from its last entry.
+   */
   const watched = (sessionId: string) =>
     Effect.acquireRelease(
       Effect.gen(function* () {
-        const queue = yield* Queue.unbounded<SessionEvent>();
+        const backlog = yield* Queue.unbounded<{ event: SessionEvent; bytes: number }, Cause.Done>();
+        let bytes = 0;
+        let behind = false;
         const unwatch = port.watch(sessionId, (event) => {
-          Queue.offerUnsafe(queue, event);
+          if (behind) return;
+          const size = utf8.encode(JSON.stringify(event)).byteLength;
+          if (Queue.sizeUnsafe(backlog) >= LIVE_BACKLOG.events || bytes + size > LIVE_BACKLOG.bytes) {
+            behind = true;
+            log.warn(`[fastagent] a subscriber of session ${sessionId} fell behind; its stream ends`);
+            Queue.offerUnsafe(backlog, {
+              event: {
+                type: "serving_error",
+                message: `this stream fell behind by more than ${LIVE_BACKLOG.events} events or ${LIVE_BACKLOG.bytes >> 20} MiB and ended: follow again after the last entry you read`,
+              },
+              bytes: 0,
+            });
+            Queue.endUnsafe(backlog);
+            return;
+          }
+          bytes += size;
+          Queue.offerUnsafe(backlog, { event, bytes: size });
         });
-        return { queue, unwatch };
+        const queue = Stream.fromQueue(backlog).pipe(
+          Stream.map((queued) => {
+            bytes -= queued.bytes;
+            return queued.event;
+          }),
+        );
+        return { queue, backlog, unwatch };
       }),
-      ({ queue, unwatch }) => Effect.sync(unwatch).pipe(Effect.andThen(Queue.shutdown(queue))),
+      ({ backlog, unwatch }) => Effect.sync(unwatch).pipe(Effect.andThen(Queue.shutdown(backlog))),
     );
 
   const asIterable = <A>(stream: Stream.Stream<A, never>): AsyncIterable<A> => Stream.toAsyncIterable(stream);
@@ -140,7 +172,7 @@ export function servingAgent(port: HarnessPort): Agent {
   const runStream = (
     sessionId: string,
     runId: string,
-    live: Queue.Queue<SessionEvent>,
+    live: Stream.Stream<SessionEvent>,
     after: string | undefined,
   ): Effect.Effect<{ ok: true; events: Stream.Stream<SessionEvent> } | { ok: false; error: AgentError }> =>
     Effect.gen(function* () {
@@ -157,7 +189,7 @@ export function servingAgent(port: HarnessPort): Agent {
         return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(runId))) };
       }
       const seen = new Set(backfill.entries.map((entry) => entry.id));
-      const fresh = Stream.fromQueue(live).pipe(
+      const fresh = live.pipe(
         Stream.filter(belongsTo(runId)),
         Stream.filter((event) => event.type !== "entry" || !seen.has(event.entry.id)),
       );
@@ -234,7 +266,7 @@ export function servingAgent(port: HarnessPort): Agent {
           );
           return Stream.concat(
             backfill,
-            Stream.fromQueue(queue).pipe(Stream.filter((event) => event.type !== "entry" || !seen.has(event.entry.id))),
+            queue.pipe(Stream.filter((event) => event.type !== "entry" || !seen.has(event.entry.id))),
           ) as Stream.Stream<FollowEvent, unknown>;
         }).pipe(Effect.catchCause((cause) => Effect.succeed(followFailed(portError(cause))))),
       ).pipe(Stream.catchCause((cause) => followFailed(portError(cause)))),
