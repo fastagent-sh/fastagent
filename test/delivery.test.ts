@@ -1,3 +1,4 @@
+import { ev } from "./scripted-run.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -6,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import { expect, it, vi } from "vitest";
-import { previewPump, serialWriter, renderReply, type PreviewPump } from "../src/channels/kit/delivery.ts";
+import { previewPump, serialWriter, renderReply, turnEnd, type PreviewPump } from "../src/channels/kit/delivery.ts";
 import { PortFailure, portError, portJoin } from "../src/effect-port.ts";
 import { run } from "./channel-effects.ts";
 
@@ -198,7 +199,9 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
       run(
         Effect.scoped(
           renderReply(
-            phase === "source" ? Stream.fail(new PortFailure(primary)) : Stream.succeed({ type: "completed" } as const),
+            phase === "source"
+              ? Stream.fail(new PortFailure(primary))
+              : Stream.fromIterable([ev.accepted(), ev.ended()]),
             {
               label: "[test]",
               finish: Effect.void,
@@ -225,7 +228,7 @@ it("a failed answer hand-over stops the turn before it delivers anything", async
   await expect(
     run(
       Effect.scoped(
-        renderReply(Stream.succeed({ type: "completed" } as const), {
+        renderReply(Stream.fromIterable([ev.accepted(), ev.ended()]), {
           label: "[test]",
           finish: Effect.void,
           onEvent: () => {},
@@ -256,4 +259,25 @@ it("source failure remains primary when writer cleanup also fails", async () => 
     ),
   );
   expect(Exit.isFailure(exit) && portError(exit.cause)).toBe(primary);
+});
+
+it("turnEnd: a refusal or the turn's own run_ended ends the turn, and says how", () => {
+  const run = "run";
+  expect(turnEnd(ev.rejected("busy"), undefined)).toMatchObject({ failure: { code: "busy" } });
+  expect(turnEnd(ev.ended(), run)).toEqual({ answered: true });
+  // Stopped at its output limit, or taken by a command: still an answer, with whatever it wrote.
+  expect(turnEnd(ev.ended({ status: "max_tokens" }), run)).toEqual({ answered: true });
+  expect(turnEnd(ev.ended({ status: "intercepted" }), run)).toEqual({ answered: true });
+  expect(turnEnd(ev.failed("boom", { retryable: true }), run)).toEqual({
+    failure: { details: "boom", retryable: true, code: "model_error" },
+  });
+  expect(turnEnd(ev.ended({ status: "canceled", by: "abort" }), run)).toMatchObject({
+    failure: { retryable: false, code: "canceled" },
+  });
+  expect(turnEnd(ev.ended({ status: "interrupted" }), run)).toMatchObject({
+    failure: { retryable: true, code: "interrupted" },
+  });
+  // Another run's ending, or anything else, is not this turn's.
+  expect(turnEnd(ev.ended({ status: "completed" }, "other"), run)).toBeUndefined();
+  expect(turnEnd(ev.text("x"), run)).toBeUndefined();
 });

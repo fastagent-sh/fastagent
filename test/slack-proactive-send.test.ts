@@ -3,12 +3,12 @@
  * credential and `apiBaseUrl`, not a pipeline of its own over the environment. With no channel
  * mounted (`fastagent invoke`) it builds one from the env.
  */
-import { asProtocolAgent } from "./protocol-agent.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
+import { ev } from "./scripted-run.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Agent } from "../src/agent.ts";
 import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { slackChannel } from "../src/slack.ts";
 
@@ -46,11 +46,10 @@ function fakeSlack() {
   return calls;
 }
 
-const agent: Agent = {
-  async *invoke() {
-    yield { type: "completed" };
-  },
-};
+const agent = scriptedAgent(async function* (_request) {
+  yield ev.accepted();
+  yield ev.ended();
+});
 
 const send = (cwd: string) =>
   turnContext.run({ cwd }, () => sender.execute("call", { channelId: "C1", text: "scheduled update" }));
@@ -63,7 +62,7 @@ describe("Slack proactive delivery rides the channel's transport", () => {
     const dir = agentDir();
     slackChannel({ botToken: "xoxb-channel", signingSecret: "s", apiBaseUrl: "https://slack.test/api" })({
       stateRoot: join(dir, ".state"),
-      agent: asProtocolAgent(agent),
+      agent,
     });
 
     await expect(send(dir)).resolves.toMatchObject({ details: "sent message to Slack channel C1 (ts 1.0)" });

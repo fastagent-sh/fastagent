@@ -2,7 +2,8 @@
  * Channel-neutral live-preview pieces shared by every messaging channel's preview renderer (telegram/preview.ts,
  * feishu/preview.ts, slack/preview.ts).
  */
-import type { AgentEvent, Json } from "../../agent.ts";
+import type { InvokeEvent, Json, SessionEvent } from "../../protocol.ts";
+import { runText } from "../../run-text.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
 /** A terminal failure, as a channel hands it to its `onError`. */
@@ -39,11 +40,15 @@ interface ToolLine {
 
 /** The channel-neutral view STATE of one in-flight turn. */
 export interface TurnView {
+  /** The run the turn's invoke was accepted as: only its events are the turn's. */
+  runId?: string;
   thinking: string;
   tools: ToolLine[];
-  /** tool-call id → its line, for `tool_ended` status flips (bookkeeping; renderers read `tools`). */
+  /** tool-call id → its line, for the `tool_result` status flips (bookkeeping; renderers read `tools`). */
   toolById: Map<string, ToolLine>;
   answer: string;
+  /** What each event adds to the answer: its delta, or the settled text no delta carried. */
+  textOf: (event: SessionEvent) => string;
   /** Arrival time of the first non-empty answer delta; age-based reveal policies read it. */
   answerSince?: number;
   /** An advisory retry backoff is in progress (closed again by any subsequent progress event). */
@@ -51,40 +56,62 @@ export interface TurnView {
 }
 
 export function createTurnView(): TurnView {
-  return { thinking: "", tools: [], toolById: new Map(), answer: "", retrying: false };
+  const view: TurnView = {
+    thinking: "",
+    tools: [],
+    toolById: new Map(),
+    answer: "",
+    textOf: runText(() => view.runId),
+    retrying: false,
+  };
+  return view;
 }
 
-export function applyTurnEvent(view: TurnView, e: AgentEvent, now = Date.now()): boolean {
-  const closedRetry = view.retrying && e.type !== "retrying";
+/** Fold one event of a turn's invoke into its view; true when what a renderer shows changed. */
+export function applyTurnEvent(view: TurnView, e: InvokeEvent, now = Date.now()): boolean {
+  const closedRetry = view.retrying && e.type !== "retry_scheduled";
   if (closedRetry) view.retrying = false;
+  const appended = (text: string): boolean => {
+    if (text === "") return closedRetry;
+    view.answer += text;
+    if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = now;
+    return true;
+  };
   switch (e.type) {
-    case "text":
-      view.answer += e.delta;
-      if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = now;
-      return true;
-    case "thinking":
+    case "accepted":
+      view.runId = e.run.runId;
+      return closedRetry;
+    case "message_delta":
+      if (e.runId !== view.runId) return closedRetry;
+      if (e.channel === "text") return appended(view.textOf(e));
       view.thinking += e.delta;
       return true;
     case "tool_started": {
+      if (e.runId !== view.runId) return closedRetry;
       const arg = summarizeToolArgs(e.args);
       const name = humanizeToolName(e.name);
       const line: ToolLine = { label: arg ? `${name} ${arg}` : name, status: "running" };
       view.tools.push(line);
-      view.toolById.set(e.id, line);
+      view.toolById.set(e.toolCallId, line);
       return true;
     }
     case "tool_progress": {
-      const line = view.toolById.get(e.id);
-      if (line?.status !== "running") return closedRetry;
+      const line = view.toolById.get(e.toolCallId);
+      if (e.runId !== view.runId || line?.status !== "running") return closedRetry;
       line.progress = e.text;
       return true;
     }
-    case "tool_ended": {
-      const line = view.toolById.get(e.id);
-      if (line) line.status = e.isError ? "error" : "ok";
+    case "entry": {
+      if (e.entry.runId !== view.runId) return closedRetry;
+      if (e.entry.kind === "assistant_message") return appended(view.textOf(e));
+      if (e.entry.kind !== "tool_result") return closedRetry;
+      const data = e.entry.data as { toolCallId?: string; isError?: boolean };
+      const line = data.toolCallId === undefined ? undefined : view.toolById.get(data.toolCallId);
+      if (!line) return closedRetry;
+      line.status = data.isError === true ? "error" : "ok";
       return true;
     }
-    case "retrying":
+    case "retry_scheduled":
       view.retrying = true;
       return true;
     default:

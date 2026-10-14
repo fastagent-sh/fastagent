@@ -1,10 +1,8 @@
 /** Resolve Slack file IDs at dequeue, then stream one harness-neutral Agent turn. */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {
-  type BusyRetry,
-  DEFAULT_BUSY_RETRY,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
@@ -86,22 +84,25 @@ async function resolveInputs(
   };
 }
 
+/** One turn: resolve its files, then ask the agent. `key` is the turn's: the message it answers. */
 export function slackTurnStream(
-  agent: Agent,
-  session: string,
-  text: string,
+  agent: Pick<Agent, "invoke">,
+  turn: { session: string; key: string; text: string },
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
-  busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, PortFailure> {
+): Stream.Stream<InvokeEvent, PortFailure> {
   return turnStream({
     agent,
     label: transport.label,
-    busyRetry,
+    source: { kind: "channel", name: "slack" },
     resolve: () => resolveInputs(transport, attachments),
     turn: (resolved) => ({
-      scope: { session },
-      prompt: { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images },
+      sessionId: turn.session,
+      idempotencyKey: turn.key,
+      prompt: {
+        text: `${turn.text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`,
+        ...(resolved.images ? { images: resolved.images } : {}),
+      },
     }),
     // Slack says which failures are transient; anything else (a deleted file, a missing scope) will
     // fail the same way on redelivery.

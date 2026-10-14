@@ -4,12 +4,10 @@
  * Split from parse.ts because this half touches the Bot API + disk; split from telegram.ts so the
  * factory keeps only wiring and the per-turn lifecycle.
  */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {
-  type BusyRetry,
-  DEFAULT_BUSY_RETRY,
   attachedFilesManifest,
   attributedFileName,
   loadBackground,
@@ -48,7 +46,7 @@ interface ResolvedAttachments {
 /**
  * Resolve a turn's attachments: images (vision) inline, files downloaded to disk with their absolute
  * paths listed in a manifest the agent reads with its tools. Two tiers, different failure policies.
- * PRIMARY (this turn's own message) THROWS on any load failure — the caller turns it into a `failed`
+ * PRIMARY (this turn's own message) THROWS on any load failure — the caller turns it into a `rejected`
  * event, so the agent never runs on inputs the user sent but we failed to load. BACKGROUND (`buffered`,
  * from the un-summoned discussion) degrades PER ATTACHMENT — a warn + a prompt note — rather than
  * failing the ask it merely accompanies: one expired earlier file must neither block the answer nor drag
@@ -93,24 +91,26 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 
 /**
  * Run one turn: resolve its attachments, then ask the agent (invoke-turn-kit — a primary-attachment
- * failure surfaces as a `failed` event, never a silent drop).
+ * failure surfaces as a `rejected` event, never a silent drop). `key` is the turn's: the update it answers.
  */
 export function telegramTurnStream(
-  agent: Agent,
-  session: string,
-  text: string,
+  agent: Pick<Agent, "invoke">,
+  turn: { session: string; key: string; text: string },
   transport: TurnTransport,
   attachments: TurnAttachments,
-  busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, PortFailure> {
+): Stream.Stream<InvokeEvent, PortFailure> {
   return turnStream({
     agent,
     label: "[telegram]",
-    busyRetry,
+    source: { kind: "channel", name: "telegram" },
     resolve: () => resolveTurnAttachments(transport, attachments),
     turn: (resolved) => ({
-      scope: { session },
-      prompt: { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images },
+      sessionId: turn.session,
+      idempotencyKey: turn.key,
+      prompt: {
+        text: `${turn.text}${resolved.promptSuffix}${HTML_INSTRUCTION}`,
+        ...(resolved.images ? { images: resolved.images } : {}),
+      },
     }),
     // A Bot API download that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,

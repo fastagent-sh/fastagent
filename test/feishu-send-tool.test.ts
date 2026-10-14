@@ -3,13 +3,13 @@
  * so what differs per cloud (gateway, env prefix, credential isolation) runs for BOTH, and what does
  * not (the description contract, input validation, card/text encoding, transport reuse) runs once.
  */
-import { asProtocolAgent } from "./protocol-agent.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
+import { ev } from "./scripted-run.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { Agent } from "../src/agent.ts";
 import type { InvokeEvent } from "../src/protocol.ts";
 import { turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { createPiAgentFromDefinition, type FastagentTool } from "../src/pi.ts";
@@ -43,11 +43,10 @@ function stubOpenApi() {
   return calls;
 }
 
-const agent: Agent = {
-  async *invoke() {
-    yield { type: "completed" };
-  },
-};
+const agent = scriptedAgent(async function* (_request) {
+  yield ev.accepted();
+  yield ev.ended();
+});
 
 /** Loads one cloud's scaffold tool and gives every test a fresh workspace + credential stubs. */
 function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
@@ -113,7 +112,7 @@ describe.each([
 
   it("uses the mounted channel's credentials and gateway, keeping both clouds isolated", async () => {
     const calls = stubOpenApi();
-    const ctx = { stateRoot: join(fx.cwd, ".state"), agent: asProtocolAgent(agent) };
+    const ctx = { stateRoot: join(fx.cwd, ".state"), agent: agent };
     channel({
       appId: "cli_channel",
       appSecret: "channel-secret",

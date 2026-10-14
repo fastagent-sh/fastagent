@@ -284,8 +284,7 @@ describe("channels/kit is defined by who imports it", () => {
       .filter((f) => f.endsWith(".ts"))
       .flatMap((file) =>
         importersOf(file)
-          // legacy-agent.ts is the temporary v0.1 adapter the channels still go through; it goes when they move to v1.
-          .filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p) && p !== "legacy-agent.ts")
+          .filter((p) => !/^channels\/(kit\/)?[a-z]+\//.test(p))
           .map((p) => `${file} ← ${p}`),
       );
     expect(offenders).toEqual([]);

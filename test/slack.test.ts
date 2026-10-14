@@ -1,12 +1,19 @@
 import { createHmac } from "node:crypto";
-import { asProtocolAgent } from "./protocol-agent.ts";
+import { scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
+import { ev } from "./scripted-run.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
+import {
+  type AbortResult,
+  type Agent,
+  type ErrorCode,
+  type InvokeRequest,
+  type Prompt,
+  failure,
+} from "../src/protocol.ts";
 import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
-import { NO_ACTIVE_RUN_CODE, type SessionControl } from "../src/session.ts";
 import {
   type SlackChannelOptions,
   type SlackEventEnvelope,
@@ -76,14 +83,13 @@ function platformRead(url: URL): Response {
 }
 
 function replyingAgent(reply = "done") {
-  const calls: { scope: Scope; prompt: Prompt }[] = [];
-  const agent: Agent = {
-    async *invoke(scope, prompt): AsyncIterable<AgentEvent> {
-      calls.push({ scope, prompt });
-      if (reply) yield { type: "text", delta: reply };
-      yield { type: "completed" };
-    },
-  };
+  const calls: InvokeRequest[] = [];
+  const agent = scriptedAgent(async function* (request) {
+    yield ev.accepted();
+    calls.push(request);
+    if (reply) yield ev.text(reply);
+    yield ev.ended();
+  });
   return { agent, calls };
 }
 
@@ -207,13 +213,18 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
   };
 }
 
-function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRoot = root(), control?: SessionControl) {
+function mount(
+  agent: Agent,
+  options: Partial<SlackChannelOptions> = {},
+  stateRoot = root(),
+  stopped?: (session: string) => AbortResult,
+) {
   const handler = slackChannel({
     botToken: "xoxb-test",
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent: asProtocolAgent(agent, control), stateRoot })["POST /slack"]!;
+  })({ agent: stopped ? withStop(agent, stopped) : agent, stateRoot })["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };
@@ -231,6 +242,19 @@ afterEach(async () => {
   idles.clear();
   platform.length = 0;
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
+});
+
+describe("Slack turn", () => {
+  it("asks under the message's own key, queued, as the slack channel", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent("hello back");
+    const { handler } = mount(agent);
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    expect(calls.map((c) => [c.idempotencyKey, c.whenBusy, c.source])).toEqual([
+      ["T1:D1:1.0", "queue", { kind: "channel", name: "slack" }],
+    ]);
+  });
 });
 
 describe("Slack reaction ack", () => {
@@ -345,7 +369,7 @@ describe("Slack channel construction", () => {
   it("refuses a rotating bot token at startup, naming the upgrade, instead of failing 12 hours later", () => {
     expect(() =>
       slackChannel({ botToken: "xoxe.xoxb-rotating", signingSecret: SECRET })({
-        agent: asProtocolAgent(replyingAgent().agent),
+        agent: replyingAgent().agent,
         stateRoot: root(),
       }),
     ).toThrow(/rotating Slack bot token.*If token rotation is on/);
@@ -430,7 +454,7 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(existsSync(join(stateRoot, "channels", "slack", "thread-participants.json"))).toBe(false);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("slack:T1:D1:1.0");
+    expect(calls[0]?.sessionId).toBe("slack:T1:D1:1.0");
     expect(calls[0]?.prompt.text).toContain("[slack: team T1, channel D1 (direct)");
     const methods = fetchMock.mock.calls.map(([url]) => String(url).split("/").pop());
     expect(methods).toContain("assistant.threads.setStatus");
@@ -450,16 +474,15 @@ describe("Slack sessions, context, and thread participation", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     let prompt: Prompt | undefined;
-    const agent: Agent = {
-      async *invoke(_scope, value): AsyncIterable<AgentEvent> {
-        prompt = value;
-        yield { type: "thinking", delta: "private chain of thought: launch-code" };
-        yield { type: "tool_started", id: "t1", name: "search", args: { query: "public docs" } };
-        yield { type: "tool_ended", id: "t1", isError: false, content: { result: "internal result" } };
-        yield { type: "text", delta: "# Safe answer\n\n**Done.** Do not ping <!channel>." };
-        yield { type: "completed" };
-      },
-    };
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      prompt = request.prompt;
+      yield ev.thinking("private chain of thought: launch-code");
+      yield ev.toolStarted("t1", "search", { query: "public docs" });
+      yield ev.toolResult("t1");
+      yield ev.text("# Safe answer\n\n**Done.** Do not ping <!channel>.");
+      yield ev.ended();
+    });
     const { handler } = mount(agent, { aiDisclaimer: "Custom policy footer." });
     await handler(
       signedRequest(
@@ -504,13 +527,13 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("2.0", { type: "app_mention", text: "<@UBOT> investigate" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1:2.0");
+    expect(calls[0]?.sessionId).toBe("slack:T1:C1:2.0");
     expect(calls[0]?.prompt.text).toContain("the deploy is broken");
 
     await handler(signedRequest(message("3.0", { text: "compare yesterday too", thread_ts: "2.0" })));
     await settle();
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.scope.session).toBe("slack:T1:C1:2.0");
+    expect(calls[1]?.sessionId).toBe("slack:T1:C1:2.0");
 
     await handler(
       signedRequest({
@@ -552,20 +575,19 @@ describe("Slack sessions, context, and thread participation", () => {
     vi.stubGlobal("fetch", okFetch());
     const cwd = root();
     const seen: string[] = [];
-    const agent: Agent = {
-      async *invoke(scope) {
-        const ctx = { cwd, sessionManager: { getSessionId: () => scope.session } };
-        // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
-        const list = async () => slackThreads(ctx).list();
-        seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
-        if (scope.session.includes(":C1:")) {
-          const read = async () => slackThreads(ctx).read("omt_1");
-          seen.push(await read().catch((error: Error) => `refused: ${error.message}`));
-        }
-        yield { type: "text", delta: "ok" };
-        yield { type: "completed" };
-      },
-    };
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      const ctx = { cwd, sessionManager: { getSessionId: () => request.sessionId ?? "" } };
+      // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
+      const list = async () => slackThreads(ctx).list();
+      seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
+      if (request.sessionId?.includes(":C1:")) {
+        const read = async () => slackThreads(ctx).read("omt_1");
+        seen.push(await read().catch((error: Error) => `refused: ${error.message}`));
+      }
+      yield ev.text("ok");
+      yield ev.ended();
+    });
     const { handler } = mount(agent, {}, resolveStateRoot(cwd));
     await new Promise((resolve) => setImmediate(resolve));
     platform.push({ channel: "C1", ts: "3.0", user: "U2", text: "deploy failed", reply_count: 2, latest_reply: "4.0" });
@@ -638,13 +660,13 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1:10.0");
+    expect(calls[0]?.sessionId).toBe("slack:T1:C1:10.0");
 
     // A two-party thread no longer needs the name.
     await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
+    expect(calls[1]?.sessionId).toBe("slack:T1:C1:10.0");
   });
 
   it("a bare message that mentions only other people is discussion, not an ask", async () => {
@@ -761,7 +783,7 @@ describe("Slack sessions, context, and thread participation", () => {
     // thread is then the place, so its session is where the exchange lives (§4/§5).
     await handler(signedRequest(message("20.0", { type: "app_mention", text: "<@UBOT> top level" })));
     await settle();
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1:20.0");
+    expect(calls[0]?.sessionId).toBe("slack:T1:C1:20.0");
     const stream = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.startStream"));
     expect(JSON.parse(String(stream?.[1]?.body))).toMatchObject({ thread_ts: "20.0" });
 
@@ -769,19 +791,18 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("20.1", { text: "and the follow-up", thread_ts: "20.0" })));
     await settle();
     expect(calls).toHaveLength(2);
-    expect(calls[1]?.scope.session).toBe("slack:T1:C1:20.0");
+    expect(calls[1]?.sessionId).toBe("slack:T1:C1:20.0");
   });
 
   it("persists a turn before ACK and uses only Slack file IDs in the intent", async () => {
     vi.stubGlobal("fetch", okFetch());
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        await gate;
-        yield { type: "completed" };
-      },
-    };
+    const agent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      await gate;
+      yield ev.ended();
+    });
     const { handler, stateRoot } = mount(agent);
     const event = message("4.0", {
       type: "app_mention",
@@ -802,14 +823,13 @@ describe("Slack sessions, context, and thread participation", () => {
     const stateRoot = root();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const firstCalls: { scope: Scope; prompt: Prompt }[] = [];
-    const interruptedAgent: Agent = {
-      async *invoke(scope, prompt): AsyncIterable<AgentEvent> {
-        firstCalls.push({ scope, prompt });
-        await gate;
-        yield { type: "completed" };
-      },
-    };
+    const firstCalls: InvokeRequest[] = [];
+    const interruptedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      firstCalls.push(request);
+      await gate;
+      yield ev.ended();
+    });
     const first = mount(interruptedAgent, {}, stateRoot);
     await first.handler(
       signedRequest(message("5.0", { type: "app_mention", text: "<@UBOT> recover this exact request" })),
@@ -842,15 +862,14 @@ describe("Slack sessions, context, and thread participation", () => {
 
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const calls: { scope: Scope; prompt: Prompt }[] = [];
+    const calls: InvokeRequest[] = [];
     let invocation = 0;
-    const agent: Agent = {
-      async *invoke(scope, prompt): AsyncIterable<AgentEvent> {
-        calls.push({ scope, prompt });
-        if (++invocation === 1) await gate;
-        yield { type: "completed" };
-      },
-    };
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      calls.push(request);
+      if (++invocation === 1) await gate;
+      yield ev.ended();
+    });
     const { handler, turnsIdle } = mount(
       agent,
       { route: () => ({ session: "recovery-session", text: "fresh request" }) },
@@ -917,13 +936,12 @@ describe("Slack sessions, context, and thread participation", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const calls: Prompt[] = [];
-    const agent: Agent = {
-      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
-        calls.push(prompt);
-        await gate;
-        yield { type: "completed" };
-      },
-    };
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      calls.push(request.prompt);
+      await gate;
+      yield ev.ended();
+    });
     const { turnsIdle } = mount(agent, { aiDisclaimer: false }, stateRoot);
 
     await vi.waitFor(() =>
@@ -987,36 +1005,30 @@ describe("Slack sessions, context, and thread participation", () => {
 });
 
 describe("Slack stop command", () => {
-  const fakeControl = (result: { ok: true } | { code: string }) => {
+  /** What `abort` answers: a run it stopped, nothing running, or a refusal. */
+  const fakeStop = (result: "stopped" | "idle" | ErrorCode) => {
     const aborted: string[] = [];
-    const control = {
-      sessions: {
-        get: (session: string) => ({
-          abort: async () => {
-            aborted.push(session);
-            return "ok" in result
-              ? { ok: true as const }
-              : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
-          },
-        }),
-      },
-    } as unknown as SessionControl;
-    return { control, aborted };
+    const stopped = (session: string): AbortResult => {
+      aborted.push(session);
+      if (result === "stopped") return stoppedRun;
+      if (result === "idle") return { ok: true, stopped: { queued: [], compaction: false } };
+      return failure(result, "no run");
+    };
+    return { stopped, aborted };
   };
   const invoked: string[] = [];
-  const agent: Agent = {
-    async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-      invoked.push(prompt.text);
-      yield { type: "completed" };
-    },
-  };
+  const agent = scriptedAgent(async function* (request) {
+    yield ev.accepted();
+    invoked.push(request.prompt.text);
+    yield ev.ended();
+  });
 
   it("aborts the routed session, notifies, and never submits a turn", async () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const { control, aborted } = fakeControl({ ok: true });
-    const { handler, turnsIdle } = mount(agent, {}, root(), control);
+    const { stopped, aborted } = fakeStop("stopped");
+    const { handler, turnsIdle } = mount(agent, {}, root(), stopped);
     const res = await handler(signedRequest(message("10.0", { channel: "D1", channel_type: "im", text: "Stop!" })));
     expect(res.status).toBe(200);
     await turnsIdle();
@@ -1029,8 +1041,8 @@ describe("Slack stop command", () => {
     invoked.length = 0;
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const { control } = fakeControl({ code: NO_ACTIVE_RUN_CODE });
-    const withHub = mount(agent, {}, root(), control);
+    const { stopped } = fakeStop("idle");
+    const withHub = mount(agent, {}, root(), stopped);
     await withHub.handler(signedRequest(message("11.0", { channel: "D1", channel_type: "im", text: "cancel" })));
     await withHub.turnsIdle();
     expect(invoked).toEqual([]);

@@ -364,7 +364,7 @@ nor the context bucket. A message that quotes another always loads it as referen
 inside a thread or out of it — a quote is the user pointing at something that may predate the session.
 An unreadable referent degrades to a marker instead of failing the turn.
 
-Turns are serialized per session (FIFO) instead of failing fast as `session busy`. Since the session is
+Turns are serialized per session (FIFO). Since the session is
 the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind
 an unrelated multi-minute turn (they see the "⏳ Queued" card). Different places
 run concurrently, which is why a thread is the way to start work that should not queue behind the

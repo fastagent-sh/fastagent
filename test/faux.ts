@@ -7,6 +7,7 @@
  * and return both so tests can pass `models` + `faux.getModel()` to a harness.
  */
 import {
+  type FauxResponseStep,
   type Models,
   type RegisterFauxProviderOptions,
   type TranscriptContext,
@@ -15,6 +16,8 @@ import {
   getCurrentSystemPrompt,
   getCurrentTools,
 } from "@earendil-works/pi-ai";
+import { createPiAgent } from "../src/harnesses/pi/create.ts";
+import type { Agent } from "../src/protocol.ts";
 
 /**
  * What the model was actually sent. pi 0.86 normalized provider stream input to `TranscriptContext`:
@@ -31,6 +34,14 @@ export function makeFaux(options?: RegisterFauxProviderOptions): {
   const models = createModels();
   models.setProvider(faux.provider);
   return { faux, models };
+}
+
+/** A SPEC v1 agent on pi (`createPiAgent`) answering from `responses`, in memory: the real harness, no network. */
+export function fauxPiAgent(responses: FauxResponseStep[]): Agent {
+  const { faux } = makeFaux();
+  faux.setResponses(responses);
+  const model = faux.getModel();
+  return createPiAgent({ model: `${model.provider}/${model.id}`, providers: [faux.provider], instructions: "test" });
 }
 
 /**

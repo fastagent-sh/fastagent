@@ -381,10 +381,10 @@ would duplicate that rule and drift from it: a result for a call pi-ai later dro
 provider unpaired, and every later turn is rejected. Replay does not make side-effecting tools
 exactly-once.
 
-The core lease allows one in-flight turn per session. A collision yields
-`{ type: "failed", code: "session_busy", retryable: true, details: "…" }`. Queueing is channel policy:
-Telegram, Slack, and Feishu/Lark serialize their own turns per session; HTTP uses the
-fail-fast behavior.
+A session runs one run at a time (SPEC v1 §3.2). A message that arrives while it runs queues behind it by default,
+joins the running run with `whenBusy: "steer"`, or is refused with `busy` with `whenBusy: "reject"`, which is how a
+schedule's occurrence is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
+§7), because each turn reads its discussion when it starts.
 
 ## 7. Channels and hosting
 
@@ -461,9 +461,12 @@ intent before committing the exact discussion snapshot consumed (a buffer's entr
 cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
-The busy-retry stream pulls only on downstream demand. Each attempt owns its source iterator; a
-first-event `session_busy` rejection closes that iterator before waiting on the Effect clock, and other
-failures never reopen the retry window.
+A turn is one invoke (`invoke-turn-kit.ts` `turnStream`): `whenBusy: "queue"`, so a collision with a run the
+channel did not start (a wake-up, an API caller) waits behind it, and `idempotencyKey` set to the turn's platform
+message id, so a turn the store replays after a restart is the run it already started: an ended run is replayed,
+answer included, and only an `interrupted` one runs again. The channel's own queue still serializes its turns,
+because a turn's discussion and attachments are read when it starts, not when it arrives. The stream pulls only
+on downstream demand; a reader that leaves only detaches, so the run goes on.
 
 `delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
 its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
@@ -478,7 +481,7 @@ Telegram is the stateful channel reference:
 | Module | Responsibility |
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
-| `invoke-turn.ts` | attachment resolution; the turn itself (busy retry, load-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
+| `invoke-turn.ts` | attachment resolution; the turn itself (the invoke, its key, the preparation-failure event, manifest wording) is `../kit/invoke-turn-kit.ts` |
 | `../kit/turn-runner.ts` | the durable-turn lifecycle over queue + store + discussion source (shared with Slack and Feishu) |
 | `turn-store.ts` | telegram's record + ordering over the generic `../kit/turn-store.ts` |
 | `context-buffer.ts` | telegram's entry shape over the generic `../kit/context-buffer.ts` |
@@ -761,8 +764,8 @@ rather than general — measured, not assumed:
 
 - **Two writers do not corrupt a session.** pi appends one whole transaction per line, so the file
   stays parseable; the conversation *branches* (both writers' entries share a parent) and one branch
-  falls off the path the next turn reads. Within one process this cannot happen — the session lease
-  answers a concurrent turn with `session_busy` — so it is that rule not reaching across processes.
+  falls off the path the next turn reads. Within one process this cannot happen — `LoopPort` holds each
+  session's one writer while it is busy — so it is that rule not reaching across processes.
 - **Channel state is keyed by channel kind**, so two processes serving different channels never touch
   the same files. Two processes serving the SAME channel means one ingress credential in two places,
   which no local guard can see: the same bot token in two different directories does it too.

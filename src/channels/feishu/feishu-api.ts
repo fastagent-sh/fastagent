@@ -18,7 +18,7 @@
  * transport through shared-api.ts. The official SDK handles WebSocket ingress in ws-ingress.ts.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import type { ImageRef } from "../../agent.ts";
+import type { ImageRef } from "../../protocol.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import { attachmentPath } from "../kit/attachment-path.ts";
 import { utf8Prefix } from "../kit/text.ts";

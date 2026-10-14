@@ -5,7 +5,7 @@
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
-interface ImageRef {
+export interface ImageRef {
   mimeType: string;
   data: string;
 }
