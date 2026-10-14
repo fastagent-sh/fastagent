@@ -16,6 +16,7 @@ import {
   type FollowEvent,
   type InvokeEvent,
   type RunStatus,
+  type Session,
   agentError,
 } from "../protocol.ts";
 import { readBodyCapped } from "./body.ts";
@@ -137,11 +138,18 @@ async function opened<T>(events: AsyncIterable<T>): Promise<{ first?: T; all: As
 const entryId = (event: FollowEvent | InvokeEvent): string | undefined =>
   event.type === "entry" ? event.entry.id : undefined;
 
-/** A stream that may be refused before it starts: refused, it is an error status; started, an event stream. */
-async function stream(events: AsyncIterable<FollowEvent | InvokeEvent>): Promise<Response> {
-  const { first, all } = await opened(events);
-  if (first?.type === "rejected") return refused(first.error);
-  return sseResponse(all, (event) => event, entryId);
+/**
+ * A follow: refused, an error status; otherwise an event stream at once. Whether it is refused is asked of `refusal`
+ * first, never of the stream's first event, which on a session with nothing new may be the next run's. A refusal that
+ * arrives later (the session deleted in between) is that stream's one `rejected` event.
+ */
+async function stream(
+  refusal: Promise<AgentError | undefined>,
+  events: () => AsyncIterable<FollowEvent>,
+): Promise<Response> {
+  const error = await refusal;
+  if (error) return refused(error);
+  return sseResponse(events(), (event) => event, entryId);
 }
 
 // ── Routing ──────────────────────────────────────────────────────────────────
@@ -243,6 +251,12 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
 
   const sessions = (_url: URL, params: Params) => agent.sessions.get(params.s as string);
 
+  /** What a follow from `after` would be refused with: the session and the cursor, as a read of no entries asks. */
+  const refusalOf = async (session: Session, after: { after?: string }): Promise<AgentError | undefined> => {
+    const result = await session.read({ ...after, limit: 0 });
+    return result.ok ? undefined : result.error;
+  };
+
   const user: Record<string, Handler> = {
     "POST /sessions": async (req) => {
       const body = await decoded(req, CreateBody);
@@ -265,12 +279,11 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
         }),
       );
     },
-    "GET /sessions/{s}/follow": (req, url, params) =>
-      stream(
-        sessions(url, params).follow(
-          optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id")),
-        ),
-      ),
+    "GET /sessions/{s}/follow": (req, url, params) => {
+      const after = optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id"));
+      const session = sessions(url, params);
+      return stream(refusalOf(session, after), () => session.follow(after));
+    },
     "GET /sessions/{s}/attachments/{ref}": (_req, url, params) =>
       read(
         () => sessions(url, params).attachment(params.ref as string),
@@ -282,6 +295,8 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
                     ? attachment.mimeType
                     : "application/octet-stream",
                   "x-content-type-options": "nosniff",
+                  // The declared type, for a client that wants it back; never one the browser acts on.
+                  "x-mime-type": attachment.mimeType,
                   "cache-control": "private, max-age=31536000, immutable",
                 },
               })
@@ -305,13 +320,20 @@ export function protocolHttp(agent: Agent): { user: { routes: Routes; mounts: Pr
     },
     "GET /sessions/{s}/runs/{r}": (_req, url, params) =>
       read(() => sessions(url, params).runs.get({ runId: params.r as string }), runOf),
-    "GET /sessions/{s}/runs/{r}/events": (req, url, params) =>
-      stream(
-        sessions(url, params).runs.follow(
-          params.r as string,
-          optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id")),
-        ),
-      ),
+    "GET /sessions/{s}/runs/{r}/events": (req, url, params) => {
+      const after = optional("after", url.searchParams.get("after") ?? req.headers.get("last-event-id"));
+      const session = sessions(url, params);
+      const runId = params.r as string;
+      const refusal = (async () => {
+        const run = await session.runs.get({ runId }).catch((error: unknown) => {
+          if (error instanceof AgentRejection) return error;
+          throw error;
+        });
+        if (run instanceof AgentRejection) return { code: run.code, message: run.message, retryable: run.retryable };
+        return run ? refusalOf(session, after) : agentError("not_found", `no run ${runId}`);
+      })();
+      return stream(refusal, () => session.runs.follow(runId, after));
+    },
     "POST /sessions/{s}/runs/{r}/cancel": async (_req, url, params) =>
       answer(await sessions(url, params).runs.cancel(params.r as string)),
   };

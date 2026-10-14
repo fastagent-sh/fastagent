@@ -43,12 +43,39 @@ export interface RemoteAgentOptions {
 }
 
 /** A reply the server refused, with the error it gave. */
+/** A non-2xx reply. `ours` when this protocol answered it, which says nothing ran; a gateway's page says nothing. */
 class Refused extends Error {
   readonly error: AgentError;
-  constructor(error: AgentError) {
-    super(error.message);
-    this.error = error;
+  readonly ours: boolean;
+  constructor(refusal: { error: AgentError; ours: boolean }) {
+    super(refusal.error.message);
+    this.error = refusal.error;
+    this.ours = refusal.ours;
   }
+}
+
+/**
+ * A 2xx reply's JSON. Its body can still fail: the connection lost while it is read (`unavailable`), or a reply that is
+ * not this protocol's, such as a proxy's HTML page (`internal`).
+ */
+async function bodyOf<T>(res: Response): Promise<{ value: T } | { error: AgentError }> {
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (error) {
+    return { error: unreachable(error) };
+  }
+  try {
+    return { value: JSON.parse(text) as T };
+  } catch {
+    return { error: agentError("internal", `a ${res.status} reply that is not JSON: ${text.slice(0, 200)}`) };
+  }
+}
+
+/** A request that never reached a server: the connection was not made, so nothing was recorded. */
+function neverSent(error: unknown): boolean {
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN";
 }
 
 const unreachable = (error: unknown): AgentError =>
@@ -57,16 +84,24 @@ const unreachable = (error: unknown): AgentError =>
     `the agent could not be reached: ${error instanceof Error ? error.message : String(error)}`,
   );
 
-/** The error a non-2xx reply carries, or one that says the reply was not this protocol's. */
-async function refusalOf(res: Response): Promise<AgentError> {
-  const body = await res.text();
+/** The error a non-2xx reply carries, and whether this protocol gave it. Reading the body may fail too. */
+async function refusalOf(res: Response): Promise<{ error: AgentError; ours: boolean }> {
+  let body: string;
+  try {
+    body = await res.text();
+  } catch (error) {
+    return { error: unreachable(error), ours: false };
+  }
   try {
     const parsed = JSON.parse(body) as { error?: AgentError };
-    if (typeof parsed.error?.code === "string" && typeof parsed.error.message === "string") return parsed.error;
+    if (typeof parsed.error?.code === "string" && typeof parsed.error.message === "string") {
+      return { error: parsed.error, ours: true };
+    }
   } catch {
-    // A body that is not JSON is answered below, with its status.
+    // Not this protocol's body: a gateway's page, answered below by its status.
   }
-  return agentError(res.status === 503 ? "unavailable" : "internal", `${res.status} ${body.trim()}`);
+  const code = res.status === 502 || res.status === 503 || res.status === 504 ? "unavailable" : "internal";
+  return { error: agentError(code, `${res.status} ${body.trim()}`), ours: false };
 }
 
 /** Connects once to read the agent's capabilities, which `info()` answers without a request. */
@@ -92,8 +127,9 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     } catch (error) {
       return { ok: false, error: unreachable(error) };
     }
-    if (!res.ok) return { ok: false, error: await refusalOf(res) };
-    return (await res.json()) as T;
+    if (!res.ok) return { ok: false, error: (await refusalOf(res)).error };
+    const body = await bodyOf<T>(res);
+    return "value" in body ? body.value : { ok: false, error: body.error };
   };
 
   /** A read with no failure branch: it rejects with the server's `AgentRejection`, or `unavailable`. */
@@ -107,8 +143,10 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     return parse(res);
   };
   const jsonOf = async <T>(res: Response): Promise<T> => {
-    if (!res.ok) throw new AgentRejection(await refusalOf(res));
-    return (await res.json()) as T;
+    if (!res.ok) throw new AgentRejection((await refusalOf(res)).error);
+    const body = await bodyOf<T>(res);
+    if ("error" in body) throw new AgentRejection(body.error);
+    return body.value;
   };
 
   /**
@@ -119,6 +157,8 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     path: string,
     init: RequestInit,
     connectMs: number,
+    /** Said instead of `rejected` when the request may have reached the server before the connection failed. */
+    unsure?: (reason: string) => AsyncIterable<T>,
   ): AsyncIterable<T> => {
     const abort = new AbortController();
     const generate = async function* (): AsyncGenerator<T> {
@@ -148,7 +188,9 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
       } catch (error) {
         const ended = endedBecause(abort.signal);
         if (ended?.kind === "cancelled") return;
-        if (error instanceof Refused) yield { type: "rejected", error: error.error } as T;
+        const sure = error instanceof Refused ? error.ours : neverSent(error);
+        if (!started && unsure && !sure) yield* unsure(String(ended ?? error));
+        else if (error instanceof Refused) yield { type: "rejected", error: error.error } as T;
         else if (!started) yield { type: "rejected", error: unreachable(ended ?? error) } as T;
         else
           yield { type: "serving_error", message: `${path}: the connection was lost: ${String(ended ?? error)}` } as T;
@@ -163,11 +205,8 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     return { [Symbol.asyncIterator]: () => iterator };
   };
 
-  const info = await (async (): Promise<AgentInfo> => {
-    const res = await request("/agent");
-    if (!res.ok) throw new AgentRejection(await refusalOf(res));
-    return (await res.json()) as AgentInfo;
-  })();
+  // A scale-to-zero host is woken by this first request, so it gets the payload budget, not the black-hole one.
+  const info = await reading("/agent", (res) => jsonOf<AgentInfo>(res));
 
   const query = (params: Record<string, string | number | undefined>): string => {
     const search = new URLSearchParams();
@@ -196,10 +235,17 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
         if (!addressable) return undefined;
         return reading(`${path}/attachments/${encodeURIComponent(ref)}`, async (res) => {
           if (res.status === 404) return undefined;
-          if (!res.ok) throw new AgentRejection(await refusalOf(res));
+          if (!res.ok) throw new AgentRejection((await refusalOf(res)).error);
+          let bytes: ArrayBuffer;
+          try {
+            bytes = await res.arrayBuffer();
+          } catch (error) {
+            throw new AgentRejection(unreachable(error), { cause: error });
+          }
           return {
-            mimeType: res.headers.get("content-type") ?? "application/octet-stream",
-            data: toBase64(new Uint8Array(await res.arrayBuffer())),
+            // The type as the sender declared it; `content-type` is the safe one the server serves the bytes under.
+            mimeType: res.headers.get("x-mime-type") ?? res.headers.get("content-type") ?? "application/octet-stream",
+            data: toBase64(new Uint8Array(bytes)),
           };
         });
       },
@@ -240,6 +286,40 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
     };
   };
 
+  /**
+   * The connection failed before the receipt, so the run may have been accepted. A key settles it: the key's run is
+   * this message's, followed from its start; no run under it means none was accepted, and sending again with the key
+   * is safe either way. Without a key nothing can tell, and saying `rejected` would invite a second run.
+   */
+  async function* settleUnsure(invokeRequest: InvokeRequest, reason: string): AsyncGenerator<InvokeEvent> {
+    const { sessionId, idempotencyKey } = invokeRequest;
+    if (sessionId === undefined || idempotencyKey === undefined) {
+      yield {
+        type: "serving_error",
+        message: `the connection failed before the receipt (${reason}), so whether the run was accepted is unknown: send with an idempotencyKey to make sending again safe`,
+      };
+      return;
+    }
+    const target = session(sessionId);
+    let run: RunStatus | undefined;
+    try {
+      run = await target.runs.get({ idempotencyKey });
+    } catch (error) {
+      yield {
+        type: "serving_error",
+        message: `the connection failed before the receipt (${reason}), and asking for the key's run failed too: ${String(error)}`,
+      };
+      return;
+    }
+    if (!run) {
+      yield { type: "rejected", error: agentError("unavailable", `the run was not accepted: ${reason}`) };
+      return;
+    }
+    const joined = run.messages[0]?.idempotencyKey !== idempotencyKey;
+    yield { type: "accepted", sessionId, run, joined, duplicate: false };
+    yield* target.runs.follow(run.runId) as AsyncIterable<InvokeEvent>;
+  }
+
   return {
     // The connect limit is the payload one: a scale-to-zero host may hold this open while a machine boots.
     invoke: (invokeRequest: InvokeRequest) =>
@@ -251,6 +331,7 @@ export async function connectRemoteAgent(options: RemoteAgentOptions): Promise<A
           body: JSON.stringify(invokeRequest),
         },
         PAYLOAD_TIMEOUT_MS,
+        (reason) => settleUnsure(invokeRequest, reason),
       ),
     sessions: {
       create: (options = {}) =>

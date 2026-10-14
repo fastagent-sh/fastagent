@@ -458,6 +458,11 @@ A failed `Result` is answered with its code's status (§7.1) and `{ "error": Age
 know, and this answer decides whether a Caller sends again; `attachment` answering `undefined` is `404` with no body.
 Authentication is not part of the protocol: it belongs to a gateway in front, or to middleware per plane.
 
+A connection that fails before the receipt arrives leaves it unknown whether the run was accepted, since the server
+answers only once the run is recorded. With an `idempotencyKey`, `runs.get({ idempotencyKey })` settles it, and sending
+again with the key is safe either way. Without one, a client MUST NOT report the invoke `rejected`: that says nothing
+was recorded, and a Caller would send it again.
+
 ## 10. Consumption: streaming and buffered
 
 A Caller either reads the events as they arrive (a chat UI, an SSE endpoint), or wants only the answer. The buffered

@@ -7,7 +7,7 @@ import { protocolHttp } from "../src/channels/protocol-http.ts";
 import { router, serveNode } from "../src/channels/serve.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
 import { loopPort } from "../src/loop-port.ts";
-import { type Agent, type FollowEvent, LIMITS } from "../src/protocol.ts";
+import { type Agent, AgentRejection, type FollowEvent, LIMITS } from "../src/protocol.ts";
 import { connectRemoteAgent } from "../src/protocol-remote.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
@@ -140,6 +140,110 @@ describe("the HTTP binding", () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const res = await fetch(`${url}/invoke`, invokeBody({ sessionId: "s", prompt: { text: "x" }, whenbusy: "reject" }));
     expect(res.status).toBe(400);
+  });
+
+  it("a follow of a session with nothing new starts at once, and ends when its caller leaves", async () => {
+    const fake = new FakeStore();
+    const url = await serve(loopPort(fakeLoopHarness(fake)));
+    const agent = await connectRemoteAgent({ url });
+    for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
+    const page = await agent.sessions.get("s").read();
+    const last = page.ok ? page.entries.at(-1)?.id : undefined;
+    const started = Date.now();
+    const res = await fetch(`${url}/sessions/s/follow?after=${last}`, { signal: AbortSignal.timeout(2000) });
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(2000);
+    await res.body?.cancel();
+    const iterator = agent.sessions
+      .get("s")
+      .follow({ after: last as string })
+      [Symbol.asyncIterator]();
+    const next = iterator.next();
+    for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "two" } })) void _;
+    expect(await next).toMatchObject({ value: { type: "entry" } });
+    await iterator.return?.();
+    const queued = await fetch(`${url}/sessions/s/runs/no-such-run/events`, { signal: AbortSignal.timeout(2000) });
+    expect(queued.status).toBe(404);
+  });
+
+  /** A connection that delivered the request and then failed before the reply: the server may have run it. */
+  const lostAfterSending: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/invoke")) {
+      const res = await fetch(input, init);
+      await res.body?.cancel();
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      });
+    }
+    return fetch(input, init);
+  };
+
+  it("a connection lost before the receipt is settled by the key: the run that was accepted is followed", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending });
+    const events = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
+      events.push(event);
+    }
+    expect(events[0]).toMatchObject({ type: "accepted", sessionId: "s", joined: false });
+    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+    const runs = await connectRemoteAgent({ url });
+    expect(await runs.sessions.get("s").runs.get({ idempotencyKey: "k" })).toMatchObject({ status: "done" });
+  });
+
+  it("without a key, a connection lost before the receipt is not called rejected", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const agent = await connectRemoteAgent({ url, fetchFn: lostAfterSending });
+    const events = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+    expect(events).toMatchObject([{ type: "serving_error", message: expect.stringMatching(/unknown/) }]);
+  });
+
+  it("a request that never reached the server is rejected, safe to send again", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const refusedConnection: typeof fetch = async (input, init) => {
+      if (String(input).endsWith("/invoke")) {
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+      }
+      return fetch(input, init);
+    };
+    const agent = await connectRemoteAgent({ url, fetchFn: refusedConnection });
+    const events = [];
+    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+    expect(events).toMatchObject([{ type: "rejected", error: { code: "unavailable", retryable: true } }]);
+  });
+
+  it("a 2xx that is not this protocol's is a failure value, not a thrown error", async () => {
+    const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
+    const proxied: typeof fetch = async (input, init) =>
+      String(input).endsWith("/agent") ? fetch(input, init) : new Response("<html>maintenance</html>", { status: 200 });
+    const agent = await connectRemoteAgent({ url, fetchFn: proxied });
+    const session = agent.sessions.get("s");
+    expect(await session.read()).toMatchObject({ ok: false, error: { code: "internal" } });
+    await expect(session.runs.get({ runId: "r" })).rejects.toBeInstanceOf(AgentRejection);
+    await expect(agent.sessions.list()).rejects.toMatchObject({ code: "internal" });
+  });
+
+  it("an attachment keeps its declared type, served under a safe one", async () => {
+    const port = loopPort(fakeLoopHarness(new FakeStore()));
+    const url = await serve({ ...port, attachment: async () => ({ mimeType: "image/svg+xml", data: btoa("<svg/>") }) });
+    const raw = await fetch(`${url}/sessions/s/attachments/e1%3A0`);
+    expect(raw.headers.get("content-type")).toBe("application/octet-stream");
+    const agent = await connectRemoteAgent({ url });
+    expect(await agent.sessions.get("s").attachment("e1:0")).toEqual({
+      mimeType: "image/svg+xml",
+      data: btoa("<svg/>"),
+    });
+  });
+
+  it("an agent it cannot reach is refused as unavailable", async () => {
+    const down: typeof fetch = async () => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+    };
+    await expect(connectRemoteAgent({ url: "http://127.0.0.1:1", fetchFn: down })).rejects.toMatchObject({
+      code: "unavailable",
+      retryable: true,
+    });
   });
 
   it("a follow the server refuses is one rejected event", async () => {
