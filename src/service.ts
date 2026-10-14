@@ -252,7 +252,8 @@ export function startSchedules(
   const scheduler = Effect.runSync(
     createScheduler({
       // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
-      agent: scheduleCaller(agent),
+      agent: scheduleCaller(agent, "schedule"),
+      wakeAgent: scheduleCaller(agent, "wake"),
       stateRoot,
       schedules,
       failures,

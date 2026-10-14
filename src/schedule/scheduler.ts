@@ -63,6 +63,8 @@ export interface ScheduleLoad {
 
 export interface SchedulerOptions {
   agent: Agent;
+  /** What the agent's own wake-ups run through, so their runs say they are wake-ups; `agent` when absent. */
+  wakeAgent?: Agent;
   stateRoot: string;
   /** Every valid schedule this serve loaded at start. */
   schedules: readonly Schedule[];
@@ -261,6 +263,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const fork = Effect.runForkWith(yield* Effect.context<never>());
     const {
       agent,
+      wakeAgent = agent,
       stateRoot,
       schedules,
       failures = [],
@@ -334,7 +337,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         () =>
           Effect.gen(function* () {
             const label = `wake ${w.id.slice(0, 8)}`;
-            const r = yield* runTurn(agent, label, w.session, wakeEnvelope(w));
+            const r = yield* runTurn(wakeAgent, label, w.session, wakeEnvelope(w));
             let kept = false;
             if (r.busy && !w.cron) {
               kept = yield* Effect.try({

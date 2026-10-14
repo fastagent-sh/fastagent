@@ -42,11 +42,12 @@ function terminalOf(outcome: RunOutcome): AgentEvent {
 }
 
 /**
- * The scheduler's caller: a busy session is refused, so the scheduler applies its own rule to it, as it did before
- * v1: a cron occurrence is skipped, a one-shot wake-up deferred to the next poll.
+ * The scheduler's caller, for its schedules or for the agent's wake-ups, which is what their runs record as their
+ * source. A busy session is refused, so the scheduler applies its own rule to it, as it did before v1: a cron
+ * occurrence is skipped, a one-shot wake-up deferred to the next poll.
  */
-export function scheduleCaller(agent: ProtocolAgent): LegacyAgent {
-  return legacyAgent(agent, { kind: "schedule" }, "reject");
+export function scheduleCaller(agent: ProtocolAgent, kind: "schedule" | "wake"): LegacyAgent {
+  return legacyAgent(agent, { kind }, "reject");
 }
 
 export function legacyAgent(
@@ -81,67 +82,77 @@ export function legacyAgent(
         });
         let lastError: string | undefined;
         const textOf = runText(() => runId);
-        for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
-          const event: InvokeEvent = next.value;
-          switch (event.type) {
-            case "accepted":
-              runId = event.run.runId;
-              if (wasCancelled()) {
-                const canceled = await agent.sessions.get(scope.session).runs.cancel(runId);
-                if (!canceled.ok) log.warn(`${label} run ${runId} outlived its caller: ${canceled.error.message}`);
-                await iterator.return?.();
-                return;
-              }
-              break;
-            case "rejected":
-              yield failedFrom(event.error);
-              return;
-            case "message_delta":
-              if (event.channel === "thinking") yield { type: "thinking", delta: event.delta };
-              else yield { type: "text", delta: textOf(event) };
-              break;
-            case "tool_started":
-              yield { type: "tool_started", id: event.toolCallId, name: event.name, args: event.args };
-              break;
-            case "tool_progress":
-              yield { type: "tool_progress", id: event.toolCallId, text: event.text };
-              break;
-            case "retry_scheduled":
-              yield {
-                type: "retrying",
-                attempt: event.attempt,
-                maxAttempts: event.maxAttempts,
-                delayMs: event.delayMs,
-                reason: event.reason,
-              };
-              break;
-            case "serving_error":
-              lastError = event.message;
-              break;
-            case "entry": {
-              const { entry } = event;
-              if (entry.runId !== runId) break;
-              const missing = textOf(event);
-              if (missing !== "") yield { type: "text", delta: missing };
-              if (entry.kind === "tool_result") {
-                const data = entry.data as { toolCallId: string; isError?: boolean; text?: string };
+        let terminal: AgentEvent | undefined;
+        // The v1 stream holds a listener on the session until it is closed: closed on every way out, and before the
+        // terminal is handed on, so a caller that stops at the terminal leaves nothing behind.
+        try {
+          events: for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+            const event: InvokeEvent = next.value;
+            switch (event.type) {
+              case "accepted":
+                runId = event.run.runId;
+                if (wasCancelled()) {
+                  const canceled = await agent.sessions.get(scope.session).runs.cancel(runId);
+                  if (!canceled.ok) log.warn(`${label} run ${runId} outlived its caller: ${canceled.error.message}`);
+                  return;
+                }
+                break;
+              case "rejected":
+                terminal = failedFrom(event.error);
+                break events;
+              case "message_delta":
+                if (event.channel === "thinking") yield { type: "thinking", delta: event.delta };
+                else yield { type: "text", delta: textOf(event) };
+                break;
+              case "tool_started":
+                yield { type: "tool_started", id: event.toolCallId, name: event.name, args: event.args };
+                break;
+              case "tool_progress":
+                yield { type: "tool_progress", id: event.toolCallId, text: event.text };
+                break;
+              case "retry_scheduled":
                 yield {
-                  type: "tool_ended",
-                  id: data.toolCallId,
-                  isError: data.isError === true,
-                  content: data.text ?? "",
+                  type: "retrying",
+                  attempt: event.attempt,
+                  maxAttempts: event.maxAttempts,
+                  delayMs: event.delayMs,
+                  reason: event.reason,
                 };
+                break;
+              case "serving_error":
+                lastError = event.message;
+                break;
+              case "entry": {
+                const { entry } = event;
+                if (entry.runId !== runId) break;
+                const missing = textOf(event);
+                if (missing !== "") yield { type: "text", delta: missing };
+                if (entry.kind === "tool_result") {
+                  const data = entry.data as { toolCallId: string; isError?: boolean; text?: string };
+                  yield {
+                    type: "tool_ended",
+                    id: data.toolCallId,
+                    isError: data.isError === true,
+                    content: data.text ?? "",
+                  };
+                }
+                if (entry.kind === "run_ended") {
+                  ended = true;
+                  terminal = terminalOf((entry.data as { outcome: RunOutcome }).outcome);
+                  break events;
+                }
+                break;
               }
-              if (entry.kind === "run_ended") {
-                ended = true;
-                yield terminalOf((entry.data as { outcome: RunOutcome }).outcome);
-                return;
-              }
-              break;
             }
           }
+        } finally {
+          await iterator.return?.();
         }
-        yield { type: "failed", details: lastError ?? "the stream ended before its run did", retryable: true };
+        yield terminal ?? {
+          type: "failed",
+          details: lastError ?? "the stream ended before its run did",
+          retryable: true,
+        };
       }),
   };
 }
