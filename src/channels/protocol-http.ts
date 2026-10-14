@@ -21,7 +21,7 @@ import {
 } from "../protocol.ts";
 import { MAX_BODY_BYTES, readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
-import { type PrefixMount, parseRouteKey, router, withoutBody } from "./router.ts";
+import { type PrefixMount, assertCorsOrigins, parseRouteKey, router, withoutBody } from "./router.ts";
 import { sseResponse } from "./sse.ts";
 
 /** A valid request body for `POST /invoke`: the CLI's "try it" line, next to the decoder it must satisfy. */
@@ -239,13 +239,19 @@ function fromBase64(data: string): Uint8Array<ArrayBuffer> {
 
 /**
  * The agent's API as one Fetch handler, for an app to mount: the user plane always, `/control` only when asked. It
- * authenticates nobody; the app's own middleware decides who reaches it.
+ * authenticates nobody, and answers no browser cross-origin unless `corsOrigins` names who may: mounted in an app,
+ * who reaches it, and from which page, is the app's middleware's decision.
  */
-export function createAgentHandler(agent: Agent, options: { control?: boolean } = {}): ChannelHandler {
+export function createAgentHandler(
+  agent: Agent,
+  options: { control?: boolean; corsOrigins?: readonly string[] } = {},
+): ChannelHandler {
+  if (options.corsOrigins) assertCorsOrigins(options.corsOrigins, "createAgentHandler: corsOrigins");
   const planes = protocolHttp(agent);
   return router({
     unverified: planes.user.routes,
     mounts: [...planes.user.mounts, ...(options.control ? [planes.control] : [])],
+    corsOrigins: options.corsOrigins ?? false,
   });
 }
 

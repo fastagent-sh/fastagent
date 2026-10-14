@@ -92,8 +92,10 @@ const { text } = await collect(agent.invoke({ sessionId: "u1", prompt: { text: "
 // (3) HTTP/SSE — the agent's API as one Fetch handler: POST /invoke, /sessions/*, /agent/*
 import { createAgentHandler } from "@fastagent-sh/fastagent";
 const handler = createAgentHandler(agent);   // (Request) => Promise<Response>; `{ control: true }` adds /control/*
-// It requires content-type: application/json on a body and caps it. It sends NO CORS headers — mounted in your app,
-// who may call it cross-origin is your middleware's decision. Call it from another process with `connectAgent`.
+// It requires content-type: application/json on a body and caps it. It sends NO CORS headers and answers no preflight
+// — mounted in your app, who may call it cross-origin is your middleware's decision — unless you name the origins:
+// `createAgentHandler(agent, { corsOrigins: ["https://app.example.com"] })`. Call it from another process with
+// `connectAgent`.
 ```
 
 ### The whole agent, as a service

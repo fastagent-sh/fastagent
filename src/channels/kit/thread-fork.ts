@@ -49,20 +49,21 @@ export function branchPoint(path: readonly Entry[], hints: readonly string[]): s
   return undefined;
 }
 
+/** Every entry of a session, oldest first: a read without a cursor is the newest page, so it pages back from there. */
 async function wholeHistory(agent: Agent, sessionId: string): Promise<{ entries: Entry[]; leaf?: string } | undefined> {
-  const entries: Entry[] = [];
+  const pages: Entry[][] = [];
   let leaf: string | undefined;
-  let after: string | undefined;
+  let before: string | undefined;
   for (;;) {
-    const page = await agent.sessions.get(sessionId).read({ ...(after ? { after } : {}), limit: LIMITS.readMax });
+    const page = await agent.sessions.get(sessionId).read({ ...(before ? { before } : {}), limit: LIMITS.readMax });
     if (!page.ok) {
-      if (page.error.code === "not_found") return undefined;
+      if (page.error.code === "not_found" && before === undefined) return undefined;
       throw new Error(`reading session ${sessionId} failed: ${page.error.message}`);
     }
-    leaf = page.state.leafEntryId;
-    entries.push(...page.entries);
-    if (!page.next) return { entries, ...(leaf ? { leaf } : {}) };
-    after = page.next;
+    if (before === undefined) leaf = page.state.leafEntryId;
+    pages.unshift(page.entries);
+    if (!page.prev) return { entries: pages.flat(), ...(leaf ? { leaf } : {}) };
+    before = page.prev;
   }
 }
 

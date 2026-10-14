@@ -4,9 +4,14 @@ import type { AgentEvent } from "../src/agent.ts";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
 import { branchPoint, forkThread } from "../src/channels/kit/thread-fork.ts";
 import { log } from "../src/log.ts";
-import { legacyAgent } from "../src/legacy-agent.ts";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as Effect from "effect/Effect";
+import { legacyAgent, scheduleCaller } from "../src/legacy-agent.ts";
+import { fireScheduleOnce } from "../src/schedule/scheduler.ts";
 import { loopPort } from "../src/loop-port.ts";
-import { type Agent, type Entry, failure } from "../src/protocol.ts";
+import { type Agent, type Entry, failure, LIMITS } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 
@@ -77,6 +82,48 @@ describe("legacyAgent", () => {
     const page = await v1.sessions.get("thread").read();
     const said = page.ok ? page.entries.filter((e) => e.kind === "user_message").map((e) => e.data) : [];
     expect(said).toEqual([{ text: "msg-1 first" }, { text: "reply" }]);
+  });
+});
+
+describe("scheduleCaller", () => {
+  it("a schedule's occurrence on a busy session is skipped, not queued behind the running run", async () => {
+    const { v1, store } = agentOver();
+    const running = v1.invoke({ sessionId: "schedule:job", prompt: { text: "hold" } })[Symbol.asyncIterator]();
+    await running.next();
+    const schedule = { name: "job", cron: "* * * * *", tz: "UTC", prompt: "go" };
+    const slot = new Date(Math.floor(Date.now() / 60_000) * 60_000);
+    const stateRoot = await mkdtemp(join(tmpdir(), "fa-schedule-busy-"));
+    const outcome = await Effect.runPromise(
+      fireScheduleOnce({ agent: scheduleCaller(v1), stateRoot, schedule, slot, now: () => slot }),
+    );
+    expect(outcome).toMatchObject({ fired: false, skipped: true });
+    const state = await v1.sessions.get("schedule:job").read({ limit: 0 });
+    expect(state.ok && state.state.queued).toEqual([]);
+    store.release();
+    await running.return?.();
+  });
+});
+
+describe("a thread far back in a long room", () => {
+  it("forks at the exchange its hint names, however many pages of history came after it", async () => {
+    const { v1, legacy } = agentOver();
+    // More than one page (LIMITS.readMax entries): the hint's exchange is only on the oldest one.
+    await drain(legacy.invoke({ session: "room" }, { text: "msg-first the start" }));
+    for (let i = 0; i < Math.ceil(LIMITS.readMax / 4) + 10; i++) {
+      await drain(legacy.invoke({ session: "room" }, { text: `later ${i}` }));
+    }
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await drain(
+        legacy.invoke({ session: "thread", parentSession: "room", branchHints: ["msg-first"] }, { text: "reply" }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+    const page = await v1.sessions.get("thread").read({ limit: LIMITS.readMax });
+    const said = page.ok ? page.entries.filter((e) => e.kind === "user_message").map((e) => e.data) : [];
+    expect(said).toEqual([{ text: "msg-first the start" }, { text: "reply" }]);
   });
 });
 

@@ -1,5 +1,5 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
-import { legacyAgent } from "../legacy-agent.ts";
+import { scheduleCaller } from "../legacy-agent.ts";
 import type { Agent } from "../protocol.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
@@ -221,7 +221,7 @@ export function mountAgentcore(options: {
     }
     const outcome = await Effect.runPromise(
       // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
-      fireScheduleOnce({ agent: legacyAgent(agent, { kind: "schedule" }), stateRoot, schedule, slot: occurrence }).pipe(
+      fireScheduleOnce({ agent: scheduleCaller(agent), stateRoot, schedule, slot: occurrence }).pipe(
         Effect.mapError((e) => e.cause),
       ),
     ).catch((cause: unknown) => {

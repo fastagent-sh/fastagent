@@ -132,8 +132,11 @@ export interface RouterSurface {
   selfVerifying?: Routes;
   /** Prefix-owning handlers (the control plane, and the protocol's `/sessions` and `/agent`). Always unverified. */
   mounts?: readonly PrefixMount[];
-  /** `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. */
-  corsOrigins?: readonly string[];
+  /**
+   * `http.cors` — exact origins, or `["*"]`. Set, it REPLACES the `*` default; unset, the default stands. `false`
+   * leaves cross-origin to whoever mounts the handler: no CORS headers, and no preflight answered here.
+   */
+  corsOrigins?: readonly string[] | false;
 }
 
 /**
@@ -216,7 +219,7 @@ export function router(surface: RouterSurface): ChannelHandler {
     const fromPage = origin !== null && owned;
     // Decided BEFORE dispatch, so a 404, a 405 and a handler's own reply all leave with the same verdict — a browser
     // that cannot read the 405 gets an opaque network error instead of the reason.
-    const cors = fromPage ? allowedOrigin(origin as string, corsOrigins) : undefined;
+    const cors = fromPage && corsOrigins !== false ? allowedOrigin(origin as string, corsOrigins) : undefined;
     const answer = (): Response | Promise<Response> => {
       // The gate that makes "an origin we do not allow is simply not answered" safe: a POST carrying `text/plain`
       // is a CORS simple request, sent with no preflight at all, so a route that authenticates nobody must refuse
@@ -248,7 +251,7 @@ export function router(surface: RouterSurface): ChannelHandler {
       const out = req.method === "HEAD" ? withoutBody(res) : res;
       // `vary` whether or not the origin was allowed: the answer DEPENDS on the request's origin either way, and a
       // cache that does not know it would serve one caller's verdict to another.
-      if (owned) out.headers.append("vary", "origin");
+      if (owned && corsOrigins !== false) out.headers.append("vary", "origin");
       if (cors === undefined) return out;
       out.headers.set("access-control-allow-origin", cors);
       // Echoed for the same reason the methods are: what a caller needs is not ours to enumerate. A gateway in front

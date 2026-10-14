@@ -139,6 +139,29 @@ describe("the HTTP binding", () => {
     await held.return?.();
   });
 
+  it("createAgentHandler answers no browser cross-origin unless told which origins may call", async () => {
+    const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+    const fromPage = { origin: "https://evil.example" };
+    const preflight = () =>
+      new Request("http://app/invoke", {
+        method: "OPTIONS",
+        headers: { ...fromPage, "access-control-request-method": "POST" },
+      });
+    const plain = createAgentHandler(agent);
+    const read = await plain(new Request("http://app/sessions", { headers: fromPage }));
+    expect(read.status).toBe(200);
+    expect(read.headers.get("access-control-allow-origin")).toBeNull();
+    const asked = await plain(preflight());
+    expect(asked.status).not.toBe(204);
+    expect(asked.headers.get("access-control-allow-origin")).toBeNull();
+
+    const allowed = createAgentHandler(agent, { corsOrigins: ["https://app.example"] });
+    const ours = await allowed(new Request("http://app/sessions", { headers: { origin: "https://app.example" } }));
+    expect(ours.headers.get("access-control-allow-origin")).toBe("https://app.example");
+    expect((await allowed(preflight())).headers.get("access-control-allow-origin")).toBeNull();
+    expect(() => createAgentHandler(agent, { corsOrigins: ["https://app.example/"] })).toThrow(/corsOrigins/);
+  });
+
   it("the route table in api-reference lists exactly the routes the binding serves", () => {
     // The table is what a non-TypeScript client builds from: a route missing there is one nobody can find, and a
     // listed route the binding does not serve is a 404 someone will debug.

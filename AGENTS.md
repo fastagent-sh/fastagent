@@ -48,7 +48,7 @@ src/
 ├── legacy-agent.ts         # TEMPORARY: a v0.1 Agent over a v1 one, for the channels and the scheduler until they move
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + zero packages /
 │                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
-├── index.ts                # supported all-in-one entry (re-exports core + node + session + pi)
+├── index.ts                # supported all-in-one entry (re-exports core + node + pi)
 ├── cli.ts                  # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                    # the CLI, built on clig.dev
 │   ├── kernel.ts           # CommandSpec-as-data + the commander adapter (commander appears ONLY here); exit 0/1/2

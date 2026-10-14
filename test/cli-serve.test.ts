@@ -305,3 +305,90 @@ describe("cli: the assembled serving surface", () => {
     }
   });
 });
+
+describe("cli: bind address policy", () => {
+  /** Both policies end in process.exit — trade it for a throw so the exit CODE is assertable. */
+  const exits = (fn: () => void): number | undefined => {
+    const spy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      fn();
+      return undefined;
+    } catch (e) {
+      // Only the injected exit is an outcome; a real throw is a bug and must not read as "accepted".
+      if (spy.mock.calls.length === 0) throw e;
+      return spy.mock.calls[0]?.[0] as number | undefined;
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+  };
+
+  it("parseBind: an unbindable value is a usage error (2), a valid one passes through", async () => {
+    const { parseBind } = await import("../src/cli/shared.ts");
+    expect(parseBind(undefined)).toBeUndefined();
+    expect(parseBind("  ")).toBeUndefined(); // "not set", so the config/default chain still applies
+    expect(parseBind("127.0.0.1")).toBe("127.0.0.1");
+    expect(exits(() => parseBind("banana"))).toBe(2);
+  });
+
+  it("assertTunnelBindable: --tunnel refuses a --bind localhost cannot reach, as a usage error", async () => {
+    const { assertTunnelBindable } = await import("../src/cli/serve.ts");
+    expect(exits(() => assertTunnelBindable("192.168.1.5", true))).toBe(2);
+    expect(exits(() => assertTunnelBindable("192.168.1.5", false))).toBeUndefined(); // no tunnel, no conflict
+    expect(exits(() => assertTunnelBindable("127.0.0.1", true))).toBeUndefined();
+    expect(exits(() => assertTunnelBindable("::1", true))).toBeUndefined(); // localhost resolves to it
+    // Loopback yet NOT what `localhost` resolves to — the tunnel would 502, so it is refused.
+    expect(exits(() => assertTunnelBindable("127.0.0.2", true))).toBe(2);
+    expect(exits(() => assertTunnelBindable(undefined, true))).toBeUndefined(); // start's wildcard
+  });
+
+  it("the ready lines all name the SAME dialable address", async () => {
+    // They are one message: the first says where it bound, the second is the command a reader copies.
+    // Only the first was updated when --bind landed, so `--bind 192.168.1.5` printed a curl to
+    // localhost — the very address that bind stops answering. They come from one function now; this
+    // pins the property that made splitting them a bug.
+    const { bindLine } = await import("../src/cli/serve.ts");
+    const { bindAddress } = await import("../src/bind.ts");
+    /** The two ready lines `reportServing` logs: where it bound, and the try-it curl when it serves `/invoke`. */
+    const readyLines = (host: string | undefined, port: number, servesInvoke: boolean): string[] => {
+      const info = vi.spyOn(log, "info").mockImplementation(() => {});
+      try {
+        reportServing(
+          {
+            routes: {},
+            channels: { routes: [], longConnections: [] },
+            unverifiedRoutes: servesInvoke ? ["POST /invoke", "GET /health"] : ["GET /health"],
+          } as never,
+          host,
+          port,
+        );
+        return info.mock.calls.map(([line]) => String(line)).filter((line) => !line.includes("routes:"));
+      } finally {
+        info.mockRestore();
+      }
+    };
+    // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in
+    // these lines, so leaving it out would make the `not.toContain("localhost")` below pass for the
+    // reason that it was never tried. It cannot get here — `parseBind` resolves it to an
+    // address first (bind.ts `bindAddress`) — and this is what says so.
+    for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
+      const [bound, tryLine] = readyLines(host, 8899, true);
+      const dial = tryLine!.match(/curl -s (\S+?)\/invoke/)![1]!;
+      expect(dial, String(host)).toContain(":8899");
+      expect(dial, String(host)).not.toContain("localhost"); // never a name the bind may not answer
+      // A wildcard bind IS every interface, so the report says so rather than understating it as one
+      // address — but the curl still has to dial something, and loopback is what a wildcard answers.
+      expect(bound, String(host)).toContain(host === undefined || host === "0.0.0.0" ? ":8899 (all interfaces)" : dial);
+      if (host === "::1") expect(dial).toBe("[::1]:8899"); // URL form, brackets and all
+    }
+    // Bind line + try-it, nothing else…
+    expect(readyLines("127.0.0.1", 1, true)).toHaveLength(2);
+    // …and NO try-it when this serve has no `/invoke` of its own (`http.api: false`, or a channel
+    // holding that path with a protocol of its own). A copyable request that 404s, or that pushes the
+    // built-in body at a handler which does not accept it, is worse than no line.
+    expect(readyLines("127.0.0.1", 1, false)).toEqual([bindLine("127.0.0.1", 1)]);
+  });
+});

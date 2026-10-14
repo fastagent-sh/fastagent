@@ -70,13 +70,18 @@ otherwise. An `intercepted` run (a command took the message, and no model was ca
 ## HTTP/host helpers
 
 ```ts
-function createAgentHandler(agent: Agent, options?: { control?: boolean }): (req: Request) => Promise<Response>;
+function createAgentHandler(
+  agent: Agent,
+  options?: { control?: boolean; corsOrigins?: string[] },
+): (req: Request) => Promise<Response>;
 function connectAgent(options: { url: string; fetchFn?: typeof fetch }): Promise<Agent>;
 ```
 
 `createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §9](SPEC-v1.md#9-http-binding)): the
 user plane always, the control plane (`PATCH`/`DELETE /control/sessions/{s}`) only with `control: true`. Request
-bodies are JSON (`content-type: application/json`), decoded strictly: an unknown field is a 400. Event streams are
+bodies are JSON (`content-type: application/json`), decoded strictly: an unknown field is a 400. It sends no CORS
+headers and answers no preflight unless `corsOrigins` names the origins (exact, or `["*"]`) a page may call it from;
+otherwise cross-origin is the mounting app's decision. Event streams are
 Server-Sent Events, one JSON event per `data:` line, with comment heartbeats (`: ping`) so a client can tell a quiet
 run from a dead connection.
 
