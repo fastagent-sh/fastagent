@@ -106,7 +106,7 @@
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "croner": "^10.0.1",
-    "effect": "4.0.2",
+    "effect": "4.0.3",
     "giget": "^3.3.0",
     "hono": "^4",
     "ignore": "^7.0.12",
