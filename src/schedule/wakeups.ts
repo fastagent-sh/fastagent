@@ -172,3 +172,11 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
   save(stateRoot, all);
   return w;
 }
+
+/**
+ * Put back a ONE-SHOT wake-up its session refused for now (the process or the session's queue was full), to fire at
+ * `fireAt`. It was taken out of the store to fire, so it does not count against the session's cap again.
+ */
+export function requeueWakeup(stateRoot: string, w: Wakeup, fireAt: Date): void {
+  save(stateRoot, [...load(stateRoot), { ...w, fireAt: fireAt.toISOString() }]);
+}
