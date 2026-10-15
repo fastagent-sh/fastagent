@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
+import { ev } from "./scripted-run.ts";
 import {
   applyTurnEvent,
   composeTurnBody,
@@ -41,20 +42,22 @@ describe("defaultErrorMessage", () => {
 });
 
 describe("turn-view reducer", () => {
-  const apply = (events: AgentEvent[]) => {
+  /** A turn's events after its receipt: the receipt names the run, and only that run's events are the turn's. */
+  const apply = (events: InvokeEvent[]) => {
     const view = createTurnView();
+    applyTurnEvent(view, ev.accepted());
     const changes = events.map((e) => applyTurnEvent(view, e));
     return { view, changes };
   };
 
   it("reduces a full turn: humanized+arg'd tool lines, status flips, answer accumulation", () => {
     const { view } = apply([
-      { type: "thinking", delta: "hm " },
-      { type: "tool_started", id: "t1", name: "read", args: { path: "AGENTS.md" } },
-      { type: "tool_started", id: "t2", name: "mcp__github__create_issue", args: {} },
-      { type: "tool_ended", id: "t1", isError: false, content: null },
-      { type: "tool_ended", id: "t2", isError: true, content: null },
-      { type: "text", delta: "ok" },
+      ev.thinking("hm "),
+      ev.toolStarted("t1", "read", { path: "AGENTS.md" }),
+      ev.toolStarted("t2", "mcp__github__create_issue"),
+      ev.toolResult("t1"),
+      ev.toolResult("t2", true),
+      ev.text("ok"),
     ]);
     expect(toolLines(view)).toBe("🔧 Read AGENTS.md ✓\n🔧 Github: create issue ✗");
     expect(view.answer).toBe("ok");
@@ -64,22 +67,22 @@ describe("turn-view reducer", () => {
 
   it("a running call shows its latest progress, clipped to one line; a finished one drops it", () => {
     const { view, changes } = apply([
-      { type: "tool_started", id: "t1", name: "bash", args: { command: "npm test" } },
-      { type: "tool_progress", id: "t1", text: "12 passed" },
-      { type: "tool_progress", id: "t1", text: `42 passed ${"x".repeat(100)}` },
-      { type: "tool_progress", id: "unknown", text: "not a call the view shows" },
+      ev.toolStarted("t1", "bash", { command: "npm test" }),
+      ev.toolProgress("t1", "12 passed"),
+      ev.toolProgress("t1", `42 passed ${"x".repeat(100)}`),
+      ev.toolProgress("unknown", "not a call the view shows"),
     ]);
     expect(changes).toEqual([true, true, true, false]);
     expect(toolLines(view)).toBe(`\u{1F527} Bash npm test \u2026 \u203a 42 passed ${"x".repeat(53)}\u2026`);
-    applyTurnEvent(view, { type: "tool_ended", id: "t1", isError: false, content: null });
+    applyTurnEvent(view, ev.toolResult("t1"));
     expect(toolLines(view)).toBe("\u{1F527} Bash npm test \u2713");
     // Progress that arrives after the call ended is stale, and not a view change.
-    expect(applyTurnEvent(view, { type: "tool_progress", id: "t1", text: "late" })).toBe(false);
+    expect(applyTurnEvent(view, ev.toolProgress("t1", "late"))).toBe(false);
   });
 
   it("opens the retry notice and closes it on ANY subsequent event, including terminals", () => {
-    const retrying = { type: "retrying", attempt: 1, maxAttempts: 4, delayMs: 1000, reason: "503" } as const;
-    const { view, changes } = apply([retrying, { type: "completed" }]);
+    const retrying = ev.retrying();
+    const { view, changes } = apply([retrying, ev.ended()]);
     expect(changes).toEqual([true, true]); // the close is a view change even on a terminal
     expect(view.retrying).toBe(false);
     const open = apply([retrying]);
@@ -87,15 +90,30 @@ describe("turn-view reducer", () => {
   });
 
   it("a terminal without an open notice is not a view change", () => {
-    const { changes } = apply([{ type: "completed" }]);
+    const { changes } = apply([ev.ended()]);
     expect(changes).toEqual([false]);
   });
 
   it("thinkingLine takes a code-point-safe tail and collapses whitespace", () => {
     const view = createTurnView();
-    applyTurnEvent(view, { type: "thinking", delta: `a\nb  ${"🐍".repeat(10)}` });
+    applyTurnEvent(view, ev.accepted());
+    applyTurnEvent(view, ev.thinking(`a\nb  ${"🐍".repeat(10)}`));
     expect(thinkingLine(view, 6)).toBe("💭 …🐍🐍🐍🐍🐍"); // marker + 5 points, no torn surrogate
     expect(thinkingLine(createTurnView(), 6)).toBe("");
+  });
+
+  it("the settled message adds what no delta carried; another run's events are not the turn's", () => {
+    const { view, changes } = apply([
+      ev.text("Hel"),
+      ev.answer("Hello"),
+      ev.text("ignored", "other-run"),
+      ev.thinking("not ours", "other-run"),
+      ev.toolStarted("t9", "read", {}, "other-run"),
+    ]);
+    expect(view.answer).toBe("Hello");
+    expect(view.thinking).toBe("");
+    expect(view.tools).toEqual([]);
+    expect(changes).toEqual([true, true, false, false, false]);
   });
 
   it("composeTurnBody skips empty parts and joins with blank lines", () => {

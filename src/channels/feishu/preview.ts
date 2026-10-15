@@ -10,7 +10,7 @@
  * with NO live updates; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import type { AgentEvent } from "../../agent.ts";
+import type { InvokeEvent } from "../../protocol.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
@@ -192,7 +192,7 @@ export async function settleFeishuPreview(
  * Consume one turn's event stream into a Feishu-compatible chat, live.
  */
 export function feishuReply(
-  events: Stream.Stream<AgentEvent, PortFailure>,
+  events: Stream.Stream<InvokeEvent, PortFailure>,
   api: FeishuApi,
   target: FeishuTarget,
   formatError: (failed: FeishuFailure) => string | undefined,

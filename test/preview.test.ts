@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
+import { ev } from "./scripted-run.ts";
 import { telegramReply } from "../src/channels/telegram/preview.ts";
 import { run, stream } from "./channel-effects.ts";
 
@@ -11,16 +12,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A push-based event source, so a test controls exactly WHEN each event reaches telegramReply. */
+/** A push-based event source, so a test controls exactly WHEN each event reaches telegramReply. It opens with the
+ *  invoke's receipt, which names the run the pushed events belong to. */
 const eventSource = () => {
-  const queue: AgentEvent[] = [];
+  const queue: InvokeEvent[] = [ev.accepted()];
   let notify: (() => void) | undefined;
   let ended = false;
-  const iterable: AsyncIterable<AgentEvent> = {
+  const iterable: AsyncIterable<InvokeEvent> = {
     async *[Symbol.asyncIterator]() {
       while (true) {
         if (queue.length > 0) {
-          yield queue.shift() as AgentEvent;
+          yield queue.shift() as InvokeEvent;
           continue;
         }
         if (ended) return;
@@ -32,7 +34,7 @@ const eventSource = () => {
   };
   return {
     iterable,
-    push(e: AgentEvent): void {
+    push(e: InvokeEvent): void {
       queue.push(e);
       notify?.();
       notify = undefined;
@@ -61,7 +63,9 @@ const recordingFetch = () => {
   return { sends, edits };
 };
 
-async function* events(...list: AgentEvent[]): AsyncIterable<AgentEvent> {
+/** One invoke's events: its receipt, then `list`. */
+async function* events(...list: InvokeEvent[]): AsyncIterable<InvokeEvent> {
+  yield ev.accepted();
   for (const e of list) yield e;
 }
 
@@ -97,20 +101,20 @@ describe("telegramReply single-writer pump (direct)", () => {
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     const first = "ab";
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "text", delta: "a" });
+    src.push(ev.text("a"));
     await vi.advanceTimersByTimeAsync(1500);
     expect(inFlight).toBe(0); // no timer-driven partial answer flush
-    src.push({ type: "text", delta: "b" });
+    src.push(ev.text("b"));
     await vi.advanceTimersByTimeAsync(0);
     expect(inFlight).toBe(1); // the first answer frame is held in flight…
-    src.push({ type: "text", delta: "c" });
-    src.push({ type: "text", delta: "d" }); // …while newer frames arrive
+    src.push(ev.text("c"));
+    src.push(ev.text("d")); // …while newer frames arrive
     await vi.advanceTimersByTimeAsync(0);
     expect(maxInFlight).toBe(1); // SINGLE writer: nothing stacked behind the held edit
     releaseFirst();
     await vi.advanceTimersByTimeAsync(1600); // past the throttle → the next frame is the LATEST view
     expect(edits).toEqual([first, `${first}cd`]); // coalesced — never an intermediate, never out of order
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
     expect(edits.at(-1)).toBe(`${first}cd`); // the authoritative final write lands LAST
@@ -121,15 +125,7 @@ describe("telegramReply single-writer pump (direct)", () => {
 describe("telegramReply answer preview (direct)", () => {
   it("does not stream an answer before one preview interval has elapsed", async () => {
     const { sends, edits } = recordingFetch();
-    await run(
-      telegramReply(
-        stream(events({ type: "text", delta: "OK." }, { type: "completed" })),
-        API,
-        "BOT",
-        { chatId: 1 },
-        neutral,
-      ),
-    );
+    await run(telegramReply(stream(events(ev.text("OK."), ev.ended())), API, "BOT", { chatId: 1 }, neutral));
     expect(sends).toEqual(["💭 Thinking…"]);
     expect(edits).toEqual(["OK."]);
   });
@@ -140,15 +136,15 @@ describe("telegramReply answer preview (direct)", () => {
     const src = eventSource();
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "text", delta: "a" });
+    src.push(ev.text("a"));
     await vi.advanceTimersByTimeAsync(1499);
     expect(edits).not.toContain("a");
     await vi.advanceTimersByTimeAsync(1);
     expect(edits).not.toContain("a"); // answerView has no timer; it only affects the next preview pass
-    src.push({ type: "text", delta: "bc" });
+    src.push(ev.text("bc"));
     await vi.advanceTimersByTimeAsync(0);
     expect(edits).toContain("abc");
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
     expect(edits.at(-1)).toBe("abc");
@@ -175,14 +171,14 @@ describe("telegramReply answer preview (direct)", () => {
     const src = eventSource();
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "thinking", delta: "checking" });
+    src.push(ev.thinking("checking"));
     await vi.advanceTimersByTimeAsync(0); // first edit is now in flight
-    src.push({ type: "text", delta: "answer" });
+    src.push(ev.text("answer"));
     await vi.advanceTimersByTimeAsync(0);
     releaseFirstEdit();
     await vi.advanceTimersByTimeAsync(1500);
     expect(edits).toEqual(["💭 checking", "💭 checking\n\nanswer"]);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
     expect(edits.at(-1)).toBe("answer");
@@ -194,13 +190,13 @@ describe("telegramReply answer preview (direct)", () => {
     const src = eventSource();
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "retrying", attempt: 1, maxAttempts: 3, delayMs: 2000, reason: "503 upstream" });
+    src.push(ev.retrying());
     await vi.advanceTimersByTimeAsync(0);
     expect(edits).toEqual(["⏳ Temporary problem — retrying…"]);
-    src.push({ type: "tool_started", id: "t1", name: "read", args: {} });
+    src.push(ev.toolStarted("t1", "read"));
     await vi.advanceTimersByTimeAsync(0);
     expect(edits.at(-1)).toBe("🔧 Read …"); // notice closed by progress, no stale retry line
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
   });
@@ -211,12 +207,12 @@ describe("telegramReply answer preview (direct)", () => {
     const src = eventSource();
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "text", delta: "a" });
+    src.push(ev.text("a"));
     await vi.advanceTimersByTimeAsync(0);
-    src.push({ type: "tool_started", id: "t1", name: "read", args: { path: "AGENTS.md" } });
+    src.push(ev.toolStarted("t1", "read", { path: "AGENTS.md" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(edits).toEqual(["🔧 Read AGENTS.md …"]);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
     expect(edits.at(-1)).toBe("a");
@@ -226,15 +222,7 @@ describe("telegramReply answer preview (direct)", () => {
 describe("telegramReply terminal writes (direct)", () => {
   it("completed → the preview message is edited into the final answer", async () => {
     const { sends, edits } = recordingFetch();
-    await run(
-      telegramReply(
-        stream(events({ type: "text", delta: "the answer" }, { type: "completed" })),
-        API,
-        "BOT",
-        { chatId: 1 },
-        neutral,
-      ),
-    );
+    await run(telegramReply(stream(events(ev.text("the answer"), ev.ended())), API, "BOT", { chatId: 1 }, neutral));
     expect(sends.length).toBe(1); // ONE preview message, never a second
     expect(edits.at(-1)).toBe("the answer"); // …edited into the answer in place
   });
@@ -242,15 +230,7 @@ describe("telegramReply terminal writes (direct)", () => {
   it("failed → the onError text is delivered and the failure is rethrown for the operator log", async () => {
     const { edits } = recordingFetch();
     await expect(
-      run(
-        telegramReply(
-          stream(events({ type: "failed", details: "boom", retryable: true })),
-          API,
-          "BOT",
-          { chatId: 1 },
-          neutral,
-        ),
-      ),
+      run(telegramReply(stream(events(ev.failed("boom", { retryable: true }))), API, "BOT", { chatId: 1 }, neutral)),
     ).rejects.toThrow(/agent failed: boom/);
     expect(edits.at(-1)).toBe("⚠️ neutral"); // the user was told, in the same message
   });
@@ -258,7 +238,7 @@ describe("telegramReply terminal writes (direct)", () => {
   it("a stream that ends without a terminal event delivers the neutral notice and throws (SPEC MUST 1)", async () => {
     const { sends, edits } = recordingFetch();
     await expect(
-      run(telegramReply(stream(events({ type: "text", delta: "partial…" })), API, "BOT", { chatId: 1 }, neutral)),
+      run(telegramReply(stream(events(ev.text("partial…"))), API, "BOT", { chatId: 1 }, neutral)),
     ).rejects.toThrow(/stream ended without a terminal event/);
     expect([...sends, ...edits]).toContain("⚠️ neutral"); // not silence, not a silent delete of partial work
   });
@@ -267,7 +247,7 @@ describe("telegramReply terminal writes (direct)", () => {
     const { sends, edits } = recordingFetch();
     await run(
       telegramReply(
-        stream(events({ type: "text", delta: "answer" }, { type: "completed" })),
+        stream(events(ev.text("answer"), ev.ended())),
         API,
         "BOT",
         { chatId: 1 },
@@ -304,8 +284,8 @@ describe("telegramReply preview frames are droppable (direct)", () => {
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(2_100); // the placeholder retries past Telegram's 1s flood wait
     expect(sends).toBe(2);
-    src.push({ type: "text", delta: "hello" });
-    src.push({ type: "completed" });
+    src.push(ev.text("hello"));
+    src.push(ev.ended());
     src.end();
     await vi.advanceTimersByTimeAsync(2_000);
     await turn;
@@ -335,12 +315,12 @@ describe("telegramReply preview frames are droppable (direct)", () => {
     const src = eventSource();
     const turn = run(telegramReply(stream(src.iterable), API, "BOT", { chatId: 1 }, neutral));
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
-    src.push({ type: "text", delta: "hel" });
+    src.push(ev.text("hel"));
     await vi.advanceTimersByTimeAsync(1600); // the partial answer ages into view…
-    src.push({ type: "text", delta: "lo" }); // …and this frame carries it, rate-limited below
+    src.push(ev.text("lo")); // …and this frame carries it, rate-limited below
     await vi.advanceTimersByTimeAsync(0);
     expect(frames).toBe(1);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     // The answer must land without waiting out Telegram's 25s flood wait for a frame nobody needs:
     // the next frame redraws the same view, and the final write is authoritative.

@@ -3,7 +3,6 @@ import { createHmac } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { ChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
-import { legacyAgent } from "../../legacy-agent.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
@@ -256,9 +255,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   }
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
-  return ({ agent: protocolAgent, stateRoot }) => {
-    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
-    const agent = legacyAgent(protocolAgent, { kind: "channel", name: "slack" });
+  return ({ agent, stateRoot }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
@@ -447,8 +444,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               slackReply(
                 slackTurnStream(
                   agent,
-                  turn.session,
-                  `${discussionBlock(discussion.text)}${turn.baseText}`,
+                  { session: turn.session, key: turn.id, text: `${discussionBlock(discussion.text)}${turn.baseText}` },
                   { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
                   {
                     primaryFileIds: turn.fileIds,
@@ -552,7 +548,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
         sideTasks.track(
-          dispatchStop(protocolAgent, routed.session ?? defaultSession, label)
+          dispatchStop(agent, routed.session ?? defaultSession, label)
             .then((feedback) =>
               placeApi({ historyKey, teamId })
                 .postMessage(target, feedback)

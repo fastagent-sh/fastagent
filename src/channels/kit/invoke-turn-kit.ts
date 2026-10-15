@@ -1,10 +1,9 @@
 /**
  * Shared pieces of the channels' invoke-turn modules (telegram/feishu/slack `invoke-turn.ts`) — the
- * halves that are channel-independent, so a retry-policy or prompt-wording change lands ONCE:
+ * halves that are channel-independent, so a policy or prompt-wording change lands ONCE:
  *
- *   - {@link turnStream}: resolve inputs → ask the agent, with a load failure arriving as a `failed`
- *     EVENT rather than a thrown iteration (SPEC MUST 2);
- *   - {@link busyRetryStream}: the busy-retry loop around `agent.invoke`;
+ *   - {@link turnStream}: prepare the turn's inputs → ask the agent, with a preparation failure arriving as the
+ *     invoke's `rejected` EVENT rather than a thrown iteration;
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
  *
@@ -16,137 +15,59 @@
  * message-scoped Feishu keys, Slack file objects) are real differences. The two TIERS' failure
  * policies are not: see {@link loadBackground}.
  */
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../../agent.ts";
+import type { Agent, InvokeEvent, InvokeRequest } from "../../protocol.ts";
+import { log } from "../../log.ts";
 import { eventStream } from "./event-stream.ts";
 import { type PortFailure, portJoin } from "../../effect-port.ts";
-import { log } from "../../log.ts";
 
 /**
- * One turn, end to end: resolve the platform inputs, then stream `agent.invoke` with the shared
- * busy-wait. All three chat channels wrote this out, and the copies had already disagreed about the
- * one thing that is actually a per-platform judgement (whether a load failure is worth a redelivery)
- * while agreeing on everything that is not.
+ * One turn, end to end: prepare the platform inputs, then stream `agent.invoke`. All three chat channels wrote this
+ * out, and the copies had already disagreed about the one thing that is actually a per-platform judgement (whether a
+ * preparation failure is worth a redelivery) while agreeing on everything that is not.
  *
- * A resolution failure becomes a `failed` EVENT. It must never throw out of the stream: the SPEC
- * forbids it (MUST 2), and the turn's own settlement path is what tells the user — an exception here
- * would take the reply with it.
+ * The invoke queues behind whatever runs in the session (a wake-up, an API caller): the channel's own turns never
+ * collide, its queue serializes them per session. Its key is the turn's, so a turn run again after a restart is the
+ * run it already started: an ended run is replayed, answer included, and only an `interrupted` one runs again.
+ *
+ * A preparation failure is the invoke's `rejected` event: nothing ran. It must never throw out of the stream, since
+ * the turn's own settlement path is what tells the user — an exception here would take the reply with it.
  */
 export function turnStream<R>(opts: {
-  agent: Agent;
+  agent: Pick<Agent, "invoke">;
   label: string;
-  /** Resolve this turn's platform inputs (download attachments, walk a reply chain). */
+  source: NonNullable<InvokeRequest["source"]>;
+  /** Prepare this turn's inputs (download attachments, walk a reply chain, start a thread from its room). */
   resolve: () => Promise<R>;
-  /** What the resolved inputs make of the turn: where it runs, and what it asks. */
-  turn: (resolved: R) => { scope: Scope; prompt: Prompt };
-  /** Whether a failed resolution is worth a platform redelivery. Stated per channel because it IS a
+  /** What the prepared inputs make of the turn: where it runs, what it asks, and the key it is known by. */
+  turn: (resolved: R) => Pick<InvokeRequest, "prompt"> & { sessionId: string; idempotencyKey: string };
+  /** Whether a failed preparation is worth a platform redelivery. Stated per channel because it IS a
    *  platform question — Slack reads its API error's status, and a transport that cannot tell says
    *  yes, since a retried download is cheap next to an unanswered ask. */
   retryableLoadFailure: (cause: unknown) => boolean;
-  busyRetry?: BusyRetry;
-}): Stream.Stream<AgentEvent, PortFailure> {
+}): Stream.Stream<InvokeEvent, PortFailure> {
   return Stream.unwrap(
     portJoin(opts.resolve).pipe(
       Effect.map((resolved) => {
-        const { scope, prompt } = opts.turn(resolved);
-        return busyRetryStream(opts.agent, scope, prompt, {
-          label: opts.label,
-          ...(opts.busyRetry ? { busyRetry: opts.busyRetry } : {}),
-        });
+        const request: InvokeRequest = { ...opts.turn(resolved), whenBusy: "queue", source: opts.source };
+        return eventStream(() => opts.agent.invoke(request), `${opts.label} (session=${request.sessionId})`).pipe(
+          Stream.scoped,
+        );
       }),
       Effect.catchTag("PortFailure", ({ cause }) =>
         Effect.succeed(
-          Stream.succeed<AgentEvent>({
-            type: "failed",
-            details: `could not load attachment: ${String(cause)}`,
-            retryable: opts.retryableLoadFailure(cause),
+          Stream.succeed<InvokeEvent>({
+            type: "rejected",
+            error: {
+              code: "unavailable",
+              message: `could not prepare the turn: ${String(cause)}`,
+              retryable: opts.retryableLoadFailure(cause),
+            },
           }),
         ),
       ),
     ),
-  );
-}
-
-/** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
- *  EXTERNAL turn (a self-scheduled wake, a concurrent embedder invoke), up to `maxWaitMs` total. The
- *  channel's own turns never collide (the turn-queue serializes per session), so a busy reject here is
- *  always an outside holder — wait for it like a queued turn, instead of erroring at the user. */
-export interface BusyRetry {
-  delayMs: number;
-  maxWaitMs: number;
-}
-// Each retry is a lease-check-level reject (tryAcquire runs before the session is bound) — waiting is nearly
-// free, and the loop exits within one delay of the holder finishing. So the cap is sized to outlast a
-// real tool-using wake turn (minutes), not to be short: 10 min. CEILING: a holder that runs longer than
-// this still surfaces the busy error to the user — the bound exists so a stuck lease can't hang a chat
-// turn forever.
-export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
-
-/**
- * Stream one Agent turn with the shared busy-wait. The durable-commit point is NOT here: an answer becomes durable
- * where its text is known and about to be written to the chat (the renderer's `onAnswered`), because "the model
- * finished" and "the user has it" are different events. Source pulls remain demand-driven, including while final
- * platform delivery runs.
- *
- * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn holds this session's
- * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user
- * sees the channel's "Thinking…" placeholder while waiting (the mirror of the scheduler deferring a
- * wake INTO a busy session), and only an exhausted wait surfaces the busy failure. Only a FIRST-event
- * busy retries — a fail-fast reject is the only shape the harness emits it in, so nothing that started
- * is ever re-run.
- */
-export function busyRetryStream(
-  agent: Agent,
-  scope: Scope,
-  prompt: Prompt,
-  { label, busyRetry = DEFAULT_BUSY_RETRY }: { label: string; busyRetry?: BusyRetry },
-): Stream.Stream<AgentEvent, PortFailure> {
-  return Stream.unwrap(
-    Effect.map(Clock.currentTimeMillis, (started) => {
-      const deadline = started + busyRetry.maxWaitMs;
-      const attempt = (): Stream.Stream<AgentEvent, PortFailure> =>
-        Stream.suspend(() => {
-          let retryBusy = false;
-          let first = true;
-          return eventStream(() => agent.invoke(scope, prompt), `${label} (session=${scope.session})`).pipe(
-            Stream.takeWhileEffect((event) =>
-              Effect.gen(function* () {
-                if (
-                  first &&
-                  event.type === "failed" &&
-                  event.code === SESSION_BUSY_CODE &&
-                  (yield* Clock.currentTimeMillis) + busyRetry.delayMs < deadline
-                ) {
-                  retryBusy = true;
-                  return false;
-                }
-                first = false;
-                return true;
-              }),
-            ),
-            Stream.scoped,
-            // concat closes the attempt's scope (and its iterator) before the wait or next invoke.
-            Stream.concat(
-              Stream.suspend(() =>
-                retryBusy
-                  ? Stream.unwrap(
-                      Effect.gen(function* () {
-                        log.info(
-                          `${label} session ${scope.session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`,
-                        );
-                        yield* Effect.sleep(busyRetry.delayMs);
-                        return attempt();
-                      }),
-                    )
-                  : Stream.empty,
-              ),
-            ),
-          );
-        });
-      return attempt();
-    }),
   );
 }
 

@@ -6,17 +6,55 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { AgentEvent } from "../../agent.ts";
+import type { InvokeEvent, RunOutcome } from "../../protocol.ts";
 import { log } from "../../log.ts";
 import type { ChannelFailure } from "./preview-kit.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
 
+/** How a turn ended: answered, or the failure to tell the asker about. */
+export type TurnEnd = { answered: true } | { failure: ChannelFailure };
+
+/**
+ * Whether this event ends the turn, and how: the invoke refused (nothing ran), or the turn's run ended. A run that
+ * stopped at its output limit, or that a command took, still answers with what it wrote.
+ */
+export function turnEnd(event: InvokeEvent, runId: string | undefined): TurnEnd | undefined {
+  if (event.type === "rejected") {
+    const { code, message, retryable } = event.error;
+    return { failure: { details: message, retryable, code } };
+  }
+  if (event.type !== "entry" || event.entry.kind !== "run_ended" || event.entry.runId !== runId) return undefined;
+  const { outcome } = event.entry.data as { outcome: RunOutcome };
+  switch (outcome.status) {
+    case "completed":
+    case "max_tokens":
+    case "intercepted":
+      return { answered: true };
+    case "failed":
+      return {
+        failure: { details: outcome.error.message, retryable: outcome.error.retryable, code: outcome.error.code },
+      };
+    case "canceled":
+      return { failure: { details: `the run was canceled (${outcome.by})`, retryable: false, code: "canceled" } };
+    case "interrupted":
+      return { failure: { details: "the run was interrupted", retryable: true, code: "interrupted" } };
+  }
+}
+
+/**
+ * A turn whose stream ended before its run did, after the agent said why (`serving_error`: the run's end could not be
+ * recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
+ */
+export function unfinishedTurn(servingError: string | undefined): ChannelFailure | undefined {
+  return servingError === undefined ? undefined : { details: servingError, retryable: true, code: "serving_error" };
+}
+
 /** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
 export function renderReply(
-  events: Stream.Stream<AgentEvent, PortFailure>,
+  events: Stream.Stream<InvokeEvent, PortFailure>,
   opts: {
     label: string;
-    onEvent: (event: AgentEvent) => void;
+    onEvent: (event: InvokeEvent) => void;
     finish: Effect.Effect<void>;
     answer: () => string;
     settle: (text: string) => Effect.Effect<void, PortFailure>;
@@ -41,8 +79,20 @@ export function renderReply(
           yield* notify({ details: "the turn ended without completing", retryable: false }, "abnormal-turn");
       }),
     );
+    let runId: string | undefined;
+    let servingError: string | undefined;
+    const failWith = (failure: ChannelFailure) =>
+      Effect.gen(function* () {
+        yield* notify(failure, "agent-failure");
+        return yield* Effect.fail(
+          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+        );
+      });
     yield* Stream.runForEachWhile(events, (event) => {
-      if (event.type !== "completed" && event.type !== "failed") {
+      if (event.type === "accepted") runId = event.run.runId;
+      if (event.type === "serving_error") servingError = event.message;
+      const end = turnEnd(event, runId);
+      if (end === undefined) {
         return Effect.try({
           try: () => {
             opts.onEvent(event);
@@ -54,7 +104,7 @@ export function renderReply(
       return Effect.gen(function* () {
         yield* opts.finish;
         finalized = true;
-        if (event.type === "completed") {
+        if ("answered" in end) {
           const answer = opts.answer();
           yield* Effect.try({
             try: () => opts.onAnswered?.(answer),
@@ -62,22 +112,19 @@ export function renderReply(
           });
           yield* opts.settle(answer);
         } else {
-          yield* notify(
-            {
-              details: event.details,
-              retryable: event.retryable,
-              ...(event.code !== undefined ? { code: event.code } : {}),
-            },
-            "agent-failure",
-          );
-          return yield* Effect.fail(
-            new PortFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
-          );
+          return yield* failWith(end.failure);
         }
         return false;
       }).pipe(Effect.uninterruptible);
     });
-    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    if (finalized) return;
+    const unfinished = unfinishedTurn(servingError);
+    if (unfinished === undefined) {
+      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    }
+    yield* opts.finish;
+    finalized = true;
+    yield* failWith(unfinished).pipe(Effect.uninterruptible);
   });
 }
 

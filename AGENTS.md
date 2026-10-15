@@ -45,7 +45,6 @@ src/
 ├── collect.ts              # caller-side stream helpers: collect + the SPEC cancellation protocol (abortFirstIterator)
 ├── protocol-collect.ts     # the v1 buffered consumer: a run's answer, or RunNotCompleted / RunUnfinished saying why not
 ├── run-text.ts             # a run's answer text as it streams: its deltas, plus entry text no delta carried
-├── legacy-agent.ts         # TEMPORARY: a v0.1 Agent over a v1 one, for the channels and the scheduler until they move
 ├── core.ts, node.ts, pi.ts # the three public layers, by what each costs to import: neutral + Effect only, no Node /
 │                           # harness-neutral but needs Node / names the harness. Asserted in package-boundary.test.ts
 ├── index.ts                # supported all-in-one entry (re-exports core + node + pi)
@@ -139,7 +138,7 @@ src/
 │   │   ├── preview-kit.ts  # pure turn-view reducer, line renderers, preview policies
 │   │   ├── delivery.ts     # scoped coalescing previews, ordered native writes, terminal settlement
 │   │   ├── event-stream.ts # typed, demand-driven Agent iterator acquisition and scoped cleanup
-│   │   ├── invoke-turn-kit.ts # resolve inputs → ask the agent; the background tier's degradation; busy wait;
+│   │   ├── invoke-turn-kit.ts # prepare inputs → one queued, keyed invoke; the background tier's degradation;
 │   │   │                   # the prompt manifest wording
 │   │   ├── transport.ts    # whether a call is worth waiting out a rate limit for (DROPPABLE_FRAME, CONTEXT_READ)
 │   │   ├── turn-runner.ts  # accept → dequeue → execute → settle over the queue + store + discussion source
@@ -157,7 +156,7 @@ src/
 │   │   ├── text.ts         # Unicode-safe code-point slicing
 │   │   ├── attachment-path.ts # where an attachment lands (the conversation id encoded into a directory)
 │   │   ├── stop-command.ts # the shared /stop parsing every chat channel accepts, and the abort it dispatches
-│   │   └── thread-fork.ts  # a new thread starts as a fork of its room at the exchange it points into
+│   │   └── thread-fork.ts  # a new thread starts as a fork of its room at the run its reply chain names (by key)
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # ingress + per-turn lifecycle + composition
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy

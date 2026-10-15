@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
-import type { Agent, AgentEvent, Prompt } from "../src/agent.ts";
+import type { Agent, InvokeRequest, Prompt } from "../src/protocol.ts";
+import { scriptedRun } from "./scripted-run.ts";
 import { slackTurnStream } from "../src/channels/slack/invoke-turn.ts";
 import { run } from "./channel-effects.ts";
 import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts";
@@ -61,8 +62,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runDrain(
         slackTurnStream(
           { invoke },
-          "s",
-          "read it",
+          { session: "s", key: "k", text: "read it" },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
@@ -89,10 +89,10 @@ describe("Slack turn attachment resolution", () => {
   });
   it("turns primary images into vision input and ordinary files into an absolute-path manifest", async () => {
     let prompt: Prompt | undefined;
-    const agent: Agent = {
-      async *invoke(_scope, value): AsyncIterable<AgentEvent> {
-        prompt = value;
-        yield { type: "completed" };
+    const agent = {
+      async *invoke(request: InvokeRequest) {
+        prompt = request.prompt;
+        yield* scriptedRun(request);
       },
     };
     const api = fakeApi({
@@ -102,20 +102,19 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           agent,
-          "s1",
-          "read these",
+          { session: "s1", key: "k", text: "read these" },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["IMG", "DOC"], buffered: { files: [], skipped: 0 } },
         ),
       ),
     );
 
-    expect(events.at(-1)).toEqual({ type: "completed" });
+    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
     expect(prompt?.images).toEqual([{ mimeType: "image/png", data: "aW1n" }]);
     expect(prompt?.text).toContain("/state/DOC.txt");
   });
 
-  it("turns a primary file failure into failed without invoking the Agent", async () => {
+  it("turns a primary file failure into a refusal without invoking the Agent", async () => {
     const invoke = vi.fn();
     const agent = { invoke } as unknown as Agent;
     const api = fakeApi({ fileInfo: async () => Promise.reject(new Error("access_denied")) });
@@ -124,8 +123,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           agent,
-          "s1",
-          "read it",
+          { session: "s1", key: "k", text: "read it" },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
@@ -133,7 +131,9 @@ describe("Slack turn attachment resolution", () => {
     );
 
     // not retryable: the same attachment fails the same way next time, so "try again" is the wrong advice
-    expect(events).toEqual([{ type: "failed", details: expect.stringContaining("access_denied"), retryable: false }]);
+    expect(events).toMatchObject([
+      { type: "rejected", error: { message: expect.stringContaining("access_denied"), retryable: false } },
+    ]);
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -150,23 +150,24 @@ describe("Slack turn attachment resolution", () => {
       Stream.runCollect(
         slackTurnStream(
           { invoke: vi.fn() } as unknown as Agent,
-          "s1",
-          "read it",
+          { session: "s1", key: "k", text: "read it" },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
         ),
       ),
     );
 
-    expect(events).toEqual([{ type: "failed", details: expect.stringContaining("boom"), retryable: true }]);
+    expect(events).toMatchObject([
+      { type: "rejected", error: { message: expect.stringContaining("boom"), retryable: true } },
+    ]);
   });
 
   it("degrades failed background files individually and tells the model what is missing", async () => {
     let prompt: Prompt | undefined;
-    const agent: Agent = {
-      async *invoke(_scope, value): AsyncIterable<AgentEvent> {
-        prompt = value;
-        yield { type: "completed" };
+    const agent = {
+      async *invoke(request: InvokeRequest) {
+        prompt = request.prompt;
+        yield* scriptedRun(request);
       },
     };
     const api = fakeApi({
@@ -180,8 +181,7 @@ describe("Slack turn attachment resolution", () => {
       Stream.runDrain(
         slackTurnStream(
           agent,
-          "s1",
-          "answer",
+          { session: "s1", key: "k", text: "answer" },
           { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
           {
             primaryFileIds: [],

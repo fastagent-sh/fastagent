@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
+import { ev } from "./scripted-run.ts";
 import { sanitizeSlackMarkdown, slackReply } from "../src/channels/slack/preview.ts";
 import { run, stream } from "./channel-effects.ts";
 import * as Effect from "effect/Effect";
@@ -40,23 +41,25 @@ function fakeApi(): SlackApi {
   };
 }
 
-async function* quickClassicTurn(): AsyncIterable<AgentEvent> {
-  yield { type: "thinking", delta: "private reasoning" };
-  yield { type: "text", delta: "**answer**" };
-  yield { type: "completed" };
+async function* quickClassicTurn(): AsyncIterable<InvokeEvent> {
+  yield ev.accepted();
+  yield ev.thinking("private reasoning");
+  yield ev.text("**answer**");
+  yield ev.ended();
 }
 
 /** A push-based event source, so the TEST BODY advances timers — a generator that advances them
  *  while the test body is already inside `advanceTimersByTimeAsync` deadlocks. */
 function pushSource() {
-  const queue: AgentEvent[] = [];
+  const queue: InvokeEvent[] = [ev.accepted()];
   let notify: (() => void) | undefined;
   let ended = false;
   return {
-    iterable: (async function* (): AsyncIterable<AgentEvent> {
+    iterable: (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
       for (;;) {
         if (queue.length > 0) {
-          yield queue.shift() as AgentEvent;
+          yield queue.shift() as InvokeEvent;
           continue;
         }
         if (ended) return;
@@ -65,7 +68,7 @@ function pushSource() {
         });
       }
     })(),
-    push(event: AgentEvent): void {
+    push(event: InvokeEvent): void {
       queue.push(event);
       notify?.();
       notify = undefined;
@@ -86,9 +89,10 @@ describe("Slack reply rendering", () => {
   it("closes an acquired native stream when the failure formatter throws", async () => {
     const api = fakeApi();
     const warning = vi.spyOn(console, "error").mockImplementation(() => {});
-    const events = (async function* (): AsyncIterable<AgentEvent> {
-      yield { type: "tool_started", id: "t", name: "read", args: {} };
-      yield { type: "failed", details: "model failed", retryable: false };
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.toolStarted("t", "read");
+      yield ev.failed("model failed", { retryable: false });
     })();
     await expect(
       run(
@@ -102,6 +106,28 @@ describe("Slack reply rendering", () => {
     expect(warning).toHaveBeenCalledWith(expect.stringContaining("formatter failed"));
     expect(vi.mocked(api.setThreadStatus).mock.calls.at(-1)?.[1]).toBe("");
     warning.mockRestore();
+  });
+
+  it("a native stream that ends on a serving error weaves a temporary-failure notice in, and fails with the error", async () => {
+    const api = fakeApi();
+    const failures: unknown[] = [];
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.text("part");
+      yield { type: "serving_error", message: "missed events could not be read back" } as InvokeEvent;
+    })();
+    await expect(
+      run(
+        slackReply(stream(events), api, { channelId: "C1", threadTs: "1.0" }, (failure) => {
+          failures.push(failure);
+          return "temporary";
+        }),
+      ),
+    ).rejects.toThrow("agent failed: missed events could not be read back (retryable=true)");
+    expect(failures).toEqual([
+      { details: "missed events could not be read back", retryable: true, code: "serving_error" },
+    ]);
+    expect(api.stopStream).toHaveBeenCalledOnce();
   });
 
   it("reports a delivered answer whose stop failed, once, without retrying it during scope cleanup", async () => {
@@ -163,17 +189,17 @@ describe("Slack reply rendering", () => {
         disclaimer: false,
       }),
     );
-    src.push({ type: "text", delta: "start " });
+    src.push(ev.text("start "));
     await vi.advanceTimersByTimeAsync(3_500); // the answer ages into view; the first slot opens
     for (let i = 0; i < 100; i++) {
-      src.push({ type: "text", delta: `t${i} ` });
+      src.push(ev.text(`t${i} `));
       await vi.advanceTimersByTimeAsync(100); // the model's token pace, well inside one 3s slot
     }
     // The rejected frames must not reopen the mutation slot: one attempt per slot, not one per token.
     // ~10s of tokens against a 3s slot: a handful of attempts. Without the slot being spent by the
     // ATTEMPT, every rejected frame reopens it and the same view is re-sent once per token (72 here).
     expect(vi.mocked(api.updateMarkdown).mock.calls.length).toBeLessThanOrEqual(5);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await vi.advanceTimersByTimeAsync(10_000);
     await pending.catch(() => {}); // the settle write fails too; its diagnostics are asserted elsewhere
@@ -186,14 +212,15 @@ describe("Slack reply rendering", () => {
     const pending = run(
       slackReply(
         stream(
-          (async function* (): AsyncIterable<AgentEvent> {
-            yield { type: "tool_started", id: "t", name: "read", args: {} };
+          (async function* (): AsyncIterable<InvokeEvent> {
+            yield ev.accepted();
+            yield ev.toolStarted("t", "read");
             // Past the mutation interval, so the pump writes a real frame before the answer settles.
             await vi.advanceTimersByTimeAsync(3_500);
-            yield { type: "tool_ended", id: "t", isError: false, content: "ok" };
+            yield ev.toolResult("t");
             await vi.advanceTimersByTimeAsync(3_500);
-            yield { type: "text", delta: "**answer**" };
-            yield { type: "completed" };
+            yield ev.text("**answer**");
+            yield ev.ended();
           })(),
         ),
         api,
@@ -215,14 +242,15 @@ describe("Slack reply rendering", () => {
     const pending = run(
       slackReply(
         stream(
-          (async function* (): AsyncIterable<AgentEvent> {
-            yield { type: "tool_started", id: "t", name: "bash", args: { command: "echo <!here>" } };
-            yield { type: "tool_progress", id: "t", text: "<!channel> deploy done" };
+          (async function* (): AsyncIterable<InvokeEvent> {
+            yield ev.accepted();
+            yield ev.toolStarted("t", "bash", { command: "echo <!here>" });
+            yield ev.toolProgress("t", "<!channel> deploy done");
             // Past the mutation interval, so the pump writes a frame while the tool still runs.
             await vi.advanceTimersByTimeAsync(3_500);
-            yield { type: "tool_ended", id: "t", isError: false, content: "ok" };
-            yield { type: "text", delta: "done" };
-            yield { type: "completed" };
+            yield ev.toolResult("t");
+            yield ev.text("done");
+            yield ev.ended();
           })(),
         ),
         api,
@@ -268,7 +296,7 @@ it("uses the turn clock for append pacing and preserves split mention sanitizati
       yield* TestClock.setTime(10_000);
       const clock = yield* Clock.Clock;
       const sleep = vi.spyOn(clock, "sleep");
-      const queue = yield* Queue.unbounded<AgentEvent, Cause.Done>();
+      const queue = yield* Queue.unbounded<InvokeEvent, Cause.Done>();
       const turn = yield* Effect.forkChild(
         Effect.scoped(
           slackReply(Stream.fromQueue(queue), api, { channelId: "C1", threadTs: "1.0" }, () => "failure", {
@@ -276,20 +304,21 @@ it("uses the turn clock for append pacing and preserves split mention sanitizati
           }),
         ),
       );
-      yield* Queue.offer(queue, { type: "text", delta: "ping <" });
+      yield* Queue.offer(queue, ev.accepted());
+      yield* Queue.offer(queue, ev.text("ping <"));
       yield* TestClock.adjust(0);
       expect(sleep).toHaveBeenCalled();
       yield* Effect.promise(() =>
         vi.waitFor(() => expect(api.startStream).toHaveBeenCalledWith({ channelId: "C1", threadTs: "1.0" }, "ping ")),
       );
-      yield* Queue.offer(queue, { type: "text", delta: "!channel> done" });
+      yield* Queue.offer(queue, ev.text("!channel> done"));
       yield* TestClock.adjust(749);
       expect(api.appendStream).not.toHaveBeenCalled();
       yield* TestClock.adjust(1);
       yield* Effect.promise(() =>
         vi.waitFor(() => expect(api.appendStream).toHaveBeenCalledWith("C1", "1.0", "&lt;!channel> done")),
       );
-      yield* Queue.offer(queue, { type: "completed" });
+      yield* Queue.offer(queue, ev.ended());
       yield* Queue.end(queue);
       yield* Fiber.join(turn);
       yield* TestClock.adjust(60_000);
@@ -302,21 +331,12 @@ it("uses the turn clock for append pacing and preserves split mention sanitizati
 describe("native Slack tool traces", () => {
   it("shows the bounded invoked operation and states a failure without its output", async () => {
     const api = fakeApi();
-    const events = (async function* (): AsyncIterable<AgentEvent> {
-      yield {
-        type: "tool_started",
-        id: "tool-1",
-        name: "bash",
-        args: { command: `npm test <!channel> ${"🐍".repeat(80)}` },
-      };
-      yield {
-        type: "tool_ended",
-        id: "tool-1",
-        isError: true,
-        content: { content: [{ type: "text", text: "permission denied: /etc/shadow" }] },
-      };
-      yield { type: "text", delta: "Recovered." };
-      yield { type: "completed" };
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.toolStarted("tool-1", "bash", { command: `npm test <!channel> ${"🐍".repeat(80)}` });
+      yield ev.toolResult("tool-1", true);
+      yield ev.text("Recovered.");
+      yield ev.ended();
     })();
 
     await run(
@@ -340,12 +360,13 @@ describe("native Slack tool traces", () => {
 
   it("separates a trace from the text around it without splitting the answer", async () => {
     const api = fakeApi();
-    const events = (async function* (): AsyncIterable<AgentEvent> {
-      yield { type: "text", delta: "Checking." };
-      yield { type: "tool_started", id: "tool-1", name: "read", args: { path: "AGENTS.md" } };
-      yield { type: "tool_ended", id: "tool-1", isError: false, content: "ok" };
-      yield { type: "text", delta: "Done." };
-      yield { type: "completed" };
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.text("Checking.");
+      yield ev.toolStarted("tool-1", "read", { path: "AGENTS.md" });
+      yield ev.toolResult("tool-1");
+      yield ev.text("Done.");
+      yield ev.ended();
     })();
 
     await run(
@@ -365,10 +386,11 @@ describe("native Slack tool traces", () => {
 
   it("keeps an untrusted name or argument from breaking the surrounding Markdown", async () => {
     const api = fakeApi();
-    const events = (async function* (): AsyncIterable<AgentEvent> {
-      yield { type: "tool_started", id: "tool-1", name: "_", args: { command: "echo **b** _c_" } };
-      yield { type: "tool_started", id: "tool-2", name: "bash", args: { command: "`x`" } };
-      yield { type: "completed" };
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.toolStarted("tool-1", "_", { command: "echo **b** _c_" });
+      yield ev.toolStarted("tool-2", "bash", { command: "`x`" });
+      yield ev.ended();
     })();
 
     await run(
@@ -392,9 +414,10 @@ describe("native Slack tool traces", () => {
     const api = fakeApi();
     // A channel knows no tool schemas, so the summary cannot tell a query from a credential. This is
     // the boundary docs/slack.md discloses; changing WHICH field is picked has to break a test.
-    const events = (async function* (): AsyncIterable<AgentEvent> {
-      yield { type: "tool_started", id: "tool-1", name: "deploy", args: { token: "sk-live-secret", env: "prod" } };
-      yield { type: "completed" };
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.toolStarted("tool-1", "deploy", { token: "sk-live-secret", env: "prod" });
+      yield ev.ended();
     })();
 
     await run(
@@ -410,11 +433,11 @@ describe("native Slack tool traces", () => {
 
 describe("native DM Agent status around a retry backoff", () => {
   function eventSource() {
-    const queue: AgentEvent[] = [];
+    const queue: InvokeEvent[] = [ev.accepted()];
     let notify: (() => void) | undefined;
     let done = false;
     return {
-      push(e: AgentEvent) {
+      push(e: InvokeEvent) {
         queue.push(e);
         notify?.();
       },
@@ -422,7 +445,8 @@ describe("native DM Agent status around a retry backoff", () => {
         done = true;
         notify?.();
       },
-      iterable: (async function* (): AsyncIterable<AgentEvent> {
+      iterable: (async function* (): AsyncIterable<InvokeEvent> {
+        yield ev.accepted();
         while (true) {
           const next = queue.shift();
           if (next) {
@@ -454,14 +478,14 @@ describe("native DM Agent status around a retry backoff", () => {
     gates.shift()?.(); // initial "is working…" status (awaited before the loop)
     await flush();
 
-    src.push({ type: "text", delta: "a" });
-    src.push({ type: "retrying", attempt: 1, maxAttempts: 4, delayMs: 2_000, reason: "503" });
+    src.push(ev.text("a"));
+    src.push(ev.retrying());
     await flush();
     await vi.waitFor(() => expect(statuses().at(-1)).toContain("retrying"));
 
     // Progress while the retry-status write is still in flight: the restore must QUEUE behind it,
     // not race it — otherwise the stale "retrying" line could land last.
-    src.push({ type: "text", delta: "b" });
+    src.push(ev.text("b"));
     await flush();
     expect(statuses()).toHaveLength(2);
     gates.shift()?.(); // retry status delivered
@@ -469,7 +493,7 @@ describe("native DM Agent status around a retry backoff", () => {
     await vi.waitFor(() => expect(statuses()).toHaveLength(3));
     expect(statuses().at(-1)).toBe("is working on your request…");
 
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     gates.shift()?.(); // restore delivered
     await flush();

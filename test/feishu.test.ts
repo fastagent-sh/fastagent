@@ -1,12 +1,19 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { asProtocolAgent } from "./protocol-agent.ts";
-import type { Agent as ProtocolAgent } from "../src/protocol.ts";
+import { type ScriptedAgent, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
+import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
-import type { SessionControl } from "../src/session.ts";
+import {
+  type AbortResult,
+  type Agent,
+  type ErrorCode,
+  type InvokeEvent,
+  type InvokeRequest,
+  type Prompt,
+  failure,
+} from "../src/protocol.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { feishuThreads, feishuTransport } from "../src/feishu.ts";
@@ -18,16 +25,15 @@ import { log } from "../src/log.ts";
 const TOKEN = "verif-token";
 const BASE = "http://feishu.test";
 
-/** A faux Agent that records each invocation's scope+prompt and replies with `reply`. */
+/** A faux Agent that records each invocation's request and replies with `reply`. */
 function replyingAgent(reply = "") {
-  const calls: { scope: Scope; prompt: Prompt }[] = [];
-  const agent: Agent = {
-    async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-      calls.push({ scope, prompt });
-      if (reply !== "") yield { type: "text", delta: reply };
-      yield { type: "completed" };
-    },
-  };
+  const calls: InvokeRequest[] = [];
+  const agent = scriptedAgent(async function* (request) {
+    yield ev.accepted();
+    calls.push(request);
+    if (reply !== "") yield ev.text(reply);
+    yield ev.ended();
+  });
   return { agent, calls };
 }
 
@@ -186,14 +192,15 @@ function feishuFetch(
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
 function buildChannel(
-  opts: Partial<FeishuChannelOptions> & { control?: SessionControl } = {},
+  opts: Partial<FeishuChannelOptions> & { stopped?: (session: string) => AbortResult } = {},
   agentReply = "the answer",
 ) {
-  const { control, ...channelOpts } = opts;
+  const { stopped, ...channelOpts } = opts;
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
-  const protocol = asProtocolAgent(opts2Agent(opts) ?? agent, control);
+  const chosen = opts2Agent(opts) ?? agent;
+  const protocol: ScriptedAgent = stopped ? { ...chosen, ...withStop(chosen, stopped) } : chosen;
   const routes = buildFeishuChannel({
     appId: "app",
     appSecret: "secret",
@@ -209,8 +216,8 @@ function buildChannel(
   return { handler, agent, protocol, calls, root, home: join(root, "channels", "feishu"), idle };
 }
 // buildChannel accepts a custom agent through opts via this side-channel to keep the signature small.
-let injectedAgent: Agent | undefined;
-function opts2Agent(_opts: unknown): Agent | undefined {
+let injectedAgent: ScriptedAgent | undefined;
+function opts2Agent(_opts: unknown): ScriptedAgent | undefined {
   const a = injectedAgent;
   injectedAgent = undefined;
   return a;
@@ -286,7 +293,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
     })({
-      agent: asProtocolAgent(agent),
+      agent: agent,
       stateRoot: root,
     });
     const handler = routes["POST /feishu"];
@@ -430,7 +437,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
-    const ctx = { agent: {} as ProtocolAgent, stateRoot: "/tmp/unused-feishu-construction" };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
@@ -446,7 +453,7 @@ describe("construction fails closed", () => {
     const { agent } = replyingAgent();
     expect(() =>
       buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({
-        agent: asProtocolAgent(agent),
+        agent: agent,
         stateRoot: "rel",
       }),
     ).toThrow(/stateRoot/);
@@ -598,7 +605,7 @@ describe("turn flow", () => {
     await idle();
 
     // Rule 3 (memory follows the place): both messages share the chat session — no per-ask session.
-    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
+    expect(calls.map((call) => call.sessionId)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
     // The id becomes an escaped jsonl filename, so the bound that matters is the filesystem's,
     // not a round number: worst-case platform ids stay far under it.
     const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
@@ -629,13 +636,12 @@ describe("turn flow", () => {
       release = resolve;
     });
     let starts = 0;
-    injectedAgent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        starts++;
-        await gate;
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      starts++;
+      await gate;
+      yield ev.ended();
+    });
     const first = buildChannel();
     const duplicate = messageEvent({ id: "om_dup", text: "run once" });
 
@@ -657,7 +663,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: asProtocolAgent(restarted.agent), stateRoot: first.root });
+    })({ agent: restarted.agent, stateRoot: first.root });
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
     const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -678,7 +684,7 @@ describe("turn flow", () => {
     await idle();
 
     // A direct message's thread is a place too: answering in the main timeline would relocate it.
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_dm");
+    expect(calls[0]?.sessionId).toBe("feishu:oc_1:omt_dm");
     const reply = fx.calls("/im/v1/messages/om_dm_thread/reply", "POST")[0];
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
@@ -690,15 +696,18 @@ describe("turn flow", () => {
       releaseFirst = resolve;
     });
     const starts: { session: string; ask: string }[] = [];
-    injectedAgent = {
-      async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-        const ask = prompt.text.includes("first") ? "first" : prompt.text.includes("second") ? "second" : "other-chat";
-        starts.push({ session: scope.session, ask });
-        if (ask === "first") await gate;
-        yield { type: "text", delta: `answer ${ask}` };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      const ask = request.prompt.text.includes("first")
+        ? "first"
+        : request.prompt.text.includes("second")
+          ? "second"
+          : "other-chat";
+      starts.push({ session: request.sessionId ?? "", ask });
+      if (ask === "first") await gate;
+      yield ev.text(`answer ${ask}`);
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel();
 
     await handler(feishuRequest(messageEvent({ id: "om_1", text: "first" })));
@@ -742,16 +751,15 @@ describe("turn flow", () => {
   it("a group turn's thread tool reads that chat's threads, and a DM turn's is refused", async () => {
     feishuFetch();
     const seen: string[] = [];
-    injectedAgent = {
-      async *invoke(scope) {
-        const ctx = { cwd: "/agent", sessionManager: { getSessionId: () => scope.session } };
-        // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
-        const list = async () => feishuThreads(ctx).list();
-        seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
-        yield { type: "text", delta: "ok" };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      const ctx = { cwd: "/agent", sessionManager: { getSessionId: () => request.sessionId ?? "" } };
+      // As the scaffolded tool calls it: inside an async execute, where a refusal is the tool's error.
+      const list = async () => feishuThreads(ctx).list();
+      seen.push(await list().catch((error: Error) => `refused: ${error.message}`));
+      yield ev.text("ok");
+      yield ev.ended();
+    });
     const { handler, idle, root } = buildChannel();
     vi.stubEnv("FASTAGENT_STATE_DIR", root); // the tool's agent is the one this channel serves
     await flush();
@@ -832,7 +840,7 @@ describe("turn flow", () => {
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
     })({
-      agent: asProtocolAgent(agent),
+      agent: agent,
       stateRoot: join(agentDir, ".state"),
     })["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
@@ -998,7 +1006,7 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(2);
     // Rule 3: a thread is its own place, so both turns share the thread's session.
-    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1:omt_two_party", "feishu:oc_1:omt_two_party"]);
+    expect(calls.map((call) => call.sessionId)).toEqual(["feishu:oc_1:omt_two_party", "feishu:oc_1:omt_two_party"]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
     // The rule asked nothing of the platform (both halves are what this channel heard): the only thread reads are
     // each turn's history read.
@@ -1163,13 +1171,12 @@ describe("turn flow", () => {
       releaseFirst = resolve;
     });
     let invocation = 0;
-    injectedAgent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        if (++invocation === 2) await gate;
-        yield { type: "text", delta: `answer ${invocation}` };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      if (++invocation === 2) await gate;
+      yield ev.text(`answer ${invocation}`);
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_queue");
@@ -1199,16 +1206,15 @@ describe("turn flow", () => {
     const errors: string[] = [];
     vi.spyOn(log, "error").mockImplementation((message) => errors.push(message));
     let invocation = 0;
-    injectedAgent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        if (++invocation === 2) {
-          yield { type: "failed", details: "model exploded", retryable: false };
-          return;
-        }
-        yield { type: "text", delta: "ok" };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      if (++invocation === 2) {
+        yield ev.failed("model exploded", { retryable: false });
+        return;
+      }
+      yield ev.text("ok");
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_fail");
@@ -1228,17 +1234,16 @@ describe("turn flow", () => {
     feishuFetch();
     const prompts: Prompt[] = [];
     let invocation = 0;
-    injectedAgent = {
-      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
-        prompts.push(prompt);
-        if (++invocation === 2) {
-          yield { type: "failed", details: "model failed", retryable: true };
-          return;
-        }
-        yield { type: "text", delta: "ok" };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      prompts.push(request.prompt);
+      if (++invocation === 2) {
+        yield ev.failed("model failed", { retryable: true });
+        return;
+      }
+      yield ev.text("ok");
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_retry");
@@ -1281,17 +1286,16 @@ describe("turn flow", () => {
     const started = new Promise<void>((resolve) => {
       markStarted = resolve;
     });
-    injectedAgent = {
-      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
-        prompts.push(prompt);
-        if (++invocation === 2) {
-          markStarted();
-          await gate;
-        }
-        yield { type: "text", delta: "ok" };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      prompts.push(request.prompt);
+      if (++invocation === 2) {
+        markStarted();
+        await gate;
+      }
+      yield ev.text("ok");
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_inflight");
@@ -1354,7 +1358,7 @@ describe("turn flow", () => {
     );
     await idle();
 
-    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1:omt_existing"]);
+    expect(calls.map((call) => call.sessionId)).toEqual(["feishu:oc_1", "feishu:oc_1:omt_existing"]);
     const topReply = fx.calls("/im/v1/messages/om_group_continuous/reply", "POST")[0];
     expect(topReply?.body?.reply_in_thread).toBeUndefined();
     const topicReply = fx.calls("/im/v1/messages/om_group_topic/reply", "POST")[0];
@@ -1514,11 +1518,10 @@ describe("turn flow", () => {
 
   it("a failed turn surfaces the onError text through the terminal write (default: neutral)", async () => {
     const fx = feishuFetch();
-    injectedAgent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "failed", details: "boom: harness exploded", retryable: false };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      yield ev.failed("boom: harness exploded", { retryable: false });
+    });
     const { handler, idle } = buildChannel({ onError: (f) => `⚠️ ${f.details}` });
     await handler(feishuRequest(messageEvent({ id: "om_f1" })));
     await idle();
@@ -1530,32 +1533,27 @@ describe("turn flow", () => {
   it("logs terminal-notice delivery failures without replacing the Agent/stream failure", async () => {
     const errors: string[] = [];
     vi.spyOn(log, "error").mockImplementation((message) => errors.push(message));
-    const scenarios: { id: string; agent: Agent; delivery: string; primary: string }[] = [
+    const scenarios: { id: string; agent: ScriptedAgent; delivery: string; primary: string }[] = [
       {
         id: "om_failed_delivery",
-        agent: {
-          async *invoke(): AsyncIterable<AgentEvent> {
-            yield { type: "failed", details: "harness exploded", retryable: false };
-          },
-        },
+        agent: scriptedAgent(async function* (_request) {
+          yield ev.accepted();
+          yield ev.failed("harness exploded", { retryable: false });
+        }),
         delivery: "failed to deliver the agent-failure notice",
         primary: "agent failed: harness exploded",
       },
       {
         id: "om_abnormal_delivery",
-        agent: {
-          invoke(): AsyncIterable<AgentEvent> {
+        agent: scriptedAgent(() => ({
+          [Symbol.asyncIterator]() {
             return {
-              [Symbol.asyncIterator]() {
-                return {
-                  next: async (): Promise<IteratorResult<AgentEvent>> => {
-                    throw new Error("stream exploded");
-                  },
-                };
+              next: async (): Promise<IteratorResult<InvokeEvent>> => {
+                throw new Error("stream exploded");
               },
             };
           },
-        },
+        })),
         delivery: "failed to deliver the abnormal-turn notice",
         primary: "stream exploded",
       },
@@ -1692,7 +1690,7 @@ describe("turn flow", () => {
     await handler(feishuRequest(messageEvent({ id: "om_r1", text: "summarize this", parentId: "om_parent" })));
     await idle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1"); // a reply does not leave the chat session
+    expect(calls[0]?.sessionId).toBe("feishu:oc_1"); // a reply does not leave the chat session
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("[replied-to message (msg om_parent, from user ou_bob): [file: spec.pdf]]");
     expect(prompt).toContain("attached files:");
@@ -1755,15 +1753,16 @@ describe("turn flow", () => {
         }),
     });
     const { handler, protocol, calls, idle } = buildChannel({ appId: "cli_self" });
-    // The room already holds the exchange the card answered: the thread forks from it.
+    // The room already ran the ask the card answered, under the ask's message id, as the channel invokes.
     for await (const _ of protocol.invoke({
       sessionId: "feishu:oc_1",
-      prompt: { text: "(msg om_original_ask) 加一个" },
+      idempotencyKey: "om_original_ask",
+      prompt: { text: "加一个新的页面" },
     })) {
     }
-    const room = await protocol.sessions.get("feishu:oc_1").read();
-    const exchangeEnd = room.ok ? room.entries.at(-1)?.id : undefined;
-    expect(exchangeEnd).toBeDefined();
+    const asked = await protocol.sessions.get("feishu:oc_1").runs.get({ idempotencyKey: "om_original_ask" });
+    const answer = asked?.status === "done" ? asked.answer?.entryId : undefined;
+    expect(answer).toBeDefined();
     await flush(); // the group mention only matches once bot/v3/info has resolved this bot's open_id
     await handler(
       feishuRequest(
@@ -1787,25 +1786,29 @@ describe("turn flow", () => {
     expect(prompt).toContain("[reply chain above it, oldest first:");
     expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
     expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
-    // …and the thread starts as a fork of the room at the exchange it points INTO: the referent's id is unfindable
-    // there (the card was sent after its turn), so the chain's ask, which DID pass through a room turn, places it.
-    expect(calls.at(-1)?.scope.session).toBe("feishu:oc_1:omt_on_card");
+    // …and the thread starts as a fork of the room at the answer of the run its chain names: the card is no run's
+    // message (the agent posted it), so the next message up, the ask, names the run that took it.
+    expect(calls.at(-1)?.sessionId).toBe("feishu:oc_1:omt_on_card");
     expect(protocol.forks).toEqual([
       {
         sessionId: "feishu:oc_1:omt_on_card",
-        fork: { sessionId: "feishu:oc_1", entryId: exchangeEnd, context: "recent" },
+        fork: { sessionId: "feishu:oc_1", entryId: answer, context: "recent" },
       },
     ]);
   });
 
   it("a main-timeline turn carries no lineage — the room branched from nothing", async () => {
     feishuFetch();
-    const { handler, calls, idle } = buildChannel();
+    const { handler, protocol, calls, idle } = buildChannel();
     await handler(feishuRequest(messageEvent({ id: "om_plain", text: "hello" })));
     await idle();
-    expect(calls[0]?.scope.session).toBe("feishu:oc_1");
-    expect(calls[0]?.scope.parentSession).toBeUndefined();
-    expect(calls[0]?.scope.branchHints).toBeUndefined();
+    expect(calls[0]).toMatchObject({
+      sessionId: "feishu:oc_1",
+      idempotencyKey: "om_plain",
+      whenBusy: "queue",
+      source: { kind: "channel", name: "feishu" },
+    });
+    expect(protocol.forks).toEqual([]);
   });
 
   it("a thread's FIRST turn folds the room's un-answered discussion — read-only, and once", async () => {
@@ -1928,16 +1931,15 @@ describe("turn flow", () => {
     // re-parsed as `<kind>:<chat>:<thread>` — that would let a thread message inherit from a session
     // ("tenant:user") that belongs to someone else entirely: cross-session injection.
     feishuFetch();
-    const { handler, calls, idle } = buildChannel({
+    const { handler, protocol, calls, idle } = buildChannel({
       route: () => ({ session: "tenant:user:alice" }),
     });
     await handler(
       feishuRequest(messageEvent({ id: "om_routed", threadId: "omt_x", parentId: "om_root", text: "in a topic" })),
     );
     await idle();
-    expect(calls[0]?.scope.session).toBe("tenant:user:alice");
-    expect(calls[0]?.scope.parentSession).toBeUndefined(); // opaque — never split
-    expect(calls[0]?.scope.branchHints).toBeUndefined();
+    expect(calls[0]?.sessionId).toBe("tenant:user:alice");
+    expect(protocol.forks).toEqual([]); // opaque — never split into a room and a thread
   });
 
   it("another BOT's message is not the agent's own: no self-attribution, chain still walked", async () => {
@@ -2474,7 +2476,7 @@ describe("turn flow", () => {
     );
     await idle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("user:ou_alice");
+    expect(calls[0]?.sessionId).toBe("user:ou_alice");
 
     // `agentSpoke` would claim the thread's own session remembers this turn. It does not — the answer
     // went to a per-user session — so the summon rule must not see it here. The human is still
@@ -2542,7 +2544,7 @@ describe("turn flow", () => {
     );
     const { agent, calls } = replyingAgent("recovered");
     const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      agent: asProtocolAgent(agent),
+      agent: agent,
       stateRoot: root,
     })["POST /feishu"];
     const idle = (handler as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
@@ -2562,15 +2564,14 @@ describe("turn flow", () => {
     });
     const order: string[] = [];
     let invocation = 0;
-    injectedAgent = {
-      async *invoke(_s: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-        const ask = ["first", "second", "third"].find((x) => prompt.text.includes(`\n${x}`)) ?? "unknown";
-        order.push(ask);
-        if (++invocation === 1) await gate;
-        yield { type: "text", delta: `answer ${ask}` };
-        yield { type: "completed" };
-      },
-    };
+    injectedAgent = scriptedAgent(async function* (request) {
+      yield ev.accepted();
+      const ask = ["first", "second", "third"].find((x) => request.prompt.text.includes(`\n${x}`)) ?? "unknown";
+      order.push(ask);
+      if (++invocation === 1) await gate;
+      yield ev.text(`answer ${ask}`);
+      yield ev.ended();
+    });
     const { handler, idle } = buildChannel(); // one p2p chat session
     await handler(feishuRequest(messageEvent({ id: "om_q1", text: "first" })));
     await flush(); // first turn parks on the gate with its preview mounted
@@ -2652,7 +2653,7 @@ describe("the Lark compatibility profile", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: asProtocolAgent(agent), stateRoot: root });
+    })({ agent: agent, stateRoot: root });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -2664,7 +2665,7 @@ describe("the Lark compatibility profile", () => {
     expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
     // The lark-branded assembly path carries the same reply contract as canonical feishu.
     expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
-    expect(calls[0]?.scope.session).toBe("lark:oc_1"); // branded per channel, not per engine
+    expect(calls[0]?.sessionId).toBe("lark:oc_1"); // branded per channel, not per engine
     // A direct message is answered in place: a plain send, not a quoted thread reply.
     const mount = fx.calls("receive_id_type=chat_id", "POST").find((call) => call.body?.msg_type === "interactive");
     expect(mount).toBeDefined();
@@ -2675,7 +2676,7 @@ describe("the Lark compatibility profile", () => {
   });
 
   it("mount failures name each public factory", () => {
-    const ctx = { agent: {} as ProtocolAgent, stateRoot: "/tmp/unused-feishu-factory-name" };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
       /feishuChannel/,
     );
@@ -2703,27 +2704,22 @@ describe("cardSummary: the settled card's chat-list/notification preview", () =>
 });
 
 describe("feishu stop command", () => {
-  const fakeControl = (result: { ok: true } | { code: string }) => {
+  /** What `abort` answers: a run it stopped, nothing running, or a refusal. */
+  const fakeStop = (result: "stopped" | "idle" | ErrorCode) => {
     const aborted: string[] = [];
-    const control = {
-      sessions: {
-        get: (session: string) => ({
-          abort: async () => {
-            aborted.push(session);
-            return "ok" in result
-              ? { ok: true as const }
-              : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
-          },
-        }),
-      },
-    } as unknown as SessionControl;
-    return { control, aborted };
+    const stopped = (session: string): AbortResult => {
+      aborted.push(session);
+      if (result === "stopped") return stoppedRun;
+      if (result === "idle") return { ok: true, stopped: { queued: [], compaction: false } };
+      return failure(result, "no run");
+    };
+    return { stopped, aborted };
   };
 
   it("aborts the session, replies, and never submits a turn (mention-stripped match)", async () => {
     feishuFetch();
-    const { control, aborted } = fakeControl({ ok: true });
-    const { handler, calls, idle } = buildChannel({ control });
+    const { stopped, aborted } = fakeStop("stopped");
+    const { handler, calls, idle } = buildChannel({ stopped });
     const evt = messageEvent({ id: "om_stop", text: "Stop." });
     expect((await handler(feishuRequest(evt))).status).toBe(200);
     await flush();

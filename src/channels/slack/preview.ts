@@ -1,10 +1,11 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
-import type { AgentEvent, Json } from "../../agent.ts";
+import type { InvokeEvent, Json } from "../../protocol.ts";
+import { runText } from "../../run-text.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { previewPump, renderReply, serialWriter } from "../kit/delivery.ts";
+import { previewPump, renderReply, serialWriter, turnEnd, unfinishedTurn } from "../kit/delivery.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
@@ -160,8 +161,13 @@ export async function settleSlackPreview(
   await api.postMessage(target, text);
 }
 
+/** Whether an event carries answer text: a text delta, or the settled message it adds up to. */
+const isAnswerText = (event: InvokeEvent): boolean =>
+  (event.type === "message_delta" && event.channel === "text") ||
+  (event.type === "entry" && event.entry.kind === "assistant_message");
+
 function streamClassicSlackReply(
-  events: Stream.Stream<AgentEvent, PortFailure>,
+  events: Stream.Stream<InvokeEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -238,7 +244,7 @@ function streamClassicSlackReply(
       onEvent: (event) => {
         const changed = applyTurnEvent(turn, event, now());
         // A hidden answer must not open a placeholder followed by a rate-limited edit on a fast turn.
-        if (changed && (event.type !== "text" || revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS, now()) !== ""))
+        if (changed && (!isAnswerText(event) || revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS, now()) !== ""))
           touch();
       },
     });
@@ -252,7 +258,7 @@ function streamClassicSlackReply(
  * Sharing the loop would mean injecting all three, which is more shape than the two lines it saves.
  */
 function streamNativeSlackReply(
-  events: Stream.Stream<AgentEvent, PortFailure>,
+  events: Stream.Stream<InvokeEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -449,36 +455,75 @@ function streamNativeSlackReply(
       }
     });
 
+    let runId: string | undefined;
+    let servingError: string | undefined;
+    const textOf = runText(() => runId);
+    /** An ending that is a failure: its notice woven into the stream, then the turn fails with it. */
+    const failWith = (failure: SlackFailure) =>
+      Effect.gen(function* () {
+        finalized = true;
+        yield* Effect.gen(function* () {
+          const notice = yield* Effect.try({
+            try: () => formatError(failure) ?? "",
+            catch: (cause) => new PortFailure(cause),
+          });
+          if (notice) {
+            pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
+            fullAnswer += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
+          }
+          yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
+        }).pipe(
+          Effect.catchTag("PortFailure", (error) =>
+            Effect.sync(() => log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`)),
+          ),
+        );
+        return yield* Effect.fail(
+          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+        );
+      });
+    const appendAnswer = (text: string): void => {
+      if (!text) return;
+      pendingText += text;
+      fullAnswer += text;
+      scheduleText();
+    };
     yield* Stream.runForEachWhile(events, (event) =>
       Effect.gen(function* () {
-        if (event.type !== "retrying" && retryStatusShown) {
+        if (event.type !== "retry_scheduled" && retryStatusShown) {
           // Progress after a retry notice: restore the normal working status so the stale line doesn't
           // contradict a visibly streaming answer.
           retryStatusShown = false;
           setStatus(WORKING_STATUS);
         }
-        if (event.type === "text") {
-          pendingText += event.delta;
-          fullAnswer += event.delta;
-          scheduleText();
-        } else if (event.type === "thinking") {
-          // Slack's native loading status represents private reasoning without exposing it.
-        } else if (event.type === "retrying") {
-          // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-run
-          // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
-          if (target.channelId.startsWith("D")) {
-            retryStatusShown = true;
-            setStatus("hit a temporary problem — retrying…");
+        if (event.type === "accepted") runId = event.run.runId;
+        if (event.type === "serving_error") servingError = event.message;
+        const end = turnEnd(event, runId);
+        if (end === undefined) {
+          // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
+          if (event.type === "message_delta" && event.channel === "text") appendAnswer(textOf(event));
+          else if (event.type === "retry_scheduled") {
+            // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-run
+            // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
+            if (target.channelId.startsWith("D")) {
+              retryStatusShown = true;
+              setStatus("hit a temporary problem — retrying…");
+            }
+          } else if (event.type === "tool_started" && event.runId === runId) {
+            const trace = nativeToolTrace(event.name, event.args);
+            toolTraces.set(event.toolCallId, trace);
+            sendToolTrace(nativeToolLine(trace));
+          } else if (event.type === "entry" && event.entry.runId === runId) {
+            if (event.entry.kind === "assistant_message") appendAnswer(textOf(event));
+            if (event.entry.kind === "tool_result") {
+              const data = event.entry.data as { toolCallId?: string; isError?: boolean };
+              const trace = (data.toolCallId && toolTraces.get(data.toolCallId)) || { label: "Tool" };
+              if (data.toolCallId) toolTraces.delete(data.toolCallId);
+              if (data.isError === true) sendToolTrace(nativeToolLine(trace, " failed"));
+            }
           }
-        } else if (event.type === "tool_started") {
-          const trace = nativeToolTrace(event.name, event.args);
-          toolTraces.set(event.id, trace);
-          sendToolTrace(nativeToolLine(trace));
-        } else if (event.type === "tool_ended") {
-          const trace = toolTraces.get(event.id) ?? { label: "Tool" };
-          toolTraces.delete(event.id);
-          if (event.isError) sendToolTrace(nativeToolLine(trace, " failed"));
-        } else if (event.type === "completed") {
+          return true;
+        }
+        if ("answered" in end) {
           finalized = true;
           const finalAnswer = withDisclaimer(fullAnswer, disclaimer);
           const footer = finalAnswer.slice(fullAnswer.trim().length);
@@ -488,43 +533,21 @@ function streamNativeSlackReply(
           yield* Effect.try({ try: () => onAnswered?.(finalAnswer), catch: (cause) => new PortFailure(cause) });
           yield* settleNative(finalAnswer);
           return false;
-        } else if (event.type === "failed") {
-          finalized = true;
-          yield* Effect.gen(function* () {
-            const notice = yield* Effect.try({
-              try: () =>
-                formatError({
-                  details: event.details,
-                  retryable: event.retryable,
-                  ...(event.code !== undefined ? { code: event.code } : {}),
-                }) ?? "",
-              catch: (cause) => new PortFailure(cause),
-            });
-            if (notice) {
-              pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
-              fullAnswer += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
-            }
-            yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
-          }).pipe(
-            Effect.catchTag("PortFailure", (error) =>
-              Effect.sync(() =>
-                log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`),
-              ),
-            ),
-          );
-          return yield* Effect.fail(
-            new PortFailure(new Error(`agent failed: ${event.details} (retryable=${event.retryable})`)),
-          );
         }
-        return true;
+        return yield* failWith(end.failure);
       }).pipe(Effect.uninterruptible),
     );
-    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    if (finalized) return;
+    const unfinished = unfinishedTurn(servingError);
+    if (unfinished === undefined) {
+      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    }
+    yield* failWith(unfinished).pipe(Effect.uninterruptible);
   });
 }
 
 export function slackReply(
-  events: Stream.Stream<AgentEvent, PortFailure>,
+  events: Stream.Stream<InvokeEvent, PortFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,

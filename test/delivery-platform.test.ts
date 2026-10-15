@@ -5,10 +5,11 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Agent, AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
+import { ev } from "./scripted-run.ts";
 import type { FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import { feishuReply } from "../src/channels/feishu/preview.ts";
-import { busyRetryStream } from "../src/channels/kit/invoke-turn-kit.ts";
+import { turnStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import type { PortFailure } from "../src/effect-port.ts";
 import { slackReply } from "../src/channels/slack/preview.ts";
 import type { SlackApi } from "../src/channels/slack/slack-api.ts";
@@ -34,7 +35,7 @@ function renderer(
       else throw new Error(`unexpected Telegram call: ${String(input)}`);
       return Response.json({ ok: true, result: { message_id: 17 } });
     });
-    return (events: Stream.Stream<AgentEvent, PortFailure>) =>
+    return (events: Stream.Stream<InvokeEvent, PortFailure>) =>
       telegramReply(events, "https://api.telegram.org", "token", { chatId: 1 }, neutral, undefined, onAnswered);
   }
   if (platform === "feishu") {
@@ -49,7 +50,7 @@ function renderer(
       },
       updateCardElement: async () => {},
     } as unknown as FeishuApi;
-    return (events: Stream.Stream<AgentEvent, PortFailure>) =>
+    return (events: Stream.Stream<InvokeEvent, PortFailure>) =>
       feishuReply(events, api, { chatId: "chat-1" }, neutral, undefined, undefined, onAnswered);
   }
   const api = {
@@ -73,7 +74,7 @@ function renderer(
       await settle();
     },
   } as unknown as SlackApi;
-  return (events: Stream.Stream<AgentEvent, PortFailure>) =>
+  return (events: Stream.Stream<InvokeEvent, PortFailure>) =>
     slackReply(events, api, { channelId: "C1", threadTs: "1.0" }, neutral, {
       rendering: platform === "slack-classic" ? "classic" : "native",
       disclaimer: false,
@@ -100,9 +101,10 @@ it.each(platforms)(
     let released = false;
     await Effect.runPromise(
       Effect.gen(function* () {
-        const events = Stream.fromIterable<AgentEvent>([
-          { type: "thinking", delta: "working" },
-          { type: "tool_started", id: "t1", name: "read", args: {} },
+        const events = Stream.fromIterable<InvokeEvent>([
+          ev.accepted(),
+          ev.thinking("working"),
+          ev.toolStarted("t1", "read"),
         ]).pipe(Stream.concat(Stream.never));
         const turn = yield* Effect.forkChild(
           Effect.scoped(render(events)).pipe(
@@ -142,11 +144,12 @@ it.each(platforms)(
     const releaseFinal = Promise.withResolvers<void>();
     const committed = vi.fn();
     let sourceClosed = false;
-    const agent: Agent = {
-      async *invoke() {
+    const agent = {
+      async *invoke(_request: InvokeRequest) {
         try {
-          yield { type: "text", delta: "answer" };
-          yield { type: "completed" };
+          yield ev.accepted();
+          yield ev.text("answer");
+          yield ev.ended();
         } finally {
           sourceClosed = true;
         }
@@ -167,7 +170,18 @@ it.each(platforms)(
     await Effect.runPromise(
       Effect.gen(function* () {
         const turn = yield* Effect.forkChild(
-          Effect.scoped(render(busyRetryStream(agent, { session: "s" }, { text: "go" }, { label: "[test]" }))),
+          Effect.scoped(
+            render(
+              turnStream({
+                agent,
+                label: "[test]",
+                source: { kind: "channel", name: "test" },
+                resolve: async () => undefined,
+                turn: () => ({ sessionId: "s", idempotencyKey: "k", prompt: { text: "go" } }),
+                retryableLoadFailure: () => true,
+              }),
+            ),
+          ),
         );
         yield* Effect.promise(() => settling.promise);
         releaseFinal.resolve();

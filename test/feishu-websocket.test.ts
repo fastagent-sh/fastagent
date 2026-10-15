@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
-import { asProtocolAgent } from "./protocol-agent.ts";
+import { scriptedAgent } from "./scripted-agent.ts";
+import { ev } from "./scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Agent } from "../src/agent.ts";
 import { FEISHU_CLOUD, LARK_COMPAT_CLOUD } from "../src/channels/feishu/cloud.ts";
 import { buildFeishuWebSocketChannel, feishuChannel, feishuWebSocketChannel } from "../src/channels/feishu/feishu.ts";
 import { larkChannel, larkWebSocketChannel } from "../src/channels/lark/lark.ts";
@@ -64,12 +64,11 @@ describe("Feishu/Lark WebSocket ingress", () => {
           },
         },
       );
-      const agent: Agent = {
-        async *invoke() {
-          yield { type: "completed" };
-        },
-      };
-      const run = module.connect({ agent: asProtocolAgent(agent), stateRoot: root }, new AbortController().signal);
+      const agent = scriptedAgent(async function* (_request) {
+        yield ev.accepted();
+        yield ev.ended();
+      });
+      const run = module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);
       await run.ready;
       expect(accepted).toBeTypeOf("function");
       await accepted?.(event);
@@ -99,12 +98,11 @@ describe("Feishu/Lark WebSocket ingress", () => {
         },
       },
     );
-    const agent: Agent = {
-      async *invoke() {
-        yield { type: "completed" };
-      },
-    };
-    module.connect({ agent: asProtocolAgent(agent), stateRoot: root }, new AbortController().signal);
+    const agent = scriptedAgent(async function* (_request) {
+      yield ev.accepted();
+      yield ev.ended();
+    });
+    module.connect({ agent: agent, stateRoot: root }, new AbortController().signal);
     const home = join(root, "channels", "feishu");
     await mkdir(join(home, "turns.json.tmp")); // saveStateFile(writeFile) fails with EISDIR before the ACK
 

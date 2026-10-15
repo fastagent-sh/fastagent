@@ -12,13 +12,11 @@
  * ancestors, and degrade per attachment: one expired background file must not block the current ask
  * or hide its still-readable siblings.
  */
-import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
+import type { Agent, ImageRef, InvokeEvent } from "../../protocol.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
-  type BusyRetry,
-  DEFAULT_BUSY_RETRY,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
@@ -27,6 +25,7 @@ import {
   turnStream,
 } from "../kit/invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
+import { forkThread } from "../kit/thread-fork.ts";
 import type { FeishuBufferedRef } from "./history.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
@@ -52,10 +51,8 @@ export interface FeishuTurnTransport {
    *  sender is an app. Needed to tell the agent's OWN messages from any other bot's in the same chat:
    *  `sender_type` alone says "some app", which is not the question the referent path asks. */
   appId: string;
-  /** The place this thread branched from (the chat's main place), when the turn runs in a thread —
-   *  rides the Scope's lineage extension so a NEW thread session starts from what the room knew
-   *  (participant-model.md §5). The harness reads it once, at session creation; every later turn
-   *  carries it inertly. */
+  /** The place this thread branched from (the chat's main place), when the turn runs in a thread: a NEW thread
+   *  session starts as a fork of it (participant-model.md §5); one that exists is left alone. */
   parentSession?: string;
 }
 
@@ -83,7 +80,7 @@ export interface FeishuTurnAttachments {
 interface ResolvedInputs {
   images: ImageRef[] | undefined;
   promptSuffix: string;
-  /** Branch hints for the scope's lineage extension: the referent + its chain, nearest first. */
+  /** The referent + its chain, nearest first: the messages that may name the run a new thread forks at. */
   referentIds: string[];
 }
 
@@ -331,28 +328,35 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
 }
 
 /**
- * Run one turn: resolve its inputs, then ask the agent (invoke-turn-kit — a primary-input failure
- * surfaces as a `failed` event, never a silent drop).
+ * Run one turn: resolve its inputs, start a new thread from its room, then ask the agent (invoke-turn-kit — a
+ * preparation failure surfaces as a `rejected` event, never a silent drop). `key` is the turn's: the message it
+ * answers, which is also how a later thread finds the run this one becomes.
  */
 export function feishuTurnStream(
   agent: Agent,
-  session: string,
-  text: string,
+  turn: { session: string; key: string; text: string; source: string },
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
-  busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
-): Stream.Stream<AgentEvent, PortFailure> {
+): Stream.Stream<InvokeEvent, PortFailure> {
+  const room = transport.parentSession;
   return turnStream({
     agent,
     label: transport.label,
-    busyRetry,
-    resolve: () => resolveTurnInputs(transport, attachments),
+    source: { kind: "channel", name: turn.source },
+    resolve: async () => {
+      const resolved = await resolveTurnInputs(transport, attachments);
+      if (room !== undefined) {
+        await forkThread(agent, { sessionId: turn.session, room, chain: resolved.referentIds }, transport.label);
+      }
+      return resolved;
+    },
     turn: (resolved) => ({
-      // Lineage is resolved per turn; the harness reads it only when creating a new session.
-      scope: (transport.parentSession === undefined
-        ? { session }
-        : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds }) satisfies Scope,
-      prompt: { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images },
+      sessionId: turn.session,
+      idempotencyKey: turn.key,
+      prompt: {
+        text: `${turn.text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`,
+        ...(resolved.images ? { images: resolved.images } : {}),
+      },
     }),
     // A resource fetch that failed may simply succeed on the redelivery.
     retryableLoadFailure: () => true,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
+import { ev } from "./scripted-run.ts";
 import {
   ANSWER_ELEMENT_ID,
   PROCESS_ELEMENT_ID,
@@ -17,14 +18,14 @@ afterEach(() => {
 
 /** A push-based event source, so a test controls exactly WHEN each event reaches the stream. */
 const eventSource = () => {
-  const queue: AgentEvent[] = [];
+  const queue: InvokeEvent[] = [ev.accepted()];
   let notify: (() => void) | undefined;
   let ended = false;
-  const iterable: AsyncIterable<AgentEvent> = {
+  const iterable: AsyncIterable<InvokeEvent> = {
     async *[Symbol.asyncIterator]() {
       while (true) {
         if (queue.length > 0) {
-          yield queue.shift() as AgentEvent;
+          yield queue.shift() as InvokeEvent;
           continue;
         }
         if (ended) return;
@@ -36,7 +37,7 @@ const eventSource = () => {
   };
   return {
     iterable,
-    push(e: AgentEvent): void {
+    push(e: InvokeEvent): void {
       queue.push(e);
       notify?.();
       notify = undefined;
@@ -132,14 +133,14 @@ describe("feishuReply two-element streaming (direct)", () => {
     await vi.advanceTimersByTimeAsync(0); // mount flush
     // The process block keeps changing (a live tool trace), so it is retried on every frame.
     for (let i = 0; i < 6; i++) {
-      src.push({ type: "tool_started", id: `t${i}`, name: "bash", args: { cmd: `step ${i}` } });
-      src.push({ type: "text", delta: `chunk${i} ` });
+      src.push(ev.toolStarted(`t${i}`, "bash", { cmd: `step ${i}` }));
+      src.push(ev.text(`chunk${i} `));
       await vi.advanceTimersByTimeAsync(1100);
     }
     // One answer write per chunk: a rejected process write ends the flush it is in, so writing the
     // decoration first costs the answer change that shared that flush.
     expect(elementWrites.filter((w) => w.elementId === ANSWER_ELEMENT_ID)).toHaveLength(6);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
   });
@@ -153,27 +154,27 @@ describe("feishuReply two-element streaming (direct)", () => {
     expect(created).toHaveLength(1);
 
     // Thinking longer than the 280-point tail window — every later delta slides the line's HEAD.
-    src.push({ type: "thinking", delta: "a".repeat(300) });
+    src.push(ev.thinking("a".repeat(300)));
     await vi.advanceTimersByTimeAsync(1100);
-    src.push({ type: "text", delta: "hello" });
+    src.push(ev.text("hello"));
     await vi.advanceTimersByTimeAsync(1100); // answer ages past the reveal window
-    src.push({ type: "text", delta: " wor" });
+    src.push(ev.text(" wor"));
     await vi.advanceTimersByTimeAsync(1100); // → answer frame 1
-    src.push({ type: "text", delta: "ld" });
+    src.push(ev.text("ld"));
     await vi.advanceTimersByTimeAsync(1100); // → answer frame 2 (strict prefix extension of frame 1)
 
     // Churn-only phase: the answer element must FREEZE while the process block keeps changing —
     // an equal-content rewrite here would burn quota and re-trigger the client's animation.
     const answerWritesBeforeChurn = elementWrites.filter((w) => w.elementId === ANSWER_ELEMENT_ID).length;
-    src.push({ type: "thinking", delta: "b".repeat(50) }); // slides the tail again
+    src.push(ev.thinking("b".repeat(50))); // slides the tail again
     await vi.advanceTimersByTimeAsync(1100);
-    src.push({ type: "tool_started", id: "t1", name: "bash", args: { cmd: "ls" } });
+    src.push(ev.toolStarted("t1", "bash", { cmd: "ls" }));
     await vi.advanceTimersByTimeAsync(1100);
-    src.push({ type: "tool_ended", id: "t1", isError: false, content: "ok" }); // the …→✓ flip is process churn too
+    src.push(ev.toolResult("t1")); // the …→✓ flip is process churn too
     await vi.advanceTimersByTimeAsync(1100);
     expect(elementWrites.filter((w) => w.elementId === ANSWER_ELEMENT_ID).length).toBe(answerWritesBeforeChurn);
 
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
 
@@ -227,12 +228,12 @@ describe("feishuReply two-element streaming (direct)", () => {
     const mounted = JSON.parse(created[0] ?? "{}") as { body: { elements: { content: string }[] } };
     expect(mounted.body.elements[0]?.content).toBe("💭 Thinking…");
 
-    src.push({ type: "text", delta: "OK" });
+    src.push(ev.text("OK"));
     await vi.advanceTimersByTimeAsync(1100); // young answer: placeholder stays, nothing written yet
     expect(elementWrites).toHaveLength(0);
-    src.push({ type: "text", delta: " then" });
+    src.push(ev.text(" then"));
     await vi.advanceTimersByTimeAsync(1100); // answer reveals → placeholder cleared in the same flush
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
 
@@ -250,15 +251,10 @@ describe("feishuReply two-element streaming (direct)", () => {
     await vi.advanceTimersByTimeAsync(0); // mount flush
     // 30 tool lines × ~60 points ≈ 1800 points — well past the 1000-point process budget.
     for (let i = 0; i < 30; i++) {
-      src.push({
-        type: "tool_started",
-        id: `t${i}`,
-        name: `tool${String(i).padStart(2, "0")}`,
-        args: { p: "x".repeat(60) },
-      });
+      src.push(ev.toolStarted(`t${i}`, `tool${String(i).padStart(2, "0")}`, { p: "x".repeat(60) }));
     }
     await vi.advanceTimersByTimeAsync(1100);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
 
@@ -277,14 +273,14 @@ describe("feishuReply two-element streaming (direct)", () => {
     const src = eventSource();
     const turn = run(feishuReply(stream(src.iterable), api, { chatId: "oc_1" }, neutral));
     await vi.advanceTimersByTimeAsync(0); // mount flush
-    src.push({ type: "thinking", delta: "short" });
+    src.push(ev.thinking("short"));
     await vi.advanceTimersByTimeAsync(1100);
     const after = elementWrites.length;
     // tool_ended for an unknown id changes nothing in the view → no write may follow.
-    src.push({ type: "tool_ended", id: "ghost", isError: false, content: "ok" });
+    src.push(ev.toolResult("ghost"));
     await vi.advanceTimersByTimeAsync(2500);
     expect(elementWrites.length).toBe(after);
-    src.push({ type: "completed" });
+    src.push(ev.ended());
     src.end();
     await turn;
   });

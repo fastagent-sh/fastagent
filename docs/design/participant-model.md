@@ -241,14 +241,17 @@ is deliberate: the walk repeats per reply turn, so an established session re-rea
 already hold (attachments are deduplicated by message identity; text cannot be, from a layer that
 cannot read the session).
 
-**Rungs 3 and 4 are one mechanism with two parameters, implemented as session inheritance.** The
-channel states two facts only it knows — which place this one branched from (`scope.parentSession`,
-SPEC §8's extension mechanism) and which message ids may locate the branch point (`scope.branchHints`:
-the referent and its reply chain) — and the harness does the rest ONCE, when the thread's session is
-first created: the session existing is the record that the decision was taken, so there is no marker
-to persist and no decision to retry. The fork copies the room's active path up to the branch point (a
-hit is extended to the end of its exchange, so a mid-exchange fork does not inherit a question without
-its answer; a miss falls back to the room's present, with a warn). What the model sees is bounded by
+**Rungs 3 and 4 are one mechanism with two parameters, implemented as a fork of the room's session.** The
+channel knows which place this one branched from and the reply chain the thread starts under (the referent,
+then each message it replies to, nearest first). When the thread's session does not exist yet, the channel
+creates it with `sessions.create({ fork: { sessionId: <the room>, entryId, context: "recent" } })` (SPEC v1 §5),
+ONCE: the session existing is the record that the decision was taken, so there is no marker to persist and no
+decision to retry. The branch point is the first run the chain names (`kit/thread-fork.ts`): a channel invokes
+with the platform's message id as the `idempotencyKey`, so `runs.get({ idempotencyKey })` finds the run a user's
+message became, and the thread forks at that run's answer, at its message when it has none, and at the room's
+present when nothing in the chain names a run (a message the agent was not asked about, or one it posted
+itself) or the run is still queued. A message the channel posted for a run does not name it yet: that half of
+agent-service.md §8.3 is [#796](https://github.com/fastagent-sh/fastagent/issues/796). `context: "recent"` is how the harness bounds what the model sees with
 one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, measured with
 pi's `estimateTokens` on what the model will see (an attempt pi omitted costs nothing). A room compaction
 copied along keeps its retained tail only while everything fits: pi reads the newest compaction alone,
