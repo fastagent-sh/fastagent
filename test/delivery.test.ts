@@ -1,4 +1,5 @@
 import { ev } from "./scripted-run.ts";
+import type { InvokeEvent } from "../src/protocol.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -218,6 +219,41 @@ it("preserves a source OR completed failure without duplicate terminal delivery"
     if (phase === "source") expect(warning, phase).toHaveBeenCalledWith(expect.stringContaining(secondary.message));
     warning.mockRestore();
   }
+});
+
+it("a stream that ends on a serving error tells the asker it was temporary, and fails with the error", async () => {
+  // The run's end could not be recorded, or missed events could not be read back: the `serving_error` is the only
+  // account of why, so it is what the notice and the turn's failure carry.
+  const failures: unknown[] = [];
+  const settle = vi.fn((_text: string) => Effect.void);
+  await expect(
+    run(
+      Effect.scoped(
+        renderReply(
+          Stream.fromIterable([
+            ev.accepted(),
+            ev.text("part"),
+            { type: "serving_error", message: "the run's end could not be recorded: ENOSPC" } as InvokeEvent,
+          ]),
+          {
+            label: "[test]",
+            finish: Effect.void,
+            onEvent: () => {},
+            answer: () => "answer",
+            formatError: (failure) => {
+              failures.push(failure);
+              return "temporary";
+            },
+            settle,
+          },
+        ),
+      ),
+    ),
+  ).rejects.toThrow("agent failed: the run's end could not be recorded: ENOSPC (retryable=true)");
+  expect(failures).toEqual([
+    { details: "the run's end could not be recorded: ENOSPC", retryable: true, code: "serving_error" },
+  ]);
+  expect(settle).toHaveBeenCalledExactlyOnceWith("temporary");
 });
 
 it("a failed answer hand-over stops the turn before it delivers anything", async () => {

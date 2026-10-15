@@ -76,7 +76,6 @@ export function telegramChannel({
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
   return ({ agent, stateRoot }) => {
-    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
     // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
     if (!secretToken) {
       throw new Error(

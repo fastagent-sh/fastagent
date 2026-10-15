@@ -108,6 +108,28 @@ describe("Slack reply rendering", () => {
     warning.mockRestore();
   });
 
+  it("a native stream that ends on a serving error weaves a temporary-failure notice in, and fails with the error", async () => {
+    const api = fakeApi();
+    const failures: unknown[] = [];
+    const events = (async function* (): AsyncIterable<InvokeEvent> {
+      yield ev.accepted();
+      yield ev.text("part");
+      yield { type: "serving_error", message: "missed events could not be read back" } as InvokeEvent;
+    })();
+    await expect(
+      run(
+        slackReply(stream(events), api, { channelId: "C1", threadTs: "1.0" }, (failure) => {
+          failures.push(failure);
+          return "temporary";
+        }),
+      ),
+    ).rejects.toThrow("agent failed: missed events could not be read back (retryable=true)");
+    expect(failures).toEqual([
+      { details: "missed events could not be read back", retryable: true, code: "serving_error" },
+    ]);
+    expect(api.stopStream).toHaveBeenCalledOnce();
+  });
+
   it("reports a delivered answer whose stop failed, once, without retrying it during scope cleanup", async () => {
     // The answer is already on screen (appended, or carried by startStream); `stop` only closes the stream. Failing
     // the turn here would make the runner keep its record and re-send the whole answer on the next start.

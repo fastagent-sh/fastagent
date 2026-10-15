@@ -265,7 +265,6 @@ function createFeishuRuntimeFactory(
   const { kind } = profile;
   const label = `[${kind}]`;
   return ({ agent, stateRoot }) => {
-    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
     // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
       throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);

@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { previewPump, renderReply, serialWriter, turnEnd } from "../kit/delivery.ts";
+import { previewPump, renderReply, serialWriter, turnEnd, unfinishedTurn } from "../kit/delivery.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
@@ -456,7 +456,31 @@ function streamNativeSlackReply(
     });
 
     let runId: string | undefined;
+    let servingError: string | undefined;
     const textOf = runText(() => runId);
+    /** An ending that is a failure: its notice woven into the stream, then the turn fails with it. */
+    const failWith = (failure: SlackFailure) =>
+      Effect.gen(function* () {
+        finalized = true;
+        yield* Effect.gen(function* () {
+          const notice = yield* Effect.try({
+            try: () => formatError(failure) ?? "",
+            catch: (cause) => new PortFailure(cause),
+          });
+          if (notice) {
+            pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
+            fullAnswer += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
+          }
+          yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
+        }).pipe(
+          Effect.catchTag("PortFailure", (error) =>
+            Effect.sync(() => log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`)),
+          ),
+        );
+        return yield* Effect.fail(
+          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+        );
+      });
     const appendAnswer = (text: string): void => {
       if (!text) return;
       pendingText += text;
@@ -472,6 +496,7 @@ function streamNativeSlackReply(
           setStatus(WORKING_STATUS);
         }
         if (event.type === "accepted") runId = event.run.runId;
+        if (event.type === "serving_error") servingError = event.message;
         const end = turnEnd(event, runId);
         if (end === undefined) {
           // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
@@ -498,8 +523,8 @@ function streamNativeSlackReply(
           }
           return true;
         }
-        finalized = true;
         if ("answered" in end) {
+          finalized = true;
           const finalAnswer = withDisclaimer(fullAnswer, disclaimer);
           const footer = finalAnswer.slice(fullAnswer.trim().length);
           if (footer) pendingText += footer;
@@ -509,28 +534,15 @@ function streamNativeSlackReply(
           yield* settleNative(finalAnswer);
           return false;
         }
-        const { failure } = end;
-        yield* Effect.gen(function* () {
-          const notice = yield* Effect.try({
-            try: () => formatError(failure) ?? "",
-            catch: (cause) => new PortFailure(cause),
-          });
-          if (notice) {
-            pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
-            fullAnswer += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
-          }
-          yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
-        }).pipe(
-          Effect.catchTag("PortFailure", (error) =>
-            Effect.sync(() => log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`)),
-          ),
-        );
-        return yield* Effect.fail(
-          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
-        );
+        return yield* failWith(end.failure);
       }).pipe(Effect.uninterruptible),
     );
-    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    if (finalized) return;
+    const unfinished = unfinishedTurn(servingError);
+    if (unfinished === undefined) {
+      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    }
+    yield* failWith(unfinished).pipe(Effect.uninterruptible);
   });
 }
 

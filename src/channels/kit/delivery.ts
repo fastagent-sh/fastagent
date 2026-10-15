@@ -41,6 +41,14 @@ export function turnEnd(event: InvokeEvent, runId: string | undefined): TurnEnd 
   }
 }
 
+/**
+ * A turn whose stream ended before its run did, after the agent said why (`serving_error`: the run's end could not be
+ * recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
+ */
+export function unfinishedTurn(servingError: string | undefined): ChannelFailure | undefined {
+  return servingError === undefined ? undefined : { details: servingError, retryable: true, code: "serving_error" };
+}
+
 /** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
 export function renderReply(
   events: Stream.Stream<InvokeEvent, PortFailure>,
@@ -72,8 +80,17 @@ export function renderReply(
       }),
     );
     let runId: string | undefined;
+    let servingError: string | undefined;
+    const failWith = (failure: ChannelFailure) =>
+      Effect.gen(function* () {
+        yield* notify(failure, "agent-failure");
+        return yield* Effect.fail(
+          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+        );
+      });
     yield* Stream.runForEachWhile(events, (event) => {
       if (event.type === "accepted") runId = event.run.runId;
+      if (event.type === "serving_error") servingError = event.message;
       const end = turnEnd(event, runId);
       if (end === undefined) {
         return Effect.try({
@@ -95,16 +112,19 @@ export function renderReply(
           });
           yield* opts.settle(answer);
         } else {
-          const { failure } = end;
-          yield* notify(failure, "agent-failure");
-          return yield* Effect.fail(
-            new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
-          );
+          return yield* failWith(end.failure);
         }
         return false;
       }).pipe(Effect.uninterruptible);
     });
-    if (!finalized) yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    if (finalized) return;
+    const unfinished = unfinishedTurn(servingError);
+    if (unfinished === undefined) {
+      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+    }
+    yield* opts.finish;
+    finalized = true;
+    yield* failWith(unfinished).pipe(Effect.uninterruptible);
   });
 }
 

@@ -256,7 +256,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
   return ({ agent, stateRoot }) => {
-    // Until this channel speaks SPEC v1 itself (step 4, PR 4b).
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
