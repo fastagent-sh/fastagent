@@ -6,7 +6,6 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import { protocolHttp } from "./channels/protocol-http.ts";
 import { text } from "./channels/respond.ts";
-import { scheduleCaller } from "./legacy-agent.ts";
 import type { Agent } from "./protocol.ts";
 import { assertCorsOrigins, parseRouteKey, pathUnderPrefix, type PrefixMount, router } from "./channels/router.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "./channels/discover.ts";
@@ -251,9 +250,7 @@ export function startSchedules(
   const { schedules, failures } = loaded;
   const scheduler = Effect.runSync(
     createScheduler({
-      // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
-      agent: scheduleCaller(agent, "schedule"),
-      wakeAgent: scheduleCaller(agent, "wake"),
+      agent,
       stateRoot,
       schedules,
       failures,

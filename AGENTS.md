@@ -116,7 +116,7 @@ src/
 │   │                       # and the shared-secret boundary that separates a forwarder call from any IAM one
 │   ├── agentcore-protocol.ts # THE WIRE between the forwarder Lambda and the container (types + constants)
 │   ├── agentcore-limits.ts # the host's body ceilings, computed once
-│   ├── busy.ts             # the process's work in flight (every leased session, channel work not yet at one),
+│   ├── busy.ts             # the process's work in flight (every queued or running run and compaction, channel work not yet at one),
 │                           # read by /ping (HealthyBusy) and by `dev` before it restarts: an ACK is not the end
 │                           # of a turn
 │   ├── http.ts             # v0.1's POST /invoke over HTTP/SSE (createInvokeHandler): neither served nor exported (goes in 4c)
@@ -233,7 +233,8 @@ src/
 │   ├── schedule.ts         # a schedule as loaded ({ name, cron, tz?, prompt }) + its one session, schedule:<name>
 │   ├── cron.ts             # the one place touching `croner`: nextRun + cronError
 │   ├── discover.ts         # schedules/<name>.md discovery: a strict cron/tz frontmatter over the prompt
-│   ├── scheduler.ts        # the resident clock loops + claim/run/settle; stop cancels waits, claimed turns finish
+│   ├── scheduler.ts        # the resident clock loops + claim/run/settle, over SPEC v1: a schedule is refused by a
+│   │                       # busy session (skipped), a wake-up queues; stop cancels waits, runs go on
 │   ├── wakeups.ts          # the agent's self-scheduled wake-ups: neutral store + guardrails
 │   ├── wake-alarm.ts       # the EXTERNAL-clock form of both: schedules as recurring EventBridge schedules,
 │   │                       # wake-ups as one-shots

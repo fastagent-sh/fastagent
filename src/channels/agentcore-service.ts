@@ -1,5 +1,4 @@
 /** The AgentCore serving assembly — the same product as `mountAgentService`, built differently because the host is. */
-import { scheduleCaller } from "../legacy-agent.ts";
 import type { Agent } from "../protocol.ts";
 import { fromForwarder } from "./agentcore-protocol.ts";
 import { log } from "../log.ts";
@@ -220,10 +219,7 @@ export function mountAgentcore(options: {
       return skip(`not an instant of its cron "${schedule.cron}" any more`);
     }
     const outcome = await Effect.runPromise(
-      // Until the scheduler speaks SPEC v1 itself (step 4, PR 4b).
-      fireScheduleOnce({ agent: scheduleCaller(agent, "schedule"), stateRoot, schedule, slot: occurrence }).pipe(
-        Effect.mapError((e) => e.cause),
-      ),
+      fireScheduleOnce({ agent, stateRoot, schedule, slot: occurrence }).pipe(Effect.mapError((e) => e.cause)),
     ).catch((cause: unknown) => {
       // `fireScheduleOnce`'s only failure is a claim-state fault, which happens BEFORE any claim exists — the
       // occurrence is unburned, so the forwarder's throw makes EventBridge retry it, which is the right answer.

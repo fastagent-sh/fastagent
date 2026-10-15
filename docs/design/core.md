@@ -702,8 +702,19 @@ captured Effect clock; Croner computes calendar instants, with capped waits rech
 claim IO failures are typed: the resident loop logs a skipped fire, while external slot delivery
 receives the original error.
 
-`stop()` interrupts pending waits synchronously without draining or canceling a claimed occurrence.
-That occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
+Every fire is an invoke of the SPEC v1 Agent, with its `source`. A schedule's is
+`{ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: <the slot> }`: an occurrence that finds the
+previous run still going is refused, and settled `skipped`. A wake-up's is
+`{ sessionId: <its session>, whenBusy: "queue", idempotencyKey: "wake:<id>@<fireAt>" }`: it runs after whatever
+runs there, and its `accepted` is its delivery, so the wake loop goes on to the next due wake-up while the run is
+followed to its end apart, for the log line that is a wake-up's whole record. Queued, a wake-up is refused only while
+the process or its session's queue is full: a one-shot one goes back in the store for the next poll, and a recurring
+one has its next occurrence. A run whose stream ends on a `serving_error` (its end could not be recorded, or missed
+events could not be read back) fails with that error, in the claim's log line and the external fire's reply.
+
+`stop()` interrupts pending waits synchronously without canceling a claimed occurrence: interrupting a read of a
+run's stream only detaches from it (SPEC v1 §3.1), so the run goes on to its end and stays in its session. A
+claimed cron occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
 process itself is not waited for, so a restart can still land between a cron claim and its settlement:
 the next `start()` reads the claims it is about to arm and settles an unsettled one as `interrupted`,
 with a warning — which also makes the check idempotent across boots. It is not re-fired — a turn that
@@ -711,13 +722,12 @@ kills its own process would then replay on every boot — and external slot deli
 on AgentCore an interrupted fire stays `unreported` forever (there is no boot of a resident scheduler
 to reconcile it, and that host reclaims its container most often). A
 killed wake-up leaves nothing to reconcile: its claim removes it from the store before the turn starts.
-Waiting loops do not count as business work. Wake execution keeps its busy ownership through one-shot
-deferral and settlement, so the idle notification observes settled state.
+Waiting loops do not count as business work. A wake-up counts as work until its run is accepted; from then on
+the run itself is counted (`channels/busy.ts`).
 
 Every serve mounts `wake`/`unwake`. Wake-ups are persisted, bounded by
-minimum delay/frequency and per-session count, and fired back into the originating session. A one-shot
-wake that hits `session_busy` is deferred because the turn never started; other failures are not
-replayed because tools may already have produced side effects.
+minimum delay/frequency and per-session count, and fired back into the originating session. A run that fails is
+not replayed, because its tools may already have produced side effects.
 
 A declared cron needs one continuously running process, and deploy preflight prevents scale-to-zero settings
 that would silently miss one. Wake-ups do not pin a machine: the store is on the volume, so a box that slept fires

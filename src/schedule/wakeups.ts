@@ -19,8 +19,6 @@ export interface Wakeup {
   cron?: string;
   /** IANA timezone for `cron` (default UTC). */
   tz?: string;
-  /** ONE-SHOT ONLY: consecutive busy-defer attempts. */
-  attempts?: number;
 }
 
 /** The minimum delay a wake-up may be scheduled for — rejects a busy-loop (`wake in 1s`, then again…). */
@@ -31,8 +29,6 @@ export const MIN_WAKE_MS = 60_000; // 1 minute
  * deploy is one session per chat).
  */
 export const MAX_PENDING_WAKEUPS = 20;
-/** How many times a busy/transient wake is retried (deferred) before being dropped. */
-export const MAX_WAKE_ATTEMPTS = 120;
 
 /** A stored entry is a real Wakeup: the fields are present and `fireAt` is a parseable date. */
 function isWakeup(e: unknown): e is Wakeup {
@@ -44,7 +40,6 @@ function isWakeup(e: unknown): e is Wakeup {
     typeof w.prompt === "string" &&
     typeof w.fireAt === "string" &&
     !Number.isNaN(Date.parse(w.fireAt)) &&
-    (w.attempts === undefined || typeof w.attempts === "number") && // a non-number would make deferWakeup's count NaN
     (w.tz === undefined || typeof w.tz === "string") &&
     // A stored cron must PARSE: a bad one would throw inside the claim's nextRun.
     (w.cron === undefined ||
@@ -166,10 +161,9 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
   if (idx === -1) return undefined;
   const w = all[idx] as Wakeup;
   if (w.cron !== undefined) {
-    // RECURRING claim = ADVANCE IN PLACE: the entry STAYS in the store with fireAt pushed to the next cron instant
-    // (attempts cleared).
+    // RECURRING claim = ADVANCE IN PLACE: the entry STAYS in the store with fireAt pushed to the next cron instant.
     const next = nextRun(w.cron, w.tz, now);
-    if (next) all[idx] = { ...w, fireAt: next.toISOString(), attempts: undefined };
+    if (next) all[idx] = { ...w, fireAt: next.toISOString() };
     else all.splice(idx, 1); // the cron has no next instant — this is its final occurrence
     save(stateRoot, all);
     return { ...w }; // THIS occurrence (original fireAt); the store already holds the next
@@ -180,12 +174,9 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
 }
 
 /**
- * Re-schedule a ONE-SHOT wake whose fire failed TRANSIENTLY (its session was busy — a channel is mid-turn on it),
- * deferred to `fireAt`.
+ * Put back a ONE-SHOT wake-up its session refused for now (the process or the session's queue was full), to fire at
+ * `fireAt`. It was taken out of the store to fire, so it does not count against the session's cap again.
  */
-export function deferWakeup(stateRoot: string, w: Wakeup, fireAt: Date): boolean {
-  const attempts = (w.attempts ?? 0) + 1;
-  if (attempts > MAX_WAKE_ATTEMPTS) return false;
-  save(stateRoot, [...load(stateRoot), { ...w, fireAt: fireAt.toISOString(), attempts }]);
-  return true;
+export function requeueWakeup(stateRoot: string, w: Wakeup, fireAt: Date): void {
+  save(stateRoot, [...load(stateRoot), { ...w, fireAt: fireAt.toISOString() }]);
 }

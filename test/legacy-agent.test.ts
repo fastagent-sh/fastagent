@@ -5,14 +5,7 @@ import type { HarnessPort } from "../src/harness-port.ts";
 import { dispatchStop } from "../src/channels/kit/stop-command.ts";
 import { branchPoint, forkThread } from "../src/channels/kit/thread-fork.ts";
 import { log } from "../src/log.ts";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import * as Effect from "effect/Effect";
-import { legacyAgent, scheduleCaller } from "../src/legacy-agent.ts";
-import { fireScheduleOnce } from "../src/schedule/scheduler.ts";
-import { MIN_WAKE_MS, addWakeup } from "../src/schedule/wakeups.ts";
-import { startSchedules } from "../src/service.ts";
+import { legacyAgent } from "../src/legacy-agent.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, type Entry, failure, LIMITS } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
@@ -91,7 +84,11 @@ describe("legacyAgent", () => {
 describe("legacyAgent and the session's listeners", () => {
   it("each turn releases its listener, whether its run ended, it was refused, or its caller stopped at the end", async () => {
     const store = new FakeStore();
-    const port = loopPort(fakeLoopHarness(store));
+    // No queue: a message for a running session is refused.
+    const port = loopPort(fakeLoopHarness(store), {
+      queuedPerSession: 0,
+      inFlightPerProcess: LIMITS.inFlightPerProcess,
+    });
     let listening = 0;
     const counted: HarnessPort = {
       ...port,
@@ -109,10 +106,10 @@ describe("legacyAgent and the session's listeners", () => {
     for (let i = 0; i < 5; i++) await drain(legacy.invoke({ session: "s" }, { text: `turn ${i}` }));
     expect(listening).toBe(0);
 
-    // Refused: the session is running, and a schedule does not queue.
+    // Refused: the session is running, and there is no room to queue.
     const running = v1.invoke({ sessionId: "busy", prompt: { text: "hold" } })[Symbol.asyncIterator]();
     await running.next();
-    expect(await drain(scheduleCaller(v1, "schedule").invoke({ session: "busy" }, { text: "fire" }))).toMatchObject([
+    expect(await drain(legacy.invoke({ session: "busy" }, { text: "fire" }))).toMatchObject([
       { type: "failed", code: SESSION_BUSY_CODE },
     ]);
     store.release();
@@ -125,51 +122,6 @@ describe("legacyAgent and the session's listeners", () => {
       if (next.value.type === "completed") break;
     }
     expect(listening).toBe(0);
-  });
-});
-
-describe("scheduleCaller", () => {
-  it("a schedule's occurrence on a busy session is skipped, not queued behind the running run", async () => {
-    const { v1, store } = agentOver();
-    const running = v1.invoke({ sessionId: "schedule:job", prompt: { text: "hold" } })[Symbol.asyncIterator]();
-    await running.next();
-    const schedule = { name: "job", cron: "* * * * *", tz: "UTC", prompt: "go" };
-    const slot = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const stateRoot = await mkdtemp(join(tmpdir(), "fa-schedule-busy-"));
-    const outcome = await Effect.runPromise(
-      fireScheduleOnce({ agent: scheduleCaller(v1, "schedule"), stateRoot, schedule, slot, now: () => slot }),
-    );
-    expect(outcome).toMatchObject({ fired: false, skipped: true });
-    const state = await v1.sessions.get("schedule:job").read({ limit: 0 });
-    expect(state.ok && state.state.queued).toEqual([]);
-    store.release();
-    await running.return?.();
-  });
-});
-
-describe("startSchedules", () => {
-  it("records a wake-up's run as a wake, not as a schedule", async () => {
-    const { v1 } = agentOver();
-    const stateRoot = await mkdtemp(join(tmpdir(), "fa-wake-source-"));
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-wake-agent-"));
-    const added = addWakeup(
-      stateRoot,
-      { session: "chat", prompt: "check back", fireAt: new Date(Date.now() - 1_000) },
-      new Date(Date.now() - 2 * MIN_WAKE_MS),
-    );
-    expect(added.ok).toBe(true);
-    const scheduler = startSchedules(v1, stateRoot, agentDir, { schedules: [], failures: [] });
-    try {
-      const runId = await vi.waitFor(async () => {
-        const page = await v1.sessions.get("chat").read();
-        const started = page.ok ? page.entries.find((e) => e.kind === "run_started") : undefined;
-        if (!started?.runId) throw new Error("the wake-up has not run yet");
-        return started.runId;
-      });
-      expect(await v1.sessions.get("chat").runs.get({ runId })).toMatchObject({ source: { kind: "wake" } });
-    } finally {
-      await scheduler.stop();
-    }
   });
 });
 

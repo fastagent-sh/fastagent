@@ -5,10 +5,8 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   MAX_PENDING_WAKEUPS,
-  MAX_WAKE_ATTEMPTS,
   MIN_WAKE_MS,
   addWakeup,
-  deferWakeup,
   listWakeups,
   removeWakeup,
   takeFirstDueWakeup,
@@ -131,15 +129,6 @@ describe("schedule/wakeups store + guardrails", () => {
     ]);
     expect(listWakeups(r).map((w) => w.id)).toEqual(["ok"]); // malformed one filtered out at the boundary
     vi.restoreAllMocks();
-  });
-
-  it("deferWakeup re-schedules a busy wake, then drops it after the attempt cap", async () => {
-    const r = await root();
-    const w = { id: "w1", session: "s", prompt: "x", fireAt: at(0).toISOString() };
-    expect(deferWakeup(r, w, at(MIN_WAKE_MS))).toBe(true); // attempts 0 → 1, re-added
-    expect(listWakeups(r)[0]).toMatchObject({ id: "w1", attempts: 1 });
-    // at the cap, deferring drops it (returns false, not re-added)
-    expect(deferWakeup(r, { ...w, attempts: MAX_WAKE_ATTEMPTS }, at(MIN_WAKE_MS))).toBe(false);
   });
 });
 

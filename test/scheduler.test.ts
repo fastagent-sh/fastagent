@@ -3,7 +3,8 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Agent, AgentEvent } from "../src/agent.ts";
+import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
+import { type RunScript, failed, refused, scriptedRun } from "./scripted-run.ts";
 import type { Schedule } from "../src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
 import {
@@ -15,19 +16,21 @@ import { scheduleSession } from "../src/schedule/schedule.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
-import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readFires, settleClaim } from "../src/schedule/state.ts";
 
-/** A fake agent that records each invoke's session + text and yields the scripted terminal. */
-function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
+/** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
+function recordingAgent(script: RunScript = {}) {
   const calls: { session: string; text: string }[] = [];
-  const agent: Agent = {
-    async *invoke(scope, prompt) {
-      calls.push({ session: scope.session, text: prompt.text });
-      for (const e of events) yield e;
+  const requests: InvokeRequest[] = [];
+  const agent = {
+    async *invoke(request: InvokeRequest) {
+      calls.push({ session: request.sessionId ?? "", text: request.prompt.text });
+      requests.push(request);
+      yield* scriptedRun(request, script);
     },
   };
-  return { agent, calls };
+  return { agent, calls, requests };
 }
 
 const hourly = (over: Partial<Schedule> = {}): Schedule => ({
@@ -391,10 +394,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     );
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent, calls } = recordingAgent([
-      { type: "text", delta: "your bank balance is 12345" },
-      { type: "completed" },
-    ]);
+    const { agent, calls } = recordingAgent({ text: "your bank balance is 12345" });
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
@@ -403,28 +403,75 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a wake into a BUSY session is deferred (re-scheduled), not lost", async () => {
+  it("a wake-up queues behind whatever runs in its session, keyed by its id and instant, as a wake", async () => {
+    // It used to be refused by a busy session and deferred, up to a retry ceiling. Queued, it runs after the running
+    // run, and its key makes a second fire of the same occurrence the same run.
     const root = await freshRoot();
     addWakeup(
       root,
       { session: "busy", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
       new Date("2026-07-07T10:00:00Z"),
     );
-    // The turn fails retryably (its session is busy — a channel is mid-turn on it).
-    const { agent, calls } = recordingAgent([
-      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
-    ]);
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const [stored] = listWakeups(root);
+    const { agent, requests } = recordingAgent();
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
-    await vi.waitFor(() => expect(calls.length).toBe(1));
-    // NOT dropped: re-scheduled (deferred) with a bumped attempt count — a one-shot wake must not vanish.
-    await vi.waitFor(() => expect(listWakeups(root)).toHaveLength(1));
-    expect(listWakeups(root)[0]).toMatchObject({ session: "busy", attempts: 1 });
-    // Reported as a retry, not a failure: honest — the wake was re-scheduled, not finally lost. A wake-up has no
-    // claim to settle, so this line IS its record.
-    expect(logs.some((l) => /session busy — retrying next poll/.test(l))).toBe(true);
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({
+      sessionId: "busy",
+      whenBusy: "queue",
+      idempotencyKey: `wake:${stored?.id}@2026-07-07T11:00:00.000Z`,
+      source: { kind: "wake" },
+    });
+    expect(listWakeups(root)).toHaveLength(0);
+    s.stop();
+  });
+
+  it("an accepted wake-up is delivered: the next one fires while the first is still running", async () => {
+    const root = await freshRoot();
+    for (const session of ["slow", "fast"]) {
+      addWakeup(
+        root,
+        { session, prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
+        new Date("2026-07-07T10:00:00Z"),
+      );
+    }
+    const finish = Promise.withResolvers<void>();
+    const sessions: string[] = [];
+    const agent = {
+      async *invoke(request: InvokeRequest) {
+        sessions.push(request.sessionId ?? "");
+        const [accepted, ...rest] = scriptedRun(request);
+        yield accepted as InvokeEvent;
+        if (request.sessionId === "slow") await finish.promise;
+        yield* rest;
+      },
+    };
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(sessions).toEqual(["slow", "fast"]));
+    finish.resolve();
+    s.stop();
+  });
+
+  it("a one-shot wake-up refused for now (a full process or queue) goes back in the store for the next poll", async () => {
+    // Taken out of the store to fire, so without this it would be gone; `busy` is retryable, and a queued invoke is
+    // refused only while something is full.
+    const root = await freshRoot();
+    addWakeup(
+      root,
+      { session: "full", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    const [stored] = listWakeups(root);
+    const logs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
+    const { agent } = recordingAgent(refused("busy", "this process already has 100 runs in flight"));
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(logs.some((l) => /INFO.*refused for now — retrying next poll/.test(l))).toBe(true));
+    expect(listWakeups(root)).toEqual([{ ...stored, fireAt: "2026-07-07T12:00:30.000Z" }]);
+    expect(logs.join("\n")).not.toMatch(/ERROR/);
     s.stop();
   });
 
@@ -436,7 +483,7 @@ describe("schedule/scheduler: fire algorithm", () => {
       new Date("2026-07-07T10:00:00Z"),
     );
     // Retryable, but a mid-turn transient (a 429), NOT the busy case: the turn started — don't re-run it.
-    const { agent } = recordingAgent([{ type: "failed", retryable: true, details: "provider 429" }]);
+    const { agent } = recordingAgent(failed("provider 429"));
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
       errs.push(String(m));
@@ -454,7 +501,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const root = await freshRoot();
     seedClaim(root, "job", "2026-07-07T08:00:00Z");
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const { agent, calls } = recordingAgent([{ type: "failed", retryable: true, details: "boom" }]);
+    const { agent, calls } = recordingAgent(failed("boom"));
     const s = createScheduler({
       agent,
       stateRoot: root,
@@ -469,7 +516,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a RECURRING wake fires and re-arms at the next cron instant (same id, attempts reset)", async () => {
+  it("a RECURRING wake fires and re-arms at the next cron instant (same id)", async () => {
     const root = await freshRoot();
     mkdirSync(join(root, "schedule"), { recursive: true });
     writeFileSync(
@@ -499,7 +546,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a busy RECURRING occurrence is SKIPPED (reported, never stored) — the recurrence continues untouched", async () => {
+  it("a refused RECURRING occurrence is SKIPPED (reported, never stored) — the recurrence continues untouched", async () => {
     const root = await freshRoot();
     mkdirSync(join(root, "schedule"), { recursive: true });
     writeFileSync(
@@ -511,9 +558,7 @@ describe("schedule/scheduler: fire algorithm", () => {
     const logs: string[] = [];
     // Every level goes through console.error (log.ts); the LEVEL is in the formatted line.
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent, calls } = recordingAgent([
-      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
-    ]);
+    const { agent, calls } = recordingAgent(refused("busy"));
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:00:00Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
@@ -523,29 +568,6 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(listWakeups(root)[0]).toMatchObject({ id: "rec2", fireAt: "2026-07-08T09:00:00.000Z" });
     await vi.waitFor(() => expect(logs.some((l) => /INFO.*occurrence skipped \(session busy\)/.test(l))).toBe(true));
     expect(logs.join("\n")).not.toMatch(/ERROR/); // a busy recurring occurrence is a policy outcome, not a fault
-    s.stop();
-  });
-
-  it("a busy wake dropped at the retry ceiling is reported as an ERROR (a final silent loss), not deferred", async () => {
-    const root = await freshRoot();
-    // Seed the wake already AT the attempt cap — the next busy defer drops it.
-    mkdirSync(join(root, "schedule"), { recursive: true });
-    writeFileSync(
-      join(root, "schedule", "wakeups.json"),
-      JSON.stringify([
-        { id: "w9", session: "s", prompt: "go", fireAt: "2026-07-07T11:00:00Z", attempts: MAX_WAKE_ATTEMPTS },
-      ]),
-    );
-    const logs: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent, calls } = recordingAgent([
-      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
-    ]);
-    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
-    s.start();
-    await vi.waitFor(() => expect(calls.length).toBe(1));
-    await vi.waitFor(() => expect(logs.some((l) => /dropped after too many/.test(l))).toBe(true));
-    expect(listWakeups(root)).toHaveLength(0); // gone — that's exactly why the drop must be reported as an error
     s.stop();
   });
 });
@@ -574,7 +596,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // scheduler names this
     // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
     const root = await freshRoot();
-    const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
+    const { agent } = recordingAgent(refused("busy"));
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
 
     expect(outcome).toMatchObject({ fired: false, skipped: true });
@@ -596,12 +618,30 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // Every level goes through console.error (log.ts); the LEVEL is in the formatted line, which is
     // exactly what this asserts.
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
-    const { agent } = recordingAgent([{ type: "failed", retryable: true, code: "session_busy", details: "busy" }]);
+    const { agent } = recordingAgent(refused("busy"));
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
 
     expect(lines.join("\n")).toMatch(/INFO.*job: occurrence skipped \(session busy\)/);
     expect(lines.join("\n")).not.toMatch(/ERROR/);
     expect(lines.join("\n")).not.toMatch(/failed/);
+  });
+
+  it("a run whose stream ended on a serving error is `failed` with that error, said in the log", async () => {
+    // The storage refused to record the run's end, or a missed event could not be read back: the stream ends on a
+    // `serving_error` instead of `run_ended`, and that message is the only account of why.
+    const root = await freshRoot();
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
+    const agent = {
+      async *invoke(request: InvokeRequest) {
+        yield scriptedRun(request)[0] as InvokeEvent;
+        yield { type: "serving_error", message: "the run's end could not be recorded: ENOSPC" } as InvokeEvent;
+      },
+    };
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    expect(outcome).toMatchObject({ fired: true, failed: "the run's end could not be recorded: ENOSPC" });
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
+    expect(lines.join("\n")).toMatch(/ERROR.*job failed .*ENOSPC/);
   });
 
   it("a turn that really fails is `failed`, and its occurrence is spent either way", async () => {
@@ -610,7 +650,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // a failure before them from one after. The harness's own retry budget is what covers a transient
     // model error; by the time a `failed` event arrives, that budget is spent.
     const root = await freshRoot();
-    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "upstream 500" }]);
+    const { agent } = recordingAgent(failed("upstream 500"));
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
 
     expect(outcome).toMatchObject({ fired: true, failed: "upstream 500" });
@@ -625,7 +665,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const root = await freshRoot();
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent } = recordingAgent([{ type: "text", delta: "the digest, in full" }, { type: "completed" }]);
+    const { agent } = recordingAgent({ text: "the digest, in full" });
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
     expect(logs.some((l) => /job completed \(\d+ms\)$/.test(l))).toBe(true);
     expect(logs.join("\n")).not.toContain("digest");
@@ -641,7 +681,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
     const forged = "boom\n  at somewhere\nERROR [schedule] daily failed (1ms): DISK ON FIRE";
-    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: forged }]);
+    const { agent } = recordingAgent(failed(forged));
     await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
     const line = logs.find((l) => /job failed/.test(l)) ?? "";
     expect(line).not.toContain("\n");
@@ -723,7 +763,7 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     const root = await freshRoot();
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent } = recordingAgent([{ type: "failed", retryable: false, details: "model exploded" }]);
+    const { agent } = recordingAgent(failed("model exploded"));
     const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
     expect(outcome.fired).toBe(true);
     expect(outcome.failed).toBe("model exploded");
