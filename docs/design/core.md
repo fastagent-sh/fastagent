@@ -707,8 +707,10 @@ Every fire is an invoke of the SPEC v1 Agent, with its `source`. A schedule's is
 previous run still going is refused, and settled `skipped`. A wake-up's is
 `{ sessionId: <its session>, whenBusy: "queue", idempotencyKey: "wake:<id>@<fireAt>" }`: it runs after whatever
 runs there, and its `accepted` is its delivery, so the wake loop goes on to the next due wake-up while the run is
-followed to its end apart, for the log line that is a wake-up's whole record. A one-shot wake-up its session refuses
-(a full queue) is gone, and said at ERROR; a recurring one has its next occurrence.
+followed to its end apart, for the log line that is a wake-up's whole record. Queued, a wake-up is refused only while
+the process or its session's queue is full: a one-shot one goes back in the store for the next poll, and a recurring
+one has its next occurrence. A run whose stream ends on a `serving_error` (its end could not be recorded, or missed
+events could not be read back) fails with that error, in the claim's log line and the external fire's reply.
 
 `stop()` interrupts pending waits synchronously without canceling a claimed occurrence: interrupting a read of a
 run's stream only detaches from it (SPEC v1 §3.1), so the run goes on to its end and stays in its session. A

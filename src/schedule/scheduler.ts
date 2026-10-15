@@ -15,7 +15,7 @@ import { basename } from "node:path";
 import type { ModuleLoadFailure } from "../loader.ts";
 import { type Schedule, scheduleSession } from "./schedule.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
-import { takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
+import { requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 /**
  * Account for a claim whose turn never reported. The slot is claimed BEFORE the turn runs and shutdown does not wait
@@ -131,8 +131,11 @@ function oneLine(text: string): string {
   return folded === "" ? "" : `: ${folded}`;
 }
 
-/** How one invoke went: refused before it ran, or the run's outcome; `undefined` when the stream stopped first. */
-type InvokeEnd = { refused: string; busy: boolean } | { outcome: RunOutcome } | undefined;
+/**
+ * How one invoke went: refused before it ran, the run's outcome, or a stream that stopped before its run ended, with
+ * the serving error that said why when there was one.
+ */
+type InvokeEnd = { refused: string; busy: boolean } | { outcome: RunOutcome } | { unfinished: string };
 
 /**
  * Read an invoke's stream to its run's end, and close it; `onAccepted` hears the receipt. Interrupted, it closes the
@@ -149,9 +152,11 @@ async function readInvoke(
   signal.addEventListener("abort", close, { once: true });
   try {
     let runId: string | undefined;
+    let servingError: string | undefined;
     for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
       const event: InvokeEvent = next.value;
       if (event.type === "rejected") return { refused: event.error.message, busy: event.error.code === "busy" };
+      if (event.type === "serving_error") servingError = event.message;
       if (event.type === "accepted") {
         runId = event.run.runId;
         onAccepted();
@@ -160,7 +165,7 @@ async function readInvoke(
         return { outcome: (event.entry.data as { outcome: RunOutcome }).outcome };
       }
     }
-    return undefined;
+    return { unfinished: servingError ?? "the stream ended before the run did" };
   } finally {
     signal.removeEventListener("abort", close);
     await iterator.return?.();
@@ -209,9 +214,9 @@ function runTurn(agent: ScheduledAgent, label: string, request: InvokeRequest, o
       return { fire: "failed" as const, busy: false, failed, ms };
     }
     const end = read.success;
-    if (end === undefined) {
-      log.error(`[schedule] ${label} failed (${ms}ms): the stream ended before the run did`);
-      return { fire: "failed" as const, busy: false, failed: "the stream ended before the run did", ms };
+    if ("unfinished" in end) {
+      log.error(`[schedule] ${label} failed (${ms}ms)${oneLine(end.unfinished)}`);
+      return { fire: "failed" as const, busy: false, failed: end.unfinished, ms };
     }
     if ("refused" in end) {
       // BUSY IS NOT A FAILURE: "the previous run is still going" and "the model call died" need different reactions.
@@ -405,12 +410,25 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
             const delivered = () => void Deferred.doneUnsafe(accepted, Effect.void);
             const followed = runTurn(agent, label, request, delivered).pipe(
               Effect.tap((r) =>
-                Effect.sync(() => {
-                  // A recurring wake-up has its next occurrence; a one-shot one refused now is gone.
-                  if (r.busy && w.cron === undefined) {
-                    log.error(`[schedule] ${label}: dropped — its session refused it (${r.failed})`);
-                  }
-                }),
+                // Queued, it is refused only while the process or its session's queue is full: for now. A recurring
+                // wake-up has its next occurrence; a one-shot one goes back in the store, for the next poll.
+                r.busy && w.cron === undefined
+                  ? Effect.try({
+                      try: () => {
+                        requeueWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
+                        log.info(`[schedule] ${label}: refused for now — retrying next poll (${r.failed})`);
+                      },
+                      catch: (cause) => new PortFailure(cause),
+                    }).pipe(
+                      Effect.catchTag("PortFailure", (error) =>
+                        Effect.sync(() =>
+                          log.error(
+                            `[schedule] ${label}: refused, and could not be kept for a retry, so it is gone: ${String(error.cause)}`,
+                          ),
+                        ),
+                      ),
+                    )
+                  : Effect.void,
               ),
               Effect.ensuring(Effect.sync(delivered)),
             );

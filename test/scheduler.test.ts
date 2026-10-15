@@ -454,20 +454,24 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
-  it("a one-shot wake-up its session refuses is dropped, and said at ERROR: nothing will fire it again", async () => {
+  it("a one-shot wake-up refused for now (a full process or queue) goes back in the store for the next poll", async () => {
+    // Taken out of the store to fire, so without this it would be gone; `busy` is retryable, and a queued invoke is
+    // refused only while something is full.
     const root = await freshRoot();
     addWakeup(
       root,
       { session: "full", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
       new Date("2026-07-07T10:00:00Z"),
     );
+    const [stored] = listWakeups(root);
     const logs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void logs.push(a.join(" ")));
-    const { agent } = recordingAgent(refused("busy", "the session's queue is full"));
+    const { agent } = recordingAgent(refused("busy", "this process already has 100 runs in flight"));
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start();
-    await vi.waitFor(() => expect(logs.some((l) => /ERROR.*dropped — its session refused it/.test(l))).toBe(true));
-    expect(listWakeups(root)).toHaveLength(0);
+    await vi.waitFor(() => expect(logs.some((l) => /INFO.*refused for now — retrying next poll/.test(l))).toBe(true));
+    expect(listWakeups(root)).toEqual([{ ...stored, fireAt: "2026-07-07T12:00:30.000Z" }]);
+    expect(logs.join("\n")).not.toMatch(/ERROR/);
     s.stop();
   });
 
@@ -620,6 +624,24 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     expect(lines.join("\n")).toMatch(/INFO.*job: occurrence skipped \(session busy\)/);
     expect(lines.join("\n")).not.toMatch(/ERROR/);
     expect(lines.join("\n")).not.toMatch(/failed/);
+  });
+
+  it("a run whose stream ended on a serving error is `failed` with that error, said in the log", async () => {
+    // The storage refused to record the run's end, or a missed event could not be read back: the stream ends on a
+    // `serving_error` instead of `run_ended`, and that message is the only account of why.
+    const root = await freshRoot();
+    const lines: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void lines.push(a.join(" ")));
+    const agent = {
+      async *invoke(request: InvokeRequest) {
+        yield scriptedRun(request)[0] as InvokeEvent;
+        yield { type: "serving_error", message: "the run's end could not be recorded: ENOSPC" } as InvokeEvent;
+      },
+    };
+    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    expect(outcome).toMatchObject({ fired: true, failed: "the run's end could not be recorded: ENOSPC" });
+    expect(readFires(root, "job")).toMatchObject([{ outcome: "failed" }]);
+    expect(lines.join("\n")).toMatch(/ERROR.*job failed .*ENOSPC/);
   });
 
   it("a turn that really fails is `failed`, and its occurrence is spent either way", async () => {
