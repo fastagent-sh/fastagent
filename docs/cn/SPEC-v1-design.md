@@ -1,12 +1,12 @@
 ---
 title: SPEC v1 设计解读
-description: "从产品设计、开发者与调用方、架构三个角度解读 Agent Handler 协议 v1 草案。"
-status: draft
+description: "从产品设计、开发者与调用方、架构三个角度解读 Agent Handler 协议 v1。"
+status: current
 ---
 
 # SPEC v1 设计解读
 
-规范原文见 [SPEC-v1.md](../SPEC-v1.md)，设计理由见 [agent-service.md](../design/agent-service.md) §7 和 §9。两者与本文不一致时，以 SPEC 为准。
+规范原文见 [SPEC.md](../SPEC.md)，设计理由见 [agent-service.md](../design/agent-service.md) §7 和 §9。两者与本文不一致时，以 SPEC 为准。
 
 ## 一句话概括
 
@@ -306,9 +306,8 @@ ACP v1 表达不了三样东西：调用方自己命名的会话、幂等 key、
 
 ## 六、现状和未决问题
 
-- **现状**：[SPEC-v1.md](../SPEC-v1.md) 是草案，代码仍然实现 [v0.1](../SPEC.md)。step 4 落地后，v1 替换 `docs/SPEC.md` 并锁定。
+- **现状**：v1 已在 step 4 替换 v0.1，成为锁定的 [SPEC.md](../SPEC.md)，代码实现的就是它。
 - **待设计**：
-  - harness port 的具体接口；
   - pi-durable 的几个缺口：失败后队列不会自动继续、没有 rewind 和 delete；
   - 跨进程租约和 AgentCore 横向扩展（step 6）；
   - 身份和权限（principal）；

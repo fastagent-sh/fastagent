@@ -39,11 +39,11 @@ machine has is bound in `context.local.json` alone: it stays here, and a deploym
 ## What FastAgent provides
 
 1. **The agent is a directory** — it holds its prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`), `skills/`, `tools/`, `channels/`, `schedules/` and reference material as files you can inspect, edit, and commit, in a repository of its own. What it works on and knows is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **A contract** — [Agent Handler SPEC v1](SPEC-v1.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose runs outlive their callers.
+2. **A contract** — [Agent Handler SPEC v1](SPEC.md): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions whose runs outlive their callers.
 3. **A reference implementation** — pi-based assembly for `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `content`, `dev`, `chat`, `tool`, `invoke`, `schedules`, `start`, `login`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`.
 5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
-6. **Clients** — the agent's HTTP API on every serve ([SPEC v1](SPEC-v1.md): runs, session history, live events, abort; [`http.api`](configuration.md#config-file)), plus an opt-in control plane (`/control/*`: rename, reconfigure, delete; `http.control`). Both are unauthenticated, so bind loopback or put a gateway in front, and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
+6. **Clients** — the agent's HTTP API on every serve ([SPEC v1](SPEC.md): runs, session history, live events, abort; [`http.api`](configuration.md#config-file)), plus an opt-in control plane (`/control/*`: rename, reconfigure, delete; `http.control`). Both are unauthenticated, so bind loopback or put a gateway in front, and an [authoring API](api-reference.md#content) (`createAgent`, `addContent`, `removeContent`) for clients such as a desktop app, to create agents and edit their content under the same rules as the CLI.
 7. **Time triggers** — schedules (`schedules/<name>.md`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
 
 ## Design choices
@@ -130,10 +130,10 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 
 Implemented today:
 
-- Agent Handler v0.1 reference implementation over pi.
+- Agent Handler v1 reference implementation over pi.
 - Directory assembly from `SYSTEM.md` / `APPEND_SYSTEM.md` / `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.ts`.
 - Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
-- Session control (`/control/*`) and the authoring API for clients.
+- The agent's HTTP API (the user plane, and the opt-in `/control` plane) and the authoring API for clients.
 - HTTP/SSE invoke channel.
 - Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Schedules (`schedules/` files) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.

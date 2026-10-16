@@ -38,7 +38,7 @@ A feature is not real product surface until users can name it and reason about i
 | Concept | Meaning |
 |---|---|
 | **Agent Definition** | The directory that describes the agent: optional `SYSTEM.md` / `APPEND_SYSTEM.md`, `skills/`, `prompts/`, authored context, tools/channels, and config, including the content it declares; nothing a content entry holds is part of it. |
-| **Agent Handler** | The callable contract ([SPEC v1](SPEC-v1.md)): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions. |
+| **Agent Handler** | The callable contract ([SPEC v1](SPEC.md)): `invoke(request) => AsyncIterable<InvokeEvent>`, and sessions. |
 | **Event** | What a run reports: live text and tool activity, and durable entries ending in the run's outcome. |
 | **Tool** | A typed action the model can call, validated before execution. |
 | **Skill** | Reusable markdown expertise loaded from the definition, not from global machine state. |

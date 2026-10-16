@@ -184,8 +184,8 @@ The unit of concurrency is the session, and the session is the place:
 - one conversation is sequential: people take turns, and an answer may depend on the previous one;
 - separate conversations are parallel: threads proceed independently.
 
-Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and the harness's single-writer
-lease in `harnesses/pi/turn-kit.ts`). Two turns in different places run concurrently.
+Two turns in one place serialize (`channels/kit/turn-queue.ts` FIFO, and a session runs one run at a time, SPEC
+§3.2). Two turns in different places run concurrently.
 
 Finer-grained concurrency (parallel turns *inside* one session) is rejected: a conversation needs
 convergence, and a tree only provides divergence. Concatenating two independently computed turns
@@ -283,9 +283,8 @@ CURRENT chatter to a thread that branched long before. Repetition degrades an an
 label misstates the past.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
-at ingress. It would delete rung 3 entirely, and it fails on three measured counts: durable session
-writes take the run lease ([session-control.md](session-control.md) §9), so ingress would block behind
-a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
+at ingress. It would delete rung 3 entirely, and it fails on three measured counts: a session takes one
+run at a time (SPEC §3.2), so a write at ingress would wait behind a multi-minute turn; that blocking sits on the PRE-ACK path, where the webhook must answer before the
 platform re-pushes; and consecutive ambient user entries reach the provider unmerged — Bedrock rejects
 them (`roles must alternate`), and `deploy agentcore` is a shipped host.
 

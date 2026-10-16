@@ -19,7 +19,7 @@ FastAgent is pre-1.0. The Agent Handler contract is the stable design center; im
 
 ## Contract
 
-The Agent is the [Agent Handler protocol v1](SPEC-v1.md), which is normative; this is its shape.
+The Agent is the [Agent Handler protocol v1](SPEC.md), which is normative; this is its shape.
 
 ```ts
 interface Agent {
@@ -77,7 +77,7 @@ function createAgentHandler(
 function connectAgent(options: { url: string; fetchFn?: typeof fetch }): Promise<Agent>;
 ```
 
-`createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §9](SPEC-v1.md#9-http-binding)): the
+`createAgentHandler` serves the agent's API as one Fetch handler ([SPEC v1 §9](SPEC.md#9-http-binding)): the
 user plane always, the control plane (`PATCH`/`DELETE /control/sessions/{s}`) only with `control: true`. Request
 bodies are JSON (`content-type: application/json`), decoded strictly: an unknown field is a 400. It sends no CORS
 headers and answers no preflight unless `corsOrigins` names the origins (exact, or `["*"]`) a page may call it from;
@@ -782,7 +782,7 @@ supported.
 
 ## Working with sessions
 
-Every session operation is on the `Agent` ([SPEC v1 §5](SPEC-v1.md)), in process or over `connectAgent`:
+Every session operation is on the `Agent` ([SPEC v1 §5](SPEC.md)), in process or over `connectAgent`:
 
 ```ts
 const s1 = agent.sessions.get("s1");

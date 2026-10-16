@@ -156,7 +156,7 @@ const agent = createPiAgent({
 | [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
-| [Agent Handler SPEC](https://fastagent.sh/docs/spec/) | Agent Handler protocol v0.1 |
+| [Agent Handler SPEC](https://fastagent.sh/docs/spec/) | Agent Handler protocol v1 |
 | [Core design](https://fastagent.sh/docs/design/core/) | Maintainer architecture notes |
 
 ## Public API surface & stability
@@ -178,7 +178,7 @@ you register a custom provider.
 
 | Area | Examples | Stability |
 |---|---|---|
-| Contract | `Agent`, `InvokeEvent`, `collect` ([SPEC v1](docs/SPEC-v1.md)) | Stable within SPEC v1 |
+| Contract | `Agent`, `InvokeEvent`, `collect` ([SPEC v1](docs/SPEC.md)) | Stable within SPEC v1 |
 | Directory → service | `createAgentService` (pi opener), `mountAgentService` + `MountableAgent` (neutral assembly), `AgentService` | The supported way to mount an agent directory in an app |
 | Serving and calling | `createAgentHandler`, `connectAgent`, `Routes`, `ChannelHandler` | Reference implementation, pre-1.0 |
 | Node binding | `nodeListener`, `serveNode` (from `/node`) | The one runtime-specific piece; see below |

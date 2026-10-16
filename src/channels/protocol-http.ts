@@ -1,5 +1,5 @@
 /**
- * SPEC v1 over HTTP (docs/SPEC-v1.md §9): the user plane (`POST /invoke`, `/sessions`, `/agent`) and the control plane
+ * SPEC v1 over HTTP (docs/SPEC.md §9): the user plane (`POST /invoke`, `/sessions`, `/agent`) and the control plane
  * (`/control`), each a mount a gateway can treat apart. A failed result is answered with its code's status and
  * `{ "error": AgentError }`; a request is decoded here, the one place untyped input becomes a typed one.
  *

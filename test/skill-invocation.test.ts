@@ -1,5 +1,5 @@
 /**
- * RUNNING a listed command, over the data plane (docs/design/session-control.md §5.1.1).
+ * RUNNING a listed command, through `invoke` (docs/design/agent-service.md §7.4, `commands`).
  *
  * `commands()` publishes names; this is what sending one back means. The whole reason it is the HARNESS's job and
  * not a client's: the expansion reads the definition's own files, so it works the same for an in-process caller

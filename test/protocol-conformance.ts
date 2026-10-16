@@ -1,5 +1,5 @@
 /**
- * SPEC v1 conformance (docs/SPEC-v1.md §8), runnable against any `Agent`. Everything harness-specific comes from the
+ * SPEC v1 conformance (docs/SPEC.md §8), runnable against any `Agent`. Everything harness-specific comes from the
  * subject; what a run does is chosen by its message (`hold`, `fail`, `effect`, or any other text, answered
  * `answer: <text>`), which a subject maps onto its harness.
  */

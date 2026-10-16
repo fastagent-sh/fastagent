@@ -53,7 +53,7 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 ## Core concepts
 
 - **The agent is a directory of its own.** Runtime behavior comes from the agent directory: optional `SYSTEM.md` / `APPEND_SYSTEM.md` (the prompt), `skills/`, `prompts/`, `tools/`, `channels/`, `schedules/`, and markdown context. What it works on is declared as its content, whose files, `AGENTS.md` included, the agent reads there and never takes into its prompt.
-- **The Agent is the contract.** Every channel or host drives an `Agent` ([SPEC v1](SPEC-v1.md)) through `invoke(request) => AsyncIterable<InvokeEvent>` and its sessions.
+- **The Agent is the contract.** Every channel or host drives an `Agent` ([SPEC v1](SPEC.md)) through `invoke(request) => AsyncIterable<InvokeEvent>` and its sessions.
 - **Channels are adapters.** A channel receives external events (HTTP, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.
 - **Small core, typed edges.** FastAgent uses a small callable contract, app-level composition, and validation at the boundaries.
@@ -71,6 +71,6 @@ These are not required to use FastAgent, but they explain public architecture de
 | [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
 | [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
 | [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`FEISHU_INGRESS`); one app serves one environment at a time until per-environment apps (#749) |
-| [Session control plane](design/session-control.md) | Serving extension beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions |
+| [Security boundary](design/security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, and a multi-tenant facade in front of one deployment |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

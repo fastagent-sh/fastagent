@@ -9,7 +9,7 @@ updated: 2026-07-19
 # Core design
 
 Architecture of FastAgent's pi reference implementation. The normative protocol is
-[Agent Handler SPEC v0.1](../SPEC.md); code in `src/` is the implementation source of truth. User
+[Agent Handler SPEC v1](../SPEC.md); code in `src/` is the implementation source of truth. User
 behavior belongs in the other `docs/` guides.
 
 ## 1. Product boundary
@@ -17,7 +17,7 @@ behavior belongs in the other `docs/` guides.
 FastAgent serves file-defined agents. Its stable center is the harness-neutral Agent Handler:
 
 ```ts
-agent.invoke(scope, prompt) => AsyncIterable<AgentEvent>
+agent.invoke(request) => AsyncIterable<InvokeEvent>   // and agent.sessions, whose runs outlive their callers
 ```
 
 The contract separates three things that otherwise form an integration matrix:
@@ -191,7 +191,7 @@ deleted when its stages landed:
 ### Promise ports
 
 Every contract at the edge of this codebase is Promise-shaped and none of them are ours to change: the
-SPEC fixes `Agent.invoke` as an AsyncIterable and `SessionControl` as Promises, pi's SDK is
+SPEC fixes `Agent.invoke` as an AsyncIterable and its other operations as Promises, pi's SDK is
 Promise-based, every platform client is `fetch`, and so is the filesystem. `src/effect-port.ts` is the
 single crossing into Effect execution, and it holds exactly two opinions.
 
@@ -208,26 +208,24 @@ classification, the channels' platform error types and every operator-facing mes
 
 One module, because each layer re-derived both during the Effect migration: the channel kit, the pi
 harness, the AgentCore runtime and the scheduler each grew a tagged error, a squash-unwrapper and a
-join-on-interrupt combinator that differed only in the word before `Failure`. `SessionBusy` stays a
-separate tag in `harnesses/pi/session-effects.ts` because it is control flow, not a port failure.
+join-on-interrupt combinator that differed only in the word before `Failure`.
 
 ## 3. Assembly ladder
 
 | Rung | Function | Responsibility |
 |---|---|---|
-| L0 | `createPiAgentFromSession` | Adapt a pi `AgentSession` factory to the Agent Handler stream |
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
 `createPiAgentFromDir` sits above L2 and resolves the agent directory, config, content, model, auth, tools,
 sessions, and machinery paths. `dev`, `start` and `invoke` share it rather than carrying parallel
-implementations.
+implementations. Every rung's assembly runs as `agentOf`: `piLoopHarness` behind `loopPort`, behind `servingAgent`
+(§4).
 
-Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn.
-Continuity comes from `PiSessionRecordStore`, not a resident session. That is L0's choice on the axis a
-deployment owns: per-invoke state (SPEC MUST 6, what AgentCore and every scaled channel host require),
-swappable at this rung alone — [conformance-levels.md](conformance-levels.md) states what each posture
-owes.
+Each run binds a fresh `AgentSession` to its record and disposes it when the run settles. Continuity comes from
+`PiSessionRecordStore`, not a resident session: process affinity only while a run is active or queued (SPEC MUST 8,
+what AgentCore and every scaled channel host require). That is the default on an axis a deployment owns;
+[conformance-levels.md](conformance-levels.md) states what each posture owes.
 
 Reopening restores Pi's tool declarations from the active transcript using `getCurrentSystemMessage` and
 `setActiveToolsByName`. The SDK supplies an initial loadout even on resume, bypassing `AgentSession`'s own
@@ -243,51 +241,43 @@ remain selected in `model_change`; assistant entries record the physical model t
 that physical model's limits. Extension factories run for catalog registration too, so work requiring a session
 belongs in lifecycle handlers, not the factory.
 
-This per-invoke assembly is the only data plane. A client needing mid-run control, live observation, or
-reconnectable history uses the optional [session control plane](session-control.md) — never a second
-way to start work, and never resident process state as the source of continuity.
+`invoke` is the only way to start work. Reading, following, stopping and setting a session are the same `Agent`'s
+other operations (SPEC §5), served from the session's log, never from resident process state.
 
-## 4. Event translation and terminal discipline
+## 4. Runs: from pi's events to the session's log
 
 pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
-a value — a turn's outcome is the assistant message the stream ended on, never an index into session
-state (compaction and overflow recovery rewrite that array mid-turn).
-`src/harnesses/pi/invoke-session.ts` combines the two into one async iterable. An Effect scope owns the
-shared lease, session and subscription; an Effect queue carries projected events. `turn-kit.ts` owns
-protocol projection and terminal classification; `session-effects.ts` supplies the scoped lease/session
-acquisition shared with control-plane writes, and the Promise crossing itself is `src/effect-port.ts`
-(see [Promise ports](#promise-ports)):
+a value — a run's outcome is the assistant message the stream ended on, never an index into session
+state (compaction and overflow recovery rewrite that array mid-run). Three layers turn that into the protocol,
+each written once:
 
-1. acquire the per-session lease;
-2. publish `run_started` with the run's controls — before binding, so a dispatch that races the build
-   queues on it rather than finding no run;
-3. open/create the record and bind a session to it;
-4. subscribe, translating pi events once into the rich `SessionEvent` vocabulary (the SPEC stream is
-   its projection), then wake waiting controls so their synchronous queue events are observed;
-5. run the prompt;
-6. queue exactly one `completed` or `failed` terminal and wait for consumer settlement;
-7. unsubscribe, dispose, publish exactly one `run_settled`, and release the lease.
+| Layer | Owns |
+|---|---|
+| `serving-layer.ts` (`servingAgent`) | Session ids, the request rules a type cannot carry, the invoke stream (a receipt, then the run replayed from its first entry), `follow`, and pages of `read`. The same for every harness |
+| `loop-port.ts` (`loopPort`) | What a harness that is only a loop lacks: admission and the queue, idempotency keys, steering, run records (`run_accepted`, `run_started`, `run_ended`) written into the session's own log through its one writer, and closing the runs a previous process left open |
+| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per run, and what became of each message it was handed (taken as a user message, consumed by an extension, or never run) |
 
-The scope stays alive while output is buffered or the consumer is paused at its terminal. Consumer
-cancellation interrupts the execution fiber, aborts and joins actual SDK work, and silences pending
-reads. Acquisition stays uninterruptible so a late-created session cannot publish durable state after
-its lease is released.
+pi's vocabulary is read in three modules: `live-events.ts` turns its events into a run's live events (deltas, a tool
+call's status line, retries), `log-records.ts` its journal entries into the log's records and how full the context
+is, and `messages.ts` an answer into its outcome and a thrown error into a failure, `retryable` read from the
+provider's status or network code before its prose. The Promise crossings are `src/effect-port.ts`
+([Promise ports](#promise-ports)); a fault the port reports is the serving layer's `internal` failure, logged.
 
-`SessionBusy` and `PortFailure` are typed failures inside execution. Protocol boundaries
-translate failures and defects into `failed` events or existing `SessionResult` codes. Cleanup faults
-are logged independently, continue remaining finalizers, and cannot overwrite a published outcome.
+A run settles on one outcome, decided in order: a thrown error, a fault while observing the run, a failure an
+extension reported for work the run owes (a command, or a message it sent), a retry pi started after answer text was
+streamed, the last answer, and, when an extension took the message and no model ran, `intercepted`. A stop that
+arrives before pi starts its agent run (or the automatic compaction `prompt()` runs first) is applied when it does
+(#691).
 
-Control mutations take the same fail-fast lease. Manual compaction owns its own scope: admission
-returns before model work finishes, and `compaction_finished` is published after cleanup and lease
-release. Admission is pi's own: an internal extension observes `session_before_compact`, which pi
-emits once `prepareCompaction` found work and before the model call. It is the event's first
-listener, so a definition's own handler (a custom summarizer, a cancel) runs after admission.
-fastagent does not predict pi's private cut-point rules. Assembly services are explicitly injected and shared; sessions and subscriptions stay
-per-operation. These scopes do not own channel turns, durable replay policy, or service shutdown.
+Manual compaction binds its own session and answers when the compaction is done. Admission is pi's own: an internal
+extension observes `session_before_compact`, which pi emits once `prepareCompaction` found work and before the model
+call. It is the event's first listener, so a definition's own handler (a custom summarizer, a cancel) runs after
+admission. fastagent does not predict pi's private cut-point rules. An `abort` reaches the compaction; one that came
+before admission reached pi's previous abort controller, so it is sent again once pi admits the compaction.
 
-pi retries a failed assistant request itself. That is free resilience while the turn is silent and
-corruption once it is not — SPEC deltas are append-only, so a second attempt would concatenate its
-answer onto the first one's half-sentence. L0 refuses the retry exactly there: once answer text has
+pi retries a failed assistant request itself. That is free resilience while the run is silent and
+corruption once it is not — deltas are append-only, so a second attempt would concatenate its
+answer onto the first one's half-sentence. The harness refuses the retry exactly there: once answer text has
 been streamed, never on tool events (refusing on those would push the retry out to the caller, who can
 only re-run the whole prompt and execute the tool a second time).
 
@@ -374,7 +364,7 @@ The reference stores are `piInMemorySessionRecordStore()` for embedding/tests an
 `piSessionRecordStore({ dir })` for restart-surviving local continuity.
 
 A tool call left without a result (an interrupted process, a move onto an assistant whose result
-is off-path, an inherited mid-turn room) is not repaired in the record. pi-ai pairs it at request
+is off-path, a fork taken mid-run) is not repaired in the record. pi-ai pairs it at request
 time with a synthetic error result (`transformMessages`), after dropping `error`/`aborted`
 assistants, so the provider always receives a valid transcript. A durable repair written here
 would duplicate that rule and drift from it: a result for a call pi-ai later drops reaches the
@@ -411,11 +401,11 @@ Enabled agent channels are files ending in `.ts`, `.js`, or `.mjs` under `channe
 The loader collects all per-file diagnostics, but `dev`/`start` treats any broken enabled channel or
 route collision as fatal: a declared inbound endpoint must not silently disappear.
 
-`mountAgentService` adds `POST /invoke` and `GET /health`, starts long connections and schedules, and
-owns their shutdown. `/invoke` is the framework's data plane, so it is served whatever else is
-declared, and a channel claiming that path is refused; `/health` stays overridable, because a probe is
-the deployment's to shape. AgentCore is the one posture that opts out of `/invoke`: it serves the
-Runtime's own `/invocations` contract instead. Health returns
+`mountAgentService` adds the agent's API and `GET /health`, starts long connections and schedules, and owns their
+shutdown. The API is the user plane (`POST /invoke`, `/sessions`, `/agent`; `http.api`, on by default) and the control
+plane (`/control`; `http.control`, off by default). The protocol's paths are reserved, so a channel claiming one is
+refused; `/health` stays overridable, because a probe is the deployment's to shape. AgentCore serves the Runtime's own
+`/invocations` contract instead, and carries both planes as IAM-gated `api` envelopes. Health returns
 503 until every long connection is ready, and again if one closes unexpectedly. The CLI binds the
 service's handler through `channels/serve.ts` and exits on unexpected channel closure; its
 SIGINT/SIGTERM handler closes the service and listener, force-closes active HTTP streams, and bounds
@@ -426,13 +416,14 @@ closure observers, and the caller's abort listener. Shutdown broadcasts the tran
 closing the scope, then waits for all connections under one deadline; its result is cached so
 concurrent and repeated `close()` calls wait for the same completion or failure. Startup rollback uses
 that same shutdown. Effect stays internal to `/node` service assembly, `/pi` execution/control, and the
-stateful chat channels; `/core` and `/session` remain dependency-free and expose no Effect types.
+stateful chat channels; `/core` stays free of Node and of every package but Effect, and exposes no Effect types.
 
-`channels/sse.ts` owns the Fetch-only response lifecycle shared by HTTP invoke and session observation:
+`channels/sse.ts` owns the Fetch-only response lifecycle shared by the invoke and follow streams:
 eager subscription, heartbeat, serialization and iterator cleanup; callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
 during body streaming close the source and heartbeat and propagate through the response body. The
-remote invoke client stops at the first terminal event; malformed control envelopes fail visibly.
+remote client (`protocol-remote.ts`) ends an invoke stream at its run's `run_ended`; a stream cut off before then ends
+with `serving_error`, so a caller never reads a cut run as an ended one.
 
 ### Shared chat execution
 
@@ -447,8 +438,8 @@ happening (see [Promise ports](#promise-ports)). Side-task drains observe only t
 called.
 
 `invoke-turn-kit.ts` owns the turn itself: resolve the platform inputs, then ask the agent. A failed
-resolution becomes a `failed` EVENT (SPEC MUST 2) whose only per-channel part is whether it is worth a
-redelivery — Slack reads its API error's status, the other two say yes.
+resolution becomes the invoke's `rejected` event, never a thrown iteration; its only per-channel part is whether it is
+worth a redelivery — Slack reads its API error's status, the other two say yes.
 
 A write's rate-limit budget is the caller's to set, through `kit/transport.ts`. A live-preview frame
 passes `DROPPABLE_FRAME`: the next frame carries the same snapshot and the terminal write supersedes
@@ -791,7 +782,8 @@ rather than general — measured, not assumed:
   already-stated at-least-once floor (a duplicate over a loss); claiming each turn on disk would make
   a killed process block its own replay, which is worse than the duplicate.
 
-Multiple instances still require shared session, lease, credential, and channel-state backends. What
+Multiple instances still require shared session, credential, and channel-state backends, and a router that sends a
+session's calls to the process running it (SPEC MUST 8). What
 is deliberately absent is a directory-level writer lock: it would forbid harmless topologies (two
 channels in two processes, a one-shot `invoke` beside a serving `dev`, an embedder mounting twice)
 without preventing the dangerous one above.
@@ -859,8 +851,8 @@ unwraps the envelope — a webhook is reconstructed verbatim and dispatched to t
 (signature verification unchanged; the channel's real HTTP response rides back inside a transport-200
 reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with
 the slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as
-SSE. `GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every leased session, a turn,
-compaction or control write however it started, and channel work not yet at one) so an idle reclaim cannot kill a
+SSE. `GET /ping` reports `HealthyBusy` while any work runs (`channels/busy.ts`: every queued or running run and
+compaction however it started, and channel work not yet at one) so an idle reclaim cannot kill a
 post-ACK turn, and always carries `time_of_last_update`: the field is documented
 as optional, but measured platform behavior reads only it — without it the idle timer counts from the
 last `InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy`. All ingress traffic shares

@@ -17,7 +17,7 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 
 ## The one mental model
 
-An agent is a thing with `invoke` and sessions ([SPEC v1](SPEC-v1.md)). Everything else is "how you get it" and "how
+An agent is a thing with `invoke` and sessions ([SPEC v1](SPEC.md)). Everything else is "how you get it" and "how
 you consume it".
 
 ```ts
