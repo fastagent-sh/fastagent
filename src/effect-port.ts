@@ -2,7 +2,7 @@
  * The ONE crossing between this codebase's Promise-shaped ports and Effect execution.
  *
  * The ports are everywhere and none of them are ours to change: the SPEC fixes `Agent.invoke` as an
- * AsyncIterable and `SessionControl` as Promises, pi's SDK is Promise-based, every platform client
+ * AsyncIterable and its other operations as Promises, pi's SDK is Promise-based, every platform client
  * is `fetch`, and so is the filesystem. Two properties have to hold at each crossing:
  *
  *  1. INTERRUPTION MUST JOIN. A Promise exposes no abort hook, so cancelling the fiber that awaits

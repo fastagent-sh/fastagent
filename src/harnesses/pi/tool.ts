@@ -41,8 +41,8 @@ export interface ToolContext {
   executeTool?: ExtensionToolContext["executeTool"];
   /**
    * Report progress while this call runs: a snapshot of everything so far (each call replaces the last), wrapped the
-   * way a return value is. Its last line is the call's status (`tool_progress` on the invoke stream); session-control
-   * observers receive the whole snapshot. Undefined when the caller takes no progress (`fastagent tool`).
+   * way a return value is. Its last line is the call's status (`tool_progress` on the invoke stream); nothing else of
+   * it reaches a client. Undefined when the caller takes no progress (`fastagent tool`).
    */
   onUpdate?: (partial: unknown) => void;
   /** THE values of {@link DefineToolOptions.secrets}, keyed by the names this tool declared — read

@@ -13,7 +13,7 @@ const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
 /**
  * Every request carries a TIMEOUT: a client's reliability model counts failed rounds against a budget ("unreachable
  * for ~Ns"), which a black-hole endpoint (firewall drop, half-dead tunnel) would silently defeat — a hung
- * state()/entries(), or a stream that never finishes connecting, ticks nothing.
+ * `read()`, or a stream that never finishes connecting, ticks nothing.
  */
 export const REQUEST_TIMEOUT_MS = 10_000;
 /** The PAYLOAD-bearing calls get a longer budget than the black-hole detector's 10s. */

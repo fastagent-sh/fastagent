@@ -380,10 +380,10 @@ function definitionResourceLoaderOptions(source: {
 }
 
 /**
- * Records on a tool result that it asked to end its run ({@link asksToEndRun}), so `entries()` can tell a run that
- * ended on its tool batch from one cut after its tools. Through pi's `message_end` replacement, which runs before pi
- * appends the message to the record. LAST among the extensions (pi appends inline factories after path ones), so a
- * definition's own `message_end` replacement cannot drop the flag. One instance per loader, so per session.
+ * Records on a tool result that it asked to end its run ({@link asksToEndRun}), so the `tool_result` record can tell
+ * a run that ended on its tool batch from one cut after its tools. Through pi's `message_end` replacement, which runs
+ * before pi appends the message to the record. LAST among the extensions (pi appends inline factories after path
+ * ones), so a definition's own `message_end` replacement cannot drop the flag. One instance per loader, so per session.
  */
 const recordEndsRun: InlineExtension = {
   name: "fastagent-record-ends-run",

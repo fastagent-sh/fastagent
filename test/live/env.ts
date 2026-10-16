@@ -207,9 +207,8 @@ export const awsAsRunner: CliRunner = async (args, opts) => {
 };
 
 /** POST one turn to a deployed agent and return its SSE events (the built-in `/invoke`, mounted
- *  because no channel is declared). Same reduction test/http.test.ts uses; `JSON.parse` is
- *  deliberately unguarded, since a payload that is not an event is a broken wire format, not a case to
- *  absorb. */
+ *  because no channel is declared). `JSON.parse` is deliberately unguarded, since a payload that is not
+ *  an event is a broken wire format, not a case to absorb. */
 export async function invoke(baseUrl: string, session: string, text: string): Promise<InvokeEvent[]> {
   const response = await fetch(`${baseUrl}/invoke`, {
     method: "POST",

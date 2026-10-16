@@ -278,7 +278,7 @@ export function applyProperties(record: SessionManager, writes: PropertyWrites):
   // change under a moved leaf.
   const name = record.getSessionName();
   // The PUBLISHED head, not pi's: the anchor above is ours, and a client must be told the position it asked for — the
-  // one it can find in `entries()`.
+  // one it can find among the log's records (`read()`).
   const leafEntryId = publishedLeaf(record);
   let path: OverrideEntryLike[] | undefined;
   try {
