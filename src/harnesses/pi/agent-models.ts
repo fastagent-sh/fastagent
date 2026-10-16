@@ -9,7 +9,7 @@ import { stat } from "node:fs/promises";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
 import { liveExtensions } from "./live-extensions.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { definitionServices } from "./agent-session-factory.ts";
+import { definitionServices } from "./session-binding.ts";
 import { loadExtensionPaths } from "./definition.ts";
 import {
   type AuthLayers,

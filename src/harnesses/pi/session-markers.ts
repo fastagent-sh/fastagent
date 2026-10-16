@@ -56,10 +56,10 @@ export function isConversationMessage(entry: { type?: string; message?: { role?:
 }
 
 /**
- * Every position a client may move the branch head to, and everything `entries()` publishes — ONE predicate, so
- * "anything published is navigable" holds by construction.
+ * Every position a client may move the branch head to, and everything the log publishes: ONE predicate, so "anything
+ * published is navigable" holds by construction.
  */
-export function isNavigable(entry: { type?: string; customType?: string }): boolean {
+function isNavigable(entry: { type?: string; customType?: string }): boolean {
   return entry.type !== "label" && !isPlaneMarker(entry);
 }
 
@@ -76,15 +76,4 @@ export function publishedLeaf(record: SessionManager): string | undefined {
 /** Stamp a fresh fork with where it came from. */
 export function stampProvenance(record: SessionManager, provenance: string): void {
   record.appendCustomEntry(FORK_PROVENANCE, { provenance });
-}
-
-/** What fork this record IS, or undefined for a record that was not forked. */
-export function forkProvenance(record: SessionManager): string | undefined {
-  let found: string | undefined;
-  for (const raw of record.getEntries() as { type?: string; customType?: string; data?: unknown }[]) {
-    if (raw.type !== "custom" || raw.customType !== FORK_PROVENANCE) continue;
-    const value = (raw.data as { provenance?: unknown } | undefined)?.provenance;
-    if (typeof value === "string") found = value;
-  }
-  return found;
 }

@@ -12,7 +12,7 @@ import {
   createAgentSessionRuntime,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { bindPiSession, definitionServices } from "./agent-session-factory.ts";
+import { bindPiSession, definitionServices } from "./session-binding.ts";
 import { missingDefaultModel, resolveModel } from "./config.ts";
 import { canonicalPath } from "./definition.ts";
 import { reportToolCollisions } from "./report.ts";

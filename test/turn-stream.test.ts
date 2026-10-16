@@ -1,8 +1,8 @@
 /** A channel's turn as one invoke: what it asks the agent, and how its stream is owned. */
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import { afterEach, expect, it, vi } from "vitest";
-import { turnStream } from "../src/channels/kit/invoke-turn-kit.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { attachedFilesManifest, turnStream } from "../src/channels/kit/invoke-turn-kit.ts";
 import { PortFailure } from "../src/effect-port.ts";
 import { log } from "../src/log.ts";
 import type { InvokeEvent, InvokeRequest } from "../src/protocol.ts";
@@ -165,4 +165,22 @@ it("diagnoses source cleanup failure when a paused consumer cancels", async () =
   await done;
   expect(source.return).toHaveBeenCalledTimes(1);
   expect(warn.mock.calls.flat().join(" ")).toContain("cancel cleanup broke");
+});
+
+describe("attachedFilesManifest: states, does not instruct", () => {
+  it("gives name, size and path without telling the agent what to do with them", () => {
+    const rendered = attachedFilesManifest([{ name: "spec.pdf", size: 1234, path: "/state/files/spec.pdf" }]);
+    expect(rendered).toContain("spec.pdf");
+    expect(rendered).toContain("1234");
+    expect(rendered).toContain("/state/files/spec.pdf");
+    // The earlier wording was "read them with your tools" — an assumption about the reader. An
+    // assumption has to be verified, which is where a capability flag threaded through eight files
+    // came from. An agent with a file tool decides for itself; one without says it cannot. Neither
+    // needs this line to have guessed first.
+    expect(rendered).not.toMatch(/your tools|read them/i);
+  });
+
+  it("renders nothing for no files", () => {
+    expect(attachedFilesManifest([])).toBe("");
+  });
 });

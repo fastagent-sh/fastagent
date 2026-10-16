@@ -12,7 +12,7 @@
  *     pending promise to settle before releasing, and abort first when the port gives us a door.
  *     {@link port} is the explicit opt-out, for work a caller may walk away from — so a call site
  *     holding a lease, a session or any other resource must not reach for it.
- *  2. THE CAUSE SURVIVES. Retry classification (`turn-kit.classifyRetryable`), the channels'
+ *  2. THE CAUSE SURVIVES. Retry classification (`messages.ts` `thrownFailure`), the channels'
  *     platform error types and every operator-facing message read the ORIGINAL error, so the
  *     wrapper carries it verbatim and {@link portError} is how a caller gets it back.
  *

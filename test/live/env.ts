@@ -15,11 +15,11 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect } from "vitest";
-import type { AgentEvent } from "../../src/agent.ts";
 import { destroyAgentcoreDeployment as destroyDeployment } from "../../src/deploy/agentcore/destroy.ts";
 import { ingressSessionId } from "../../src/deploy/agentcore/plan.ts";
 import type { CliRunner } from "../../src/deploy/runner.ts";
 import { environmentAuthSource } from "../../src/harnesses/pi/models.ts";
+import type { InvokeEvent, RunOutcome } from "../../src/protocol.ts";
 import { fastagentVersion } from "../../src/version.ts";
 import { TARBALL_ENV } from "./pack.ts";
 export function requireEnv(name: string, hint: string): string {
@@ -210,30 +210,44 @@ export const awsAsRunner: CliRunner = async (args, opts) => {
  *  because no channel is declared). Same reduction test/http.test.ts uses; `JSON.parse` is
  *  deliberately unguarded, since a payload that is not an event is a broken wire format, not a case to
  *  absorb. */
-export async function invoke(baseUrl: string, session: string, text: string): Promise<AgentEvent[]> {
+export async function invoke(baseUrl: string, session: string, text: string): Promise<InvokeEvent[]> {
   const response = await fetch(`${baseUrl}/invoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ session, text }),
+    body: JSON.stringify({ sessionId: session, prompt: { text } }),
   });
   expect(response.status).toBe(200);
-  return (await response.text())
-    .split("\n\n")
-    .filter((block) => block.startsWith("data: "))
-    .map((block) => JSON.parse(block.slice("data: ".length)) as AgentEvent);
+  return sseEvents(await response.text());
 }
 
+/** The events of an invoke's SSE body: its own over HTTP, and AgentCore's streaming reply, which is the same stream. */
+export function sseEvents(body: string): InvokeEvent[] {
+  return body
+    .split("\n\n")
+    .flatMap((block) => block.split("\n").filter((line) => line.startsWith("data: ")))
+    .map((line) => JSON.parse(line.slice("data: ".length)) as InvokeEvent);
+}
+
+/** How the stream's run ended, as its `run_ended` entry says. */
+const outcomeOf = (events: InvokeEvent[]): RunOutcome | undefined => {
+  for (const event of events) {
+    if (event.type === "entry" && event.entry.kind === "run_ended") {
+      return (event.entry.data as { outcome: RunOutcome }).outcome;
+    }
+  }
+  return undefined;
+};
+
 /**
- * One invoke's TERMINAL, asserted with the event itself in the message.
+ * One invoke's outcome, asserted with the outcome itself (or the stream's last event) in the message.
  *
- * `toMatchObject({ type: "completed" })` was believed to print a `failed` terminal's `details` — it does not.
- * vitest diffs only the keys the matcher named and reports the rest as "(2 matching properties omitted from actual)",
- * so three nightlies went red with nothing in the log but `+ "type": "failed"`, and the reason each turn died was
- * discardable only by re-running a 20-minute probe against a platform that had already moved on.
+ * A partial matcher was believed to print a failure's details; it does not. vitest diffs only the keys the matcher
+ * named, so three nightlies went red with nothing in the log but the status, and the reason each run died was
+ * discoverable only by re-running a 20-minute probe against a platform that had already moved on.
  */
-export function expectCompleted(events: AgentEvent[], what: string): void {
-  const terminal = events.at(-1);
-  expect(terminal?.type, `${what} did not complete: ${JSON.stringify(terminal)}`).toBe("completed");
+export function expectCompleted(events: InvokeEvent[], what: string): void {
+  const outcome = outcomeOf(events);
+  expect(outcome?.status, `${what} did not complete: ${JSON.stringify(outcome ?? events.at(-1))}`).toBe("completed");
 }
 
 /**
@@ -241,8 +255,15 @@ export function expectCompleted(events: AgentEvent[], what: string): void {
  * provider that splits `47` into two tokens never spells it literally, and a `thinking` delta that
  * reasoned about the number would satisfy the assertion even when the answer got it wrong.
  */
-export const answerOf = (events: AgentEvent[]): string =>
-  events.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("");
+export const answerOf = (events: InvokeEvent[]): string => {
+  let answer = "";
+  for (const event of events) {
+    if (event.type === "entry" && event.entry.kind === "assistant_message") {
+      answer = String((event.entry.data as { text?: unknown }).text ?? "");
+    }
+  }
+  return answer;
+};
 
 /**
  * Everything one AgentCore probe created, torn down BY THE PRODUCT — `fastagent destroy agentcore --run`,
@@ -281,7 +302,15 @@ export async function invokeAgentcore(args: {
 }): Promise<string> {
   const payload = join(args.dir, `${args.label}.json`);
   const out = join(args.dir, `${args.label}-reply.json`);
-  await writeFile(payload, `${JSON.stringify({ kind: "invoke", session: args.session, text: args.text })}\n`);
+  const request = { sessionId: args.session, prompt: { text: args.text } };
+  const envelope = {
+    kind: "api",
+    method: "POST",
+    path: "/invoke",
+    headers: { "content-type": "application/json" },
+    bodyB64: Buffer.from(JSON.stringify(request)).toString("base64"),
+  };
+  await writeFile(payload, `${JSON.stringify(envelope)}\n`);
   const reply = await aws([
     "bedrock-agentcore",
     "invoke-agent-runtime",

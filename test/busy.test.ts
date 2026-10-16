@@ -9,9 +9,6 @@ import { activeWork, beginWork } from "../src/channels/busy.ts";
 import { portJoin } from "../src/effect-port.ts";
 import { createTaskTracker } from "../src/channels/kit/tasks.ts";
 import { createTurnQueue } from "../src/channels/kit/turn-queue.ts";
-import * as Effect from "effect/Effect";
-import type { Lease } from "../src/harnesses/pi/turn-kit.ts";
-import { acquireSessionLease } from "../src/harnesses/pi/session-effects.ts";
 
 /** Wait until `cond` holds (settlement callbacks run on the microtask queue). */
 const until = async (cond: () => boolean): Promise<void> => {
@@ -19,26 +16,6 @@ const until = async (cond: () => boolean): Promise<void> => {
 };
 
 describe("channels/busy: the process-wide in-flight signal", () => {
-  it("a session leased for a turn or a write counts, on any Lease, until the lease is released", async () => {
-    // A Lease of an embedder's own (a distributed lock) is acquired at the same one point, so it counts too.
-    const own: Lease = { tryAcquire: () => () => {} };
-    const base = activeWork();
-    let during = -1;
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          yield* acquireSessionLease(own, "s");
-          during = activeWork();
-        }),
-      ),
-    );
-    expect(during).toBe(base + 1);
-    expect(activeWork()).toBe(base);
-    // A refused lease is no work.
-    await Effect.runPromise(Effect.exit(Effect.scoped(acquireSessionLease({ tryAcquire: () => null }, "s"))));
-    expect(activeWork()).toBe(base);
-  });
-
   it("counts begin → done, and done is idempotent", () => {
     const base = activeWork();
     const done = beginWork();

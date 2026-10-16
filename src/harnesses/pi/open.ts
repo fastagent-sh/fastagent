@@ -15,7 +15,7 @@ import {
   resolveSessionsDir,
   resolveStateRoot,
 } from "../../paths.ts";
-import type { ModelDescriptor } from "../../session.ts";
+import type { ModelDescriptor } from "../../protocol.ts";
 import { describeModels } from "./session-settings.ts";
 import {
   type IndirectTool,

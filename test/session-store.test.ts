@@ -1,6 +1,5 @@
 /**
- * The AgentSession L0's session store: pi accepts the ids channels actually mint, two rooms never
- * share a record.
+ * The session record store: pi accepts the ids channels actually mint, two rooms never share a record.
  */
 import { symlinkSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
@@ -11,6 +10,9 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type PiSessionRecordStore,
+  type PropertyWrites,
+  applyProperties,
   callerSessionId,
   piInMemorySessionRecordStore,
   piSessionId,
@@ -18,6 +20,13 @@ import {
 } from "../src/harnesses/pi/session-store.ts";
 import { log } from "../src/log.ts";
 import { publishedLeaf } from "../src/harnesses/pi/session-markers.ts";
+
+/** Write properties on a fresh handle of `sessionId`'s record, as each served write opens one. */
+async function apply(store: PiSessionRecordStore, sessionId: string, writes: PropertyWrites) {
+  const record = await store.openIfExists(sessionId);
+  if (!record) throw new Error(`no record ${sessionId}`);
+  return applyProperties(record, writes);
+}
 
 /** What the built-in channels and a custom route() produce. */
 const CHANNEL_IDS = [
@@ -126,8 +135,8 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
       (await store.openOrCreate(id)).appendMessage({ role: "user", content: "hi", timestamp: 1 });
     }
     const listed = await store.list();
-    expect(listed.map((r) => r.session).sort()).toEqual(["-1001234567890", "oc_9:thread/1"]);
-    expect(listed.every((r) => r.messageCount === 1 && r.createdAt > 0)).toBe(true);
+    expect(listed.map((r) => r.sessionId).sort()).toEqual(["-1001234567890", "oc_9:thread/1"]);
+    expect(listed.every((r) => r.preview === "hi" && r.createdAt > 0)).toBe(true);
   });
 
   it("round-trips every id shape the encoding escapes", () => {
@@ -152,7 +161,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     await store.fork("room", at, "room-fork", "test-provenance");
     const forked = await store.openIfExists("room-fork");
     expect(messages(forked)).toHaveLength(2); // up to `at`, not the parent's leaf
-    expect((await store.list()).map((r) => r.session).sort()).toEqual(["room", "room-fork"]);
+    expect((await store.list()).map((r) => r.sessionId).sort()).toEqual(["room", "room-fork"]);
     // The parent is untouched by its own fork.
     expect(messages(await store.openIfExists("room"))).toHaveLength(4);
 
@@ -172,7 +181,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     record.appendMessage({ role: "user", content: "two", timestamp: 3 });
     const tip = record.appendMessage(fauxAssistantMessage("a2"));
 
-    const applied = await store.applyProperties("s1", { leafEntryId: first });
+    const applied = await apply(store, "s1", { leafEntryId: first });
     expect(applied?.landed).toEqual(["leafEntryId"]);
     expect(applied?.leafEntryId).toBe(first);
 
@@ -185,13 +194,13 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     // session.
     const size = () => (reopened?.getEntries() ?? []).length;
     const before = size();
-    const again = await store.applyProperties("s1", { leafEntryId: first });
+    const again = await apply(store, "s1", { leafEntryId: first });
     expect(again?.landed).toEqual(["leafEntryId"]);
     expect((await store.openIfExists("s1"))?.getEntries().length).toBe(before);
 
     // And a move that travels WITH another property needs no anchor of its own — the property is
     // the anchor. (The head then sits on that property record, as it does after any boundary write.)
-    await store.applyProperties("s1", { leafEntryId: tip, thinkingLevel: "high" });
+    await apply(store, "s1", { leafEntryId: tip, thinkingLevel: "high" });
     const after = await store.openIfExists("s1");
     expect(after?.getBranch().map((e) => e.id)).toContain(tip); // the move stuck
     expect(
@@ -208,7 +217,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
       parent.appendMessage({ role: "user", content: "use the tool", timestamp: 1 });
       parent.appendCustomEntry("fastagent:extension-state", { topic: "shared context" });
       const at = parent.appendMessage(fauxAssistantMessage("done"));
-      await store.applyProperties("src", { leafEntryId: at }); // leaves an anchor behind
+      await apply(store, "src", { leafEntryId: at }); // leaves an anchor behind
 
       await store.fork("src", at, "branch", `src@${at}`);
       const kinds = ((await store.openIfExists("branch"))?.getEntries() ?? []).map(
@@ -233,7 +242,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
       throw new Error("ENOSPC: no space left on device");
     });
     try {
-      const applied = await store.applyProperties("s1", { leafEntryId: first });
+      const applied = await apply(store, "s1", { leafEntryId: first });
       expect(applied?.landed).toEqual([]); // NOT ["leafEntryId"]
       expect(applied?.failure).toBeTruthy();
     } finally {
@@ -270,29 +279,10 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
       record.appendMessage({ role: "user", content: "the first question", timestamp: 1 });
       record.appendMessage(fauxAssistantMessage("an answer"));
       const [row] = await store.list();
-      expect(row).toMatchObject({ session: "room", name: "Named", messageCount: 2, preview: "the first question" });
+      expect(row).toMatchObject({ sessionId: "room", name: "Named", preview: "the first question" });
       expect(Number.isFinite(row?.createdAt)).toBe(true);
       expect(row?.updatedAt).toBeGreaterThanOrEqual(row?.createdAt as number);
     }
-  });
-
-  it("the row counts the conversation, not pi's system bookkeeping", async () => {
-    // A served record carries the assembled prompt as a system message, plus one more whenever the prompt or
-    // tool set changes. Counting those makes a one-exchange conversation report 3, and the number a client
-    // shows drifts with pi's internal accounting.
-    const store = piInMemorySessionRecordStore();
-    const record = await store.openOrCreate("room");
-    record.appendMessage({
-      role: "system",
-      content: "", // pi's shape: the prompt is in `sections`, the tool declarations in `toolsAdded`
-      sections: { preamble: "You are a bot." },
-      toolsAdded: [{ name: "read", description: "Read a file.", parameters: { type: "object", properties: {} } }],
-      timestamp: 0,
-    } as never);
-    record.appendMessage({ role: "user", content: "a question", timestamp: 1 });
-    record.appendMessage(fauxAssistantMessage("an answer"));
-
-    expect((await store.list())[0]?.messageCount).toBe(2);
   });
 
   it("in memory too: same three primitives, same semantics", async () => {
@@ -302,7 +292,7 @@ describe("the lifecycle primitives (list / fork / delete)", () => {
     parent.appendMessage({ role: "user", content: "second", timestamp: 2 });
     await store.fork("room", at, "copy", "test-provenance");
     expect(messages(await store.openIfExists("copy"))).toHaveLength(1);
-    expect((await store.list()).map((r) => r.session).sort()).toEqual(["copy", "room"]);
+    expect((await store.list()).map((r) => r.sessionId).sort()).toEqual(["copy", "room"]);
     expect(await store.delete("copy")).toBe(true);
     expect(await store.list()).toHaveLength(1);
   });
@@ -348,11 +338,9 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     photo.appendMessage(fauxAssistantMessage("nice picture"));
 
     const rows = await store.list();
-    expect(rows.find((r) => r.session === "fresh")).toMatchObject({ messageCount: 0 });
-    expect(rows.find((r) => r.session === "fresh")?.preview).toBeUndefined();
-    const photoRow = rows.find((r) => r.session === "photo");
-    expect(photoRow?.messageCount).toBeGreaterThan(0); // the count cannot say there is no text
-    expect(photoRow?.preview).toBeUndefined();
+    expect(rows.find((r) => r.sessionId === "fresh")).toBeDefined();
+    expect(rows.find((r) => r.sessionId === "fresh")?.preview).toBeUndefined();
+    expect(rows.find((r) => r.sessionId === "photo")?.preview).toBeUndefined();
   });
 
   it("forking onto an existing session is refused by the STORE, in both backends", async () => {
@@ -371,8 +359,8 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     }
   });
 
-  it("a lifecycle fork keeps the whole copied history — the inheritance window is not its business", async () => {
-    // A new THREAD gets a compaction mark bounding what its model sees. A fork is the same user
+  it("a plain fork keeps the whole copied history — the `recent` window is not its business", async () => {
+    // A `recent` fork gets a compaction mark bounding what its model sees. A plain fork is the same user
     // keeping their own history, so marking it would hide the exact entries they forked to keep.
     // Only visible past the window (50 exchanges), which is why the two backends drifted unnoticed.
     const store = piInMemorySessionRecordStore();
@@ -385,12 +373,9 @@ describe("the lifecycle primitives: the failure modes each one owes", () => {
     await store.fork("long", at, "long-fork", "test-provenance");
     const child = await store.openIfExists("long-fork");
     expect(child?.getBranch().filter((e) => e.type === "compaction")).toHaveLength(0);
-    // The inheritance path, same backend, DOES bound it — the split is deliberate, not an omission.
-    const thread = await store.openOrCreate("thread", { parentSession: "long" });
-    expect(thread.getBranch().filter((e) => e.type === "compaction").length).toBeGreaterThan(0);
   });
 
-  it("a `recent` fork is bounded by the inheritance window, on disk and in memory alike", async () => {
+  it("a `recent` fork is bounded by its window, on disk and in memory alike", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-store-recent-"));
     for (const store of [piSessionRecordStore({ dir, cwd: dir }), piInMemorySessionRecordStore()]) {
       const parent = await store.openOrCreate("long");
@@ -539,31 +524,30 @@ describe("fork: the copy is a copy", () => {
     const rec = await store.openOrCreate("room");
     rec.appendMessage({ role: "user", content: "asked before the move", timestamp: 1 });
     rec.appendMessage(fauxAssistantMessage("answered"));
-    expect((await store.list()).map((r) => r.session)).toEqual(["room"]);
+    expect((await store.list()).map((r) => r.sessionId)).toEqual(["room"]);
 
     const after = join(root, "after");
     await rename(before, after);
     const moved = piSessionRecordStore({ dir: "sessions", cwd: after });
-    expect((await moved.list()).map((r) => r.session)).toEqual(["room"]);
+    expect((await moved.list()).map((r) => r.sessionId)).toEqual(["room"]);
     expect(await moved.openIfExists("room")).toBeDefined();
     expect(JSON.stringify((await moved.openIfExists("room"))?.getBranch())).toContain("asked before the move");
   });
 
-  it("a named parent is found after the workspace moves, like every other lookup", async () => {
-    // The listing and `openIfExists` were moved off pi's cwd-filtered listing; inheritance was the
-    // call site that kept it, so a renamed directory left a thread starting empty beside the very
-    // conversation it named.
+  it("a fork's source is found after the workspace moves, like every other lookup", async () => {
+    // The listing and `openIfExists` were moved off pi's cwd-filtered listing; a lookup that kept it would leave a
+    // fork failing beside the very conversation it named.
     const root = await mkdtemp(join(tmpdir(), "fa-store-inherit-moved-"));
     const before = join(root, "before");
     const store = piSessionRecordStore({ dir: "sessions", cwd: before });
     const room = await store.openOrCreate("room");
     room.appendMessage({ role: "user", content: "room history", timestamp: 1 });
-    room.appendMessage(fauxAssistantMessage("answered in the room"));
+    const at = room.appendMessage(fauxAssistantMessage("answered in the room"));
 
     await rename(before, join(root, "after"));
     const moved = piSessionRecordStore({ dir: "sessions", cwd: join(root, "after") });
-    const thread = await moved.openOrCreate("thread", { parentSession: "room" });
-    expect(JSON.stringify(thread.getBranch())).toContain("room history");
+    await moved.fork("room", at, "thread", `room@${at}`);
+    expect(JSON.stringify((await moved.openIfExists("thread"))?.getBranch())).toContain("room history");
   });
 
   it("rows come back newest-ACTIVITY first, and a broken timestamp is still a number", async () => {
@@ -582,7 +566,7 @@ describe("fork: the copy is a copy", () => {
     (await store.openOrCreate("older")).appendMessage(fauxAssistantMessage("just now"));
 
     const ordered = await store.list();
-    expect(ordered.map((r) => r.session)).toEqual(["older", "newer"]);
+    expect(ordered.map((r) => r.sessionId)).toEqual(["older", "newer"]);
     expect(ordered[0]?.updatedAt).toBeGreaterThan(ordered[1]?.updatedAt as number);
 
     // An entry whose timestamp does not parse is NaN, and NaN serializes to null — in a field the
@@ -593,7 +577,7 @@ describe("fork: the copy is a copy", () => {
     last.timestamp = "not-a-date";
     lines[lines.length - 1] = JSON.stringify(last);
     await writeFile(file, `${lines.join("\n")}\n`);
-    const row = (await store.list()).find((r) => r.session === "newer");
+    const row = (await store.list()).find((r) => r.sessionId === "newer");
     expect(Number.isFinite(row?.updatedAt)).toBe(true);
     expect(JSON.parse(JSON.stringify(row)).updatedAt).not.toBeNull();
   });
@@ -639,7 +623,7 @@ describe("fork: the copy is a copy", () => {
     const warned: string[] = [];
     const spy = vi.spyOn(log, "warn").mockImplementation((line: string) => void warned.push(line));
     try {
-      expect((await store.list()).map((r) => r.session)).toEqual(["room"]);
+      expect((await store.list()).map((r) => r.sessionId)).toEqual(["room"]);
       expect(warned.join("\n")).toMatch(/1 of 2 session records/);
       expect(warned.join("\n")).toMatch(/sbroken\.jsonl/); // WHICH one, and why
 
@@ -662,7 +646,7 @@ describe("fork: the copy is a copy", () => {
     symlinkSync(join(dir, "agent-session", "gone.jsonl"), join(dir, "agent-session", "dangling.jsonl"));
 
     const rows = await store.list();
-    expect(rows.map((r) => r.session)).toEqual(["survivor"]); // no throw, and the survivor is listed
+    expect(rows.map((r) => r.sessionId)).toEqual(["survivor"]); // no throw, and the survivor is listed
   });
 
   it("a fork never lists as modified BEFORE it existed", async () => {
@@ -676,7 +660,7 @@ describe("fork: the copy is a copy", () => {
     const at = parent.appendMessage({ ...fauxAssistantMessage("answered long ago"), timestamp: 2 } as never);
 
     await store.fork("old", at, "branch", "test-provenance");
-    const row = (await store.list()).find((r) => r.session === "branch") as { createdAt: number; updatedAt: number };
+    const row = (await store.list()).find((r) => r.sessionId === "branch") as { createdAt: number; updatedAt: number };
     expect(row.updatedAt).toBeGreaterThanOrEqual(row.createdAt);
   });
 });
@@ -690,7 +674,7 @@ describe("list rows are safe to render", () => {
     session.appendMessage({ role: "user", content: `${"a".repeat(199)}🌤 tail`, timestamp: 1 });
     session.appendMessage(fauxAssistantMessage("ok"));
 
-    const preview = (await store.list()).find((r) => r.session === "emoji")?.preview as string;
+    const preview = (await store.list()).find((r) => r.sessionId === "emoji")?.preview as string;
     expect(preview).toHaveLength(201); // 199 + the pair, as ONE code point sliced whole
     expect(preview.endsWith("🌤")).toBe(true);
     expect(preview).not.toMatch(/[\uD800-\uDBFF]$/); // no dangling HIGH surrogate — a whole pair ends on a low one

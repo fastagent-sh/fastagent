@@ -17,15 +17,13 @@ import type {
   LoopHarness,
   LoopHooks,
   LoopLog,
+  LoopOutcome,
   LoopRun,
   MessageFate,
-  RunMarker,
 } from "../../loop-port.ts";
-import { ABORTED_CODE } from "../../agent.ts";
 import {
   type AgentCommand,
   type AgentError,
-  type Json,
   type Result,
   type SessionSettings,
   type SessionState,
@@ -33,13 +31,14 @@ import {
   agentError,
   failure,
 } from "../../protocol.ts";
-import { type PiAgentSessionFactoryOptions, piSessionBinder, startCompaction } from "./agent-session-factory.ts";
+import { type PiBindingOptions, piSessionBinder, startCompaction } from "./session-binding.ts";
 import { resolveModel } from "./config.ts";
 import { imageAt } from "./entry-images.ts";
-import { OWED_BY_THE_RUN, toSessionEvent, trackExtensionTurns } from "./invoke-session.ts";
+import { liveEvents } from "./live-events.ts";
+import { contextOf, isRecord, toRecord } from "./log-records.ts";
+import { answeredOutcome, thrownFailure, toPiPromptOptions } from "./messages.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
-import { sessionUsage, toSessionEntry } from "./session-control.ts";
-import { RUN_MARKERS, isConversationMessage, isPlaneMarker, isRunMarker } from "./session-markers.ts";
+import { RUN_MARKERS, isConversationMessage } from "./session-markers.ts";
 import {
   MissingModel,
   modelBySpec,
@@ -48,56 +47,17 @@ import {
   describeModels,
   resolveSessionSettings,
 } from "./session-settings.ts";
-import { type PiSessionRecordStore, applyPropertiesTo } from "./session-store.ts";
-import { agentEventProjection, answerOutcome, errorToTerminal, toPiPromptOptions, toTerminal } from "./turn-kit.ts";
+import { type PiSessionRecordStore, applyProperties } from "./session-store.ts";
 
 /**
  * ONE assembly: the binder's own options decide what a run binds (its default model and thinking level), and the same
  * ones decide what `state()` reports and `update()` validates against, so the two cannot disagree.
  */
-export interface PiLoopHarnessOptions extends Omit<PiAgentSessionFactoryOptions, "sessions"> {
+export interface PiLoopHarnessOptions extends PiBindingOptions {
   sessions: PiSessionRecordStore;
   /** The registry a run resolves against, as it is now: for `state()`, `update()` and `models()`. */
   catalog: () => Promise<Models>;
   commands?: () => Promise<AgentCommand[]>;
-}
-
-const MARKER_KINDS = new Map<string, RunMarker>(
-  Object.entries(RUN_MARKERS).map(([kind, customType]) => [customType, kind as RunMarker]),
-);
-
-const V1_KINDS: Record<string, string> = { user: "user_message", assistant: "assistant_message", tool: "tool_result" };
-
-/** Whether an entry is a record of the log at all: pi's prompt bookkeeping, labels and extension state are not. */
-function isRecord(entry: PiSessionEntry): boolean {
-  if (entry.type === "message") return isConversationMessage(entry);
-  if (entry.type === "custom") return isRunMarker(entry);
-  return entry.type !== "label" && entry.type !== "usage" && !isPlaneMarker(entry);
-}
-
-/** One pi entry as a record of the log, under the nearest ancestor that is one. */
-function toRecord(entry: PiSessionEntry, parentEntryId: string | undefined): LogRecord {
-  const base = { id: entry.id, ...(parentEntryId ? { parentEntryId } : {}), timestamp: Date.parse(entry.timestamp) };
-  switch (entry.type) {
-    case "custom":
-      return { ...base, kind: MARKER_KINDS.get(entry.customType) as string, data: (entry.data ?? {}) as Json };
-    case "model_change":
-      return { ...base, kind: "settings_changed", data: { model: `${entry.provider}/${entry.modelId}` } };
-    case "thinking_level_change":
-      return { ...base, kind: "settings_changed", data: { thinkingLevel: entry.thinkingLevel } };
-    case "session_info":
-      return { ...base, kind: "settings_changed", data: entry.name ? { name: entry.name } : {} };
-    case "compaction":
-      return {
-        ...base,
-        kind: "compaction",
-        data: { summary: entry.summary, firstKeptEntryId: entry.firstKeptEntryId },
-      };
-    default: {
-      const neutral = toSessionEntry(entry);
-      return { ...base, kind: V1_KINDS[neutral.kind] ?? neutral.kind, data: neutral.data };
-    }
-  }
 }
 
 const usageOf = (message: AssistantMessage): Usage => ({
@@ -119,24 +79,32 @@ function addUsage(total: Usage | undefined, more: Usage): Usage {
   };
 }
 
-type LoopOutcome = Awaited<LoopRun["done"]>["outcome"];
-
 function thrownOutcome(error: unknown): LoopOutcome {
   if (error instanceof MissingModel) return { status: "failed", error: agentError("missing_model", error.message) };
-  // The one reading v0.1 uses too (`errorToTerminal`): status, then code, then text.
-  const { details, retryable } = errorToTerminal(error);
-  return retryable
-    ? { status: "failed", error: { ...agentError("model_error", details), retryable: true } }
-    : { status: "failed", error: agentError("internal", details) };
+  return { status: "failed", error: thrownFailure(error) };
 }
 
-/** How a run ended, by its last answer: `answerOutcome` for its shape, `toTerminal` for whether a retry may help. */
-function answeredOutcome(message: AssistantMessage): LoopOutcome {
-  if (answerOutcome(message)?.status === "truncated") return { status: "max_tokens" };
-  const terminal = toTerminal(message);
-  if (terminal.type !== "failed") return { status: "completed" };
-  if (terminal.code === ABORTED_CODE) return { status: "failed", error: agentError("internal", terminal.details) };
-  return { status: "failed", error: { ...agentError("model_error", terminal.details), retryable: terminal.retryable } };
+/** pi's error-channel events for work a run owes its caller: the command it ran, and the turns it started. */
+const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]);
+
+/**
+ * The turns extensions start on this session and have not finished. `pi.sendUserMessage` and `pi.sendMessage` reach
+ * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is this run's
+ * alone, so the wrap never outlives the run.
+ */
+function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
+  const pending = new Set<Promise<void>>();
+  const track = (sent: Promise<void>): Promise<void> => {
+    pending.add(sent);
+    const done = () => void pending.delete(sent);
+    sent.then(done, done); // pi's own `.catch` on `sent` reports the failure
+    return sent;
+  };
+  const sendUserMessage = session.sendUserMessage.bind(session);
+  const sendCustomMessage = session.sendCustomMessage.bind(session);
+  session.sendUserMessage = (...args) => track(sendUserMessage(...args));
+  session.sendCustomMessage = (...args) => track(sendCustomMessage(...args));
+  return pending;
 }
 
 interface Settings {
@@ -243,7 +211,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     const state = (): Omit<SessionState, "status" | "run" | "queued"> => {
       const name = record.getSessionName();
       let resolved: ReturnType<typeof resolveSessionSettings>;
-      let usage: ReturnType<typeof sessionUsage>;
+      let context: SessionState["context"];
       try {
         const path = activePath(record);
         resolved = settings && resolveSessionSettings(path, settings.models, settings.defaults);
@@ -260,7 +228,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
             : undefined;
         const physical =
           latest?.role === "assistant" ? settings?.models.getModel(latest.provider, latest.model) : undefined;
-        usage = sessionUsage(path as unknown as PiSessionEntry[], record, (physical ?? selected)?.contextWindow);
+        context = contextOf(path as unknown as PiSessionEntry[], record, (physical ?? selected)?.contextWindow);
       } catch (error) {
         log.warn(`[fastagent] session ${sessionId}: state unreadable (entry chain): ${String(error)}`);
       }
@@ -275,14 +243,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
               thinkingLevels: resolved.availableThinkingLevels,
             }
           : {}),
-        ...(usage?.contextTokens !== undefined || usage?.contextWindow !== undefined
-          ? {
-              context: {
-                ...(usage.contextTokens !== undefined ? { tokens: usage.contextTokens } : {}),
-                ...(usage.contextWindow !== undefined ? { window: usage.contextWindow } : {}),
-              },
-            }
-          : {}),
+        ...(context ? { context } : {}),
         ...(leaf ? { leafEntryId: leaf.id } : {}),
       };
     };
@@ -372,7 +333,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         resolveReady(bound);
         const cleanup: (() => void)[] = [];
         try {
-          const project = agentEventProjection();
+          const project = liveEvents();
           let finalAssistant: AssistantMessage | undefined;
           let runStarted = false;
           let streamedAnswer = false;
@@ -412,36 +373,10 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
                   queueMicrotask(() => abort("retry-after-answer"));
                   return;
                 }
-                const rich = toSessionEvent(event, "");
-                const projected = rich && project(rich);
-                if (!projected) return;
-                switch (projected.type) {
-                  case "text":
-                  case "thinking":
-                    streamedAnswer = true;
-                    emit({ type: "message_delta", channel: projected.type, delta: projected.delta });
-                    break;
-                  case "tool_started":
-                    emit({
-                      type: "tool_started",
-                      toolCallId: projected.id,
-                      name: projected.name,
-                      args: projected.args,
-                    });
-                    break;
-                  case "tool_progress":
-                    emit({ type: "tool_progress", toolCallId: projected.id, text: projected.text });
-                    break;
-                  case "retrying":
-                    emit({
-                      type: "retry_scheduled",
-                      attempt: projected.attempt,
-                      maxAttempts: projected.maxAttempts,
-                      delayMs: projected.delayMs,
-                      reason: projected.reason,
-                    });
-                    break;
-                }
+                const live = project(event);
+                if (!live) return;
+                if (live.type === "message_delta") streamedAnswer = true;
+                emit(live);
               } catch (error) {
                 // A listener fault leaves the run's stream incomplete: stop the run rather than let it go on unseen.
                 eventFailure = error;
@@ -532,7 +467,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
       state,
       run: startRun,
       rewind: async (entryId) => {
-        const applied = applyPropertiesTo(record, { leafEntryId: entryId });
+        const applied = applyProperties(record, { leafEntryId: entryId });
         return applied.failure === undefined
           ? { ok: true }
           : failure("internal", `rewind failed: ${String(applied.failure)}`);
@@ -540,7 +475,12 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
       compact: async ({ instructions }, signal) => {
         if (!record.getEntries().some(isConversationMessage))
           return failure("nothing_to_compact", "nothing to compact");
-        const bound = await bind(sessionId, record);
+        const bound = await bind(sessionId, record).catch((error: unknown) => {
+          if (error instanceof MissingModel) return failure("missing_model", error.message);
+          throw error;
+        });
+        if ("ok" in bound) return bound;
+        const stopped = () => failure("internal", "the compaction was stopped by abort");
         const abort = () => bound.abortCompaction();
         signal.addEventListener("abort", abort, { once: true });
         try {
@@ -548,7 +488,15 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           const admission = await compaction.admission;
           if (admission === "nothing_to_compact") return failure("nothing_to_compact", "nothing to compact");
           if (admission !== "admitted") return failure("internal", String(admission.refused));
-          await compaction.done;
+          // pi's compact() makes its abort controller only after an await: an abort that came before admission (during
+          // the binding, say) reached the previous one.
+          if (signal.aborted) bound.abortCompaction();
+          try {
+            await compaction.done;
+          } catch (error) {
+            if (signal.aborted) return stopped();
+            throw error;
+          }
           return { ok: true };
         } finally {
           signal.removeEventListener("abort", abort);
@@ -578,7 +526,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           const problem = thinkingLevelProblem(patch.thinkingLevel, target);
           if (problem) return invalid(problem);
         }
-        const applied = applyPropertiesTo(record, {
+        const applied = applyProperties(record, {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
           ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
@@ -637,7 +585,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     },
     list: async () =>
       (await sessions.list()).map((summary) => ({
-        sessionId: summary.session,
+        sessionId: summary.sessionId,
         ...(summary.name ? { name: summary.name } : {}),
         status: "idle" as const,
         createdAt: summary.createdAt,

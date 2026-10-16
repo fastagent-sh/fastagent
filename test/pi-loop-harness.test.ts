@@ -3,7 +3,7 @@
  * run does is chosen by its message, as the suite asks: the faux model answers the newest user message, `hold` and
  * `effect` call tools of those names first, and `fail` is an error the model returns.
  */
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,7 +14,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
 import { isRunMarker } from "../src/harnesses/pi/session-markers.ts";
 import {
@@ -23,10 +23,14 @@ import {
   piSessionRecordStore,
 } from "../src/harnesses/pi/session-store.ts";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
+import { log } from "../src/log.ts";
 import { loopPort } from "../src/loop-port.ts";
 import { type Agent, type InvokeEvent, LIMITS } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
+import { fauxAgent } from "./agent.ts";
 import { makeFaux } from "./faux.ts";
+import { collect, RunNotCompleted } from "../src/protocol-collect.ts";
+import { defineTool, z } from "../src/pi.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
 type Message = { role: string; content: unknown };
@@ -419,5 +423,128 @@ describe("pi-coding-agent through LoopPort", () => {
     });
     expect(await compactions("thread")).toBe(1);
     expect(await compactions("copy")).toBe(0);
+  });
+});
+
+describe("pi's auto-retry vs. append-only deltas", () => {
+  it("a failure AFTER output was streamed is final: a retry would concatenate two answers", async () => {
+    const { agent } = fauxAgent([
+      fauxAssistantMessage("the first half of a wrong", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("a complete replacement answer"),
+    ]);
+    const started = Date.now();
+    await expect(
+      collect(agent.invoke({ sessionId: "streamed-then-failed", prompt: { text: "go" } })),
+    ).rejects.toBeInstanceOf(RunNotCompleted);
+    // Refusing the retry must also CANCEL it: pi's first backoff is 2s, and letting it run would both delay the
+    // failure and spend a provider call on an answer this run can never use.
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("a failure BEFORE any output still retries: that window is free resilience", async () => {
+    const { agent } = fauxAgent([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("the answer, second attempt"),
+    ]);
+    const { text } = await collect(agent.invoke({ sessionId: "silent-then-retried", prompt: { text: "go" } }));
+    expect(text).toBe("the answer, second attempt");
+  });
+
+  it("an executed tool does not close the window: the retry resumes from it instead of re-running it", async () => {
+    let toolRuns = 0;
+    const ping = defineTool({
+      name: "ping",
+      description: "A tool with a side effect worth not repeating.",
+      input: z.object({}),
+      execute: () => {
+        toolRuns++;
+        return "pong";
+      },
+    });
+    const { agent } = fauxAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("ping", {}, { id: "call-1" })),
+        // The request that follows the tool fails before saying anything. pi retries it against the PERSISTED tool
+        // result; refusing here would hand the retry to the caller, who cannot re-ask without running the tool again.
+        fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+        fauxAssistantMessage("pong, once"),
+      ],
+      { tools: [ping] },
+    );
+    const { text } = await collect(agent.invoke({ sessionId: "tool-then-retried", prompt: { text: "go" } }));
+    expect(text).toBe("pong, once");
+    expect(toolRuns).toBe(1);
+  });
+});
+
+describe("an abort right after acceptance", () => {
+  // pi's abort stops only an agent run in flight; one sent before the first request (while prompt() prepares) must
+  // still stop it (#691). This response answers only an aborted signal, so a missed abort never settles.
+  const untilAborted: FauxResponseStep = (_context, options) =>
+    new Promise((resolve) => {
+      const aborted = () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "aborted" }));
+      if (options?.signal?.aborted) return aborted();
+      options?.signal?.addEventListener("abort", aborted, { once: true });
+    });
+
+  /** Start a run, abort its session once it is accepted (after `wait`), and answer how the run ended. */
+  async function abortedAfter(agent: Agent, sessionId: string, wait: () => Promise<void>) {
+    const iterator = agent.invoke({ sessionId, prompt: { text: "go" } })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: "accepted" });
+    await wait();
+    expect(await agent.sessions.get(sessionId).abort()).toMatchObject({ ok: true });
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) throw new Error("the stream ended without its run_ended");
+      const event = next.value;
+      if (event.type === "entry" && event.entry.kind === "run_ended")
+        return (event.entry.data as { outcome: unknown }).outcome;
+    }
+  }
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ["synchronously", async () => {}],
+    ["after a microtask", () => Promise.resolve()],
+    ["after setImmediate", () => new Promise<void>((r) => setImmediate(r))],
+  ])("stops the first request when sent %s", async (_when, wait) => {
+    const { agent } = fauxAgent([untilAborted]);
+    expect(await abortedAfter(agent, "sEarly", wait)).toEqual({ status: "canceled", by: "abort" });
+  });
+
+  it("also stops the automatic compaction prompt() runs before the first agent run", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-early-abort-home-"));
+    await mkdir(join(home, ".pi", "agent"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 400 },
+        retry: { enabled: false },
+      }),
+    );
+    vi.stubEnv("HOME", home);
+    const debug = vi.spyOn(log, "debug");
+    try {
+      const { agent, sessions, faux } = fauxAgent([untilAborted, untilAborted], {
+        faux: { models: [{ id: "small", contextWindow: 2500, maxTokens: 1000 }] },
+      });
+      // History whose last answer filled the context window: prompt() compacts before it starts the agent run.
+      const record = await sessions.openOrCreate("sEarlyCompact");
+      for (let i = 0; i < 4; i++) {
+        record.appendMessage({ role: "user", content: `Earlier question ${i}`, timestamp: i });
+        record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
+      }
+      const model = faux.getModel();
+      const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      const usage = { input: 2450, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 2450, cost: zero };
+      record.appendMessage({ ...fauxAssistantMessage("full"), provider: model.provider, model: model.id, usage });
+
+      expect(await abortedAfter(agent, "sEarlyCompact", async () => {})).toEqual({ status: "canceled", by: "abort" });
+      // The compaction did start, so the abort above is what stopped it, not a history that needed none.
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/automatic compaction threshold .*: aborted$/));
+    } finally {
+      debug.mockRestore();
+    }
   });
 });

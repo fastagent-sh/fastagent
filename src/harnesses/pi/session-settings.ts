@@ -2,7 +2,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ModelDescriptor } from "../../session.ts";
+import type { ModelDescriptor } from "../../protocol.ts";
 import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. */

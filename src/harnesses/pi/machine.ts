@@ -107,7 +107,7 @@ async function read(agentDir: string, piDir: string): Promise<Machine> {
     settingsManager: scopedSettings(settings),
     additionalSkillPaths: fromPackages(packages.skills),
     additionalPromptTemplatePaths: fromPackages(packages.prompts),
-    // The machine's extensions are its owner's setup, not this agent's (agent-session-factory.ts loads only the
+    // The machine's extensions are its owner's setup, not this agent's (session-binding.ts loads only the
     // definition's own); the only context file is the definition's own AGENTS.md.
     noExtensions: true,
     noContextFiles: true,

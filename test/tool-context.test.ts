@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import type { AgentEvent } from "../src/agent.ts";
+import { collect } from "../src/protocol-collect.ts";
 import { defineTool } from "../src/harnesses/pi/tool.ts";
 import { fauxAgent } from "./agent.ts";
 
@@ -27,10 +27,9 @@ describe("shared ToolContext session manager", () => {
       { tools: [probe] },
     );
 
-    const events: AgentEvent[] = [];
-    for await (const event of agent.invoke({ session: "sess-42" }, { text: "go" })) events.push(event);
+    const { text } = await collect(agent.invoke({ sessionId: "sess-42", prompt: { text: "go" } }));
 
-    expect(events.at(-1)?.type).toBe("completed");
+    expect(text).toBe("done");
     expect(seen).toBe("sess-42");
   });
 

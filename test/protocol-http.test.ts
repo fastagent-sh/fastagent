@@ -13,6 +13,7 @@ import { type Agent, AgentRejection, type FollowEvent, LIMITS } from "../src/pro
 import { connectAgent } from "../src/protocol-remote.ts";
 import { collect } from "../src/protocol-collect.ts";
 import { servingAgent } from "../src/serving-layer.ts";
+import { log } from "../src/log.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
 
@@ -139,6 +140,56 @@ describe("the HTTP binding", () => {
     await held.return?.();
   });
 
+  it("a write that does not declare JSON never reaches the agent: the cross-origin write gate, on both planes", async () => {
+    // THE reason a foreign origin can simply be left unanswered instead of refused. A cross-origin POST carrying
+    // text/plain (or a form's multipart) is a CORS *simple request*: no preflight, sent regardless, and withholding the
+    // response headers only stops the page from READING a run that has already started and been billed. Demanding
+    // application/json takes it out of that class, so the browser must preflight, and a preflight we do not answer is
+    // a request never sent.
+    const handler = createAgentHandler(servingAgent(loopPort(fakeLoopHarness(new FakeStore()))), { control: true });
+    const body = JSON.stringify({ sessionId: "s", prompt: { text: "hi" } });
+    const writes = [
+      ["POST", "/invoke"],
+      ["POST", "/sessions"],
+      ["PATCH", "/control/sessions/s"],
+    ] as const;
+    for (const [method, path] of writes) {
+      for (const contentType of ["text/plain", "multipart/form-data", "application/x-www-form-urlencoded", undefined]) {
+        const res = await handler(
+          new Request(`http://app${path}`, {
+            method,
+            ...(contentType ? { headers: { "content-type": contentType } } : {}),
+            body,
+          }),
+        );
+        expect({ path, contentType, status: res.status }).toEqual({ path, contentType, status: 415 });
+      }
+      // Asked of the ROUTE, not of "does this have a body": a body-less write is refused too.
+      expect((await handler(new Request(`http://app${path}`, { method }))).status).toBe(415);
+    }
+    expect(await (await handler(new Request("http://app/sessions"))).json()).toEqual([]);
+    // The parameters browsers attach are part of the header, not a different media type.
+    const ok = await handler(
+      new Request("http://app/invoke", {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8", accept: "application/json" },
+        body,
+      }),
+    );
+    expect(ok.status).toBe(202);
+  });
+
+  it("refuses a body over 1 MiB before invoking, counting bytes rather than characters", async () => {
+    const handler = createAgentHandler(servingAgent(loopPort(fakeLoopHarness(new FakeStore()))));
+    // 400k emoji are 400k characters, but more than 1 MiB of UTF-8.
+    for (const text of ["x".repeat(2 * 1024 * 1024), "🙂".repeat(400_000)]) {
+      const res = await handler(new Request("http://app/invoke", invokeBody({ sessionId: "s", prompt: { text } })));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: { code: "invalid_request" } });
+    }
+    expect(await (await handler(new Request("http://app/sessions"))).json()).toEqual([]);
+  });
+
   it("createAgentHandler answers no browser cross-origin unless told which origins may call", async () => {
     const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
     const fromPage = { origin: "https://evil.example" };
@@ -160,6 +211,74 @@ describe("the HTTP binding", () => {
     expect(ours.headers.get("access-control-allow-origin")).toBe("https://app.example");
     expect((await allowed(preflight())).headers.get("access-control-allow-origin")).toBeNull();
     expect(() => createAgentHandler(agent, { corsOrigins: ["https://app.example/"] })).toThrow(/corsOrigins/);
+  });
+
+  it("a browser can reach every route under the default `*`: the preflight, and CORS on every answer", async () => {
+    const agent = servingAgent(loopPort(fakeLoopHarness(new FakeStore())));
+    agent.commands = async () => {
+      throw new Error("skills/ unreadable: permission denied");
+    };
+    const surface = protocolHttp(agent);
+    const server = serveNode(
+      router({ unverified: surface.user.routes, mounts: [...surface.user.mounts, surface.control] }),
+      { port: 0, host: "127.0.0.1" },
+    );
+    servers.push(server);
+    const url = `http://127.0.0.1:${await server.listening}`;
+    const fromBrowser = { origin: "http://localhost:5173" };
+    const origin = (res: Response) => res.headers.get("access-control-allow-origin");
+    const listed = (res: Response, name: string) =>
+      (res.headers.get(name) ?? "").split(",").map((part) => part.trim().toLowerCase());
+    // Derived from what the binding serves, so a route added later cannot ship browser-unreachable. A JSON body is
+    // not a safelisted content-type, so a write's preflight names it, and a fronted deployment adds `authorization`.
+    const served = readFileSync(new URL("../src/channels/protocol-http.ts", import.meta.url), "utf8");
+    const keys = [...served.matchAll(/"(GET|POST|PATCH|DELETE) (\/[^"\s]*)"/g)].map(([, method, path]) => ({
+      method: method as string,
+      path: (path as string).replace(/\{[^}]+\}/g, "x"),
+    }));
+    expect(keys.length).toBeGreaterThan(10);
+    for (const { method, path } of [...keys, { method: "POST", path: "/invoke" }]) {
+      const requested = method === "GET" ? ["authorization"] : ["authorization", "content-type"];
+      const res = await fetch(`${url}${path}`, {
+        method: "OPTIONS",
+        headers: {
+          ...fromBrowser,
+          "access-control-request-method": method,
+          "access-control-request-headers": requested.join(", "),
+        },
+      });
+      // The check a BROWSER performs: everything the preflight named must be covered.
+      expect({
+        path,
+        status: res.status,
+        origin: origin(res),
+        method: listed(res, "access-control-allow-methods").includes(method.toLowerCase()),
+        headers: requested.every((h) => listed(res, "access-control-allow-headers").includes(h)),
+      }).toEqual({ path, status: 204, origin: "*", method: true, headers: true });
+      expect(res.headers.get("vary")?.toLowerCase()).toContain("origin");
+    }
+
+    // A refused or failing call must stay READABLE: without the headers the browser hands the client an opaque
+    // network error instead of the status that says what went wrong.
+    for (const [path, status] of [
+      ["/control/nonexistent", 404],
+      ["/control/sessions/s", 405],
+      ["/sessions/unknown", 404],
+    ] as const) {
+      const res = await fetch(`${url}${path}`, { headers: fromBrowser });
+      expect({ path, status: res.status, origin: origin(res) }).toEqual({ path, status, origin: "*" });
+    }
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    try {
+      const failed = await fetch(`${url}/agent/commands`, { headers: fromBrowser });
+      expect({ status: failed.status, origin: origin(failed) }).toEqual({ status: 500, origin: "*" });
+      // Failing visibly is not optional just because the client now gets a readable status...
+      expect(errors.mock.calls.map(String).join("\n")).toMatch(/permission denied/);
+      // ...and the internal message stays internal.
+      expect(await failed.text()).not.toMatch(/permission denied/);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("the route table in api-reference lists exactly the routes the binding serves", () => {
@@ -218,10 +337,21 @@ describe("the HTTP binding", () => {
     expect(bogus.status).toBe(400);
   });
 
-  it("refuses an unknown field instead of dropping it", async () => {
+  it("refuses an unknown field instead of dropping it, and a body that is not an object", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const res = await fetch(`${url}/invoke`, invokeBody({ sessionId: "s", prompt: { text: "x" }, whenbusy: "reject" }));
     expect(res.status).toBe(400);
+    const patch = (body: string) =>
+      fetch(`${url}/control/sessions/s`, { method: "PATCH", headers: { "content-type": "application/json" }, body });
+    // An update that names a field nothing writes would otherwise be answered ok with nothing written.
+    expect(await (await patch('{"colour":"red"}')).json()).toMatchObject({ error: { code: "invalid_request" } });
+    for (const body of ["[]", "null", '"x"', "7", "{not"]) {
+      const answered = await patch(body);
+      expect({ body, status: answered.status }).toEqual({ body, status: 400 });
+      await answered.body?.cancel();
+    }
+    // A path segment that does not decode is a route nothing serves, never a throw past the binding.
+    expect((await fetch(`${url}/sessions/%E0%A4%A`)).status).toBe(404);
   });
 
   it("a follow of a session with nothing new starts at once, and ends when its caller leaves", async () => {

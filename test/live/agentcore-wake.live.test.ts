@@ -54,7 +54,9 @@ import {
   aws,
   deployAgentcore,
   destroyAgentcoreDeployment,
+  expectCompleted,
   invokeAgentcore,
+  sseEvents,
   installSpec,
   requireAwsAccount,
   requireEnv,
@@ -186,7 +188,7 @@ describe("agentcore wake alarms: a self-scheduled wake-up becomes an EventBridge
       dir: agentDir,
       label: "wake",
     });
-    expect(body, `the wake turn did not complete:\n${body.slice(0, 600)}`).toContain('"type":"completed"');
+    expectCompleted(sseEvents(body), "the wake run");
 
     // THE assertion. Everything between the tool call and this line is the chain that has no other
     // test: the store write, the sink, the authenticated POST to the forwarder's reserved path, and

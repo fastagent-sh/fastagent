@@ -94,10 +94,8 @@ describe("harness neutrality: the core subpath + channel spine import no harness
     "protocol-remote.ts",
     "channels/protocol-http.ts",
     "channels/router.ts",
-    "agent.ts",
-    "collect.ts",
+    "protocol-collect.ts",
     "cli/invoke-stream.ts",
-    "channels/http.ts",
     "channels/body.ts",
     "channels/respond.ts",
     "channels/telegram/telegram.ts",
@@ -291,7 +289,7 @@ describe("channels/kit is defined by who imports it", () => {
   });
 
   it("...and the serving mechanism beside it stays out of the kit", () => {
-    for (const file of ["serve.ts", "http.ts", "control.ts", "discover.ts"]) {
+    for (const file of ["serve.ts", "protocol-http.ts", "discover.ts"]) {
       const src = readFileSync(resolve(srcDir, "channels", file), "utf8");
       expect(src.includes("./kit/"), `${file} reaches into the kit`).toBe(false);
     }
@@ -305,8 +303,7 @@ describe("the contracts depend on nothing", () => {
   // and the day that type drags in an HTTP framework, every such file inherits it. This is the check
   // that keeps the split honest, and it is why serving lives in channels/serve.ts instead.
   it("each of them pulls no package at all", () => {
-    // protocol.ts is the contract every caller uses; agent.ts and session.ts are v0.1's, kept until nothing uses them.
-    const offenders = ["protocol.ts", "channel.ts", "agent.ts", "session.ts"].flatMap((contract) =>
+    const offenders = ["protocol.ts", "channel.ts"].flatMap((contract) =>
       [...staticPackageGraph(contract)].map((p) => `${contract} → ${p}`),
     );
     expect(offenders).toEqual([]);

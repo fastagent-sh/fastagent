@@ -156,3 +156,39 @@ export async function* sseData(body: ReadableStream<Uint8Array>, watch?: ReadBud
     reader.releaseLock();
   }
 }
+
+/**
+ * A remote stream the caller can leave at any point. An async generator suspended on a quiet await (a silent SSE read)
+ * parks inside that await, and `gen.return()`/`gen.throw()` queue behind the pending `next()` forever
+ * (async-generator semantics), so leaving would deadlock. This iterator's `return()` first runs `cancel` (abort the
+ * connection, which settles the suspension), then delegates to `gen.return`, swallowing its rejection (the
+ * generator's own catch/finally already surfaced the outcome). `throw()` tears down the same way and rethrows the
+ * caller's error.
+ *
+ * Leaving also SILENCES the stream: a generator parked in an await can still reach a `yield` on its way out, and that
+ * yield would satisfy the pending `next()`, handing an event to a caller that already left. Deciding it here, once,
+ * keeps every producer from re-asking "is anyone still listening?" before each yield. Not `Stream.toAsyncIterable`:
+ * a pull that has already resolved still hands its value back from the same `next()`.
+ */
+export function abortFirstIterator<T>(gen: AsyncGenerator<T>, cancel: () => void): AsyncIterator<T> {
+  let cancelled = false;
+  const teardown = async () => {
+    cancelled = true;
+    cancel();
+    await gen.return(undefined as never).catch(() => {});
+  };
+  return {
+    async next() {
+      const result = await gen.next();
+      return cancelled ? { done: true as const, value: undefined } : result;
+    },
+    async return() {
+      await teardown();
+      return { done: true as const, value: undefined };
+    },
+    async throw(error?: unknown): Promise<IteratorResult<T>> {
+      await teardown();
+      throw error;
+    },
+  };
+}
