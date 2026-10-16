@@ -1,6 +1,6 @@
 /**
  * An agent with no default model still opens: its conversations are readable and a session that records its model
- * runs on it. Only a session with no model of its own is refused, at invoke, with `missing_model` (#706).
+ * runs on it. Only a session with no model of its own fails, at run time, with `missing_model` (#706).
  */
 import { collect } from "../src/protocol-collect.ts";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -8,107 +8,108 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AgentEvent, MISSING_MODEL_CODE } from "../src/agent.ts";
 import { createPiAgentFromDir } from "../src/harnesses/pi/open.ts";
 import { piInMemorySessionRecordStore } from "../src/harnesses/pi/session-store.ts";
-import { fauxControlledAgent } from "./agent.ts";
+import type { Agent, SessionState } from "../src/protocol.ts";
+import { fauxAgent } from "./agent.ts";
 
 const FAUX = { provider: "faux-706" };
 
-async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
-  const out: AgentEvent[] = [];
-  for await (const event of events) out.push(event);
-  return out;
+async function stateOf(agent: Agent, sessionId: string): Promise<SessionState> {
+  const read = await agent.sessions.get(sessionId).read({ limit: 0 });
+  if (!read.ok) throw new Error(read.error.message);
+  return read.state;
+}
+
+/** How a run that could not run ended: its `missing_model` error. */
+async function missingModel(
+  agent: Agent,
+  sessionId: string,
+): Promise<{ code: string; retryable: boolean; message: string }> {
+  const error = await collect(agent.invoke({ sessionId, prompt: { text: "hi" } })).then(
+    () => undefined,
+    (thrown: { outcome?: { error?: { code: string; retryable: boolean; message: string } } }) => thrown.outcome?.error,
+  );
+  if (!error) throw new Error(`the run on ${sessionId} did not fail`);
+  return error;
 }
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe("an agent with no default model", () => {
-  it("refuses a session with no model of its own before creating it, and runs one once update({ model }) gives it one", async () => {
-    const { agent, control, faux } = await fauxControlledAgent([fauxAssistantMessage("hello")], {
-      faux: FAUX,
-      noDefaultModel: true,
-    });
+  it("fails a run on a session with no model of its own, and runs it once update({ model }) gives it one", async () => {
+    const { agent, faux } = fauxAgent([fauxAssistantMessage("hello")], { faux: FAUX, noDefaultModel: true });
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
-    const s = control.sessions.get("fresh");
+    expect((await agent.models()).map((m) => m.spec)).toContain(spec);
 
+    expect(await missingModel(agent, "fresh")).toMatchObject({
+      code: "missing_model",
+      retryable: false,
+      message: expect.stringMatching(/session "fresh" has no model: it records none/),
+    });
     // Readable, and honest that there is no model yet.
-    const before = await s.state();
+    const before = await stateOf(agent, "fresh");
     expect(before).not.toHaveProperty("model");
-    expect(before).not.toHaveProperty("availableThinkingLevels");
-    expect((await control.models()).map((m) => m.spec)).toContain(spec);
-
-    const refused = await drain(agent.invoke({ session: "fresh" }, { text: "hi" }));
-    expect(refused.at(-1)).toMatchObject({ type: "failed", code: MISSING_MODEL_CODE, retryable: false });
-    expect((refused.at(-1) as { details: string }).details).toMatch(/session "fresh" has no model: it records none/);
-    // A turn that could not run left no empty conversation behind.
-    expect((await control.sessions.list()).map((summary) => summary.session)).not.toContain("fresh");
+    expect(before).not.toHaveProperty("thinkingLevels");
 
     // A level without a model is recorded as asked; the model then decides what runs.
+    const s = agent.sessions.get("fresh");
     expect(await s.update({ thinkingLevel: "high" })).toEqual({ ok: true });
-    expect(await s.state()).not.toHaveProperty("model");
+    expect(await stateOf(agent, "fresh")).not.toHaveProperty("model");
     expect(await s.update({ model: spec })).toEqual({ ok: true });
-    expect(await s.state()).toMatchObject({ model: spec });
+    expect(await stateOf(agent, "fresh")).toMatchObject({ model: spec });
 
-    const ran = await drain(agent.invoke({ session: "fresh" }, { text: "hi" }));
-    expect(ran.at(-1)).toEqual({ type: "completed" });
+    expect((await collect(agent.invoke({ sessionId: "fresh", prompt: { text: "hi" } }))).text).toBe("hello");
   });
 
-  it("a new thread takes its model from its parent, and one whose parent has none leaves no record behind", async () => {
+  it("a fork takes its model from its source, and one whose source has none fails missing_model", async () => {
     const sessions = piInMemorySessionRecordStore();
-    const withDefault = await fauxControlledAgent([fauxAssistantMessage("in the room")], { faux: FAUX, sessions });
-    expect((await drain(withDefault.agent.invoke({ session: "room" }, { text: "hi" }))).at(-1)).toEqual({
-      type: "completed",
-    });
+    const withDefault = fauxAgent([fauxAssistantMessage("in the room")], { faux: FAUX, sessions });
+    await collect(withDefault.agent.invoke({ sessionId: "room", prompt: { text: "hi" } }));
 
-    const { agent, control } = await fauxControlledAgent([fauxAssistantMessage("in the thread")], {
+    const { agent } = fauxAgent([fauxAssistantMessage("in the thread")], {
       faux: FAUX,
       sessions,
       noDefaultModel: true,
     });
-    expect(await control.sessions.get("bare").update({ name: "a parent with no model" })).toEqual({ ok: true });
-    for (const parentSession of ["nowhere", "bare"]) {
-      const child = `child-of-${parentSession}`;
-      const refused = await drain(agent.invoke({ session: child, parentSession }, { text: "hi" }));
-      expect(refused.at(-1), parentSession).toMatchObject({ type: "failed", code: MISSING_MODEL_CODE });
-      expect(
-        (await control.sessions.list()).map((s) => s.session),
-        parentSession,
-      ).not.toContain(child);
-    }
+    expect(await agent.sessions.create({ sessionId: "bare" })).toMatchObject({ ok: true });
+    expect(await agent.sessions.get("bare").update({ name: "a source with no model" })).toEqual({ ok: true });
+    expect(await agent.sessions.create({ sessionId: "child-of-bare", fork: { sessionId: "bare" } })).toMatchObject({
+      ok: true,
+    });
+    expect(await missingModel(agent, "child-of-bare")).toMatchObject({ code: "missing_model" });
 
-    const inherited = await drain(agent.invoke({ session: "thread", parentSession: "room" }, { text: "go on" }));
-    expect(inherited.at(-1)).toEqual({ type: "completed" });
+    expect(await agent.sessions.create({ sessionId: "thread", fork: { sessionId: "room" } })).toMatchObject({
+      ok: true,
+    });
+    expect((await collect(agent.invoke({ sessionId: "thread", prompt: { text: "go on" } }))).text).toBe(
+      "in the thread",
+    );
   });
 
   it("runs a session on the model it records, and names a recorded model this registry does not know", async () => {
     const sessions = piInMemorySessionRecordStore();
     // Recorded under an agent that HAD a default: pi writes the model a new session starts on into its record.
-    const before = await fauxControlledAgent([fauxAssistantMessage("first")], { faux: FAUX, sessions });
-    expect((await drain(before.agent.invoke({ session: "s1" }, { text: "hi" }))).at(-1)).toEqual({ type: "completed" });
+    const before = fauxAgent([fauxAssistantMessage("first")], { faux: FAUX, sessions });
+    await collect(before.agent.invoke({ sessionId: "s1", prompt: { text: "hi" } }));
     const spec = `${before.faux.getModel().provider}/${before.faux.getModel().id}`;
 
-    const now = await fauxControlledAgent([fauxAssistantMessage("second")], {
-      faux: FAUX,
-      sessions,
-      noDefaultModel: true,
-    });
-    expect((await now.control.sessions.list()).map((summary) => summary.session)).toContain("s1");
-    expect(await now.control.sessions.get("s1").state()).toMatchObject({ model: spec });
-    expect((await drain(now.agent.invoke({ session: "s1" }, { text: "again" }))).at(-1)).toEqual({ type: "completed" });
-    const answers = (await now.control.sessions.get("s1").entries()).entries.filter((e) => e.kind === "assistant");
+    const now = fauxAgent([fauxAssistantMessage("second")], { faux: FAUX, sessions, noDefaultModel: true });
+    expect((await now.agent.sessions.list()).map((summary) => summary.sessionId)).toContain("s1");
+    expect(await stateOf(now.agent, "s1")).toMatchObject({ model: spec });
+    expect((await collect(now.agent.invoke({ sessionId: "s1", prompt: { text: "again" } }))).text).toBe("second");
+    const read = await now.agent.sessions.get("s1").read();
+    const answers = read.ok ? read.entries.filter((e) => e.kind === "assistant_message") : [];
     expect(answers.map((e) => (e.data as { text: string }).text)).toEqual(["first", "second"]);
 
     // Opened where that model is not registered, and with no default: refused, saying which model it records.
-    const elsewhere = await fauxControlledAgent([], { faux: { provider: "other" }, sessions, noDefaultModel: true });
-    expect(await elsewhere.control.sessions.get("s1").state()).not.toHaveProperty("model");
-    const refused = await drain(elsewhere.agent.invoke({ session: "s1" }, { text: "again" }));
-    expect(refused.at(-1)).toMatchObject({ type: "failed", code: MISSING_MODEL_CODE });
-    expect((refused.at(-1) as { details: string }).details).toContain(`the model it records, ${spec}, is not one`);
+    const elsewhere = fauxAgent([], { faux: { provider: "other" }, sessions, noDefaultModel: true });
+    expect(await stateOf(elsewhere.agent, "s1")).not.toHaveProperty("model");
+    expect((await missingModel(elsewhere.agent, "s1")).message).toContain(`the model it records, ${spec}, is not one`);
     // Compaction is a model call on the session's model: refused with the same code, the same fix applies.
-    expect(await elsewhere.control.sessions.get("s1").compact()).toMatchObject({
+    expect(await elsewhere.agent.sessions.get("s1").compact()).toMatchObject({
       ok: false,
-      error: { code: MISSING_MODEL_CODE, retryable: false },
+      error: { code: "missing_model", retryable: false },
     });
   });
 

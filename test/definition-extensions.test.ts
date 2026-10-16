@@ -11,7 +11,7 @@ import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition, createPiAgentFromDir } from "../src/index.ts";
-import { definitionServices } from "../src/harnesses/pi/agent-session-factory.ts";
+import { definitionServices } from "../src/harnesses/pi/session-binding.ts";
 import { agentModels } from "../src/harnesses/pi/agent-models.ts";
 import { withModelRegistration } from "../src/harnesses/pi/models.ts";
 import { registerAccountModels } from "../src/harnesses/pi/openai-account-models.ts";

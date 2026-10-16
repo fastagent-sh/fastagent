@@ -3,7 +3,6 @@
  * iterating never throws, a result that failed resolves as one, and only the reads with no failure branch reject
  * (SPEC v1 §2). A transport failure is `unavailable`, which a caller may retry.
  */
-import { abortFirstIterator } from "./collect.ts";
 import {
   type AbortResult,
   type AgentCommand,
@@ -28,6 +27,7 @@ import {
   PAYLOAD_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,
   StreamEnded,
+  abortFirstIterator,
   endedBecause,
   openStreamBody,
   readBudget,

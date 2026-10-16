@@ -1,42 +1,18 @@
-/** The turn mechanism's HARNESS-agnostic half: the parts that describe a turn rather than pi. */
-import { stripVTControlCharacters } from "node:util";
-import {
-  type AssistantMessage,
-  type ImageContent,
-  type ThinkingContent,
-  type ToolResultMessage,
-  contentText,
-} from "@earendil-works/pi-ai";
-import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
-import type { AnswerOutcome, PromptDisposition, SessionEvent } from "../../session.ts";
+/**
+ * How fastagent reads pi's messages: an answer's outcome and published thinking, whether a tool result asked to end its
+ * run, a prompt's images, and the run outcome an answer or a thrown error makes.
+ */
+import type { AssistantMessage, ImageContent, ThinkingContent, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { LoopOutcome } from "../../loop-port.ts";
+import { type AgentError, type Prompt, agentError } from "../../protocol.ts";
 import { log } from "../../log.ts";
 
-// ── Lease: single-writer concurrency floor ──────────────────────────────────
-//
-// Corruption-prevention floor only: it does not pick a UX.
+/**
+ * How an answer ended, when it did not end normally. `truncated` is an answer cut off at the output limit, a property
+ * of the answer rather than its run.
+ */
+export type AnswerOutcome = { status: "failed" | "aborted" | "truncated"; error?: { message: string } };
 
-type Release = () => void;
-
-export interface Lease {
-  /** Try to acquire exclusive write access for the session (fail-fast). */
-  tryAcquire(session: string): Release | null;
-}
-
-export function inProcessLease(): Lease {
-  const busy = new Set<string>();
-  return {
-    tryAcquire(session: string): Release | null {
-      if (busy.has(session)) return null;
-      busy.add(session);
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        busy.delete(session);
-      };
-    },
-  };
-}
 /** Clearly-transient network error codes (Node/undici), decisive on their own. */
 const RETRYABLE_CODES = new Set([
   "ECONNRESET",
@@ -69,7 +45,7 @@ function retryableFromSignal(signal: { status?: number; code?: unknown }): boole
 }
 
 /** Classify `retryable`: structured status/code first, message prose only as the last-resort ceiling. */
-export function classifyRetryable(details: string, signal: { status?: number; code?: unknown }): boolean {
+function classifyRetryable(details: string, signal: { status?: number; code?: unknown }): boolean {
   return retryableFromSignal(signal) ?? RETRYABLE_MESSAGE.test(details);
 }
 
@@ -92,9 +68,8 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
   return {};
 }
 /**
- * How an answer ended, read off the stopReason pi records on the message. The ONE reading: `message_finished`,
- * the `assistant` entry `entries()` publishes, and the invoke terminal all derive from it, so the live outcome and
- * the recorded one cannot disagree.
+ * How an answer ended, read off the stopReason pi records on the message. The ONE reading: the `assistant_message`
+ * entry and the run's outcome both derive from it, so the recorded answer and the run cannot disagree.
  */
 export function answerOutcome(message: AssistantMessage): AnswerOutcome | undefined {
   const error = message.errorMessage ? { error: { message: message.errorMessage } } : {};
@@ -131,7 +106,8 @@ export function abortedAnswer(
  * Whether a thinking block is PUBLISHED: readable reasoning. A redacted one holds a provider's opaque payload and a
  * placeholder (pi writes "[Reasoning redacted]" for it), not reasoning anyone can read, so it is neither streamed nor
  * read back. The ONE rule: the live `message_delta { channel: "thinking" }` ({@link streamsThinkingDelta}) and the
- * `assistant` entry's `thinking` ({@link answerThinking}) both apply it, so a client reads the same text either way.
+ * `assistant_message` entry's `thinking` ({@link answerThinking}) both apply it, so a client reads the same text either
+ * way.
  *
  * One exception, by when the flag is read: live reads it as each delta arrives, the record as the answer ended. pi's
  * Bedrock path flags a block redacted when its first encrypted chunk arrives, and its readable text and its encrypted
@@ -165,9 +141,9 @@ export function streamsThinkingDelta(event: { contentIndex: number; partial: Ass
  * Whether a finished tool call asked to end its run (pi's `terminate`: returned by the tool, or set by a `tool_call`
  * hook that blocks it; pi 0.99.2's `tool_result` hook cannot set it). After a batch whose EVERY result asks it, pi
  * makes no further model call for that batch, so unless a queued steer or follow-up continues the run, it completes on
- * `tool` entries with no answer after them: the same shape a process killed after its tools leaves. A call made from
- * inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count.
- * The ONE reading: the live `tool_finished` and the flag {@link markEndsRun} records both come from it.
+ * `tool_result` entries with no answer after them: the same shape a process killed after its tools leaves. A call made
+ * from inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count. The flag
+ * {@link markEndsRun} records comes from it.
  */
 export function asksToEndRun(event: { result?: unknown; parentToolCallId?: string }): boolean {
   return !event.parentToolCallId && (event.result as { terminate?: unknown } | undefined)?.terminate === true;
@@ -187,29 +163,37 @@ export function endsRun(message: ToolResultMessage): boolean {
 }
 
 /**
- * Terminal mapping, decided by the resolved message's outcome: pi's `prompt()` RESOLVES a message with stopReason
- * "error"/"aborted" rather than throwing, so relying on catch alone would miss that whole failure class and violate
- * SPEC MUST 1. A truncated final answer still completes the run.
+ * A run's failure from what pi threw: worth sending again when its status or network code says so (a model error),
+ * otherwise an internal fault.
  */
-export function toTerminal(message: AssistantMessage): AgentEvent {
+export function thrownFailure(error: unknown): AgentError {
+  const message = error instanceof Error ? error.message : String(error);
+  return classifyRetryable(message, errorSignal(error))
+    ? { ...agentError("model_error", message), retryable: true }
+    : agentError("internal", message);
+}
+
+/**
+ * How a run ended, by its last answer. pi's `prompt()` RESOLVES a message that failed or was aborted rather than
+ * throwing, so the answer is read rather than relying on a catch. A truncated answer still answers: `max_tokens`. An
+ * aborted one is a failure here; a run the caller stopped is reported `canceled` by the port, which knows it asked.
+ */
+export function answeredOutcome(message: AssistantMessage): LoopOutcome {
   const outcome = answerOutcome(message);
+  if (outcome?.status === "truncated") return { status: "max_tokens" };
   if (outcome?.status === "aborted") {
-    // A deliberate stop (a control-plane or consumer abort), not an error — see {@link ABORTED_CODE} for the consumer
-    // contract (design §6).
-    const details = outcome.error?.message ?? "run aborted";
-    return { type: "failed", details, retryable: false, code: ABORTED_CODE };
+    return { status: "failed", error: agentError("internal", outcome.error?.message ?? "run aborted") };
   }
   if (outcome?.status === "failed") {
     const details = outcome.error?.message ?? "model stopped: error";
-    return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
+    return {
+      status: "failed",
+      error: { ...agentError("model_error", details), retryable: classifyRetryable(details, messageSignal(message)) },
+    };
   }
-  return { type: "completed" };
+  return { status: "completed" };
 }
 
-export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "failed" }> {
-  const details = error instanceof Error ? error.message : String(error);
-  return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
-}
 /**
  * Map prompt images to pi ImageContent. `prompt()` normalizes its images itself, with the bound model's resize
  * profile (`inputLimits.images.resize`) and format conversion, so a `"prompt"` delivery hands them over as-is.
@@ -241,91 +225,4 @@ export async function toPiPromptOptions(
     }),
   );
   return { images };
-}
-/** Live modulation handles for one active run — what the control plane's `dispatch` routes to. */
-export interface RunControls {
-  steer(prompt: Prompt): Promise<PromptDisposition>;
-  followUp(prompt: Prompt): Promise<PromptDisposition>;
-  abort(): Promise<void>;
-}
-
-/** The DATA-plane observation seam: every rich event of every run, pushed as it happens. */
-export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
-
-/**
- * The SPEC projection of ONE run's rich stream. Stateful only for `tool_progress`, the one event that is a status
- * rather than a fact: an outer call's status line is sent when it changes, and a call that call makes, at any depth,
- * is its status. Nested calls are otherwise the observation plane's alone.
- */
-export function agentEventProjection(): (se: SessionEvent) => AgentEvent | null {
-  /** Each nested call's outer call, the one the stream announced with `tool_started`. */
-  const outerOf = new Map<string, string>();
-  /** The status line each outer call last reported. */
-  const shown = new Map<string, string>();
-  const progress = (id: string, text: string | undefined): AgentEvent | null => {
-    if (text === undefined || shown.get(id) === text) return null;
-    shown.set(id, text);
-    return { type: "tool_progress", id, text };
-  };
-  return (se) => {
-    switch (se.type) {
-      case "message_delta": {
-        const d = se.data as { channel: "text" | "thinking"; delta: string };
-        return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
-      }
-      case "tool_started": {
-        const d = se.data as { id: string; name: string; args: Json; parentToolCallId?: string };
-        if (!d.parentToolCallId) return { type: "tool_started", id: d.id, name: d.name, args: d.args };
-        const outer = outerOf.get(d.parentToolCallId) ?? d.parentToolCallId;
-        outerOf.set(d.id, outer);
-        return progress(outer, callLine(d.name, d.args));
-      }
-      case "tool_progress": {
-        const d = se.data as { id: string; partialResult: { content?: unknown }; parentToolCallId?: string };
-        // A nested call's own output is not its caller's status; the nested call starting is (above).
-        if (d.parentToolCallId || !Array.isArray(d.partialResult.content)) return null;
-        return progress(d.id, lastLine(contentText(d.partialResult.content, "\n")));
-      }
-      case "tool_finished": {
-        const d = se.data as { id: string; isError: boolean; content: Json; parentToolCallId?: string };
-        if (d.parentToolCallId) return null;
-        return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
-      }
-      case "retry_scheduled": {
-        // `operation` (compaction | branch_summary) stays session-plane vocabulary.
-        const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
-        return {
-          type: "retrying",
-          attempt: d.attempt,
-          maxAttempts: d.maxAttempts,
-          delayMs: d.delayMs,
-          reason: d.error,
-        };
-      }
-      default:
-        return null;
-    }
-  };
-}
-
-/**
- * The line a terminal shows last: control sequences removed, and a bare `\r`, a progress bar redrawing in place, ends a
- * line like `\n` does. Undefined when there is no visible text yet (a shell that has printed nothing).
- */
-function lastLine(text: string): string | undefined {
-  const lines = stripVTControlCharacters(text).split(/\r\n|\r|\n/);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]?.trim();
-    if (line) return line;
-  }
-  return undefined;
-}
-
-/** A nested call as its caller's status: the tool and its first plain argument, on one line (`weather London`). */
-function callLine(name: string, args: Json): string {
-  const first =
-    args !== null && typeof args === "object" && !Array.isArray(args)
-      ? Object.values(args).find((value) => typeof value === "string" || typeof value === "number")
-      : undefined;
-  return first === undefined ? name : `${name} ${String(first).replace(/\s+/g, " ").trim()}`.trim();
 }

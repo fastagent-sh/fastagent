@@ -9,7 +9,7 @@
  *
  * THE REAL ASSEMBLY, not a hand-built session: the behaviour needs two things to hold at once — pi's
  * `AgentSession.prompt()` expands the prefix, and fastagent hands it the definition's skills with a readable
- * `filePath` while never passing `expandPromptTemplates: false` (src/harnesses/pi/turn-kit.ts). Either half can
+ * `filePath` while never passing `expandPromptTemplates: false` (src/harnesses/pi/messages.ts). Either half can
  * regress without a word changing in this file, so the assertion is on the bytes the model receives, through
  * `createPiAgentFromDefinition`.
  */

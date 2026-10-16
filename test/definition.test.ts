@@ -16,7 +16,7 @@ import {
   z,
 } from "../src/index.ts";
 import { CODING_TOOL_NAMES, assemblePiFromDefinition, piAllCodingTools } from "../src/harnesses/pi/create.ts";
-import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { piSessionBinder } from "../src/harnesses/pi/session-binding.ts";
 import { loadAgentDefinition } from "../src/harnesses/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/paths.ts";
@@ -739,7 +739,7 @@ describe("create L2: explicit tools replace the coding defaults", () => {
       tools: piAllCodingTools(dir).filter((tool) => tool.name === "read"),
     });
 
-    const session = await piAgentSessionFactory({ ...assembly.binding, sessions: assembly.sessions })("s");
+    const session = await piSessionBinder(assembly.binding)("s", await assembly.sessions.openOrCreate("s"));
     // ACTIVE is the property that matters: what the model is offered and may call. The registry may
     // hold more than we passed — pi 0.84.3 keeps its own `powershell` there — but nothing we omitted
     // is ever ACTIVATED, and that is the guarantee. What the model actually receives is asserted in

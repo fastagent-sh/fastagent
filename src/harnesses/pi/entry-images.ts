@@ -1,12 +1,14 @@
 /**
- * Which images a journal entry PUBLISHES, the ref each one is published under, and the read back from a ref. Both
- * `user_message` (invoke-session.ts) and `entries()`/`image()` (session-control.ts) go through here, so the live
- * event, the durable entry and the byte read cannot disagree about which images exist or what their refs are.
+ * Which images a journal entry PUBLISHES, the ref each one is published under, and the read back from a ref. The log
+ * record (log-records.ts) and `attachment()` both go through here, so the entry and the byte read cannot disagree
+ * about which images exist or what their refs are.
  */
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SessionEntry as PiSessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ImageRef } from "../../agent.ts";
-import type { EntryImage } from "../../session.ts";
+import type { ImageRef } from "../../protocol.ts";
+
+/** An image an entry publishes: its ref, for `attachment(ref)`, and its type. */
+type EntryImage = { ref: string; mimeType: string };
 
 type Message = { role: string; content?: unknown };
 

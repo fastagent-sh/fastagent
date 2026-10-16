@@ -43,23 +43,3 @@ export function fauxPiAgent(responses: FauxResponseStep[]): Agent {
   const model = faux.getModel();
   return createPiAgent({ model: `${model.provider}/${model.id}`, providers: [faux.provider], instructions: "test" });
 }
-
-/**
- * What a fastagent turn touches on a pi `AgentSession` beyond prompt/subscribe/dispose, for a hand-written double:
- * a session with no extensions loaded that is idle once `prompt()` returns.
- */
-export const bareSessionParts = {
-  waitForIdle: async () => {},
-  sendUserMessage: async () => {},
-  sendCustomMessage: async () => {},
-  /** A getter, so each spread gets its own record: a run wraps `appendMessage` on the one it binds. */
-  get sessionManager() {
-    return { appendMessage: () => "entry" };
-  },
-  extensionRunner: {
-    onError: () => () => {},
-    emit: async () => undefined,
-    hasHandlers: () => false,
-    getRegisteredCommands: () => [],
-  },
-};

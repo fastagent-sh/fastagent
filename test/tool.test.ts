@@ -139,10 +139,9 @@ describe("defineTool", () => {
       { tools: [tool] },
     );
 
-    const events: { type: string }[] = [];
-    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    const { text } = await collect(agent.invoke({ sessionId: "s", prompt: { text: "go" } }));
 
-    expect(events.at(-1)?.type).toBe("completed");
+    expect(text).toBe("done");
     expect(seen).toEqual({ query: "q", note: null });
   });
 });

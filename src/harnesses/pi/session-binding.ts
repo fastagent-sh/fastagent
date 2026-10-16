@@ -1,6 +1,6 @@
 /**
- * The AgentSession L0's harness binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one
- * durable record, per invoke.
+ * The harness binding: fastagent's assembled agent — model, prompt, skills, tools — bound to one durable record as a
+ * fresh pi `AgentSession`, per run (loop-harness.ts) or per conversation (chat's session-builder.ts).
  */
 import { dirname } from "node:path";
 import {
@@ -42,18 +42,16 @@ import {
   getAgentDir,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import { warnWhenChanged } from "./report.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
-import type { PiSessionRecordStore } from "./session-store.ts";
 import type { MountedTool } from "./tool.ts";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { resolveModel } from "./config.ts";
 import { MissingModel, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
 import { registerAccountModels } from "./openai-account-models.ts";
-import { abortedAnswer, asksToEndRun, markEndsRun } from "./turn-kit.ts";
+import { abortedAnswer, asksToEndRun, markEndsRun } from "./messages.ts";
 import { type TurnContext, agentSessionManager, sessionToolActivation, turnContext } from "./tool-context.ts";
 import type { DefinitionPrompt } from "./definition.ts";
 
@@ -72,9 +70,7 @@ export interface PiSessionDefinition {
   prompts?: DefinitionPrompt[];
 }
 
-export interface PiAgentSessionFactoryOptions {
-  /** Where conversations live. */
-  sessions: PiSessionRecordStore;
+export interface PiBindingOptions {
   /** A fresh model runtime per binding: extension routers and provider registrations belong to this session. */
   createModelRuntime: () => Promise<ModelRuntime>;
   /**
@@ -330,7 +326,7 @@ function fastagentSections(sections: Record<string, string>, failedExtensions: r
 }
 
 /** The resource posture a fastagent definition asks pi for — ONE definition of it, for both assemblies. */
-export function definitionResourceLoaderOptions(source: {
+function definitionResourceLoaderOptions(source: {
   definition: PiSessionDefinition;
   /** {@link readMachine} for this agent directory — resolved by the caller, because this function is synchronous. */
   machine: Machine;
@@ -384,10 +380,10 @@ export function definitionResourceLoaderOptions(source: {
 }
 
 /**
- * Records on a tool result that it asked to end its run ({@link asksToEndRun}), so `entries()` can tell a run that
- * ended on its tool batch from one cut after its tools. Through pi's `message_end` replacement, which runs before pi
- * appends the message to the record. LAST among the extensions (pi appends inline factories after path ones), so a
- * definition's own `message_end` replacement cannot drop the flag. One instance per loader, so per session.
+ * Records on a tool result that it asked to end its run ({@link asksToEndRun}), so the `tool_result` record can tell
+ * a run that ended on its tool batch from one cut after its tools. Through pi's `message_end` replacement, which runs
+ * before pi appends the message to the record. LAST among the extensions (pi appends inline factories after path
+ * ones), so a definition's own `message_end` replacement cannot drop the flag. One instance per loader, so per session.
  */
 const recordEndsRun: InlineExtension = {
   name: "fastagent-record-ends-run",
@@ -454,14 +450,14 @@ function admissionFirst(base: LoadExtensionsResult): LoadExtensionsResult {
 }
 
 /** Tell a waiting {@link startCompaction} that pi admitted the compaction on this record. */
-export function admitCompaction(record: SessionManager): void {
+function admitCompaction(record: SessionManager): void {
   compactAdmissions.get(record)?.();
 }
 
 /**
  * pi's refusals when `prepareCompaction` finds nothing. They are plain Errors, so their text is the only way to tell
  * them from any other error pi raises before admission. If pi rewords them, the refusal still fails visibly, as
- * `boundary_command_failed` instead of `nothing_to_compact`, and the admission tests in session-control.test.ts,
+ * an `internal` failure instead of `nothing_to_compact`, and the admission tests in pi-session-settings.test.ts,
  * which run pi's real refusal, fail with it.
  */
 const NOTHING_TO_COMPACT = /^(Nothing to compact|Already compacted)\b/;
@@ -561,49 +557,20 @@ export async function servedExtensionCommands(options: {
   return runner.getRegisteredCommands();
 }
 
-/**
- * Open-or-create the record, then bind a fresh session to it — on a fresh resource loader.
- *
- * ONE LOADER PER SESSION, because pi's extension runtime belongs to its loader: a loader shared across concurrent
- * turns would let one conversation's extension act on another's session. It also makes the definition live with no
- * bookkeeping: every bind reads the prompt and skills this invoke read. The machine's half is the process's one read
- * (machine.ts). Extensions are live too: `extensionPaths` is asked for every bind, and answers only once pi's cache
- * holds the code on disk (live-extensions.ts), so the session loads the code as it is now.
- */
-export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
-  const { sessions } = options;
-  const bind = piSessionBinder(options);
-  return async (sessionId, inherit) => {
-    // Without a default, a turn that cannot run must leave no conversation behind in the listing. A new record with
-    // nothing to inherit records no model, so it is refused before it is created. One that inherits may get a model
-    // from its parent, which only the copy decides (the store's cut), so it is created and, if still model-less,
-    // removed below. The caller holds this session's lease, so nothing else creates the record in between.
-    const existed = options.modelSpec ? true : (await sessions.openIfExists(sessionId)) !== undefined;
-    if (!existed && !inherit) throw new MissingModel(sessionId, []);
-    // Publish the record before loading resources: boundary writes must find it while binding is in flight.
-    const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
-    try {
-      return await bind(sessionId, sessionManager);
-    } catch (error) {
-      if (error instanceof MissingModel && !existed) {
-        // The record this bind created for a thread whose parent supplied no model. A failed removal is reported on
-        // its own and does not replace `missing`: the caller still needs the missing_model answer and its fix.
-        await sessions.delete(sessionId).catch((removal: unknown) => {
-          log.warn(
-            `[fastagent] session ${sessionId}: could not remove the record of a refused turn: ${String(removal)}`,
-          );
-        });
-      }
-      throw error;
-    }
-  };
-}
-
 /** Binds a fresh session, with this definition, to a record the caller holds: it opens and creates nothing. */
 export type PiSessionBinder = (sessionId: string, sessionManager: SessionManager) => Promise<AgentSession>;
 
-/** The binding half of {@link piAgentSessionFactory}; it throws {@link MissingModel} when nothing names a model. */
-export function piSessionBinder(options: Omit<PiAgentSessionFactoryOptions, "sessions">): PiSessionBinder {
+/**
+ * Bind a fresh session to a record the caller holds — on a fresh resource loader. Throws {@link MissingModel} when
+ * nothing names a model.
+ *
+ * ONE LOADER PER SESSION, because pi's extension runtime belongs to its loader: a loader shared across concurrent
+ * runs would let one conversation's extension act on another's session. It also makes the definition live with no
+ * bookkeeping: every bind reads the prompt and skills as they are now. The machine's half is the process's one read
+ * (machine.ts). Extensions are live too: `extensionPaths` is asked for every bind, and answers only once pi's cache
+ * holds the code on disk (live-extensions.ts), so the session loads the code as it is now.
+ */
+export function piSessionBinder(options: PiBindingOptions): PiSessionBinder {
   const { thinkingLevel, cwd } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
   const tools = options.tools ?? [];

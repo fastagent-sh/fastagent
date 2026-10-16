@@ -9,11 +9,11 @@
  * agent dir away from `~/.pi/agent` — and every one of those was missed at least once here. A probe
  * that rebuilds the assembly measures the rebuild's fidelity, not the product.
  *
- * SPEC conformance therefore stays where it can be asserted honestly: test/conformance-session.test.ts
- * runs the full suite (MUST 1/2/3/6) against the L0 on a faux model. Cancellation in particular gains
- * nothing from a live provider — the assertion is that the harness's abort ran, which is identical in
- * both worlds. What only a real provider can settle is here: a real stream completes, a real HTTP
- * error becomes a `failed` terminal with the right `retryable`, a real record carries a conversation
+ * SPEC conformance therefore stays where it can be asserted honestly: test/pi-loop-harness.test.ts runs
+ * the full SPEC v1 suite against pi on a faux model. Cancellation in particular gains nothing from a live
+ * provider — the assertion is that the harness's abort ran, which is identical in both worlds. What only
+ * a real provider can settle is here: a real stream completes, a real HTTP error becomes a failed run
+ * with the right `retryable`, a real record carries a conversation
  * across two independent instances, and a real model CALLS a tool this repo described to it.
  *
  * `FASTAGENT_LIVE_MODEL` selects the model ("provider/modelId"); credentials resolve as the product
@@ -61,7 +61,6 @@ async function agentDirectory(model: string, files: Record<string, string> = {})
   return dir;
 }
 
-/** Drain a turn without letting a `failed` terminal throw — the SPEC's own discipline (MUST 2). */
 /** The run's durable entries, in order: what a probe asserts on (live deltas are best-effort). */
 async function entries(events: AsyncIterable<InvokeEvent>): Promise<Entry[]> {
   const out: Entry[] = [];

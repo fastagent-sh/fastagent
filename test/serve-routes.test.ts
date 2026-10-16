@@ -65,7 +65,7 @@ describe("serve: who may call this from a browser", () => {
   });
 
   it("echoes the headers the preflight asked for — a fixed list is a 204 the browser refuses to act on", async () => {
-    // `connectSessionControl({ fetchFn })` exists so a caller can satisfy whatever fronts this port.
+    // `connectAgent({ fetchFn })` exists so a caller can satisfy whatever fronts this port.
     // A fixed allow-list cannot know that header's name, so the preflight would pass and the real
     // request would never be sent.
     const res = await build()(

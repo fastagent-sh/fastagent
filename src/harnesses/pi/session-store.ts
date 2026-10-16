@@ -1,35 +1,35 @@
-/** Session persistence for the `AgentSession` L0. */
+/** Session records on pi's `SessionManager`: the caller's id encoded as a record name, created on disk at once. */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { contentText } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import type { SessionSummary, SessionUpdateField } from "../../session.ts";
+import { copyBranchInto, copyRecentBranch } from "./session-fork.ts";
 import { LEAF_ANCHOR, isConversationMessage, publishedLeaf, stampProvenance } from "./session-markers.ts";
 import { type OverrideEntryLike, activePath } from "./session-settings.ts";
-import {
-  type SessionInheritance,
-  copyBranchForInheritance,
-  copyBranchInto,
-  inheritanceCut,
-} from "./session-inheritance.ts";
+
+/** One record as a conversation-list row, under the CALLER's id. */
+interface RecordSummary {
+  sessionId: string;
+  name?: string;
+  createdAt: number;
+  updatedAt: number;
+  preview?: string;
+}
 
 /** The session RECORDS, as operations rather than as pi handles. */
 export interface PiSessionRecordStore {
-  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
+  openOrCreate(sessionId: string): Promise<SessionManager>;
   /**
    * OPEN-EXISTING sibling: an unknown session answers undefined, never creates one. The reads and every write that
    * needs history go through it; creating is `openOrCreate`'s.
    */
   openIfExists(sessionId: string): Promise<SessionManager | undefined>;
-  /** Write session properties, in the order pi's leaf pointer requires, and report what LANDED. */
-  applyProperties(sessionId: string, writes: PropertyWrites): Promise<AppliedProperties | undefined>;
   /** Every record this store holds, in CALLER ids. */
-  list(): Promise<SessionSummary[]>;
+  list(): Promise<RecordSummary[]>;
   /**
-   * Copy `from`'s history up to entry `at` into a new record named `into`, stamped with `provenance` so a repeat of
-   * the SAME fork can be recognised as one ({@link forkProvenance}) instead of becoming a second record or an
-   * overwrite. `recent` bounds what the model sees of the copy with the inheritance window a chat thread gets.
+   * Copy `from`'s history up to entry `at` into a new record named `into`, stamped with `provenance` (where it came
+   * from). `recent` bounds what the model sees of the copy to its newest exchanges (session-fork.ts).
    */
   fork(from: string, at: string, into: string, provenance: string, context?: "full" | "recent"): Promise<void>;
   delete(sessionId: string): Promise<boolean>;
@@ -46,7 +46,7 @@ export interface PropertyWrites {
 /** What a property write actually did, and what the record holds after it. */
 export interface AppliedProperties {
   /** In write order. */
-  landed: SessionUpdateField[];
+  landed: (keyof PropertyWrites)[];
   /** Why the rest stopped, if anything did. */
   failure?: unknown;
   /**
@@ -138,28 +138,6 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     renameSync(file, target);
     return target;
   };
-  /** Fork the named parent into `id`, or answer undefined so the caller starts empty. */
-  const inheritInto = async (sessionId: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
-    const found = locate(inherit.parentSession);
-    if (!found) {
-      log.warn(
-        `[fastagent] session "${sessionId}" names parent "${inherit.parentSession}", which has no record — starting empty`,
-      );
-      return undefined;
-    }
-    try {
-      const parent = SessionManager.open(found.path, found.dir);
-      const cut = inheritanceCut(parent, inherit.branchHints);
-      if (!cut) return undefined;
-      return fillStaged(piSessionId(sessionId), (staged) => copyBranchForInheritance(parent, staged, cut.at));
-    } catch (error) {
-      // Unattributed on purpose: this spans reading the parent AND writing the child.
-      log.warn(
-        `[fastagent] could not inherit from "${inherit.parentSession}" into "${sessionId}" (${String(error)}) — starting empty`,
-      );
-      return undefined;
-    }
-  };
   /**
    * The unreadable records the last listing reported, so a polled endpoint states the condition once rather than once
    * a second.
@@ -179,24 +157,17 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     return found ? SessionManager.open(found.path, found.dir) : undefined;
   };
   return {
-    async openOrCreate(sessionId, inherit) {
+    async openOrCreate(sessionId) {
       const found = locate(sessionId);
       if (found) return SessionManager.open(found.path, found.dir);
       mkdirSync(own, { recursive: true });
-      // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which is what makes it
-      // one-time by construction.
-      if (inherit) {
-        const inherited = await inheritInto(sessionId, inherit);
-        if (inherited) return inherited;
-      }
       // The CALLER's id in every message above; pi's spelling only where pi names the file.
       return materialize(SessionManager.create(cwd, own, { id: piSessionId(sessionId) }), own);
     },
     openIfExists: openExisting,
-    applyProperties: (sessionId, writes) => applyProperties(() => openExisting(sessionId), writes),
     async list() {
       const files = recordFiles(own);
-      const rows: SessionSummary[] = [];
+      const rows: RecordSummary[] = [];
       const unreadable: string[] = [];
       for (const file of files) {
         // A name this store did not write cannot be decoded back to a Caller id, and a row nobody can dial is worse
@@ -255,20 +226,14 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
   };
 }
 
-const copyBranch = (context: "full" | "recent") => (context === "recent" ? copyBranchForInheritance : copyBranchInto);
+const copyBranch = (context: "full" | "recent") => (context === "recent" ? copyRecentBranch : copyBranchInto);
 
-/** The property write, for both backends: the ONE place that knows how pi records a property. */
-async function applyProperties(
-  open: () => Promise<SessionManager | undefined>,
-  writes: PropertyWrites,
-): Promise<AppliedProperties | undefined> {
-  const record = await open();
-  return record ? applyPropertiesTo(record, writes) : undefined;
-}
-
-/** {@link applyProperties} on a record the caller already holds, which is then the write's only writer. */
-export function applyPropertiesTo(record: SessionManager, writes: PropertyWrites): AppliedProperties {
-  const landed: SessionUpdateField[] = [];
+/**
+ * Write session properties to a record the caller holds (and is then the write's only writer), in the order pi's leaf
+ * pointer requires, and report what LANDED.
+ */
+export function applyProperties(record: SessionManager, writes: PropertyWrites): AppliedProperties {
+  const landed: (keyof PropertyWrites)[] = [];
   let moved = false;
   let failure: unknown;
   try {
@@ -313,7 +278,7 @@ export function applyPropertiesTo(record: SessionManager, writes: PropertyWrites
   // change under a moved leaf.
   const name = record.getSessionName();
   // The PUBLISHED head, not pi's: the anchor above is ours, and a client must be told the position it asked for — the
-  // one it can find in `entries()`.
+  // one it can find among the log's records (`read()`).
   const leafEntryId = publishedLeaf(record);
   let path: OverrideEntryLike[] | undefined;
   try {
@@ -360,7 +325,7 @@ function recordFiles(dir: string): { path: string; id: string }[] {
 }
 
 /** One record as a conversation-list row. */
-function summarize(session: string, record: SessionManager): SessionSummary {
+function summarize(sessionId: string, record: SessionManager): RecordSummary {
   const entries = record.getEntries() as unknown as {
     type?: string;
     timestamp?: string;
@@ -370,16 +335,14 @@ function summarize(session: string, record: SessionManager): SessionSummary {
   // `|| 0` on both: an unparseable timestamp is NaN, and NaN in `updatedAt` serializes to `null` — which the contract
   // types as a number and a client sorts by.
   const lastAt = Date.parse(entries.at(-1)?.timestamp ?? "") || 0;
-  // A list row counts turns in the conversation, not the harness's system bookkeeping (`isConversationMessage`).
-  const messages = entries.filter(isConversationMessage);
+  // The preview is a turn in the conversation, never the harness's system bookkeeping (`isConversationMessage`).
   const name = record.getSessionName();
-  const preview = firstUserText(messages);
+  const preview = firstUserText(entries.filter(isConversationMessage));
   return {
-    session,
+    sessionId,
     ...(name ? { name } : {}),
     createdAt,
     updatedAt: Math.max(lastAt, createdAt),
-    messageCount: messages.length,
     ...(preview ? { preview } : {}),
   };
 }
@@ -427,43 +390,18 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
   const cwd = options.cwd ?? process.cwd();
   const live = new Map<string, SessionManager>();
   return {
-    async openOrCreate(sessionId, inherit) {
+    async openOrCreate(sessionId) {
       // Keyed by the CALLER's id: the encoding exists to satisfy pi's filename rule, and in memory there are no
       // filenames.
       const existing = live.get(sessionId);
       if (existing) return existing;
-      const fresh = () => SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
-      // Same semantics as the durable store, different mechanism: with no file to fork, the parent's path is copied
-      // entry by entry.
-      const parent = inherit ? live.get(inherit.parentSession) : undefined;
-      if (inherit && !parent) {
-        log.warn(
-          `[fastagent] session "${sessionId}" names parent "${inherit.parentSession}", which has no record — starting empty`,
-        );
-      }
-      let created: SessionManager;
-      if (inherit && parent) {
-        try {
-          const staged = fresh();
-          const cut = inheritanceCut(parent, inherit.branchHints);
-          if (cut) copyBranchForInheritance(parent, staged, cut.at);
-          created = staged;
-        } catch (error) {
-          log.warn(
-            `[fastagent] could not inherit from "${inherit.parentSession}" into "${sessionId}" (${String(error)}) — starting empty`,
-          );
-          created = fresh(); // the partially-copied one is discarded, never registered
-        }
-      } else {
-        created = fresh();
-      }
+      const created = SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
       live.set(sessionId, created);
       return created;
     },
     async openIfExists(sessionId) {
       return live.get(sessionId);
     },
-    applyProperties: (sessionId, writes) => applyProperties(async () => live.get(sessionId), writes),
     async list() {
       // The SAME row builder the disk store uses, ordered the same way.
       return [...live].map(([session, record]) => summarize(session, record)).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -473,7 +411,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       if (!parent) throw new Error(`session "${from}" has no record`);
       // The port's promise, not the caller's: registering over a live session would replace its history outright.
       if (live.has(into)) throw new Error(`session "${into}" already exists`);
-      // Entry-by-entry, like the in-memory inheritance path: there is no file to fork.
+      // Entry-by-entry: there is no file to fork.
       const staged = SessionManager.inMemory(cwd, { id: piSessionId(into) });
       // METADATA FIRST, history last — the same order the disk store writes in, and for the same reason.
       const name = parent.getSessionName();

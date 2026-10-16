@@ -44,7 +44,9 @@ import {
   aws,
   deployAgentcore,
   destroyAgentcoreDeployment,
+  expectCompleted,
   invokeAgentcore,
+  sseEvents,
   installSpec,
   requireAwsAccount,
   requireEnv,
@@ -128,8 +130,8 @@ describe("deploy agentcore --run: a real stack, provisioned and destroyed", () =
       label: "invoke",
     });
 
-    // The reply is the invoke stream in AgentCore's streaming form — the HTTP channel's SSE, reused
-    // wholesale (agentcore.ts). A turn that reached a terminal is what proves the container served.
-    expect(body, `the runtime returned no completed terminal:\n${body.slice(0, 600)}`).toContain('"type":"completed"');
+    // The reply is the invoke stream in AgentCore's streaming form: the HTTP binding's SSE, carried by the `api`
+    // envelope (agentcore.ts). A run that completed is what proves the container served.
+    expectCompleted(sseEvents(body), "the runtime's run");
   }, 1_800_000);
 });

@@ -1,70 +1,16 @@
 /**
- * Where a NEW thread starts from, when it names a parent — participant-model.md §5's rule ("a thread starts from what
- * the room knew"), on pi's `SessionManager`.
+ * A fork of a session (SPEC v1 §5), on pi's `SessionManager`: its path up to an entry, copied into a new record, and,
+ * for `context: "recent"` (a chat thread starting from its room, participant-model.md §5), bounded to what the model
+ * sees of it.
  */
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type CompactionEntry, type SessionManager, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
-import { isConversationMessage, isPlaneMarker, isRunMarker } from "./session-markers.ts";
+import { isPlaneMarker, isRunMarker } from "./session-markers.ts";
 
-/** What a Caller names when a new session should start from an existing one. */
-export interface SessionInheritance {
-  parentSession: string;
-  /**
-   * Opaque markers that MAY locate the branch point on the parent's active path (searched in message content, first
-   * hit wins, most recent occurrence).
-   */
-  branchHints?: string[];
-}
-
-/** Inheritance window: at most this many exchanges of the parent reach the child's model context. */
-const INHERIT_MAX_EXCHANGES = 50;
+/** The recent window: at most this many exchanges of the source reach the copy's model context. */
+const RECENT_MAX_EXCHANGES = 50;
 /** …and at most roughly this many tokens (~1/4 of a 200K context: generous, not everything). */
-const INHERIT_MAX_TOKENS = 50_000;
-/**
- * Branch hints are IDS, not payloads: each one costs a scan over the parent's serialized path, and the wire accepts
- * arbitrary arrays.
- */
-const MAX_BRANCH_HINTS = 16;
-const MAX_BRANCH_HINT_CHARS = 128;
-
-/** A pi session entry, read loosely: this module only needs the tree fields and a message payload. */
-type Entry = {
-  type: string;
-  id: string;
-  parentId: string | null;
-  message?: AgentMessage;
-};
-
-function isUserMessage(entry: Entry | undefined): boolean {
-  return entry?.type === "message" && entry.message?.role === "user";
-}
-
-/** Find the fork target on the parent's active path. */
-function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
-  const usable = hints
-    .filter((hint) => hint.length > 0 && hint.length <= MAX_BRANCH_HINT_CHARS)
-    .slice(0, MAX_BRANCH_HINTS);
-  if (usable.length < hints.length) {
-    log.warn(
-      `[fastagent] ignored ${hints.length - usable.length} branch hint(s) (over ${MAX_BRANCH_HINTS} hints or ${MAX_BRANCH_HINT_CHARS} chars each) — hints are message ids, not payloads`,
-    );
-  }
-  if (usable.length === 0) return undefined;
-  // Serialize each conversation message ONCE — the scan is hints × entries, and stringify must not sit in the inner
-  // loop. A hint is something a participant said, so the harness's own system entries are not searched: see
-  // `isConversationMessage` for what a hint landing in the assembled prompt would otherwise do here.
-  const serialized = path.map((entry) => (isConversationMessage(entry) ? JSON.stringify(entry.message) : ""));
-  for (const hint of usable) {
-    for (let i = path.length - 1; i >= 0; i--) {
-      if (!serialized[i]?.includes(hint)) continue;
-      let j = i + 1;
-      while (j < path.length && !isUserMessage(path[j])) j++;
-      return path[j - 1]?.id;
-    }
-  }
-  return undefined;
-}
+const RECENT_MAX_TOKENS = 50_000;
 
 /**
  * Bound what the child's MODEL CONTEXT starts with. Measured on pi's projection, what the model will actually see:
@@ -73,7 +19,7 @@ function locateBranchPoint(path: Entry[], hints: string[]): string | undefined {
  * only while no window is cut: pi reads the NEWEST compaction alone, so a mark placed after it drops that tail. Its
  * summary, a few hundred tokens covering everything older, is carried into the mark instead.
  */
-function markInheritanceWindow(child: SessionManager): void {
+function markRecentWindow(child: SessionManager): void {
   const path = child.getBranch();
   const position = new Map(path.map((entry, i) => [entry.id, i]));
   const latest = path.map((entry) => entry.type).lastIndexOf("compaction");
@@ -104,8 +50,7 @@ function markInheritanceWindow(child: SessionManager): void {
   for (let i = scanned.length - 1; i >= 0; i--) {
     suffixTokens[i] = (suffixTokens[i + 1] ?? 0) + (scanned[i]?.tokens ?? 0);
   }
-  const fits = (exchanges: number, tokens: number) =>
-    exchanges <= INHERIT_MAX_EXCHANGES && tokens <= INHERIT_MAX_TOKENS;
+  const fits = (exchanges: number, tokens: number) => exchanges <= RECENT_MAX_EXCHANGES && tokens <= RECENT_MAX_TOKENS;
   const everything = summaryTokens + tailTokens + (suffixTokens[0] ?? 0);
   if (fits(tailExchanges + starts.length, everything)) return; // the whole visible history fits the window
   // Cut: the tail goes, the summary stays (carried below). The newest exchange is the floor.
@@ -124,19 +69,6 @@ function markInheritanceWindow(child: SessionManager): void {
       ? `Inherited from the parent conversation; ${hidden} earlier exchange(s) are not shown.`
       : "Inherited from the parent conversation; earlier messages are not shown.";
   child.appendCompaction(previous ? `${previous.summary}\n\n${note}` : note, boundary.id, everything);
-}
-
-/** The branch point this inheritance should copy up to, and the parent's path. */
-export function inheritanceCut(parent: SessionManager, branchHints?: string[]): { at: string } | undefined {
-  const path = parent.getBranch() as unknown as Entry[];
-  const leaf = path[path.length - 1];
-  if (!leaf) return undefined; // an empty parent has nothing to inherit
-  const hints = branchHints ?? [];
-  const at = locateBranchPoint(path, hints);
-  if (at === undefined && hints.length > 0) {
-    log.warn("[fastagent] no branch hint matched in the parent session — inheriting from its present");
-  }
-  return { at: at ?? leaf.id };
 }
 
 /**
@@ -210,7 +142,7 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
         // over it would be worse than naming it.
         const unhandled: never = entry;
         log.warn(
-          `[fastagent] inheritance skipped a session entry of unknown type "${(unhandled as { type: string }).type}"`,
+          `[fastagent] a fork skipped a session entry of unknown type "${(unhandled as { type: string }).type}"`,
         );
       }
     }
@@ -219,10 +151,10 @@ export function copyBranchInto(parent: SessionManager, child: SessionManager, at
   }
 }
 
-/** {@link copyBranchInto} plus the inheritance window — what a new THREAD gets and a fork does not. */
-export function copyBranchForInheritance(parent: SessionManager, child: SessionManager, at: string): void {
+/** {@link copyBranchInto} plus the recent window: a fork with `context: "recent"`. */
+export function copyRecentBranch(parent: SessionManager, child: SessionManager, at: string): void {
   copyBranchInto(parent, child, at);
-  markInheritanceWindow(child);
+  markRecentWindow(child);
 }
 
 // There is deliberately NO file-level fork here. pi can copy a path into a new file (`createBranchedSession` +

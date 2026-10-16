@@ -6,11 +6,10 @@ import { join } from "node:path";
 import { log } from "../src/log.ts";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import { collect } from "../src/collect.ts";
-import type { AgentEvent } from "../src/agent.ts";
-import type { SessionEvent } from "../src/session.ts";
+import { collect } from "../src/protocol-collect.ts";
+import type { Entry, InvokeEvent } from "../src/protocol.ts";
 import { defineTool } from "../src/harnesses/pi/tool.ts";
-import { fauxControlledAgent } from "./agent.ts";
+import { fauxAgent } from "./agent.ts";
 import { sentTools } from "./faux.ts";
 
 const directories: string[] = [];
@@ -26,6 +25,20 @@ async function workspace(defaultTools?: string[]) {
   }
   return cwd;
 }
+/** One run's invoke stream, and the entries it wrote. */
+async function invoked(events: AsyncIterable<InvokeEvent>): Promise<{ events: InvokeEvent[]; entries: Entry[] }> {
+  const all: InvokeEvent[] = [];
+  for await (const event of events) all.push(event);
+  const entries = all.flatMap((event) => (event.type === "entry" ? [event.entry] : []));
+  return { events: all, entries };
+}
+const outcomeOf = (entries: Entry[]) =>
+  (entries.find((e) => e.kind === "run_ended")?.data as { outcome?: unknown } | undefined)?.outcome;
+const toolResults = (entries: Entry[]) =>
+  entries.flatMap((e) =>
+    e.kind === "tool_result" ? [e.data as { toolCallId: string; isError: boolean; text: string }] : [],
+  );
+
 const weather = () =>
   defineTool({
     name: "weather",
@@ -55,8 +68,8 @@ describe("Pi-native tool loadouts", () => {
         },
       }),
     );
-    const { agent } = await fauxControlledAgent([fauxAssistantMessage("done")], { cwd });
-    await collect(agent.invoke({ session: "no-mcp" }, { text: "go" }));
+    const { agent } = fauxAgent([fauxAssistantMessage("done")], { cwd });
+    await collect(agent.invoke({ sessionId: "no-mcp", prompt: { text: "go" } }));
     // The server would be spawned at session_start, before the model is asked.
     expect(existsSync(started)).toBe(false);
   });
@@ -66,7 +79,7 @@ describe("Pi-native tool loadouts", () => {
     await mkdir(join(cwd, ".pi"));
     await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ extensions: ["-builtin:codemode"] }));
     let offered: string[] = [];
-    const { agent } = await fauxControlledAgent(
+    const { agent } = fauxAgent(
       [
         (context) => {
           offered = sentTools(context);
@@ -75,7 +88,7 @@ describe("Pi-native tool loadouts", () => {
       ],
       { cwd, tools: [{ ...weather(), exposure: "codemode" }] },
     );
-    await collect(agent.invoke({ session: "no-codemode" }, { text: "go" }));
+    await collect(agent.invoke({ sessionId: "no-codemode", prompt: { text: "go" } }));
     expect(offered).not.toContain("codemode");
   });
 
@@ -89,12 +102,12 @@ describe("Pi-native tool loadouts", () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
     try {
-      const { agent } = await fauxControlledAgent([fauxAssistantMessage("done"), fauxAssistantMessage("again")], {
+      const { agent } = fauxAgent([fauxAssistantMessage("done"), fauxAssistantMessage("again")], {
         cwd,
         extensionPaths: [notifier],
       });
-      await collect(agent.invoke({ session: "headless" }, { text: "go" }));
-      await collect(agent.invoke({ session: "headless" }, { text: "go again" }));
+      await collect(agent.invoke({ sessionId: "headless", prompt: { text: "go" } }));
+      await collect(agent.invoke({ sessionId: "headless", prompt: { text: "go again" } }));
       // Every turn starts the extension again; the same notification is a warning once, then debug.
       const said = (spy: typeof warn) =>
         spy.mock.calls.flat().filter((line) => String(line).includes(`notifier ${cwd} is misconfigured`));
@@ -109,7 +122,7 @@ describe("Pi-native tool loadouts", () => {
   it("activates only the discovery tool an authored exposure needs, with no settings", async () => {
     const offeredWith = async (tools: ReturnType<typeof weather>[]) => {
       let offered: string[] = [];
-      const { agent } = await fauxControlledAgent(
+      const { agent } = fauxAgent(
         [
           (context) => {
             offered = sentTools(context);
@@ -118,7 +131,7 @@ describe("Pi-native tool loadouts", () => {
         ],
         { cwd: await workspace(), tools },
       );
-      await collect(agent.invoke({ session: "room:/native" }, { text: "go" }));
+      await collect(agent.invoke({ sessionId: "room:/native", prompt: { text: "go" } }));
       return offered;
     };
     const direct = await offeredWith([{ ...weather(), exposure: "direct" }]);
@@ -133,9 +146,8 @@ describe("Pi-native tool loadouts", () => {
     expect(scripted).not.toContain("tool_search");
   });
 
-  it("inherits +codemode, returns structured output, and retains nested events only on the observation plane", async () => {
-    const events: SessionEvent[] = [];
-    const { agent, sessions } = await fauxControlledAgent(
+  it("inherits +codemode, returns structured output, and reports a nested call as its caller's status", async () => {
+    const { agent, sessions } = fauxAgent(
       [
         fauxAssistantMessage(
           fauxToolCall(
@@ -148,32 +160,20 @@ describe("Pi-native tool loadouts", () => {
         ),
         fauxAssistantMessage("done"),
       ],
-      { cwd: await workspace(["+codemode"]), tools: [weather()], observer: (_session, event) => events.push(event) },
+      { cwd: await workspace(["+codemode"]), tools: [weather()] },
     );
-    const projected = [];
-    for await (const event of agent.invoke({ session: "room:/native" }, { text: "go" })) projected.push(event);
-    expect(projected.at(-1)).toMatchObject({ type: "completed" });
+    const { events, entries } = await invoked(agent.invoke({ sessionId: "room:/native", prompt: { text: "go" } }));
+    expect(outcomeOf(entries)).toEqual({ status: "completed" });
+    expect(events.filter((event) => event.type === "tool_started")).toEqual([
+      expect.objectContaining({ toolCallId: "outer", name: "codemode" }),
+    ]);
     expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "tool_started",
-        data: expect.objectContaining({ id: "outer/1", name: "weather", parentToolCallId: "outer" }),
-      }),
+      expect.objectContaining({ type: "tool_progress", toolCallId: "outer", text: "weather London" }),
     );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "tool_finished",
-        data: expect.objectContaining({
-          id: "outer",
-          isError: false,
-          content: expect.objectContaining({
-            content: expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("42") })]),
-          }),
-        }),
-      }),
-    );
-    expect(projected.filter((event) => event.type === "tool_started")).toHaveLength(1);
+    expect(toolResults(entries)).toEqual([
+      expect.objectContaining({ toolCallId: "outer", isError: false, text: expect.stringContaining("42") }),
+    ]);
     expect(JSON.stringify(events)).not.toContain('"structuredContent"');
-    expect(JSON.stringify(projected)).not.toContain('"structuredContent"');
     expect(JSON.stringify((await sessions.openOrCreate("room:/native")).getBranch())).toContain("nestedCalls");
   });
 
@@ -186,7 +186,7 @@ describe("Pi-native tool loadouts", () => {
     );
     const execute = vi.fn(weather().execute);
     const tool = { ...weather(), execute };
-    const { agent } = await fauxControlledAgent(
+    const { agent } = fauxAgent(
       [
         fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.weather({})" })),
         fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.weather({city: 'blocked'})" })),
@@ -194,10 +194,10 @@ describe("Pi-native tool loadouts", () => {
       ],
       { cwd, tools: [tool], extensionPaths: [policy] },
     );
-    const events = [];
-    for await (const event of agent.invoke({ session: "room:/native" }, { text: "go" })) events.push(event);
-    expect(events.filter((event) => event.type === "tool_ended").map((event) => event.isError)).toEqual([true, true]);
-    expect(JSON.stringify(events)).toContain("denied by policy");
+    const { entries } = await invoked(agent.invoke({ sessionId: "room:/native", prompt: { text: "go" } }));
+    const results = toolResults(entries);
+    expect(results.map((result) => result.isError)).toEqual([true, true]);
+    expect(results[1]?.text).toContain("denied by policy");
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -242,8 +242,7 @@ describe("Pi-native tool loadouts", () => {
       },
     });
     let codemodeDescription: string | undefined;
-    const events: SessionEvent[] = [];
-    const { agent } = await fauxControlledAgent(
+    const { agent } = fauxAgent(
       [
         (context) => {
           codemodeDescription = getCurrentTools(context.messages).find((t) => t.name === "codemode")?.description;
@@ -255,18 +254,15 @@ describe("Pi-native tool loadouts", () => {
         cwd,
         tools: [lookup, archive, forecast],
         extensionPaths: [policy],
-        observer: (_s, event) => events.push(event),
       },
     );
-    const projected: AgentEvent[] = [];
-    for await (const event of agent.invoke({ session: "desk" }, { text: "go" })) projected.push(event);
-    expect(projected.at(-1)).toEqual({ type: "completed" });
-    // The invoke stream carries the call's status line: its own report, and each call it makes. A status the consumer
-    // has not read yet may be replaced by a newer one, and pi delivers an update and a nested call made in the same tick
-    // out of order (the update takes the longer listener path), so only the last is certain: `archive` starts after
-    // `lookup` returned. The report itself reaching the observation plane is asserted below.
-    const statuses = projected.flatMap((event) =>
-      event.type === "tool_progress" ? [`${event.id} ${event.text}`] : [],
+    const { events, entries } = await invoked(agent.invoke({ sessionId: "desk", prompt: { text: "go" } }));
+    expect(outcomeOf(entries)).toEqual({ status: "completed" });
+    // The invoke stream carries the call's status line: its own report, and each call it makes. pi delivers an update
+    // and a nested call made in the same tick out of order (the update takes the longer listener path), so only the
+    // last is certain: `archive` starts after `lookup` returned.
+    const statuses = events.flatMap((event) =>
+      event.type === "tool_progress" ? [`${event.toolCallId} ${event.text}`] : [],
     );
     expect(statuses.at(-1)).toBe("f1 archive");
     expect(
@@ -274,28 +270,13 @@ describe("Pi-native tool loadouts", () => {
     ).toEqual([]);
     expect(codemodeDescription).toContain("forecast_desk");
     expect(codemodeDescription).toContain("Tools of the forecast desk");
-    const finished = events.find((e) => e.type === "tool_finished" && (e.data as { id: string }).id === "f1");
-    expect(JSON.stringify(finished?.data)).toContain('\\"temperature\\":42');
-    expect(JSON.stringify(finished?.data)).toContain('\\"archiveRefused\\":true');
+    const forecastResult = toolResults(entries).find((result) => result.toolCallId === "f1");
+    expect(forecastResult?.text).toContain('"temperature":42');
+    expect(forecastResult?.text).toContain('"archiveRefused":true');
     expect(save).not.toHaveBeenCalled();
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "tool_started",
-        data: expect.objectContaining({ name: "lookup", parentToolCallId: "f1" }),
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "tool_progress",
-        data: expect.objectContaining({
-          id: "f1",
-          partialResult: expect.objectContaining({ content: [{ type: "text", text: "checking London" }] }),
-        }),
-      }),
-    );
   });
 
-  it("aborts a nested codemode tool when the caller cancels", async () => {
+  it("aborts a nested codemode tool when the run is canceled", async () => {
     let start = () => {};
     const started = new Promise<void>((resolve) => {
       start = resolve;
@@ -319,20 +300,17 @@ describe("Pi-native tool loadouts", () => {
           start();
         }),
     });
-    const { agent } = await fauxControlledAgent(
-      [fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.wait({})" }))],
-      { cwd: await workspace(["+codemode"]), tools: [tool] },
-    );
-    const iterator = agent.invoke({ session: "cancelled" }, { text: "go" })[Symbol.asyncIterator]();
-    const draining = (async () => {
-      for (;;) {
-        const result = await iterator.next();
-        if (result.done) return;
-      }
-    })();
+    const { agent } = fauxAgent([fauxAssistantMessage(fauxToolCall("codemode", { code: "await tools.wait({})" }))], {
+      cwd: await workspace(["+codemode"]),
+      tools: [tool],
+    });
+    const run = invoked(agent.invoke({ sessionId: "cancelled", prompt: { text: "go" } }));
     await started;
-    await iterator.return?.();
-    await draining;
+    const read = await agent.sessions.get("cancelled").read({ limit: 0 });
+    const runId = read.ok ? read.state.run?.runId : undefined;
+    if (!runId) throw new Error("no running run");
+    expect(await agent.sessions.get("cancelled").runs.cancel(runId)).toEqual({ ok: true });
+    expect(outcomeOf((await run).entries)).toEqual({ status: "canceled", by: "cancel" });
     expect(cancelled).toBe(true);
   });
 
@@ -341,7 +319,7 @@ describe("Pi-native tool loadouts", () => {
     await mkdir(join(cwd, ".pi"));
     await writeFile(join(cwd, ".pi/settings.json"), JSON.stringify({ compaction: { keepRecentTokens: 1 } }));
     const offered: string[][] = [];
-    const { agent, control } = await fauxControlledAgent(
+    const { agent } = fauxAgent(
       [
         fauxAssistantMessage(fauxToolCall("tool_search", { query: "weather" })),
         fauxAssistantMessage("discovered"),
@@ -359,21 +337,20 @@ describe("Pi-native tool loadouts", () => {
       ],
       { cwd, tools: [weather()] },
     );
-    await collect(agent.invoke({ session: "room:/native" }, { text: "discover" }));
-    const at = (await control.sessions.get("room:/native").state()).leafEntryId!;
-    const fork = await control.sessions.fork({ from: "room:/native", at, into: "fork" });
+    await collect(agent.invoke({ sessionId: "room:/native", prompt: { text: "discover" } }));
+    const read = await agent.sessions.get("room:/native").read({ limit: 0 });
+    const at = read.ok ? read.state.leafEntryId : undefined;
+    const fork = await agent.sessions.create({ sessionId: "fork", fork: { sessionId: "room:/native", entryId: at } });
     expect(fork.ok).toBe(true);
-    await collect(agent.invoke({ session: "room:/native" }, { text: "again" }));
-    if (fork.ok) await collect(agent.invoke({ session: "fork" }, { text: "fork" }));
+    await collect(agent.invoke({ sessionId: "room:/native", prompt: { text: "again" } }));
+    if (fork.ok) await collect(agent.invoke({ sessionId: "fork", prompt: { text: "fork" } }));
     expect(offered).toHaveLength(2);
     for (const tools of offered) expect(tools).toContain("weather");
-    const finished = (async () => {
-      for await (const event of control.sessions.get("room:/native").events())
-        if (event.type === "compaction_finished") return event;
-    })();
-    expect(await control.sessions.get("room:/native").compact()).toEqual({ ok: true });
-    expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
-    await collect(agent.invoke({ session: "room:/native" }, { text: "after compaction" }));
+    expect(await agent.sessions.get("room:/native").compact()).toEqual({ ok: true });
+    const after = await agent.sessions.get("room:/native").read();
+    const compaction = after.ok ? after.entries.find((entry) => entry.kind === "compaction") : undefined;
+    expect(compaction?.data).toMatchObject({ summary: expect.any(String) });
+    await collect(agent.invoke({ sessionId: "room:/native", prompt: { text: "after compaction" } }));
     expect(offered).toHaveLength(3);
     expect(offered.at(-1)).toContain("weather");
   });

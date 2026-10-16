@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
-import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
+import { piSessionBinder } from "../src/harnesses/pi/session-binding.ts";
 import { agentCommands } from "../src/harnesses/pi/create.ts";
 import { loadExtensionPaths } from "../src/harnesses/pi/definition.ts";
 import { readMachine } from "../src/harnesses/pi/machine.ts";
@@ -286,13 +286,12 @@ it("pi's harness settings are inherited, the project file deep-merged over the m
   const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
   modelRuntime.registerNativeProvider(faux.provider);
 
-  const session = await piAgentSessionFactory({
-    sessions: piInMemorySessionRecordStore({ cwd: dir }),
+  const session = await piSessionBinder({
     createModelRuntime: async () => modelRuntime,
     modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
     readDefinition: () => ({ systemPrompt: "test", skills: [] }),
     cwd: dir,
-  })("s");
+  })("s", await piInMemorySessionRecordStore({ cwd: dir }).openOrCreate("s"));
 
   expect(session.settingsManager.getRetryEnabled()).toBe(false); // the project file
   expect(session.settingsManager.getRetrySettings().maxRetries).toBe(7); // the machine's, kept by the merge

@@ -55,10 +55,12 @@ export interface LogRecord {
 
 export type RunMarker = "run_accepted" | "run_started" | "run_ended";
 
-type LoopOutcome = Extract<RunOutcome, { status: "completed" | "max_tokens" | "intercepted" | "failed" }>;
+/** How a loop's run ended: `canceled` and `interrupted` are the port's to say. */
+export type LoopOutcome = Extract<RunOutcome, { status: "completed" | "max_tokens" | "intercepted" | "failed" }>;
 
 type Distribute<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type LoopLiveEvent = Distribute<LiveEvent, "runId">;
+/** A live event as a loop emits it: the port adds the run it belongs to. */
+export type LoopLiveEvent = Distribute<LiveEvent, "runId">;
 
 /** A message handed to a loop, under the id its fate is reported by. */
 export interface HandedMessage {

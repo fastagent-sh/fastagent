@@ -1,6 +1,6 @@
 /**
- * The AgentSession L0 running a REAL assembled agent: the prompt the definition produces, the skills
- * it declares, the tools it mounts — and the per-turn freshness that makes "the directory is the
+ * The harness binding (session-binding.ts) running a REAL assembled agent through LoopPort: the prompt the definition
+ * produces, the skills it declares, the tools it mounts, and the per-run freshness that makes "the directory is the
  * agent, LIVE" true on a shared ResourceLoader.
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -23,50 +23,63 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { MountedTool } from "../src/harnesses/pi/tool.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collect } from "../src/collect.ts";
-import { piAgentSessionFactory } from "../src/harnesses/pi/agent-session-factory.ts";
-import { createPiAgentFromSession } from "../src/harnesses/pi/invoke-session.ts";
+import { piLoopHarness } from "../src/harnesses/pi/loop-harness.ts";
+import type { PiBindingOptions } from "../src/harnesses/pi/session-binding.ts";
 import {
-  type PropertyWrites,
+  type PiSessionRecordStore,
   piInMemorySessionRecordStore,
   piSessionRecordStore,
 } from "../src/harnesses/pi/session-store.ts";
+import { loopPort } from "../src/loop-port.ts";
+import type { Agent, Entry, InvokeEvent } from "../src/protocol.ts";
+import { collect } from "../src/protocol-collect.ts";
+import { servingAgent } from "../src/serving-layer.ts";
 import { defineTool, z } from "../src/pi.ts";
 import { type TurnContext, turnContext } from "../src/harnesses/pi/tool-context.ts";
 import { piAllCodingTools } from "../src/harnesses/pi/create.ts";
 
 import { makeFaux, sentPrompt, sentTools } from "./faux.ts";
-import { definitionSkill, fauxControlledAgent } from "./agent.ts";
-import type { SessionEvent } from "../src/session.ts";
+import { definitionSkill, fauxAgent } from "./agent.ts";
 import { log } from "../src/log.ts";
 
 /** An agent built the way serving builds one, minus the directory read. */
 async function agentWith(
   responses: FauxResponseStep[],
-  options: Partial<Parameters<typeof piAgentSessionFactory>[0]> = {},
-) {
+  options: Partial<PiBindingOptions> & { sessions?: PiSessionRecordStore } = {},
+): Promise<Agent> {
   const { faux } = makeFaux();
   faux.setResponses(responses);
   const cwd = process.cwd();
-  return createPiAgentFromSession({
-    sessionFactory: piAgentSessionFactory({
-      sessions: piInMemorySessionRecordStore({ cwd }),
-      createModelRuntime: async () => {
-        const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-        runtime.registerNativeProvider(faux.provider);
-        return runtime;
-      },
-      modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
-      readDefinition: () => ({ skills: [] }),
-      cwd,
-      ...options,
-    }),
+  const createModelRuntime = async () => {
+    const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    runtime.registerNativeProvider(faux.provider);
+    return runtime;
+  };
+  const { sessions = piInMemorySessionRecordStore({ cwd }), ...binding } = options;
+  const harness = piLoopHarness({
+    sessions,
+    catalog: createModelRuntime,
+    createModelRuntime,
+    modelSpec: `${faux.getModel().provider}/${faux.getModel().id}`,
+    readDefinition: () => ({ skills: [] }),
+    cwd,
+    ...binding,
   });
+  return servingAgent(loopPort(harness));
 }
 
-describe("piAgentSessionFactory: the definition reaches the model", () => {
+/** One run's invoke stream, whole. */
+async function invoked(events: AsyncIterable<InvokeEvent>): Promise<InvokeEvent[]> {
+  const out: InvokeEvent[] = [];
+  for await (const event of events) out.push(event);
+  return out;
+}
+const entriesOf = (events: InvokeEvent[]): Entry[] =>
+  events.flatMap((event) => (event.type === "entry" ? [event.entry] : []));
+
+describe("the binding: the definition reaches the model", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it("keeps gateway error bodies in the session record and failed event, outside server logs", async () => {
+  it("keeps gateway error bodies in the session record and the run's outcome, outside server logs", async () => {
     const { faux } = makeFaux();
     const body = "gateway echoed private request: do-not-log";
     const message = await streamPiMessages(
@@ -79,9 +92,12 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const agent = await agentWith([message], { sessions });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
-      const events = [];
-      for await (const event of agent.invoke({ session: "gateway" }, { text: "hi" })) events.push(event);
-      expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining(body) });
+      const ended = entriesOf(await invoked(agent.invoke({ sessionId: "gateway", prompt: { text: "hi" } }))).find(
+        (entry) => entry.kind === "run_ended",
+      );
+      expect(ended?.data).toMatchObject({
+        outcome: { status: "failed", error: { message: expect.stringContaining(body) } },
+      });
       const record = await sessions.openOrCreate("gateway");
       expect(record.getBranch()).toContainEqual(
         expect.objectContaining({
@@ -90,7 +106,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         }),
       );
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider diagnostic pi_messages_response_failure"));
-      expect(JSON.stringify(warn.mock.calls)).toContain("session gateway, run");
+      expect(JSON.stringify(warn.mock.calls)).toContain("session gateway)");
       expect(JSON.stringify(warn.mock.calls)).not.toContain(body);
     } finally {
       warn.mockRestore();
@@ -110,8 +126,8 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       ],
       { cwd, sessions },
     );
-    await collect(first.invoke({ session: "room" }, { text: "first" }));
-    await collect(first.invoke({ session: "room" }, { text: "second" }));
+    await collect(first.invoke({ sessionId: "room", prompt: { text: "first" } }));
+    await collect(first.invoke({ sessionId: "room", prompt: { text: "second" } }));
     const record = await sessions.openOrCreate("room");
     await sessions.fork("room", record.getLeafId()!, "fork", "effort-test");
     const reopened = await agentWith(
@@ -124,7 +140,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       ],
       { cwd, sessions: piSessionRecordStore({ dir: join(cwd, "sessions"), cwd }) },
     );
-    expect((await collect(reopened.invoke({ session: "fork" }, { text: "next" }))).text).toBe("continued");
+    expect((await collect(reopened.invoke({ sessionId: "fork", prompt: { text: "next" } }))).text).toBe("continued");
   });
 
   it("compacts after a tool inside one run without repeating its side effect", async () => {
@@ -144,7 +160,6 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     let toolRuns = 0;
     let turns = 0;
     const requests: string[] = [];
-    const events: SessionEvent[] = [];
     const respond: FauxResponseStep = (context) => {
       if (!sentPrompt(context).startsWith("Same-run test")) {
         requests.push("summary");
@@ -155,7 +170,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         ? fauxAssistantMessage(fauxToolCall("large", {}, { id: "large-1" }))
         : fauxAssistantMessage("final answer");
     };
-    const { agent, sessions, control } = await fauxControlledAgent(
+    const { agent, sessions } = fauxAgent(
       Array.from({ length: 6 }, () => respond),
       {
         cwd,
@@ -180,24 +195,19 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
     }
 
-    const watching = (async () => {
-      for await (const event of control.sessions.get("compact").events()) {
-        events.push(event);
-        if (event.type === "run_settled") break;
-      }
-    })();
-    expect((await collect(agent.invoke({ session: "compact" }, { text: "get large then answer" }))).text).toBe(
-      "final answer",
+    const entries = entriesOf(
+      await invoked(agent.invoke({ sessionId: "compact", prompt: { text: "get large then answer" } })),
     );
-    await watching;
+    expect(entries.filter((e) => e.kind === "assistant_message").at(-1)?.data).toMatchObject({ text: "final answer" });
     expect(toolRuns).toBe(1);
     expect(requests[0]).toBe("assistant");
     expect(requests.at(-1)).toBe("assistant");
     expect(requests).toContain("summary");
     expect(record.getEntries().filter((e) => e.type === "compaction")).toHaveLength(1);
-    expect(events.filter((e) => e.type === "run_started")).toHaveLength(1);
-    expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
-    expect(events.some((e) => e.type === "compaction_started" || e.type === "compaction_finished")).toBe(false);
+    // One run, with the compaction inside it.
+    expect(entries.filter((e) => e.kind === "run_started")).toHaveLength(1);
+    expect(entries.filter((e) => e.kind === "run_ended")).toHaveLength(1);
+    expect(entries.filter((e) => e.kind === "compaction")).toHaveLength(1);
   });
 
   it("the assembled prompt is what the model is asked with", async () => {
@@ -212,7 +222,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       { readDefinition: () => ({ systemPrompt: "You are terse. Answer in one word.", skills: [] }) },
     );
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(systemPrompt).toContain("You are terse. Answer in one word.");
   });
@@ -228,7 +238,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       readDefinition: () => ({ systemPrompt: "MARKER_PERSONA", skills: [] }),
     });
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     const record = await store.openOrCreate("s");
     const system = record
@@ -260,7 +270,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       },
     );
 
-    const { text } = await collect(agent.invoke({ session: "-1001234567890" }, { text: "who am i" }));
+    const { text } = await collect(agent.invoke({ sessionId: "-1001234567890", prompt: { text: "who am i" } }));
 
     expect(text).toBe("done");
     // The CALLER's id, not pi's spelling of it: a tool correlates its own state by the id the
@@ -271,7 +281,6 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
   it("forwards progress and native context to tools, including the workspace for coding tools", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-tool-context-"));
     await writeFile(join(cwd, "note.txt"), "workspace note");
-    const seen: SessionEvent[] = [];
     let toolCwd: string | undefined;
     let nativeId: string | undefined;
     let headerId: string | undefined;
@@ -295,7 +304,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         return { content: [{ type: "text", text: "done" }], details: {} };
       },
     };
-    const { agent, control } = await fauxControlledAgent(
+    const { agent } = fauxAgent(
       [
         fauxAssistantMessage([fauxToolCall("probe", { path: "note.txt" }), fauxToolCall("read", { path: "note.txt" })]),
         (context) => {
@@ -305,21 +314,20 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       ],
       { cwd, tools: [probe, createReadTool(join(cwd, "different-root"))] },
     );
-    const watching = (async () => {
-      for await (const event of control.sessions.get("native-context").events()) {
-        seen.push(event);
-        if (event.type === "run_settled") break;
-      }
-    })();
-    expect((await collect(agent.invoke({ session: "native-context" }, { text: "go" }))).text).toBe("finished");
-    await watching;
+    const seen = await invoked(agent.invoke({ sessionId: "native-context", prompt: { text: "go" } }));
+    expect(
+      entriesOf(seen)
+        .filter((e) => e.kind === "assistant_message")
+        .at(-1)?.data,
+    ).toMatchObject({ text: "finished" });
     expect(toolCwd).toBe(cwd);
     expect(nativeId).toBe("native-context");
     expect(headerId).toBe("native-context");
     expect(absentHeader).toBeNull();
     expect(nativeHistory).toBeGreaterThan(0);
+    const probeCall = seen.find((event) => event.type === "tool_started" && event.name === "probe");
     expect(seen.filter((event) => event.type === "tool_progress")).toMatchObject([
-      { data: { name: "probe", partialResult: { details: { progress: 50 } } } },
+      { toolCallId: (probeCall as { toolCallId: string }).toolCallId, text: "working" },
     ]);
   });
 
@@ -329,7 +337,6 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       ["room\ud800a", '"room\\ud800a"', "json"],
       ['"room\\u0000a"', '"room\\u0000a"', ""],
       ["room:会话/🌙", "room:会话/🌙", ""],
-      ["", "", ""],
     ] as const) {
       const tools = piAllCodingTools(process.cwd());
       const bash = tools.find((tool) => tool.name === "bash")!;
@@ -372,7 +379,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       );
       vi.stubEnv("PI_SESSION_ID_ENCODING", "json");
       try {
-        expect((await collect(agent.invoke({ session: sessionId }, { text: "go" }))).text).toBe("done");
+        expect((await collect(agent.invoke({ sessionId: sessionId, prompt: { text: "go" } }))).text).toBe("done");
         expect(shellResult).toMatchObject({
           isError: false,
           content: [{ type: "text", text: `ok\n${envId}\n${encoding}` }],
@@ -414,7 +421,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       },
     };
     const command = { command: 'printf "%s" "$PI_REASONING_LEVEL"' };
-    const { agent, control, sessions } = await fauxControlledAgent(
+    const { agent, sessions } = fauxAgent(
       [
         fauxAssistantMessage(fauxToolCall("bash", command)),
         fauxAssistantMessage(fauxToolCall("bash", command)),
@@ -425,14 +432,18 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     );
     await sessions.openOrCreate("room-a");
     await sessions.openOrCreate("room-b");
-    expect(await control.sessions.get("room-a").update({ thinkingLevel: "high" })).toEqual({ ok: true });
-    expect(await control.sessions.get("room-b").update({ thinkingLevel: "low" })).toEqual({ ok: true });
-    const runningA = collect(agent.invoke({ session: "room-a" }, { text: "A" }));
+    expect(await agent.sessions.get("room-a").update({ thinkingLevel: "high" })).toEqual({ ok: true });
+    expect(await agent.sessions.get("room-b").update({ thinkingLevel: "low" })).toEqual({ ok: true });
+    const runningA = collect(agent.invoke({ sessionId: "room-a", prompt: { text: "A" } }));
     try {
       await paused;
-      expect((await collect(agent.invoke({ session: "room-b" }, { text: "B" }))).text).toBe("B done");
-      expect((await control.sessions.get("room-a").state()).thinkingLevel).toBe("high");
-      expect((await control.sessions.get("room-b").state()).thinkingLevel).toBe("low");
+      expect((await collect(agent.invoke({ sessionId: "room-b", prompt: { text: "B" } }))).text).toBe("B done");
+      const levelOf = async (id: string) => {
+        const read = await agent.sessions.get(id).read({ limit: 0 });
+        return read.ok ? read.state.thinkingLevel : undefined;
+      };
+      expect(await levelOf("room-a")).toBe("high");
+      expect(await levelOf("room-b")).toBe("low");
     } finally {
       resume();
       await runningA;
@@ -470,7 +481,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       { tools: [probe("probe-a"), probe("probe-b")] },
     );
 
-    await collect(agent.invoke({ session: "s" }, { text: "go" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "go" } }));
 
     expect(seen).toHaveLength(2);
     // Without this the assertion below would pass on two undefineds — on there being no context.
@@ -506,7 +517,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       },
     );
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(offered).toContain("eager");
     expect(offered).not.toContain("lazy");
@@ -529,9 +540,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       { readDefinition: async () => ({ systemPrompt: personaOnDisk, skills: [] }) },
     );
 
-    await collect(agent.invoke({ session: "s" }, { text: "turn one" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "turn one" } }));
     personaOnDisk = "You are the SECOND persona."; // the author edits persona.md between turns
-    await collect(agent.invoke({ session: "s" }, { text: "turn two" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "turn two" } }));
 
     expect(seen[0]).toContain("the first persona");
     expect(seen[1]).toContain("the SECOND persona");
@@ -558,9 +569,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         ],
       }),
     });
-    await collect(agent.invoke({ session: "visibility" }, { text: "first" }));
+    await collect(agent.invoke({ sessionId: "visibility", prompt: { text: "first" } }));
     disabled = true;
-    await collect(agent.invoke({ session: "visibility" }, { text: "second" }));
+    await collect(agent.invoke({ sessionId: "visibility", prompt: { text: "second" } }));
     expect(seen[0]).toContain("visible-skill");
     expect(seen[1]).not.toContain("visible-skill");
   });
@@ -572,42 +583,35 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       seen.push(sentPrompt(context));
       return fauxAssistantMessage("ok");
     };
-    // Park turn A between "definition read" and "session bound" - the window where the shared
-    // snapshot holds A's new value but the loader has not been reloaded with it yet.
+    // Park turn A between "definition read" and "session bound": the window where the shared snapshot holds A's new
+    // value but the loader has not been reloaded with it yet.
     let openRoomA!: () => void;
     let roomAParked!: () => void;
     const parked = new Promise<void>((resolve) => (openRoomA = resolve));
     const reachedPark = new Promise<void>((resolve) => (roomAParked = resolve));
-    const cwd = process.cwd();
-    const real = piInMemorySessionRecordStore({ cwd });
-    const sessions = {
-      async openOrCreate(id: string) {
-        if (id === "room-a") {
+    let park = false;
+
+    const agent = await agentWith([record, record, record], {
+      readDefinition: async () => {
+        const read = { systemPrompt: persona, skills: [] };
+        if (park) {
+          park = false;
           roomAParked();
           await parked;
         }
-        return real.openOrCreate(id);
+        return read;
       },
-      openIfExists: (id: string) => real.openIfExists(id),
-      list: () => real.list(),
-      fork: (from: string, at: string, into: string, provenance: string) => real.fork(from, at, into, provenance),
-      delete: (id: string) => real.delete(id),
-      applyProperties: (id: string, writes: PropertyWrites) => real.applyProperties(id, writes),
-    };
-
-    const agent = await agentWith([record, record, record], {
-      sessions,
-      readDefinition: async () => ({ systemPrompt: persona, skills: [] }),
     });
 
     // Turn zero settles the shared services with "first".
-    await collect(agent.invoke({ session: "warm" }, { text: "zero" }));
+    await collect(agent.invoke({ sessionId: "warm", prompt: { text: "zero" } }));
 
     persona = "second"; // the author edits between turns
-    const a = collect(agent.invoke({ session: "room-a" }, { text: "one" }));
+    park = true;
+    const a = collect(agent.invoke({ sessionId: "room-a", prompt: { text: "one" } }));
     await reachedPark;
     // B runs to completion while A is still parked - the whole point is what B sees meanwhile.
-    await collect(agent.invoke({ session: "room-b" }, { text: "two" }));
+    await collect(agent.invoke({ sessionId: "room-b", prompt: { text: "two" } }));
     openRoomA();
     await a;
 
@@ -644,13 +648,13 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       },
     );
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ sessionId: "s", prompt: { text: "hi" } }));
 
     expect(systemPrompt).toContain("release");
   });
 });
 
-describe("piAgentSessionFactory: deferred tools stay discovered", () => {
+describe("the binding: deferred tools stay discovered", () => {
   const deferredPair = () => [
     defineTool({
       name: "eager",
@@ -690,8 +694,8 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
       { tools: deferredPair() },
     );
 
-    await collect(agent.invoke({ session: "discovers" }, { text: "what is the weather?" }));
-    await collect(agent.invoke({ session: "discovers" }, { text: "and now?" }));
+    await collect(agent.invoke({ sessionId: "discovers", prompt: { text: "what is the weather?" } }));
+    await collect(agent.invoke({ sessionId: "discovers", prompt: { text: "and now?" } }));
 
     expect(offered[0]).not.toContain("weather_forecast"); // deferred at the start
     expect(offered[1]).toContain("weather_forecast"); // and restored for the next turn
@@ -704,7 +708,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
     const alpha = () =>
       defineTool({ name: "alpha", description: "The first tool.", input: z.object({}), execute: async () => "" });
     const before = await agentWith([fauxAssistantMessage("first")], { sessions: store, tools: [alpha()] });
-    await collect(before.invoke({ session: "grows" }, { text: "hello" }));
+    await collect(before.invoke({ sessionId: "grows", prompt: { text: "hello" } }));
 
     let offered: string[] = [];
     const after = await agentWith(
@@ -723,7 +727,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
       },
     );
 
-    await collect(after.invoke({ session: "grows" }, { text: "and now?" }));
+    await collect(after.invoke({ sessionId: "grows", prompt: { text: "and now?" } }));
 
     expect(offered).toContain("beta");
     expect(offered).toContain("alpha");
@@ -745,7 +749,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
         ],
         { sessions: store, tools },
       );
-      await collect(agent.invoke({ session: "rollback" }, { text: "go" }));
+      await collect(agent.invoke({ sessionId: "rollback", prompt: { text: "go" } }));
     };
     await turn([tool("alpha"), tool("beta")]);
     await turn([tool("alpha")]);
@@ -764,7 +768,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
       ],
       { sessions: store, tools: deferredPair() },
     );
-    await collect(withTool.invoke({ session: "shrinks" }, { text: "weather?" }));
+    await collect(withTool.invoke({ sessionId: "shrinks", prompt: { text: "weather?" } }));
 
     // The author removes the tool from the definition; the session still records having found it.
     let offered: string[] = [];
@@ -783,7 +787,7 @@ describe("piAgentSessionFactory: deferred tools stay discovered", () => {
       },
     );
 
-    await expect(collect(without.invoke({ session: "shrinks" }, { text: "again" }))).resolves.toBeDefined();
+    await expect(collect(without.invoke({ sessionId: "shrinks", prompt: { text: "again" } }))).resolves.toBeDefined();
     expect(offered).not.toContain("weather_forecast");
   });
 });

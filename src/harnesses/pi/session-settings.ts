@@ -2,7 +2,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ModelDescriptor } from "../../session.ts";
+import type { ModelDescriptor } from "../../protocol.ts";
 import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. */
@@ -19,10 +19,10 @@ export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(A
 
 /**
  * Models as a client's picker shows them, ordered by spec: the ONE description both listings give
- * (`SessionControl.models()` and `availableModelsFromDir`). Its levels come from the function
- * `resolveSessionSettings` reads, so a picker offers what `state()` will then report. A model that declares no name or
- * context window (an extension's virtual model may not: pi reads the window as 0) leaves the field out rather than
- * inventing one.
+ * (`Agent.models()` and `availableModelsFromDir`). Its levels come from the function `resolveSessionSettings` reads,
+ * so a picker offers what a session's `read()` state will then report. A model that declares no name or context
+ * window (an extension's virtual model may not: pi reads the window as 0) leaves the field out rather than inventing
+ * one.
  */
 export function describeModels(models: readonly AnyModel[]): ModelDescriptor[] {
   return models

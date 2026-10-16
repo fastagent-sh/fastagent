@@ -16,7 +16,7 @@ import type { Agent, AgentCommand } from "../../protocol.ts";
 import { type LoopPortHooks, loopPort } from "../../loop-port.ts";
 import { servingAgent } from "../../serving-layer.ts";
 import { piLoopHarness } from "./loop-harness.ts";
-import { servedExtensionCommands } from "./agent-session-factory.ts";
+import { servedExtensionCommands } from "./session-binding.ts";
 import { type FastagentConfig, resolveModel } from "./config.ts";
 import { isAgentcoreRuntime, isDeployedWorkspace } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
@@ -26,7 +26,7 @@ import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine, withMachine } from "./machi
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
-import type { PiAgentSessionFactoryOptions } from "./agent-session-factory.ts";
+import type { PiBindingOptions } from "./session-binding.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type AgentModels, agentModels } from "./agent-models.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
@@ -309,7 +309,7 @@ function contentSection({ agentDir, content }: { agentDir: string; content: read
 /** The assembly, as a value: what every rung builds and what the agent runs on. */
 export interface PiAssembly {
   /** What binds a session to a record: everything but the store, which is `sessions`. */
-  binding: Omit<PiAgentSessionFactoryOptions, "sessions">;
+  binding: PiBindingOptions;
   sessions: PiSessionRecordStore;
   /** Extension-aware catalog for startup reporting and control-plane validation; never bound to a session. */
   modelRuntime: () => Promise<ModelRuntime>;
@@ -318,7 +318,7 @@ export interface PiAssembly {
   /**
    * The default model, resolved against the catalog on first use (a credential read is async); throws when it does not
    * resolve. Undefined when the assembly has no default: each session then runs on the model it records
-   * (agent-session-factory.ts).
+   * (session-binding.ts).
    */
   resolveDefaultModel: () => Promise<AnyModel | undefined>;
   /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
@@ -328,7 +328,7 @@ export interface PiAssembly {
   /** Pi built-ins the mounted tools leave out, denied in every session so discovery cannot bring them back. */
   excludedToolNames: readonly string[];
   /** The prompt and skills a session runs on, read when a session is bound. */
-  readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
+  readDefinition: PiBindingOptions["readDefinition"];
   /** The extension entry points a session loads, listed afresh for each (the catalog's own discovery). */
   extensionPaths: () => Promise<readonly string[]>;
   /** The agent's content, resolved: what its tools see as `ctx.content`. */
@@ -337,17 +337,17 @@ export interface PiAssembly {
 
 /** Shared low-level wiring: resolve the model spec against the collection, default the K ports, build the parts. */
 function assemblePi(opts: {
-  /** The default model spec; see {@link PiAgentSessionFactoryOptions.modelSpec}. */
+  /** The default model spec; see {@link PiBindingOptions.modelSpec}. */
   model?: string;
   thinkingLevel?: ThinkingLevel;
   /** The model registry to run on, resolved on first use. */
   models: () => Promise<ModelRuntime>;
   catalog: () => Promise<ModelRuntime>;
-  readDefinition: PiAgentSessionFactoryOptions["readDefinition"];
+  readDefinition: PiBindingOptions["readDefinition"];
   tools?: MountedTool[];
   /** Where conversations live. */
   sessions?: PiSessionRecordStore;
-  /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
+  /** The definition's extension entry points; see {@link PiBindingOptions.extensionPaths}. */
   extensionPaths?: () => Promise<readonly string[]>;
   /**
    * The working directory: where tools operate, what the model is told its working directory is, and what session
@@ -368,7 +368,7 @@ function assemblePi(opts: {
   };
   // Deny omitted coding names so discovery cannot reintroduce tools a lower-level caller excluded.
   const excludedToolNames = omittedBuiltinNames(opts.tools ?? [], cwd);
-  const binding: Omit<PiAgentSessionFactoryOptions, "sessions"> = {
+  const binding: PiBindingOptions = {
     createModelRuntime,
     ...(opts.model ? { modelSpec: opts.model } : {}),
     ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
