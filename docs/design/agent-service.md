@@ -1,6 +1,6 @@
 ---
 title: Agent service
-description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, what an agent works with (content, connectors and environment, shared as contexts), state, credentials, the serving protocol (sessions, runs, entries) and its harness port, disposable boxes, the interfaces, the architecture, and deployment."
+description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, what an agent works with (content, connectors and environment), state, credentials, the serving protocol (sessions, runs, entries) and its harness port, disposable boxes, the interfaces, the architecture, and deployment."
 type: design-doc
 status: proposed
 ---
@@ -10,7 +10,9 @@ status: proposed
 **Status: proposed, not implemented.** It extends the [agent model](agent-model.md), replaces the
 [Agent Handler SPEC](../SPEC.md) with the serving protocol (§7; §7.8 lists what changes), and answers
 [#688](https://github.com/fastagent-sh/fastagent/issues/688): `Scope` goes, and §7.2 says what replaces it. §14 lists
-the decisions made in review; everything else is a proposal to settle before implementation.
+the decisions made in review; everything else is a proposal to settle before implementation. Shared contexts (§3.6)
+are deferred: the current scope is each agent's own `context.json` for content and environment, and nothing else in
+this design depends on them.
 
 Three things are hard in serving an agent, and this design spends itself on them:
 
@@ -46,8 +48,8 @@ they already work: chat, their own apps, other agents.
 
 Outside FastAgent:
 
-- a unit above agents: a team, its members, shared secrets, one deployment target. Sharing happens through the
-  contexts several agents use (§3.6);
+- a unit above agents: a team, its members, shared secrets, one deployment target. Sharing declarations across agents
+  through contexts is deferred (§3.6);
 - the model and the agent loop, which a harness provides (§9.1);
 - a hosting platform of its own: agents deploy to existing hosts (§10);
 - waiting states for human input: steering, queued runs, cancelling and aborting cover it.
@@ -171,7 +173,10 @@ A **trigger** is where an invoke comes from: a request (HTTP, another agent), a 
 webhook), time (a schedule), or the agent itself (`wake`, a subagent). A channel is a trigger and a connector of one
 system: messages arrive through it, and the agent's send tool posts through it.
 
-### 3.6 Contexts: the unit of sharing
+### 3.6 Contexts: the unit of sharing (deferred)
+
+Deferred until a concrete need to share declarations across agents emerges; it is kept as the design to start from
+then. Its implementation, [#787](https://github.com/fastagent-sh/fastagent/pull/787), was closed without merging.
 
 A **context** is a named unit of what agents work with, shared on its own: content, connectors and environment that
 belong together, declared once for every agent that uses it. A team's GitHub, for example: the repositories its agents
@@ -919,7 +924,8 @@ Every interface ends in one operation, `invoke` (§7).
 
 ### 8.1 The directory
 
-The directory is the only source of an agent.
+The directory is the only source of an agent. What this section says of contexts (`contexts` in `context.json`,
+`.contexts/`, `fastagent context`) is the deferred design of §3.6.
 
 ```text
 my-agent/
@@ -936,8 +942,8 @@ my-agent/
                                               or an image
   content/<name>/                             the clone of each declared repository with no checkout bound
                                               here, or a mount; never in git
-  .contexts/<name>/                           the contexts it uses, fetched at their ref; never in git, built
-                                              into the image
+  .contexts/<name>/                           deferred (§3.6): the contexts it uses, fetched at their ref; never
+                                              in git, built into the image
   .secrets/                                   values and grants, never in git
   .state/                                     the service's state, never in git; where it lives is the deployment's
     sessions/<time>_<id>.jsonl                  each session's record: an append-only log of entries (§3.5)
@@ -1012,9 +1018,9 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/fetch/remove` edit and fetch the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
+| Create | `init`, `add <channel>`, `add skill`, `content add/list/remove`: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`) | Deferred: `context add/list/fetch/remove` for shared contexts (§3.6) |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` fetches the contexts the agent uses and builds them into the image (§3.6); the image already installs the environment (§4) |
+| Ship | `deploy <host>`, `login [--deployment <host>]`; the image installs the environment (§4) | Deferred: `deploy` fetches shared contexts and builds them into the image (§3.6) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 Channels, schedules and wake-ups
@@ -1263,7 +1269,7 @@ router in front (§7.8).
 | `.state/` | The service's state: session records, schedule claims, wake-ups, channel state | Not in git; where the deployment puts it (§10.2) |
 | `context.local.json` | This machine's directories the agent is bound to: its checkouts, and directories only it has | Not in git; never in an image |
 | `content/<name>/` | The clone of each declared repository, or a mount | Not in git; on a host, a link into the host's storage |
-| `.contexts/<name>/` | The contexts the agent uses, fetched at their `ref` | Not in git; fetched by each deploy and built into the image |
+| `.contexts/<name>/` | Deferred (§3.6): the shared contexts the agent uses, fetched at their `ref` | Not in git; fetched by each deploy and built into the image |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
@@ -1328,9 +1334,9 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Joined with the contexts' (§3.6, §4) |
+| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Deferred: joined with shared contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, used as its `ref` is now and built into the image by each deploy (§3.6, §8.1) |
+| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | Deferred: a context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, built into the image by each deploy (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
@@ -1353,7 +1359,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 
 | Agent model (implemented) | This design |
 |---|---|
-| No shared contexts | A context is the unit of sharing (§3.6) |
+| No shared contexts | Shared contexts, deferred (§3.6) |
 
 ## 12. Order of work
 
@@ -1362,11 +1368,12 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
-| 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
+| 3 | Declarations as files: `context.json`, with content at `content/<name>/`; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise. Done |
 | 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |
+| Deferred | Shared contexts (§3.6), when a concrete cross-agent need warrants them |
 
 ## 13. Open questions
 
@@ -1395,8 +1402,8 @@ Each is settled when the step that needs it is built (§12).
 
 The product and the model:
 
-- A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through the contexts
-  several agents use.
+- A unit above agents (a team, members, a shared deployment) is outside FastAgent. Sharing declarations across agents
+  through contexts is deferred (§3.6).
 - `Agent = model + harness + context`: the model from a model provider, the harness pi (the loop that runs an agent,
   as the ecosystem uses the word), and the context everything it works with from outside. FastAgent defines the agent
   and composes the three in its definition, its own directory, which the agent model called the harness until this
@@ -1405,7 +1412,8 @@ The product and the model:
   runs), connectors (the other systems it reaches, through MCP, APIs and their credentials) and environment (what it
   runs in). The data kind is called content, so that *context* means only the whole. The test in §3.2 separates
   content from connectors.
-- A context is the unit of sharing: a GitHub repository whose `context.json` declares content, environment and, with
+- Deferred, and the design to start from if sharing is needed: a context is the unit of sharing, a GitHub repository
+  whose `context.json` declares content, environment and, with
   MCP, connectors, and carries no prompt and no code the harness loads, which are each agent's definition. An agent is
   shared as its definition, and what it works with a context at a time. An agent names each context's repository and
   `ref`: a branch or a tag follows the context, a full commit pins it, and there is no other lock. The commands that
