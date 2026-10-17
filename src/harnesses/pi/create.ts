@@ -24,7 +24,14 @@ import { reportFindingsIfChanged } from "./report.ts";
 import { log } from "../../log.ts";
 import { BUILTIN_EXTENSIONS, DISCOVERY, readMachine, withMachine } from "./machine.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type FastagentTool, type ToolCollision, loadTools, mergeDiscoveredTools, type MountedTool } from "./tool.ts";
+import {
+  type FastagentTool,
+  type MountedTool,
+  type ToolCollision,
+  isDefaultActiveTool,
+  loadTools,
+  mergeDiscoveredTools,
+} from "./tool.ts";
 import { type DeclaredSecret, readSecretDeclaration } from "../../declared-secrets.ts";
 import type { PiBindingOptions } from "./session-binding.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
@@ -77,12 +84,6 @@ function piRegisteredToolNames(cwd: string): string[] {
 function omittedBuiltinNames(mounted: readonly MountedTool[], cwd: string): string[] {
   const mountedNames = new Set(mounted.map((tool) => tool.name));
   return [...new Set(piRegisteredToolNames(cwd))].filter((name) => !mountedNames.has(name));
-}
-
-function isDefaultActiveTool(tool: MountedTool): boolean {
-  return (
-    (!tool.exposure || tool.exposure === "direct" || tool.exposure === "model-only") && tool.defaultActive !== false
-  );
 }
 
 /** How the model reaches a mounted tool it is not given up front. */

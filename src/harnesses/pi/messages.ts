@@ -139,7 +139,7 @@ export function streamsThinkingDelta(event: { contentIndex: number; partial: Ass
 
 /**
  * Whether a finished tool call asked to end its run (pi's `terminate`: returned by the tool, or set by a `tool_call`
- * hook that blocks it; pi 0.99.2's `tool_result` hook cannot set it). After a batch whose EVERY result asks it, pi
+ * hook that blocks it; pi 1.3.0's `tool_result` hook cannot set it). After a batch whose EVERY result asks it, pi
  * makes no further model call for that batch, so unless a queued steer or follow-up continues the run, it completes on
  * `tool_result` entries with no answer after them: the same shape a process killed after its tools leaves. A call made
  * from inside another tool (`parentToolCallId`, a codemode script) is not in the batch and does not count. The flag
@@ -151,7 +151,7 @@ export function asksToEndRun(event: { result?: unknown; parentToolCallId?: strin
 
 /**
  * The tool result message as pi then records it, carrying the request: pi's `createToolResultMessage` drops
- * `terminate` (as of pi 0.99.2), so without this nothing in the record says the run ended on purpose.
+ * `terminate` (as of pi 1.3.0), so without this nothing in the record says the run ended on purpose.
  */
 export function markEndsRun(message: ToolResultMessage): ToolResultMessage {
   return { ...message, terminate: true } as ToolResultMessage;

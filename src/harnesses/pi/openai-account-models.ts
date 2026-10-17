@@ -5,8 +5,8 @@
  * pi lists a provider's models through `filterModels`, which is synchronous, so the catalog is read when there is a
  * token to read it with (login and every token refresh) and kept on the credential, like the account it belongs to:
  * a new account brings its own list, and nothing per-account lands in the definition's model catalog. pi's `openai`
- * provider does not do this itself (checked against pi 0.99.2), so {@link withAccountModels} wraps it. An API key on the same
- * provider keeps the built-in list.
+ * provider does not do this itself (checked against pi 1.3.0), so {@link withAccountModels} wraps it. An API key on the
+ * same provider keeps the built-in list.
  */
 import type { Credential, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";

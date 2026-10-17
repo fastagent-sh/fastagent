@@ -45,8 +45,7 @@ import {
 import { log } from "../../log.ts";
 import { warnWhenChanged } from "./report.ts";
 import type { ResolvedContent } from "../../content/resolve.ts";
-import type { MountedTool } from "./tool.ts";
-import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
+import { type MountedTool, isDefaultActiveTool } from "./tool.ts";
 import { resolveModel } from "./config.ts";
 import { MissingModel, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, withModelRegistration } from "./models.ts";
@@ -198,7 +197,6 @@ function discoveryToolNames(tools: readonly MountedTool[]): string[] {
 export async function bindPiSession(options: BindPiSessionOptions): ReturnType<typeof createAgentSessionFromServices> {
   const { services, sessionManager, model, thinkingLevel, tools, cwd } = options;
   const excludedToolNames = options.excludedToolNames ?? [];
-  const history = sessionManager.buildSessionContext().messages;
   const bound: { current?: ToolBinding } = {};
   const sessionId = options.sessionId ?? sessionManager.getSessionId();
   const result = await createAgentSessionFromServices({
@@ -221,21 +219,19 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
       tools: sessionToolActivation(session),
     },
   };
-  // The SDK always supplies an initial loadout (settings' defaultTools applied), bypassing AgentSession's native
-  // transcript restore. The loadout is the definition's defaults as they are NOW, plus whatever the transcript still
-  // declares and is still mounted (a discovery). Removals in the transcript are not honored: fastagent's own activation
-  // only adds, so a removal records a turn on which the definition did not mount the tool, not the conversation's
-  // choice, and honoring it would keep a tool out of a long-lived chat after a release that briefly lacked it.
-  // Replayed through Pi's public APIs, for serving and chat alike.
-  const defaults = [...session.getActiveToolNames(), ...discoveryToolNames(tools)];
-  const current = getCurrentSystemMessage(history);
-  const mounted = new Set(session.getAllTools().map((tool) => tool.name));
-  const declared = (current?.toolsAdded ?? []).map((tool) => tool.name);
-  const dropped = declared.filter((name) => !mounted.has(name));
-  // Debug, not warn: `session_start` handlers register their tools after this point, and Pi activates the
-  // default-active ones when they do (`_refreshToolRegistry`), so an absence here is routine on every such bind.
-  if (dropped.length) log.debug(`[fastagent] session ${sessionId}: not mounted yet or removed: ${dropped.join(", ")}`);
-  session.setActiveToolsByName([...defaults, ...declared.filter((name) => mounted.has(name))]);
+  // pi restores a resumed session's loadout from its transcript, keeping a declared tool an extension registers later
+  // pending until it does. The definition's defaults as they are NOW join it: every tool the definition registers
+  // (mounted or from `extensions/`, not pi's built-ins, which settings select) that activates on registration, and the
+  // discovery tools its exposures need. fastagent's own activation only adds, so a tool the transcript lacks is one the
+  // definition did not have on some earlier run, not the conversation's choice, and leaving it out would keep a tool
+  // from a long-lived chat after a release that briefly lacked it.
+  const registered = session
+    .getAllTools()
+    .filter((tool) => tool.sourceInfo.source !== "builtin")
+    .filter((tool) => isDefaultActiveTool(session.getToolDefinition(tool.name) ?? {}))
+    .map((tool) => tool.name);
+  const defaults = [...registered, ...discoveryToolNames(tools)];
+  session.setActiveToolsByName([...new Set([...session.getActiveToolNames(), ...defaults])]);
   return result;
 }
 

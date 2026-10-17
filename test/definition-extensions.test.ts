@@ -305,6 +305,23 @@ export default function (pi) {
     );
   });
 
+  it("streams a command's turn even when an input handler holds it before it starts", async () => {
+    // The window before `before_agent_start`: pi runs the `input` handlers on the sent message before the run exists,
+    // and the session is idle meanwhile, so waiting for idle alone would end the run as intercepted.
+    const agent = await servedAgent({
+      "extensions/slow-input.ts": `
+import { setTimeout } from "node:timers/promises";
+export default function (pi) {
+  pi.on("input", async () => { await setTimeout(20); return { action: "continue" }; });
+  pi.registerCommand("go", { description: "", handler: async (args) => pi.sendUserMessage("from command " + args) });
+}
+`,
+    });
+    expect((await collect(agent.invoke({ sessionId: "s", prompt: { text: "/go held" } }))).text).toContain(
+      "from command held",
+    );
+  });
+
   it("refreshes distinct session-local runtimes for successive bindings", async () => {
     const agent = await servedAgent({ "extensions/probe.ts": probe(freshKey()) });
     await collect(agent.invoke({ sessionId: "s", prompt: { text: "first" } }));
