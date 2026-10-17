@@ -12,8 +12,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 
 | Source | Status |
 |---|---|
-| [Agent Handler SPEC](../SPEC.md) | Normative protocol contract. Changes require explicit review. |
-| [SPEC v1 draft](../SPEC-v1.md) | The approved replacement, normative once implemented. Changes require explicit review. |
+| [Agent Handler SPEC](../SPEC.md) | Normative protocol contract, v1. Changes require explicit review. |
 | Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
@@ -33,7 +32,7 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | Document | Purpose |
 |---|---|
 | [agent-model.md](agent-model.md) | **Implemented.** What an agent is, as a program: model + harness + context, composed by FastAgent in a definition, the instance that holds its state, the content it works on and knows, its types, and the vocabulary later designs build on. |
-| [agent-service.md](agent-service.md) | **Proposed.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (content, connectors and environment, shared as contexts; the environment under `environment` in `context.json`, installed by mise), state, credentials, the serving protocol that replaces the Agent Handler SPEC (sessions, runs, entries; a user plane and a control plane) and its harness port, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
+| [agent-service.md](agent-service.md) | **Proposed, partly implemented.** Agents a team builds, runs and uses together as cloud services: the product loop, what an agent works with (content, connectors and environment, with sharing them as contexts deferred; the environment under `environment` in `context.json`, installed by mise), state, credentials, the serving protocol that is now the Agent Handler SPEC v1 (sessions, runs, entries; a user plane and a control plane) and its harness port, disposable boxes, the interfaces, the architecture and deployment. Answers #688. |
 | [agent-cli.md](agent-cli.md) | **Implemented.** The command-line side of the agent model: addressing an Agent, the local instance, what `init` declares, editing content, and what each command shows. |
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
 | [configuration.md](configuration.md) | **Partially implemented** (day one landed; the env dimension is not scheduled). Where each configuration fact lives: the convention boundary, deployment environments, and credential ownership. |
@@ -41,4 +40,4 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | [conformance-levels.md](conformance-levels.md) | Where a session's state lives: the deployment axis, the postures that pin it, and what each owes. |
 | [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [place-history.md](place-history.md) | Proposed: a chat place's history read from the platform when a turn needs it, replacing the context buffer (#633, #374). |
-| [session-control.md](session-control.md) | Session control plane beside `invoke`: observe a session, act on its run, set its properties, and manage the deployment's sessions. |
+| [security-boundary.md](security-boundary.md) | Why FastAgent authenticates nothing, what an anonymous caller of a serve can do, the JSON body gate and CORS, and a multi-tenant facade in front of one deployment. |

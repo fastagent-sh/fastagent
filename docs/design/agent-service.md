@@ -1,16 +1,19 @@
 ---
 title: Agent service
-description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, what an agent works with (content, connectors and environment, shared as contexts), state, credentials, the serving protocol (sessions, runs, entries) and its harness port, disposable boxes, the interfaces, the architecture, and deployment."
+description: "Proposed: FastAgent for teams that build, run and use a set of agents together as cloud services. The product loop, what an agent works with (content, connectors and environment), state, credentials, the serving protocol (sessions, runs, entries) and its harness port, disposable boxes, the interfaces, the architecture, and deployment."
 type: design-doc
 status: proposed
 ---
 
 # Agent service
 
-**Status: proposed, not implemented.** It extends the [agent model](agent-model.md), replaces the
-[Agent Handler SPEC](../SPEC.md) with the serving protocol (§7; §7.8 lists what changes), and answers
+**Status: proposed, partly implemented** (§12 says which steps are done). It extends the
+[agent model](agent-model.md), replaced the v0.1 Agent Handler SPEC with the serving protocol, now
+[SPEC v1](../SPEC.md) (§7; §7.8 lists what changed), and answers
 [#688](https://github.com/fastagent-sh/fastagent/issues/688): `Scope` goes, and §7.2 says what replaces it. §14 lists
-the decisions made in review; everything else is a proposal to settle before implementation.
+the decisions made in review; what is not built yet is a proposal to settle before implementation. Shared contexts
+(§3.6) are deferred: the current scope is each agent's own `context.json` for content and environment, and nothing
+else in this design depends on them.
 
 Three things are hard in serving an agent, and this design spends itself on them:
 
@@ -46,8 +49,8 @@ they already work: chat, their own apps, other agents.
 
 Outside FastAgent:
 
-- a unit above agents: a team, its members, shared secrets, one deployment target. Sharing happens through the
-  contexts several agents use (§3.6);
+- a unit above agents: a team, its members, shared secrets, one deployment target. Sharing declarations across agents
+  through contexts is deferred (§3.6);
 - the model and the agent loop, which a harness provides (§9.1);
 - a hosting platform of its own: agents deploy to existing hosts (§10);
 - waiting states for human input: steering, queued runs, cancelling and aborting cover it.
@@ -171,7 +174,10 @@ A **trigger** is where an invoke comes from: a request (HTTP, another agent), a 
 webhook), time (a schedule), or the agent itself (`wake`, a subagent). A channel is a trigger and a connector of one
 system: messages arrive through it, and the agent's send tool posts through it.
 
-### 3.6 Contexts: the unit of sharing
+### 3.6 Contexts: the unit of sharing (deferred)
+
+Deferred until a concrete need to share declarations across agents emerges; it is kept as the design to start from
+then. Its implementation, [#787](https://github.com/fastagent-sh/fastagent/pull/787), was closed without merging.
 
 A **context** is a named unit of what agents work with, shared on its own: content, connectors and environment that
 belong together, declared once for every agent that uses it. A team's GitHub, for example: the repositories its agents
@@ -538,7 +544,7 @@ same model independently. ACP is validated as a compatibility target in both dir
 the contract: its center is a person in an editor driving a local coding agent, and the parts this design needs most
 are still drafts.
 
-The normative text is [SPEC v1](../SPEC-v1.md) (§7.8); this section keeps the reasoning, and where the two differ the
+The normative text is [SPEC v1](../SPEC.md) (§7.8); this section keeps the reasoning, and where the two differ the
 SPEC wins.
 
 ### 7.1 Concepts
@@ -760,6 +766,22 @@ type AbortResult =
   and kept (§7.7).
 - **`list`** returns every session of the deployment: FastAgent does not know users, so a gateway in front of many
   users filters it.
+- **`commands`** lists what a composer's `/` completion offers: `{ name, description?, source }` for the definition's
+  skills, the commands its `extensions/` register, and the machine's skills and prompt templates. It cannot be built on
+  the client: only the assembly knows the set after first-wins collisions, and a remote agent's files are not on the
+  client's machine. It is read per call, like the definition.
+  - **The harness expands a name, never the client.** A skill is sent as `/skill:<name> [args]` and becomes the
+    skill's body with the arguments after it; an extension command and a prompt template are `/<name> [args]`.
+    `source` (`skill`, `extension`, `prompt`) says which spelling. A client that read `skills/<name>/SKILL.md` and
+    built the prompt itself would re-implement loading and break against a remote agent.
+  - **One spelling, not a negotiated one.** Nothing in `commands()` or `capabilities` reports it, so a second harness
+    with another spelling cannot be told apart; adding one is a contract change. Hard-coding one harness's spelling is
+    recoverable, expanding names yourself is not.
+  - **An unknown name is text.** A typo and a sentence that opens with a slash are the same bytes, so checking a name
+    against the list is the client's job. A skill whose file cannot be read drops out of the list (with a warning), so
+    the list covers both. A file removed after the list was read is expanded at prompt time, finds nothing, and the
+    run logs `skill_expansion failed` and sends the line as written.
+  - A chat channel's own stop command is not on the list: the channel turns it into `abort` before the agent sees it.
 
 ### 7.5 Entries and events
 
@@ -863,16 +885,16 @@ middleware, per plane. The startup report keeps listing what is served unauthent
 travel as IAM-gated `InvokeAgentRuntime` envelopes, and IAM is the gateway. Channels, schedules and wake-ups call the
 protocol in process.
 
-This changes a default. Today the only route served by default is `POST /invoke`; reading sessions is the opt-in
-`/control/*`. With the user plane on by default, anyone who reaches the port can also list every session, including a
-channel's direct messages, read and follow them, and abort or rewind them, as anyone who reaches it can already make
-the agent run today. The user plane is what a client needs, so it stays on; a deployment with a public URL puts a
-gateway in front, or turns `http.api` off when only its channels are used, since they call the protocol in process.
+This changed a default in step 4: before it, the only route served by default was `POST /invoke`, and reading
+sessions was opt-in. With the user plane on by default, anyone who reaches the port can also list every session,
+including a channel's direct messages, read and follow them, and abort or rewind them, as anyone who reached it could
+already make the agent run. The user plane is what a client needs, so it stays on; a deployment with a public URL puts
+a gateway in front, or turns `http.api` off when only its channels are used, since they call the protocol in process.
+What this obliges, and the browser-facing rules that follow, are in [the security boundary](security-boundary.md).
 
 ### 7.8 SPEC changes (v1)
 
-`docs/SPEC.md` is rewritten as this protocol: drafted in [SPEC-v1.md](../SPEC-v1.md), which replaces it when step 4
-ships, so the published SPEC keeps describing what the package implements until then. The harness port stays out of
+`docs/SPEC.md` is this protocol, [SPEC v1](../SPEC.md); it replaced v0.1 in step 4. The harness port stays out of
 the SPEC: it is the implementation's contract, and a harness conforms by passing the SPEC's suite through it. Against
 v0.1:
 
@@ -919,7 +941,8 @@ Every interface ends in one operation, `invoke` (§7).
 
 ### 8.1 The directory
 
-The directory is the only source of an agent.
+The directory is the only source of an agent. What this section says of contexts (`contexts` in `context.json`,
+`.contexts/`, `fastagent context`) is the deferred design of §3.6.
 
 ```text
 my-agent/
@@ -936,8 +959,8 @@ my-agent/
                                               or an image
   content/<name>/                             the clone of each declared repository with no checkout bound
                                               here, or a mount; never in git
-  .contexts/<name>/                           the contexts it uses, fetched at their ref; never in git, built
-                                              into the image
+  .contexts/<name>/                           deferred (§3.6): the contexts it uses, fetched at their ref; never
+                                              in git, built into the image
   .secrets/                                   values and grants, never in git
   .state/                                     the service's state, never in git; where it lives is the deployment's
     sessions/<time>_<id>.jsonl                  each session's record: an append-only log of entries (§3.5)
@@ -1012,9 +1035,9 @@ export default {
 
 | Stage | Today | Proposed |
 |---|---|---|
-| Create | `init`, `add <channel>`, `add skill`, `context add/list/remove` | `context add/list/fetch/remove` edit and fetch the contexts in `context.json`, and `content add/list/remove` its content: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`), and another machine binds its own or clones |
+| Create | `init`, `add <channel>`, `add skill`, `content add/list/remove`: `content add <dir>` binds that directory in `context.local.json` (a GitHub checkout is also declared as its repository in `context.json`) | Deferred: `context add/list/fetch/remove` for shared contexts (§3.6) |
 | Develop | `dev`, `chat`, `invoke`, `tool`, `info`, `models`, `env` | The one-off `invoke` keeps a fresh session per call, so nothing it runs can collide with a session a serving process holds. `env add/remove/list/install/exec` edit and use the environment in `context.json`; each command that runs the agent installs it first (§4) |
-| Ship | `deploy <host>`, `login [--deployment <host>]` | `deploy` fetches the contexts the agent uses and builds them into the image (§3.6); the image already installs the environment (§4) |
+| Ship | `deploy <host>`, `login [--deployment <host>]`; the image installs the environment (§4) | Deferred: `deploy` fetches shared contexts and builds them into the image (§3.6) |
 | Operate | `start`, `logs`, `destroy`, `schedules list` | Unchanged |
 
 ### 8.3 Channels, schedules and wake-ups
@@ -1055,8 +1078,7 @@ move (§12).
 A client such as duang uses the user plane: the session list, `read` and `follow`, `invoke` with `queue` or `steer`,
 `runs.cancel`, `abort`, `rewind` and `compact`. Naming a session and changing its model or thinking level need the
 control plane. The remote client (`connectAgent`) presents the same interface as an agent opened in process
-(`createAgentService`); today's two remote clients, `connectAgent` and `connectSessionControl`, become one. Clients
-live outside this repository.
+(`createAgentService`); it is the one remote client, for both planes. Clients live outside this repository.
 
 ## 9. Architecture
 
@@ -1247,11 +1269,11 @@ The service never reruns a run on its own: its tools may already have had effect
 owes an answer invokes again with the message's key, which starts a new run only when the key's run was
 `interrupted` (§7.3); the channels do, from their turn stores, so they stay at-least-once.
 
-Process affinity exists only while a run is active, and routing across instances belongs to a session router above
-FastAgent ([session control](session-control.md) §9). FastAgent's deployments meet it by topology: one process per
-agent on a resident host, and on AgentCore the microVM of the runtime session the call names. Scaling out keeps it by
-giving each conversation its own runtime session, which a router finds from the path or the invoke's body (§7.7). This
-is weaker than SPEC MUST 6, which forbids requiring a session's invocations to land in one process: a queued run in
+Process affinity exists only while a run is active or queued (SPEC MUST 8), and routing across instances belongs to a
+session router above FastAgent. FastAgent's deployments meet it by topology: one process per agent on a resident
+host, and on AgentCore the microVM of the runtime session the call names. Scaling out keeps it by giving each
+conversation its own runtime session, which a router finds from the path or the invoke's body (§7.7). It is weaker
+than v0.1's rule, which forbade requiring a session's invocations to land in one process: a queued run in
 `LoopPort`'s memory, or a steer, is state only the process running the session holds. Portable conformance needs that
 router in front (§7.8).
 
@@ -1263,7 +1285,7 @@ router in front (§7.8).
 | `.state/` | The service's state: session records, schedule claims, wake-ups, channel state | Not in git; where the deployment puts it (§10.2) |
 | `context.local.json` | This machine's directories the agent is bound to: its checkouts, and directories only it has | Not in git; never in an image |
 | `content/<name>/` | The clone of each declared repository, or a mount | Not in git; on a host, a link into the host's storage |
-| `.contexts/<name>/` | The contexts the agent uses, fetched at their `ref` | Not in git; fetched by each deploy and built into the image |
+| `.contexts/<name>/` | Deferred (§3.6): the shared contexts the agent uses, fetched at their `ref` | Not in git; fetched by each deploy and built into the image |
 | `.secrets/` | Values and grants | Not in git; values reach the host through its secret store |
 
 ### 9.5 Principal
@@ -1328,20 +1350,20 @@ and what it cost is in each run's `run_ended` entry, which carries its usage.
 
 | Area | Today | Proposed |
 |---|---|---|
-| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Joined with the contexts' (§3.6, §4) |
+| Environment | `environment` in `context.json` (`packages`, `aptPackages`, `variables`), installed by the agent's own mise, here and in the image, at the newest release each version allows (step 3) | Deferred: joined with shared contexts' (§3.6, §4) |
 | Declarations | What the agent works with, in the TypeScript config | A declaration with a standard format, or one the agent or a tool writes, is a file of its own; the config keeps what only the author sets (§8.1) |
-| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | A context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, used as its `ref` is now and built into the image by each deploy (§3.6, §8.1) |
+| Content and contexts | Repositories in `context.json`, cloned at `content/<name>/`, and this machine's directories in `context.local.json` (step 3); no shared contexts | Deferred: a context is a GitHub repository whose `context.json` declares content, environment and, with MCP, connectors, built into the image by each deploy (§3.6, §8.1) |
 | State | `.state/` on the host's storage | Declared apart from the content; on AgentCore, API storage when scaling out (§10.2) |
 | Code tools | Every tool exported from any module below `tools/`, helpers beside them (step 3, §8.1) | Unchanged |
 | Connectors | `tools/`, channel send tools; MCP off when serving | MCP servers in `mcp.json` (#678); a service without MCP through a CLI, code tools or an MCP server of one's own; all listed by `fastagent info` (§5) |
 | Credentials | Declared by tools and channels; one value file and the model's grants | Declared by everything that uses one (§6) |
-| The contract | The Agent Handler SPEC v0.1: `invoke(scope, prompt)` and a stream that ends with the caller | The serving protocol (§7): sessions, runs that outlive their callers, entries and events, idempotency keys |
-| Sessions | Named by the caller; created by an invoke or an `update` | Named by the caller or by the service; created by an invoke or by `sessions.create`, the only way to fork (§7.4) |
-| A busy session | Rejected; each caller waits its own way | `whenBusy`: `queue` (the default), `steer`, `reject` (§7.2) |
-| Stopping and steering | `abort`, `steer` and `followUp` on the session | `runs.cancel` and the session's `abort`; steering through `invoke` (§7.3, §7.4) |
-| HTTP | `POST /invoke` (`http.invoke`) on by default; reading and stopping sessions only through the opt-in `/control/*` (`sessionControl`) | The user plane (`http.api`), on by default, now includes listing, reading, following, aborting and rewinding sessions; the control plane (`/control`, `http.control`) is off by default (§7.7) |
+| The contract | [SPEC v1](../SPEC.md), the serving protocol (§7): sessions, runs that outlive their callers, entries and events, idempotency keys (step 4) | Unchanged |
+| Sessions | Named by the caller or by the service; created by an invoke or by `sessions.create`, the only way to fork (§7.4, step 4) | Unchanged |
+| A busy session | `whenBusy`: `queue` (the default), `steer`, `reject` (§7.2, step 4) | Unchanged |
+| Stopping and steering | `runs.cancel` and the session's `abort`; steering through `invoke` (§7.3, §7.4, step 4) | Unchanged |
+| HTTP | The user plane (`http.api`), on by default: invoking, listing, reading, following, aborting and rewinding sessions; the control plane (`/control`, `http.control`) off by default (§7.7, step 4) | Unchanged |
 | A channel's turn after a restart | Its turn store replays it, at most three times | The same in effect: the service never reruns, and the turn store invokes again with the message's key, which starts a new run only when the key's run was `interrupted` (§7.3) |
-| The harness boundary | `Agent` is both what callers use and what pi implements | Two contracts: the protocol above, the harness port below, with the queue behind the port (§9.1) |
+| The harness boundary | Two contracts: the protocol above, the harness port below, with `LoopPort` holding the queue for pi (§9.1, step 4) | A durable harness behind the same port (pi-durable, step 4) |
 | AgentCore | One fixed runtime session for every entry point | A runtime session per conversation (§10.2) |
 | The agent's own changes on a host | Lost at the next deploy | Designed later (#605) |
 
@@ -1353,7 +1375,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 
 | Agent model (implemented) | This design |
 |---|---|
-| No shared contexts | A context is the unit of sharing (§3.6) |
+| No shared contexts | Shared contexts, deferred (§3.6) |
 
 ## 12. Order of work
 
@@ -1362,11 +1384,12 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 0 | Finish this design |
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
-| 3 | Declarations as files: `context.json`, with content at `content/<name>/` and contexts as shared units; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise |
-| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678) |
+| 3 | Declarations as files: `context.json`, with content at `content/<name>/`; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise. Done |
+| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678). Done: the protocol and `LoopPort` for pi-coding-agent with its conformance suite, the SPEC, and channels, schedules and wake-ups on it. Not yet: pi-durable, duang, MCP |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |
+| Deferred | Shared contexts (§3.6), when a concrete cross-agent need warrants them |
 
 ## 13. Open questions
 
@@ -1395,8 +1418,8 @@ Each is settled when the step that needs it is built (§12).
 
 The product and the model:
 
-- A unit above agents (a team, members, a shared deployment) is outside FastAgent; sharing is through the contexts
-  several agents use.
+- A unit above agents (a team, members, a shared deployment) is outside FastAgent. Sharing declarations across agents
+  through contexts is deferred (§3.6).
 - `Agent = model + harness + context`: the model from a model provider, the harness pi (the loop that runs an agent,
   as the ecosystem uses the word), and the context everything it works with from outside. FastAgent defines the agent
   and composes the three in its definition, its own directory, which the agent model called the harness until this
@@ -1405,8 +1428,9 @@ The product and the model:
   runs), connectors (the other systems it reaches, through MCP, APIs and their credentials) and environment (what it
   runs in). The data kind is called content, so that *context* means only the whole. The test in §3.2 separates
   content from connectors.
-- A context is the unit of sharing: a GitHub repository whose `context.json` declares content, environment and, with
-  MCP, connectors, and carries no prompt and no code the harness loads, which are each agent's definition. An agent is
+- Deferred, and the design to start from if sharing is needed: a context is the unit of sharing, a GitHub repository
+  whose `context.json` declares content, environment and, with MCP, connectors, and carries no prompt and no code the
+  harness loads, which are each agent's definition. An agent is
   shared as its definition, and what it works with a context at a time. An agent names each context's repository and
   `ref`: a branch or a tag follows the context, a full commit pins it, and there is no other lock. The commands that
   develop the agent fetch each context at start, `context fetch` and each deploy fetch it and fail when they cannot,
@@ -1448,7 +1472,7 @@ The product and the model:
 The serving protocol:
 
 - FastAgent defines its own protocol, synthesized from pi-durable and DeepSeek Harness; ACP is a compatibility target
-  checked in both directions, not the contract (§7, §7.9). `docs/SPEC.md` is rewritten as this protocol (§7.8).
+  checked in both directions, not the contract (§7, §7.9). `docs/SPEC.md` is this protocol (§7.8).
 - The concepts a user sees are the session, the message, the run and the entry; steps stay inside the harness and
   *turn* is not used. The run is the unit a caller holds; a message is content only (§7.1).
 - `invoke` keeps its name and takes one request: an optional `sessionId`, the prompt, `whenBusy` and an

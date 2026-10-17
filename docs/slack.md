@@ -289,7 +289,7 @@ usable only when Slack exposes authenticated downloadable bytes.
 3. appends standard Markdown with `chat.appendStream`;
 4. maps each `tool_started` to a compact inline Markdown trace containing the humanized tool identifier
    (`mcp__github__create_issue` → `Github: create issue`) and a bounded single-line argument summary
-   (normally the command, path, or query); an errored `tool_ended` appends one line naming the failed
+   (normally the command, path, or query); an errored `tool_result` appends one line naming the failed
    call, never its output, while a successful one appends nothing — an emitted line cannot be flipped
    to a checkmark, so the next trace (or the answer) is the completion signal;
 5. closes the stream with `chat.stopStream`.

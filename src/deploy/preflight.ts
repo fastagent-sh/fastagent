@@ -299,7 +299,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     report.warn(
       `the deployed box answers ${unauthenticated.join(" and ")} at its public URL, UNAUTHENTICATED — ` +
         `fastagent authenticates nothing. Put a gateway, an IdP-backed proxy or a private network in front of that ` +
-        `URL (docs/design/session-control.md §14)`,
+        `URL (docs/design/security-boundary.md)`,
     );
   }
 

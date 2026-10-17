@@ -1,5 +1,5 @@
 /**
- * Agent Handler protocol v1 (docs/SPEC-v1.md), the contract every caller uses. Pure types and the protocol's own
+ * Agent Handler protocol v1 (docs/SPEC.md), the contract every caller uses. Pure types and the protocol's own
  * constants: no harness, no runtime.
  */
 

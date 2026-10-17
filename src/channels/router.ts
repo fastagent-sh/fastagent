@@ -152,8 +152,9 @@ export interface RouterSurface {
  * body gate, the startup report) cannot answer differently.
  *
  * CAVEAT, stated because we cannot enforce it: a CUSTOM channel that verifies nothing lands in `selfVerifying`
- * anyway and gets neither guard. That is decision B (docs/design/session-control.md §14) and it belongs to the
- * channel's author, who owns the credential the platform issued — but it is an assumption here, not a property.
+ * anyway and gets neither guard. That is the channel's half of the boundary (docs/design/security-boundary.md §3),
+ * and it belongs to the channel's author, who owns the credential the platform issued — but it is an assumption here,
+ * not a property.
  */
 export function router(surface: RouterSurface): ChannelHandler {
   const { unverified = {}, selfVerifying = {}, mounts = [], corsOrigins = [] } = surface;

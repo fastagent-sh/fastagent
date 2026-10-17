@@ -97,7 +97,7 @@ curl -N -X POST localhost:8787/invoke \
   -d '{"sessionId":"s1","prompt":{"text":"Summarize https://example.com in two bullets"}}'
 ```
 
-The response is Server-Sent Events ([SPEC v1](SPEC-v1.md)). It starts with `accepted` (or `rejected`, with the reason),
+The response is Server-Sent Events ([SPEC v1](SPEC.md)). It starts with `accepted` (or `rejected`, with the reason),
 streams `message_delta` text and `tool_started` while the run works, records each settled message, tool result and
 the ending as an `entry`, and ends with the `run_ended` entry, whose `outcome` says `completed`, `failed` or
 `canceled`.

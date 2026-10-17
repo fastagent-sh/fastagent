@@ -138,7 +138,7 @@ export function announceControl(
     log.warn(
       `[fastagent] any web page your browser visits can call this serve cross-origin and read the reply: ${what} ` +
         "with no credential. That is the default (`*`); pin the origins you actually use with http.cors " +
-        "(docs/design/session-control.md §14)",
+        "(docs/design/security-boundary.md)",
     );
   }
   const reach = classifyBind(bind.host);
@@ -146,13 +146,13 @@ export function announceControl(
     log.warn(
       `[fastagent] the port binds ${reach === "wildcard" ? "all interfaces" : `${bind.host} (off this machine)`}: ` +
         `${what} UNAUTHENTICATED to anyone who can reach it — bind loopback (--bind 127.0.0.1), ` +
-        "firewall the port, or front it with a gateway (docs/design/session-control.md §14)",
+        "firewall the port, or front it with a gateway (docs/design/security-boundary.md)",
     );
   }
   if (bind.tunnel) {
     log.warn(
       `[fastagent] --tunnel publishes this port at a public URL with NO authentication: ${what} to anyone with ` +
-        "that URL — put real auth in front before sharing it (docs/design/session-control.md §14)",
+        "that URL — put real auth in front before sharing it (docs/design/security-boundary.md)",
     );
   }
 }

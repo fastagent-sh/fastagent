@@ -43,7 +43,7 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-The mount context's `agent` is the [SPEC v1](SPEC-v1.md) Agent: besides `invoke`, it reaches a session's live
+The mount context's `agent` is the [SPEC v1](SPEC.md) Agent: besides `invoke`, it reaches a session's live
 run (the built-in channels map a user "stop" onto `agent.sessions.get(session).abort()`), its history and its
 settings, whether or not this serve publishes the HTTP planes.
 
@@ -79,7 +79,7 @@ A channel adapter should depend on the harness-neutral `@fastagent-sh/fastagent/
 
 | Export | Use |
 |---|---|
-| `Agent`, `InvokeEvent`, `Entry`, `RunOutcome` | the agent and what its runs report ([SPEC v1](SPEC-v1.md)) |
+| `Agent`, `InvokeEvent`, `Entry`, `RunOutcome` | the agent and what its runs report ([SPEC v1](SPEC.md)) |
 | `ChannelModule`, `Routes`, `ChannelHandler` | HTTP route module and route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
 | `collect` | buffer a run into its answer `{ sessionId, runId, text }` |

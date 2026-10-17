@@ -24,7 +24,7 @@ Both are the same gap: the place's history is not where the agent looks.
 
 | | What it is | Who keeps it |
 |---|---|---|
-| Session | what the agent saw and said in its own turns | fastagent (SPEC MUST 6: durable, location-independent) |
+| Session | what the agent saw and said in its own turns | fastagent (SPEC MUST 8: durable; process affinity only while a run is active) |
 | Place history | everything said in a chat or a thread | the platform, where it can be read; fastagent only where it cannot |
 
 The context buffer (`channels/kit/context-buffer.ts`) is a partial copy of the second:

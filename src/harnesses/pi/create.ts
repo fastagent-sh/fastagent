@@ -421,7 +421,7 @@ export function agentOf(
  * machine lends (machine.ts) — and the commands its `extensions/` register.
  *
  * `source` says how a name is INVOKED, which is the one thing a client needs from it: a `skill` is sent as
- * `/skill:<name>`, an `extension` command and a `prompt` as `/<name>` (docs/design/session-control.md §5.1.1).
+ * `/skill:<name>`, an `extension` command and a `prompt` as `/<name>` (docs/design/agent-service.md §7.4).
  *
  * The definition is read live, like every turn reads it; the machine is the process's one read, the same snapshot a
  * bound session runs on, so the menu cannot offer a name the next prompt would not expand. The same holds for

@@ -443,8 +443,7 @@ Whether an agent may change its own default model is open, pending the definitio
 | Definition | harness, for an agent's own files | Across the ecosystem a harness is the loop that runs an agent (pi). What an author writes is the definition |
 | `SYSTEM.md`, `APPEND_SYSTEM.md` | `persona.md` | `persona.md` replaced only the identity line; `SYSTEM.md` replaces pi's whole default and `APPEND_SYSTEM.md` adds to it, so neither is the same. `persona.md` is refused, naming both and when to use each |
 
-A client that calls the running thing an agent (duang) maps it to an instance. [Session control](session-control.md) still
-calls a running agent a deployment; there, the word means an instance.
+A client that calls the running thing an agent (duang) maps it to an instance.
 
 ## 8. Out of scope
 
