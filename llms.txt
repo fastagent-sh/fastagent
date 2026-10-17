@@ -32,7 +32,7 @@ Key facts:
 ## Reference
 
 - [API reference](https://fastagent.sh/docs/api-reference/): public TypeScript exports.
-- [Agent Handler SPEC](https://fastagent.sh/docs/spec/): the v0.1 protocol contract.
+- [Agent Handler SPEC](https://fastagent.sh/docs/spec/): the v1 protocol contract.
 - [Design principles](https://fastagent.sh/docs/principles/): design choices, core primitives, and non-goals.
 
 ## Optional

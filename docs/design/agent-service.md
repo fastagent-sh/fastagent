@@ -1078,8 +1078,7 @@ move (§12).
 A client such as duang uses the user plane: the session list, `read` and `follow`, `invoke` with `queue` or `steer`,
 `runs.cancel`, `abort`, `rewind` and `compact`. Naming a session and changing its model or thinking level need the
 control plane. The remote client (`connectAgent`) presents the same interface as an agent opened in process
-(`createAgentService`); today's two remote clients, `connectAgent` and `connectSessionControl`, become one. Clients
-live outside this repository.
+(`createAgentService`); it is the one remote client, for both planes. Clients live outside this repository.
 
 ## 9. Architecture
 

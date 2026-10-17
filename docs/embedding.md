@@ -278,4 +278,4 @@ re-exports all of them.
 
 - [SPEC](SPEC.md) — the Agent Handler contract the whole thing rests on.
 - [quickstart](quickstart.md) — the CLI path (`init` / `dev` / `start`).
-- [core design](design/core.md) — the assembly ladder (L0–L2), the four-segment prompt assembly, and the N × M × K layering.
+- [core design](design/core.md) — the assembly ladder (L1–L2), the four-segment prompt assembly, and the N × M × K layering.
