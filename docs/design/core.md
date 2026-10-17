@@ -227,12 +227,13 @@ Each run binds a fresh `AgentSession` to its record and disposes it when the run
 what AgentCore and every scaled channel host require). That is the default on an axis a deployment owns;
 [conformance-levels.md](conformance-levels.md) states what each posture owes.
 
-Reopening restores Pi's tool declarations from the active transcript using `getCurrentSystemMessage` and
-`setActiveToolsByName`. The SDK supplies an initial loadout even on resume, bypassing `AgentSession`'s own
-constructor restore; the shared binder performs this one public-API replay for serving and chat. There is no
-separate activation journal. The loadout is the definition's current defaults plus the transcript's declarations
-that are still mounted. Transcript removals are not honored: fastagent's own activation only adds, so a removal
-records a turn on which the definition did not mount the tool, not the conversation's choice. Discoveries survive rebind, resume, fork, and compaction on that branch.
+Reopening restores the loadout from the active transcript: pi does it itself (`AgentSession`'s constructor reads the
+newest system message's tool declarations, and keeps a declared tool an extension registers later pending until it
+does). There is no separate activation journal. The shared binder, for serving and chat, then adds the definition's
+current defaults: every tool the definition registers, mounted or from `extensions/`, that activates on registration,
+and the discovery tools its exposures need. Transcript removals are not honored: fastagent's own activation only adds,
+so a removal records a turn on which the definition did not mount the tool, not the conversation's choice.
+Discoveries survive rebind, resume, fork, and compaction on that branch.
 
 Every binding also owns a fresh `ModelRuntime`. Credentials are shared through their store, but extension
 provider registrations and virtual router contexts are session-local. An unbound extension-aware catalog supplies

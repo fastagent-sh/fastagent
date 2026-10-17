@@ -87,26 +87,6 @@ function thrownOutcome(error: unknown): LoopOutcome {
 /** pi's error-channel events for work a run owes its caller: the command it ran, and the turns it started. */
 const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]);
 
-/**
- * The turns extensions start on this session and have not finished. `pi.sendUserMessage` and `pi.sendMessage` reach
- * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is this run's
- * alone, so the wrap never outlives the run.
- */
-function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
-  const pending = new Set<Promise<void>>();
-  const track = (sent: Promise<void>): Promise<void> => {
-    pending.add(sent);
-    const done = () => void pending.delete(sent);
-    sent.then(done, done); // pi's own `.catch` on `sent` reports the failure
-    return sent;
-  };
-  const sendUserMessage = session.sendUserMessage.bind(session);
-  const sendCustomMessage = session.sendCustomMessage.bind(session);
-  session.sendUserMessage = (...args) => track(sendUserMessage(...args));
-  session.sendCustomMessage = (...args) => track(sendCustomMessage(...args));
-  return pending;
-}
-
 interface Settings {
   models: Models;
   defaults: { model?: AnyModel; thinkingLevel: ThinkingLevel };
@@ -391,17 +371,13 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
               }
             }),
           );
-          const extensionTurns = trackExtensionTurns(bound);
           const extensionMayTakeInput =
             bound.extensionRunner.getRegisteredCommands().length > 0 || bound.extensionRunner.hasHandlers("input");
           try {
-            if (stopRequested) abort("requested");
             const prepared = await toPiPromptOptions(first.prompt, "prompt");
             await bound.prompt(first.prompt.text, prepared);
-            do {
-              await Promise.allSettled([...extensionTurns]);
-              await bound.waitForIdle();
-            } while (extensionTurns.size > 0);
+            // A turn an extension command starts counts as busy from the moment it is sent, so this waits for it too.
+            await bound.waitForIdle();
           } catch (error) {
             thrown = error;
           }

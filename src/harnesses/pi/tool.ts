@@ -95,6 +95,13 @@ export type MountedTool = Omit<AgentTool, "execute"> &
     ): ReturnType<AgentTool["execute"]>;
   };
 
+/** Whether pi activates the tool as soon as it is registered: the definition's default loadout. */
+export function isDefaultActiveTool(tool: Pick<MountedTool, "exposure" | "defaultActive">): boolean {
+  return (
+    (!tool.exposure || tool.exposure === "direct" || tool.exposure === "model-only") && tool.defaultActive !== false
+  );
+}
+
 /** A Pi tool with fastagent's declared secrets. */
 export type FastagentTool = MountedTool & {
   /** {@link DefineToolOptions.secrets} — read back by `readSecretDeclaration`; pi ignores it. */
