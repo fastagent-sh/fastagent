@@ -139,13 +139,14 @@ The first event is `accepted` or `rejected`.
 | `whenBusy` | When the session is working on another message |
 |---|---|
 | `queue` (default) | Queued. Queued messages are taken in arrival order, each once the work before it has ended, whatever its outcome |
-| `steer` | Taken by the work in progress at its next step, after its current tool round, and answered by that work's answer. A steered message the work has not taken when it answers is taken by the next work, ahead of the queued messages, and answered by that work's answer. An Agent whose `capabilities.steer` is false rejects it with `unsupported` |
+| `steer` | Queued ahead of the messages queued with `queue`, and taken by the work in progress at its next step, after its current tool round, and answered by that work's answer. A steered message the work has not taken when it ends, answered or not, is taken by the next work, before the other queued messages, and answered by that work's answer. An Agent whose `capabilities.steer` is false rejects it with `unsupported` |
 | `reject` | Rejected with `busy` and `details.reason: "running"` |
 
 An idle session takes a message at once, whatever `whenBusy` says. Messages taken by the same work are answered by
 the same answer and end with the same outcome; the next work MAY take the first queued message together with a
-steered one. A message withdrawn before it is taken (`messages.cancel`, `abort`, `delete`) ends `canceled` without an
-entry.
+steered one. Until it is taken, a steered message is `queued` like any other: it has a `position`, is listed in the
+session's `queued`, counts toward the queued limit (§7.2), and is withdrawn by `abort`. A message withdrawn before it
+is taken (`messages.cancel`, `abort`, `delete`) ends `canceled` without an entry.
 
 ### 3.3 Sessions and idempotency
 
@@ -198,12 +199,12 @@ type Outcome =
 interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: number }
 ```
 
-`entryId` is the message's `user_message` entry, written when it is taken. `lastEntryId` is the last entry the work
-that took it wrote, when the Agent recorded one after the message's own entry; with an answer it is the answer's
-entry. `answer` is the agent's final
-`assistant_message` of the work that took it. `usage` is what that work cost; messages taken together report the same
-work, so a Caller adding usage up counts it once per answer. `position` counts from 0 in the order the queued messages
-will be taken. Times are milliseconds since the epoch.
+`entryId` is the message's `user_message` entry, written when it is taken. `lastEntryId` is the last entry of the
+history when the work that took it ended, present whenever `entryId` is: with an answer it is the answer's entry.
+`answer` is the agent's final `assistant_message` of the work that took it. `usage` is what that work cost, reported on
+the first message the work took (the first in arrival order when it took several at once); the messages it took after
+that report none, so adding up the messages' usage counts each piece of work once. `position` counts from 0 in the
+order the queued messages will be taken, steered ones first. Times are milliseconds since the epoch.
 
 ### 4.1 How a message ends
 
@@ -231,9 +232,9 @@ effects. A Caller that owes an answer may invoke again with the message's key (�
 - **`messages.follow`** is the session's events for one message: the entries after the cursor, or from its
   `user_message` entry without one; while it is taken, the live events of the work; then its `done` event. While it is
   queued nothing is delivered but `state` events. For a message that is already done it delivers the entries after the
-  cursor through its `lastEntryId`, or through its own entry when that is absent (from its `entryId` without a cursor,
-  and none for a message never taken), and then `done`, so a Caller reattaching later sees what one following it live saw. A Caller that lost its invoke stream reattaches without
-  following the whole session.
+  cursor through its `lastEntryId` (from its `entryId` without a cursor, and none for a message never taken), and then
+  `done`, so a Caller reattaching later sees what one following it live saw. A Caller that lost its invoke stream
+  reattaches without following the whole session.
 - **`messages.cancel`** withdraws a queued message or stops the work a taken one is part of; messages queued after it
   are taken as usual. A message that is done answers `conflict`.
 
@@ -244,7 +245,7 @@ interface SessionState {
   name?: string;
   status: "idle" | "running" | "compacting";
   taken: { messageId: string; takenAt: number }[];
-  queued: { messageId: string; idempotencyKey?: string; preview: string }[];
+  queued: { messageId: string; idempotencyKey?: string; preview: string }[];   // in the order they will be taken
   model?: string; thinkingLevel?: string; thinkingLevels?: string[];
   context?: { tokens?: number; window?: number };
   leafEntryId?: string;
@@ -276,7 +277,8 @@ type AbortResult =
 - **`follow`** returns the entries after the cursor (from the beginning without one), then live events, without a gap
   or a duplicate between the two.
 - **`attachment`** returns the bytes behind a ref an entry of this session published, or `undefined`.
-- **`abort`** stops everything the session does: the work in progress, every queued message and a manual compaction.
+- **`abort`** stops everything the session does: the work in progress, every queued message, steered ones included,
+  and a manual compaction.
   It reports the messages it ended; on an idle session it answers `ok` with nothing stopped.
 - **`rewind`** moves the session's active branch to an entry; the next work continues from there. Nothing is deleted.
   A working session answers `busy`.
@@ -302,7 +304,7 @@ interface Entry {
   kind: string;
   data: Json;
 }
-// user_message       { text, images?, messageId, idempotencyKey?, source? }
+// user_message       { text, images?, messageId?, idempotencyKey?, source? }
 // assistant_message  { text, thinking?, toolCalls?, outcome? }
 // tool_result        { toolCallId, toolName, isError, text, images? }
 // settings_changed   { name?, model?, thinkingLevel? }
@@ -322,7 +324,8 @@ type SessionEvent =
 - Entries are durable, ordered as appended, and each names its parent, so branches share what they inherited. An
   entry's id is the cursor. Images in an entry are refs, read with `attachment`.
 - A `user_message` entry is a message taken: it names the message, so the history says which entry each message
-  became.
+  became. It is unnamed only when the process stopped between writing the entry and recording whose it was; that
+  message then ends `interrupted` without an `entryId`.
 - `done` reports a message that has ended, built from its durable record. It ends a `messages.follow` and an invoke
   stream; a session `follow` delivers it as a live event for each message that ends while it follows.
 - Every other event is live: a Caller that reconnects sees the entries it missed, not the deltas. A session works on
@@ -384,7 +387,7 @@ MAY add codes under its own prefix (`pi.…`). A Caller that meets an unknown co
 
 | Limit | Value |
 |---|---|
-| Queued messages per session | 20; the next is rejected `busy` / `queue_full` |
+| Queued messages per session, steered ones not yet taken included | 20; the next is rejected `busy` / `queue_full` |
 | Messages in flight per process, queued and taken together | Implementation-defined (the reference implementation: 100); past it, `busy` / `capacity` |
 | `read` page | `limit` defaults to 100; above 500 is `invalid_request`. A page MAY hold fewer entries than `limit` (the reference implementation stops at 4 MiB of JSON) but holds at least one when any exist past the cursor |
 | `idempotencyKey` | 1 to 256 characters |
@@ -447,7 +450,7 @@ One executable suite, run against every harness in process and through the HTTP 
 | Area | Checks |
 |---|---|
 | Invoke | `accepted` first; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session; iteration never throws; every event is JSON |
-| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is taken by the work in progress and shares its answer, or, arriving after that work's answer, is taken by the next work and shares that work's answer, which answers it alone when nothing was queued (or `unsupported`); an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
+| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is `queued` at position 0 until taken, is taken by the work in progress and shares its answer, or, still waiting when that work ends (answered, failed or canceled), is taken by the next work and shares that work's answer, which answers it alone when nothing was queued (or `unsupported`); usage is reported once per piece of work; an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`, so `collect` over it returns the same answer as over the first; concurrent invokes with one key make one message; an `interrupted` message's key accepts a new message, and `messages.get` by key returns it |
 | Messages | A detached message is done; `messages.follow` resumes from a cursor; `messages.cancel` stops work in progress and withdraws a queued message while the rest are taken; `abort` stops all and reports it, and reports nothing on an idle session; queued messages are taken after work that failed or was canceled |
 | Restart | A message accepted just before a restart is found by `messages.get`; work in progress continues or its messages are `interrupted` per `durableWork`; queued messages survive or are `interrupted` per `durableQueue`; after a restart, `messages.follow` of an `interrupted` message ends with its `done` without another invoke; no work is redone (a tool's effect count does not grow) |

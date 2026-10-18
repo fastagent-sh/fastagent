@@ -62,10 +62,10 @@ agent 怎么干活（step、turn、run）属于 harness 内部，不进协议。
 | `whenBusy` | 会话正在处理别的消息时 | 典型场景 |
 |---|---|---|
 | `queue`（默认） | 排队，按到达顺序，前一段工作结束后再处理 | 群聊里连续来了几条消息 |
-| `steer` | 当前工作在这轮工具调用结束后接走它，由当前工作的回答来回答；如果当前工作已经给出回答，它就排在队首，由下一段工作回答（下一段工作可能同时接走第一条排队消息，两者共用一个回答） | 用户补充一句"对了，用英文回答" |
+| `steer` | 排在队首等待，当前工作在这轮工具调用结束后接走它，由当前工作的回答来回答；如果当前工作结束时（不管是回答了、失败了还是被取消）还没接走它，就由下一段工作接走并回答（下一段工作可能同时接走第一条排队消息，两者共用一个回答） | 用户补充一句"对了，用英文回答" |
 | `reject` | 直接拒绝，返回 `busy` | 定时任务不想堆积 |
 
-会话空闲时，三种方式都会立刻处理这条消息。被同一段工作接走的消息，回答和结局都相同。
+会话空闲时，三种方式都会立刻处理这条消息。被同一段工作接走的消息，回答和结局都相同。steer 消息在被接走之前和其他排队消息一样是 `queued`：有 `position`（排在最前），出现在会话的 `queued` 列表里，占用 20 条的排队上限，`abort` 会把它撤回。
 
 ### 3. 工作不依赖调用方存活
 
@@ -264,10 +264,10 @@ steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪�
 
 ### 3. 状态放在哪里
 
-每条消息有一份持久记录：被接受时写入 id、key 和来源（在回执之前），结束时写一次结局、它变成的 entry、这段工作写下的最后一条 entry（`lastEntryId`）、回答和用量（在报告之前）。消息 id 归 Agent 所有，和调用方的 idempotency key 是两回事：pi-durable 上，消息 id 是带来源前缀的 request id（`k:<key>` 或 `m:<生成的 id>`）。消息的状态由这份记录和队列推导出来。日志里只放对话本身，不再有 run 的开始和结束标记。
+每条消息有一份持久记录：被接受时写入 id、key 和来源（在回执之前），结束时写一次结局、它变成的 entry、工作结束时历史的最后一条 entry（`lastEntryId`）、回答和用量（在报告之前）。用量每段工作只报告一次，记在这段工作接走的第一条消息上，所以把各条消息的用量加起来不会重复计算。消息 id 归 Agent 所有，和调用方的 idempotency key 是两回事：pi-durable 上，提交时的 request id 就带来源前缀（`k:<key>` 或 `m:<生成的 id>`），消息 id 就是它，所以调用方的 key 和生成的 id 在去重层也不会撞号。消息的状态由这份记录和队列推导出来。日志里只放对话本身，不再有 run 的开始和结束标记。
 
-- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入。
-- **pi-coding-agent**：`LoopPort` 把两种记录写进 pi 的会话日志：`message_accepted` 和 `message_ended`。两者都是 plane marker：不对外发布、不能作为 rewind 目标、模型看不到、fork 不复制。
+- **pi-durable**：它自己的 submission 就是这份记录，和 entry 在同一次提交里原子写入。工作没有回答就结束时，pi-durable 不记 `lastEntryId`，端口会提交一条自己类型的写入（`edits: []`）补上它，存在 pi-durable 自己的 store 里；这条写入同时会放出排在后面的消息。因为工作没回答时，在这条写入之前不会有别的东西追加到对话里，所以写入时的末尾就是准确的 `lastEntryId`；进程如果恰好在中间停了，重新打开会话时先补写，结果也一样。
+- **pi-coding-agent**：`LoopPort` 把三种记录写进 pi 的会话日志：`message_accepted`（被接受时）、`message_taken`（loop 报告写下这条消息的 entry 时，立刻写）和 `message_ended`（结局、`lastEntryId`、用量）。三者都是 plane marker：不对外发布、不能作为 rewind 目标、模型看不到、fork 不复制。
 - **ACP agent**：ACP 没法往 agent 的历史里追加自己的记录，所以 `LoopPort` 自己保存整份日志，消息记录也写在里面。
 
 不单独存一个文件，因为两个文件没法原子写入。
@@ -276,7 +276,7 @@ steer 必须交给 harness 实现：只有它的循环知道一个 step 在哪�
 
 这要求每个会话的日志只有一个写者。从第一次有操作拿到会话，到会话空闲、队列为空且没有操作持有它，`LoopPort` 一直持有这个会话唯一的 `SessionManager`，每段工作新绑定的 `AgentSession` 都用它，所有写入（消息记录、被撤回消息的结束、`update`、`rewind`、`compact`）也都经过它。对会话的任何操作，包括只读的 `read`，都要先经过 `LoopPort` 的会话锁拿到这个 `SessionManager`；本进程第一次拿到时先结束被打断的消息，所以重启后同时到达的两个请求不会各结束一次。如果另开一个 `SessionManager` 写同一个文件，写入的 entry 会变成活动分支之外的旁支，等于丢失。细节见 [agent-service.md](../design/agent-service.md) §9.3。
 
-steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry，结局是 `intercepted`），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以 loop 按 `LoopPort` 给每条消息的 id、在发生的那一刻报告它的去向；工作结束时还没被报告的，就是没被处理，`LoopPort` 让下一段工作在队首接走它。按 id 而不按位置，是因为某条 steer 出错时，按位置会让后面的消息全部错位；当场报告，是为了让正在处理的消息也能查到已写入的 entry。进程中断的工作没有这份报告，所以它的消息结局是 `interrupted`，不带 entryId。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被处理两遍。
+steer 进来的消息最后怎么样了，只有 harness 知道：写成了 entry、被扩展消费（不写 entry，结局是 `intercepted`），或者没被处理（pi 的 `steer()` 可能在 run 结束后才进队列）。所以 loop 按 `LoopPort` 给每条消息的 id、在发生的那一刻报告它的去向；工作结束时还没被报告的，就是没被处理，`LoopPort` 让下一段工作在队首接走它。按 id 而不按位置，是因为某条 steer 出错时，按位置会让后面的消息全部错位；当场报告，是为了让正在处理的消息也能查到已写入的 entry。进程中断的工作，它的消息结局是 `interrupted`，但已经写下的 `message_taken` 仍然标明了每条消息对应的 entry，所以重连后能重放它写下的内容；只有在 pi 写入 entry 和 `LoopPort` 写入 `message_taken` 之间恰好停掉时，那条消息才没有 entryId。按 user entry 的条数推断是不行的：被扩展消费的消息没有 entry，会被处理两遍。
 
 ### 4. 位置依赖（MUST 8，比 v0.1 弱）
 
