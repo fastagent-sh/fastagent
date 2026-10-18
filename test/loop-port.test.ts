@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { type LoopHarness, type LoopLog, type LoopRun, loopPort } from "../src/loop-port.ts";
 import type { HarnessPort } from "../src/harness-port.ts";
-import { AgentRejection, type FollowEvent, type InvokeEvent, LIMITS, agentError, failure } from "../src/protocol.ts";
+import {
+  AgentRejection,
+  type FollowEvent,
+  type InvokeEvent,
+  LIMITS,
+  type SessionState,
+  agentError,
+  failure,
+} from "../src/protocol.ts";
 import { LIVE_BACKLOG, servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
@@ -257,17 +265,27 @@ describe("LoopPort", () => {
     expect(throwing.loops()).toBe(1);
   });
 
-  it("a taken record the storage refused leaves the entry unnamed; the message still ends whole", async () => {
+  it("a taken record the storage refused: the message ends whole, and its end names its entry", async () => {
     const store = new FakeStore();
     const agent = servingAgent(loopPort(fakeLoopHarness(store)));
-    store.refuseNext = "message_taken";
-    const events: InvokeEvent[] = [];
-    for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
-    const done = events.at(-1);
-    expect(done).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
-    const [user] = await usersOf(agent, "s");
-    expect(done?.type === "done" && done.message.entryId).toBe(user?.id);
-    expect((user?.data as { messageId?: string } | undefined)?.messageId).toBeUndefined();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      store.refuseNext = "message_taken";
+      const events: InvokeEvent[] = [];
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" } })) events.push(event);
+      const done = events.at(-1);
+      expect(done).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
+      const [user] = await usersOf(agent, "s");
+      expect(done?.type === "done" && done.message.entryId).toBe(user?.id);
+      expect((user?.data as { messageId?: string } | undefined)?.messageId).toBe(
+        done?.type === "done" ? done.message.messageId : "",
+      );
+      const said = error.mock.calls.flat().join(" ");
+      expect(said).toContain("could not record message_taken");
+      expect(said).not.toContain("interrupted");
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("a message whose end the storage refused ends the streams waiting for it", async () => {
@@ -404,6 +422,96 @@ describe("serving layer", () => {
     await vi.waitFor(() => expect(watching).toBe(0));
     store.release();
     await doneOf(agent, "s", first.message.messageId);
+  });
+
+  it("a message taken between its status read and its backfill still streams its whole work", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    // pi binds before it writes the first message: the message is taken a moment after it is accepted.
+    const lateTake = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
+        return {
+          steer: (steered) => void started.then((run) => run.steer(steered)),
+          stop: () => void started.then((run) => run.stop()),
+          done: started.then((run) => run.done),
+        };
+      },
+    });
+    const port = loopPort({
+      ...harness,
+      open: async (sessionId, onRecord) => {
+        const log = await harness.open(sessionId, onRecord);
+        return log && lateTake(log);
+      },
+      create: async (sessionId, onRecord, fork) => lateTake(await harness.create(sessionId, onRecord, fork)),
+    });
+    // The status is read at once and answered late, after the message was taken.
+    const agent = servingAgent({
+      ...port,
+      getMessage: async (sessionId, key) => {
+        const status = await port.getMessage(sessionId, key);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return status;
+      },
+    });
+    const kinds: string[] = [];
+    const read = (async () => {
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "hold" } })) {
+        kinds.push(event.type === "entry" ? `entry:${event.entry.kind}` : event.type);
+      }
+    })();
+    await vi.waitFor(() => expect(kinds).toContain("entry:user_message"));
+    store.release();
+    await read;
+    expect(kinds).toEqual(["accepted", "entry:user_message", "message_delta", "entry:assistant_message", "done"]);
+  });
+
+  it("a follower is told when a message is taken, not only when work starts and ends", async () => {
+    const store = new FakeStore();
+    // Taken a moment after it is accepted, as pi takes a message once its session is bound.
+    const harness = fakeLoopHarness(store);
+    const lateTake = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => {
+        const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
+        return {
+          steer: (steered) => void started.then((run) => run.steer(steered)),
+          stop: () => void started.then((run) => run.stop()),
+          done: started.then((run) => run.done),
+        };
+      },
+    });
+    const late = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && lateTake(log);
+        },
+        create: async (sessionId, onRecord, fork) => lateTake(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    await late.sessions.create({ sessionId: "s" });
+    const states: SessionState[] = [];
+    const follow = late.sessions.get("s").follow()[Symbol.asyncIterator]();
+    void (async () => {
+      for (let next = await follow.next(); !next.done; next = await follow.next()) {
+        if (next.value.type === "state") states.push(next.value.state);
+      }
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const first = await receiptOf(late.invoke({ sessionId: "s", prompt: { text: "hold" } }));
+    await vi.waitFor(() =>
+      expect(states.at(-1)).toMatchObject({
+        status: "running",
+        taken: [{ messageId: first.message.messageId }],
+        queued: [],
+      }),
+    );
+    store.release();
+    await follow.return?.();
   });
 
   it("a follow whose next page the port refuses reports the port's answer, not a harness failure", async () => {

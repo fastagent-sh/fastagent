@@ -52,14 +52,15 @@ export interface HarnessPort {
   getMessage(sessionId: string, key: MessageKey): Promise<MessageStatus | undefined>;
   /**
    * A message's part of the history after `after` (any entry of the session), or from its own entry: through its
-   * `lastEntryId` once it is done, through the newest entry while it is taken, nothing while it is queued. `ended`
-   * says its end is recorded: a message the storage refused to end reads as done without being so.
+   * `lastEntryId` once it is done, through the newest entry while it is taken, nothing while it is queued. `message`
+   * is its status as of the same read, so the two agree; `ended` says its end is recorded: a message the storage
+   * refused to end reads as done without being so. An unknown message is `not_found`.
    */
   messageEntries(
     sessionId: string,
     messageId: string,
     after?: string,
-  ): Promise<{ ok: true; entries: Entry[]; ended: boolean } | { ok: false; error: AgentError }>;
+  ): Promise<{ ok: true; message: MessageStatus; entries: Entry[]; ended: boolean } | { ok: false; error: AgentError }>;
   cancelMessage(sessionId: string, messageId: string): Promise<Result>;
   abort(sessionId: string): Promise<AbortResult>;
   read(sessionId: string, page: Page): Promise<PortRead>;

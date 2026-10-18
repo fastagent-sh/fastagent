@@ -246,10 +246,11 @@ export function servingAgent(port: HarnessPort): Agent {
     after: string | undefined,
   ): Effect.Effect<{ ok: true; events: Stream.Stream<SessionEvent> } | { ok: false; error: AgentError }> =>
     Effect.gen(function* () {
-      const message = yield* fromPort(() => port.getMessage(sessionId, { messageId }));
-      if (!message) return failure("not_found", `no message ${messageId}`);
+      // One read decides both what is replayed and where the live events start: a status read before it could say
+      // queued for a message the backfill already shows taken, and its own entry, deduplicated, would never open it.
       const backfill = yield* fromPort(() => port.messageEntries(sessionId, messageId, after));
       if (!backfill.ok) return backfill;
+      const { message } = backfill;
       const recorded = Stream.fromIterable(backfill.entries.map(entryEvent));
       if (message.status === "done" && !backfill.ended) {
         return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(messageId))) };

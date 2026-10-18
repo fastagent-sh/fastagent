@@ -228,12 +228,13 @@ function project(projection: Projection, named: ReadonlyMap<string, string>, rec
   };
 }
 
+/** Which message each `user_message` entry is: `message_taken` says so, and `message_ended` again for a refused one. */
 function namedIn(records: readonly LogRecord[]): Map<string, string> {
   const named = new Map<string, string>();
   for (const record of records) {
-    if (record.kind !== "message_taken") continue;
-    const { messageId, entryId } = record.data as TakenData;
-    named.set(entryId, messageId);
+    if (record.kind !== "message_taken" && record.kind !== "message_ended") continue;
+    const { messageId, entryId } = record.data as TakenData | EndedData;
+    if (entryId !== undefined) named.set(entryId, messageId);
   }
   return named;
 }
@@ -337,26 +338,37 @@ export function loopPort(
   };
 
   /**
-   * A record the storage refused. Callers take the message out of memory first, so it reads as `interrupted` (accepted,
-   * not ended, neither taken nor queued), and the session goes on with the rest of its work. The `serving_error` is
-   * what ends a stream waiting for this message's `done`.
+   * A record the storage refused, said with what it costs. A refused end: callers take the message out of memory
+   * first, so it reads as `interrupted` (accepted, not ended, neither taken nor queued), and the session goes on with the
+   * rest of its work; the `serving_error` is what ends a stream waiting for this message's `done`. A refused
+   * `message_taken`: the message goes on, and its `message_ended` names the entry instead.
    */
-  const recorded = (held: Held, log: LoopLog, kind: MessageMarker, data: Json, messageId: string): boolean => {
+  const recorded = (
+    held: Held,
+    log: LoopLog,
+    kind: MessageMarker,
+    data: Json,
+    messageId: string,
+    consequence = "it reads as interrupted",
+  ): boolean => {
     try {
       log.append(kind, data);
       return true;
     } catch (error) {
-      const message = `could not record ${kind} of message ${messageId}; it reads as interrupted: ${String(error)}`;
+      const message = `could not record ${kind} of message ${messageId}; ${consequence}: ${String(error)}`;
       logger.error(`[fastagent] ${message}`);
       emit(held.sessionId, { type: "serving_error", message });
       return false;
     }
   };
 
+  /** Write the `message_taken` records owed, then tell followers: a message taken moves from `queued` to `taken`. */
   const payOwed = (held: Held, log: LoopLog): void => {
+    if (held.owed.length === 0) return;
     for (let taken = held.owed.shift(); taken; taken = held.owed.shift()) {
-      recorded(held, log, "message_taken", taken, taken.messageId);
+      recorded(held, log, "message_taken", taken, taken.messageId, "its entry names it only once it ends");
     }
+    emitState(held);
   };
 
   const onRecord =
@@ -797,7 +809,7 @@ export function loopPort(
           if (after !== undefined && cursor < 0) return failure("not_found", `no entry ${after}`);
           const ended = log.records().some((r) => r.kind === "message_ended" && markerOf(r) === messageId);
           if (status.status === "queued" || status.entryId === undefined) {
-            return { ok: true as const, entries: [], ended };
+            return { ok: true as const, message: status, entries: [], ended };
           }
           const { entryId } = status;
           const first = Math.max(
@@ -808,7 +820,7 @@ export function loopPort(
             status.status === "done" && status.lastEntryId !== undefined
               ? entries.findIndex((entry) => entry.id === status.lastEntryId)
               : entries.length - 1;
-          return { ok: true as const, entries: entries.slice(first, last + 1), ended };
+          return { ok: true as const, message: status, entries: entries.slice(first, last + 1), ended };
         }),
       ),
 
