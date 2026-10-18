@@ -10,7 +10,7 @@ The stable design center is the harness-neutral Agent Handler contract (`docs/SP
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The locked Agent Handler contract, v1, which the code implements. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The locked Agent Handler contract, v1. The code implements it once step 4's change from runs to messages lands (#788); until then `src/protocol.ts` is the run model it replaced. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
@@ -27,7 +27,8 @@ one place that cannot drift away from the code it explains. Directories that hav
 ```
 src/
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
-├── protocol.ts             # the Agent contract, SPEC v1 (docs/SPEC.md), as types, plus its limits and error values
+├── protocol.ts             # the Agent contract as types, plus its limits and error values: SPEC v1's run model until
+│                           # #788 moves it to messages (docs/SPEC.md)
 ├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
 ├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency, run
 │                           # markers in the session's own log through its one writer, closing interrupted runs

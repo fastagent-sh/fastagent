@@ -9,11 +9,10 @@ updated: 2026-10-17
 
 # Agent Handler — Protocol Specification v1
 
-> **Status: locked.** This is the protocol the package implements. Changing its semantics needs an explicit decision.
-> The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
->
-> **Implementation lag.** The reference implementation still serves the run model this text replaced (`runs.*`,
-> `run_started` and `run_ended` entries) until the change lands in step 4 ([#788](https://github.com/fastagent-sh/fastagent/issues/788)).
+> **Status: locked.** This is the protocol the package implements once step 4's change from runs to messages lands
+> ([#788](https://github.com/fastagent-sh/fastagent/issues/788)); until then the reference implementation serves the
+> run model this text replaced (`runs.*`, `run_started` and `run_ended` entries). Changing its semantics needs an
+> explicit decision. The design, with its rationale, is [agent-service.md](design/agent-service.md) §7 and §9.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119. This specification is
 > harness-neutral and does not depend on any implementation.
@@ -184,8 +183,8 @@ type MessageStatus = {
 } & (
   | { status: "queued"; position: number }
   | { status: "taken"; entryId: string; takenAt: number }
-  | { status: "done"; entryId?: string; takenAt?: number; endedAt: number; outcome: Outcome; usage?: Usage;
-      answer?: { entryId: string; text: string } }
+  | { status: "done"; entryId?: string; lastEntryId?: string; takenAt?: number; endedAt: number; outcome: Outcome;
+      usage?: Usage; answer?: { entryId: string; text: string } }
 );
 
 type Outcome =
@@ -199,7 +198,9 @@ type Outcome =
 interface Usage { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; cost?: number }
 ```
 
-`entryId` is the message's `user_message` entry, written when it is taken. `answer` is the agent's final
+`entryId` is the message's `user_message` entry, written when it is taken. `lastEntryId` is the last entry the work
+that took it wrote, when the Agent recorded one after the message's own entry; with an answer it is the answer's
+entry. `answer` is the agent's final
 `assistant_message` of the work that took it. `usage` is what that work cost; messages taken together report the same
 work, so a Caller adding usage up counts it once per answer. `position` counts from 0 in the order the queued messages
 will be taken. Times are milliseconds since the epoch.
@@ -229,8 +230,9 @@ effects. A Caller that owes an answer may invoke again with the message's key (�
 - **`messages.get`** returns a message by id or by key, or `undefined` (§3.4).
 - **`messages.follow`** is the session's events for one message: the entries after the cursor, or from its
   `user_message` entry without one; while it is taken, the live events of the work; then its `done` event. While it is
-  queued nothing is delivered but `state` events. For a message that is already done it delivers the entries up to its
-  answer, or none when it has no answer, and then `done`. A Caller that lost its invoke stream reattaches without
+  queued nothing is delivered but `state` events. For a message that is already done it delivers the entries after the
+  cursor through its `lastEntryId`, or through its own entry when that is absent (from its `entryId` without a cursor,
+  and none for a message never taken), and then `done`, so a Caller reattaching later sees what one following it live saw. A Caller that lost its invoke stream reattaches without
   following the whole session.
 - **`messages.cancel`** withdraws a queued message or stops the work a taken one is part of; messages queued after it
   are taken as usual. A message that is done answers `conflict`.
@@ -324,12 +326,15 @@ type SessionEvent =
 - `done` reports a message that has ended, built from its durable record. It ends a `messages.follow` and an invoke
   stream; a session `follow` delivers it as a live event for each message that ends while it follows.
 - Every other event is live: a Caller that reconnects sees the entries it missed, not the deltas. A session works on
-  one thing at a time, so the live events belong to its work in progress.
+  one thing at a time, so the live events belong to what it is doing: its work in progress, or a compaction while its
+  status is `compacting`, which can also send `retry_scheduled`. A `messages.follow` delivers only those of the work
+  that took its message.
 - `message_delta` events add up to the agent's current message until its `assistant_message` entry arrives.
   `thinking` is the model's reasoning: a Caller MUST NOT fold it into the answer.
 - `tool_progress` is the current status line of a running tool, each replacing the last; an Agent MAY drop one its
   Caller has not read. It carries the same trust as the tool's output.
-- `retry_scheduled` explains a quiet gap while the harness waits to retry.
+- `retry_scheduled` explains a quiet gap while the harness waits to retry a model call, the work's or a
+  compaction's.
 
 ## 7. Results, errors, capabilities and limits
 
@@ -442,7 +447,7 @@ One executable suite, run against every harness in process and through the HTTP 
 | Area | Checks |
 |---|---|
 | Invoke | `accepted` first; the stream ends with the message's `done` and nothing follows; a `rejected` stream records nothing; an invoke without `sessionId` gets a new session; iteration never throws; every event is JSON |
-| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is taken by the work in progress and shares its answer, or, arriving after that work's answer, is taken next and answered on its own (or `unsupported`); an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
+| Busy | `queue` messages are taken in arrival order with correct positions; `reject` answers `busy`/`running`; `steer` is taken by the work in progress and shares its answer, or, arriving after that work's answer, is taken by the next work and shares that work's answer, which answers it alone when nothing was queued (or `unsupported`); an idle session takes a message for every mode; the 21st queued message is `queue_full`; the process cap is `capacity` |
 | Idempotency | A key seen while queued, taken and done returns the same message, `duplicate`, and no second `user_message`; a duplicate's stream ends with the same `done`, so `collect` over it returns the same answer as over the first; concurrent invokes with one key make one message; an `interrupted` message's key accepts a new message, and `messages.get` by key returns it |
 | Messages | A detached message is done; `messages.follow` resumes from a cursor; `messages.cancel` stops work in progress and withdraws a queued message while the rest are taken; `abort` stops all and reports it, and reports nothing on an idle session; queued messages are taken after work that failed or was canceled |
 | Restart | A message accepted just before a restart is found by `messages.get`; work in progress continues or its messages are `interrupted` per `durableWork`; queued messages survive or are `interrupted` per `durableQueue`; after a restart, `messages.follow` of an `interrupted` message ends with its `done` without another invoke; no work is redone (a tool's effect count does not grow) |
