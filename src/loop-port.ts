@@ -86,6 +86,11 @@ export interface LoopHooks {
 export interface LoopRun {
   /** Hand a message to the work, which takes it after its current tool round. */
   steer(message: HandedMessage): void;
+  /**
+   * Take back a steered message the work has not taken, so it never will. False when that can no longer be promised
+   * (the loop has already selected it for its next step): the message is then the work's like any it took.
+   */
+  withdraw(messageId: string): boolean;
   stop(): void;
   readonly done: Promise<{ outcome: LoopOutcome; usage?: Usage }>;
 }
@@ -174,6 +179,8 @@ interface Work {
   readonly messages: Pending[];
   /** What each message became: its entry, or `null` when consumed without one. */
   readonly fates: Map<string, string | null>;
+  /** Steers canceled that the loop could not give back: they end with the work, never carried to the next one. */
+  readonly canceled: Set<string>;
   /** The newest `assistant_message` it wrote: its answer when it ends. */
   answer?: string;
 }
@@ -255,6 +262,7 @@ function failedRun(error: unknown): LoopRun {
   const message = error instanceof Error ? error.message : String(error);
   return {
     steer: () => {},
+    withdraw: () => false,
     stop: () => {},
     done: Promise.resolve({ outcome: { status: "failed", error: agentError("internal", message) } }),
   };
@@ -278,14 +286,16 @@ export function loopPort(
   hooks: LoopPortHooks = {},
 ): HarnessPort {
   const capabilities: Capabilities = { ...harness.capabilities, durableQueue: false, durableWork: false };
-  const listeners = new Map<string, Set<(event: SessionEvent) => void>>();
+  const listeners = new Map<string, Set<(event: SessionEvent, after: string | undefined) => void>>();
   const active = new Map<string, Held>();
   let inFlight = 0;
 
-  const emit = (sessionId: string, event: SessionEvent): void => {
+  /** `after` defaults to the newest entry published so far: a live event follows it. */
+  const emit = (held: Held, event: SessionEvent, after: string | undefined = held.projection.last): void => {
+    const { sessionId } = held;
     for (const listener of listeners.get(sessionId) ?? []) {
       try {
-        listener(event);
+        listener(event, after);
       } catch (error) {
         logger.warn(`[fastagent] session listener threw (session ${sessionId}, event ${event.type}): ${String(error)}`);
       }
@@ -310,11 +320,16 @@ export function loopPort(
 
   const stateOf = (held: Held, log: LoopLog): SessionState => {
     const records = log.records();
-    const timestampOf = (id: string) => records.find((r) => r.id === id)?.timestamp ?? Date.now();
+    // A taken message's entry is near the end of the log: search from there.
+    const timestampOf = (id: string): number => {
+      for (let i = records.length - 1; i >= 0; i--)
+        if (records[i]?.id === id) return (records[i] as LogRecord).timestamp;
+      return Date.now();
+    };
     const { leafEntryId: leaf, ...state } = log.state();
     // The harness's leaf can be a message record, which is never published: the head a caller sees is the entry
     // nearest above it.
-    const leafEntryId = leaf === undefined ? undefined : published(records).projection.visible.get(leaf);
+    const leafEntryId = leaf === undefined ? undefined : held.projection.visible.get(leaf);
     return {
       ...state,
       ...(leafEntryId === undefined ? {} : { leafEntryId }),
@@ -333,7 +348,7 @@ export function loopPort(
 
   const emitState = (held: Held): void => {
     if (held.log && listeners.has(held.sessionId)) {
-      emit(held.sessionId, { type: "state", state: stateOf(held, held.log) });
+      emit(held, { type: "state", state: stateOf(held, held.log) });
     }
   };
 
@@ -357,7 +372,7 @@ export function loopPort(
     } catch (error) {
       const message = `could not record ${kind} of message ${messageId}; ${consequence}: ${String(error)}`;
       logger.error(`[fastagent] ${message}`);
-      emit(held.sessionId, { type: "serving_error", message });
+      emit(held, { type: "serving_error", message });
       return false;
     }
   };
@@ -374,9 +389,10 @@ export function loopPort(
   const onRecord =
     (held: Held) =>
     (record: LogRecord): void => {
+      const before = held.projection.last;
       const entry = project(held.projection, held.named, record);
       if (record.kind === "assistant_message" && held.work) held.work.answer = record.id;
-      if (entry) emit(held.sessionId, { type: "entry", entry });
+      if (entry) emit(held, { type: "entry", entry }, before);
       if (held.log && held.owed.length > 0) payOwed(held, held.log);
     };
 
@@ -525,7 +541,7 @@ export function loopPort(
   const end = (held: Held, log: LoopLog, pending: Pending, ending: Omit<EndedData, "messageId">): void => {
     if (recorded(held, log, "message_ended", { messageId: pending.messageId, ...ending }, pending.messageId)) {
       const status = statusOf(held, log, pending.messageId);
-      if (status?.status === "done") emit(held.sessionId, { type: "done", message: status as DoneMessage });
+      if (status?.status === "done") emit(held, { type: "done", message: status as DoneMessage });
     }
     inFlight--;
     release(pending.hold);
@@ -560,7 +576,7 @@ export function loopPort(
       return log.run(
         { id: first.messageId, prompt: first.prompt },
         {
-          emit: (event) => emit(held.sessionId, event),
+          emit: (event) => emit(held, event),
           fate: (messageId, fate) => {
             if (work.fates.has(messageId)) return;
             const pending = work.messages.find((m) => m.messageId === messageId);
@@ -598,12 +614,18 @@ export function loopPort(
       const fate = work.fates.get(pending.messageId);
       if (fate === null) continue;
       const untakenSteer = fate === undefined && pending !== first;
-      if (untakenSteer && stoppedBy !== "abort" && stoppedBy !== "delete") {
+      const withdrawnBy: StopReason | undefined =
+        stoppedBy === "abort" || stoppedBy === "delete"
+          ? stoppedBy
+          : work.canceled.has(pending.messageId)
+            ? "cancel"
+            : undefined;
+      if (untakenSteer && withdrawnBy === undefined) {
         carried.push(pending);
         continue;
       }
       end(held, log, pending, {
-        outcome: untakenSteer ? { status: "canceled", by: stoppedBy as StopReason } : final,
+        outcome: untakenSteer ? { status: "canceled", by: withdrawnBy as StopReason } : final,
         ...(fate === undefined ? {} : { entryId: fate }),
         ...(fate === undefined || lastEntryId === undefined ? {} : { lastEntryId }),
         ...(pending === usageOwner && usage ? { usage } : {}),
@@ -655,6 +677,7 @@ export function loopPort(
       closing: false,
       messages: [first],
       fates: new Map(),
+      canceled: new Set(),
     };
     held.work = work;
     work.loop = startLoop(held, log, work, first);
@@ -840,12 +863,15 @@ export function loopPort(
             const work = held.work;
             const inWork = work?.messages.find((m) => m.messageId === messageId);
             if (work && inWork) {
-              if (inWork === work.messages[0] || work.fates.has(messageId)) {
+              // A steer the loop holds and has not taken is withdrawn only if the loop can promise it never will;
+              // otherwise it is the work's, and stopping the work is what cancels it.
+              const withdrawn =
+                inWork !== work.messages[0] && !work.fates.has(messageId) && work.loop.withdraw(messageId);
+              if (!withdrawn) {
+                work.canceled.add(messageId);
                 stop(work, "cancel");
                 return { ok: true };
               }
-              // A steer the loop holds and has not taken. pi offers no way to take a handed message back, so should
-              // the loop take it after all, its entry stays in the history without naming it.
               work.fates.set(messageId, null);
               end(held, log, inWork, { outcome: { status: "canceled", by: "cancel" } });
               emitState(held);
@@ -915,13 +941,17 @@ export function loopPort(
             if (entryId !== undefined && !published(from.records()).entries.some((entry) => entry.id === entryId)) {
               return failure("not_found", `no entry ${entryId} in session ${fork.sessionId}`);
             }
-            held.log = yield* port(() =>
+            const log = yield* port(() =>
               harness.create(sessionId, onRecord(held), {
                 from,
                 ...(entryId === undefined ? {} : { entryId }),
                 ...(context === undefined ? {} : { context }),
               }),
             );
+            // The copy is written without reaching `onRecord`, so the live projection starts from it here. Not observable
+            // today (a fork holds nothing, and the next operation acquires it afresh), but `stateOf` reads it.
+            held.projection = published(log.records()).projection;
+            held.log = log;
             return { ok: true } as Result;
           }),
         ),

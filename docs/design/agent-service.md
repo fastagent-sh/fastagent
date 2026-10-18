@@ -1153,6 +1153,15 @@ The rules this gives `LoopPort` over pi-coding-agent, each checked against pi wi
   answered, failed or was canceled. Work the process lost ends its messages `interrupted`, naming the entries their
   `message_taken` recorded: which entry was whose is the loop's to say, so it is recorded as the loop says it. Counting the work's user entries cannot tell these apart, checked against pi: a consumed
   message has no entry and would be taken twice.
+- **Withdrawing a steer.** `messages.cancel` of a steer the loop holds and has not taken asks the loop to take it
+  back, and it is `canceled` without an entry only when the loop can promise it never will: pi's harness drops one
+  still in its `input` handlers, and takes one out of pi's steering queue by queueing the others again without it,
+  synchronously, so pi cannot select it in between. One pi has already selected for its next step is the work's: the
+  cancel stops that work, and the steer ends `canceled` with it, never carried to the next work.
+- **Where a live event sits.** Every live event the port reports carries the newest entry published before it. A
+  subscriber reads the log after it subscribes, so its live queue overlaps that read; only an event that follows the
+  newest entry it was given is new. That keeps a message's stream from replaying another message's answer, or its own
+  entry twice, when the message is taken between its admission and the read.
 
 pi and `writeFileAtomic` both write without `fsync`, so either choice survives a process crash and may lose its newest
 write on power loss; pi drops a torn last line when it loads a log.

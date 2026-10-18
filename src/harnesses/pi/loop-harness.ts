@@ -118,6 +118,8 @@ interface Handed extends HandedMessage {
   said?: true;
   /** The user message pi queued for it. */
   queued?: unknown;
+  /** Taken back before pi queued it: it is never queued. */
+  withdrawn?: true;
 }
 
 type Disposable = { dispose(): void; extensionRunner: AgentSession["extensionRunner"] };
@@ -257,6 +259,8 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         fate(h.id, what);
       };
       let session: AgentSession | undefined;
+      /** pi's own enqueue, kept before any delivery wraps `agent.steer` for itself. */
+      let enqueueSteer: AgentSession["agent"]["steer"] | undefined;
       let stopRequested = false;
       let finished = false;
       let usage: Usage | undefined;
@@ -286,12 +290,13 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
       /** Never rejects: a message pi did not take has nothing said for it, and the run then takes it itself. */
       const deliver = async (h: Handed): Promise<void> => {
         const bound = await ready;
-        if (!bound || finished) return;
+        if (!bound || finished || h.withdrawn) return;
         const agent = bound.agent;
         const queue = agent.steer;
         // Registered as pi queues it, not when `steer()` returns: nothing orders pi's loop taking and writing it after
         // that return. Not reproduced: with the tool round ending the moment pi queues it, pi 1.1.0 writes it later.
         agent.steer = (queued) => {
+          if (h.withdrawn) return;
           h.queued = queued;
           queue.call(agent, queued);
         };
@@ -331,6 +336,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           return { outcome: thrownOutcome(error) };
         }
         const bound = session;
+        enqueueSteer = bound.agent.steer.bind(bound.agent);
         resolveReady(bound);
         const cleanup: (() => void)[] = [];
         try {
@@ -437,12 +443,38 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
         run = undefined;
       });
 
+      /**
+       * pi's steering queue holds the messages its next step takes, in order. One still in it is taken back by queueing
+       * the others again without it; one pi has not queued yet (its `input` handlers still running) is dropped when it
+       * would be. Synchronous, so pi cannot take the message in between.
+       */
+      const withdraw = (id: string): boolean => {
+        const h = handed.find((candidate) => candidate.id === id);
+        if (!h || h.said || h === handed[0]) return false;
+        if (h.queued === undefined) {
+          h.withdrawn = true;
+          return true;
+        }
+        const agent = session?.agent;
+        if (!agent || !enqueueSteer) return false;
+        const mode = agent.steeringMode;
+        agent.steeringMode = "all";
+        const pending = agent.peekQueuedMessages();
+        agent.steeringMode = mode;
+        if (!pending.some((message) => message === h.queued)) return false;
+        agent.clearSteeringQueue();
+        for (const message of pending) if (message !== h.queued) enqueueSteer(message);
+        h.withdrawn = true;
+        return true;
+      };
+
       return {
         steer: (steered) => {
           const h: Handed = { ...steered };
           handed.push(h);
           steering = steering.then(() => deliver(h));
         },
+        withdraw,
         stop: () => {
           stopRequested = true;
           if (session) {

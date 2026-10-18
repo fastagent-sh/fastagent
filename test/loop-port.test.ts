@@ -58,7 +58,7 @@ function refusingEveryMessage(
 ): { harness: LoopHarness; loops: () => number } {
   let loops = 0;
   // Past a handful, a regression would restart forever; a run that never ends stops it so the count can fail.
-  const never: LoopRun = { steer: async () => {}, stop: () => {}, done: new Promise(() => {}) };
+  const never: LoopRun = { steer: async () => {}, withdraw: () => false, stop: () => {}, done: new Promise(() => {}) };
   const refusing = (log: LoopLog): LoopLog => ({
     ...log,
     run: () => (++loops > 5 ? never : refuse()),
@@ -236,6 +236,7 @@ describe("LoopPort", () => {
   it("a loop that ends without writing its message ends it once, with its outcome", async () => {
     const missingModel = refusingEveryMessage(fakeLoopHarness(new FakeStore()), () => ({
       steer: async () => {},
+      withdraw: () => false,
       stop: () => {},
       done: new Promise((resolve) =>
         setTimeout(
@@ -346,6 +347,52 @@ describe("LoopPort", () => {
     expect(events).toEqual([{ type: "rejected", error: unavailable }]);
   });
 
+  it("canceling a steer the loop has not taken withdraws it: canceled, no entry, never taken", async () => {
+    const store = new FakeStore();
+    const agent = servingAgent(loopPort(fakeLoopHarness(store)));
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" })))
+      .message.messageId;
+    expect(await agent.sessions.get("s").messages.cancel(steer)).toEqual({ ok: true });
+    store.release();
+    expect(await doneOf(agent, "s", first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const withdrawn = await doneOf(agent, "s", steer);
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn.entryId).toBeUndefined();
+    expect((await usersOf(agent, "s")).map((e) => (e.data as { text: string }).text)).toEqual(["hold"]);
+  });
+
+  it("a steer the loop can no longer take back is canceled by stopping the work it is part of", async () => {
+    const store = new FakeStore();
+    const harness = fakeLoopHarness(store);
+    const keeping = (log: LoopLog): LoopLog => ({
+      ...log,
+      run: (message, hooks) => ({ ...log.run(message, hooks), withdraw: () => false }),
+    });
+    const agent = servingAgent(
+      loopPort({
+        ...harness,
+        open: async (sessionId, onRecord) => {
+          const log = await harness.open(sessionId, onRecord);
+          return log && keeping(log);
+        },
+        create: async (sessionId, onRecord, fork) => keeping(await harness.create(sessionId, onRecord, fork)),
+      }),
+    );
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" })))
+      .message.messageId;
+    expect(await agent.sessions.get("s").messages.cancel(steer)).toEqual({ ok: true });
+    const canceled = { outcome: { status: "canceled", by: "cancel" } };
+    expect(await doneOf(agent, "s", first)).toMatchObject(canceled);
+    expect(await doneOf(agent, "s", steer)).toMatchObject(canceled);
+  });
+
   it("an abort after a cancel withdraws the steers the canceled work had not taken", async () => {
     const store = new FakeStore();
     const harness = fakeLoopHarness(store);
@@ -434,6 +481,7 @@ describe("serving layer", () => {
         const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
         return {
           steer: (steered) => void started.then((run) => run.steer(steered)),
+          withdraw: () => false,
           stop: () => void started.then((run) => run.stop()),
           done: started.then((run) => run.done),
         };
@@ -468,6 +516,43 @@ describe("serving layer", () => {
     expect(kinds).toEqual(["accepted", "entry:user_message", "message_delta", "entry:assistant_message", "done"]);
   });
 
+  it("a message taken just before its backfill streams its own work only, each entry once", async () => {
+    const store = new FakeStore();
+    const port = loopPort(fakeLoopHarness(store));
+    let releaseBeforeRead = false;
+    // The loop moves on between the steer's admission and its backfill: the first message's answer is written, then the
+    // steer is taken. That answer, and its delta, come before the steer's own entry and are not the steer's.
+    const agent = servingAgent({
+      ...port,
+      messageEntries: async (sessionId, messageId, after) => {
+        if (releaseBeforeRead) {
+          releaseBeforeRead = false;
+          store.release();
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return port.messageEntries(sessionId, messageId, after);
+      },
+    });
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await takenNow(agent, "s", first);
+    releaseBeforeRead = true;
+    const events: InvokeEvent[] = [];
+    const read = (async () => {
+      for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "hold" }, whenBusy: "steer" })) {
+        events.push(event);
+      }
+    })();
+    await vi.waitFor(() => expect(events.some((e) => e.type === "entry")).toBe(true));
+    store.release();
+    await read;
+    const steer = events[0]?.type === "accepted" ? events[0].message.messageId : "";
+    const entries = events.flatMap((e) => (e.type === "entry" ? [e.entry] : []));
+    expect(entries.map((e) => e.kind)).toEqual(["user_message", "assistant_message"]);
+    expect((entries[0]?.data as { messageId?: string } | undefined)?.messageId).toBe(steer);
+    expect(events.filter((e) => e.type === "message_delta")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "done", message: { messageId: steer } });
+  });
+
   it("a follower is told when a message is taken, not only when work starts and ends", async () => {
     const store = new FakeStore();
     // Taken a moment after it is accepted, as pi takes a message once its session is bound.
@@ -478,6 +563,7 @@ describe("serving layer", () => {
         const started = new Promise<LoopRun>((resolve) => setTimeout(() => resolve(log.run(message, hooks)), 10));
         return {
           steer: (steered) => void started.then((run) => run.steer(steered)),
+          withdraw: () => false,
           stop: () => void started.then((run) => run.stop()),
           done: started.then((run) => run.done),
         };

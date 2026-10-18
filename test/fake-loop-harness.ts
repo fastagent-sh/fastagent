@@ -152,6 +152,12 @@ export function fakeLoopHarness(store: FakeStore): LoopHarness {
         steer: (steered) => {
           if (!finished) handed.push(steered);
         },
+        withdraw: (id) => {
+          const index = handed.findIndex((h) => h.id === id);
+          if (index < next) return false;
+          handed.splice(index, 1);
+          return true;
+        },
         stop: () => {
           stopped = true;
           stop.open();

@@ -325,6 +325,29 @@ describe("pi-coding-agent through LoopPort", () => {
     expect(users.map((e) => (e.data as { messageId?: string }).messageId)).toEqual([first, steer.message.messageId]);
   });
 
+  it("canceling a steer pi holds takes it out of pi's queue: canceled, never run", async () => {
+    const local = new World();
+    const store = piSessionRecordStore({ dir: await mkdtemp(join(tmpdir(), "pi-loop-")), cwd: process.cwd() });
+    const agent = await piAgent(store, local);
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await local.holding.opened;
+    const steer = await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "two" }, whenBusy: "steer" }));
+    // Delivered: pi runs its input handlers, then queues the message for its next step.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await agent.sessions.get("s").messages.cancel(steer.message.messageId)).toEqual({ ok: true });
+    local.held.open();
+    expect(await doneOf(agent, first)).toMatchObject({
+      outcome: { status: "completed" },
+      answer: { text: "answer: hold" },
+    });
+    const withdrawn = await doneOf(agent, steer.message.messageId);
+    expect(withdrawn).toMatchObject({ outcome: { status: "canceled", by: "cancel" } });
+    expect(withdrawn.entryId).toBeUndefined();
+    const page = await agent.sessions.get("s").read();
+    const users = page.ok ? page.entries.filter((e) => e.kind === "user_message") : [];
+    expect(users.map((e) => (e.data as { text: string }).text)).toEqual(["hold"]);
+  });
+
   it("keeps message records out of the model's context and out of a fork's history", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-loop-"));
     const store = piSessionRecordStore({ dir, cwd: process.cwd() });

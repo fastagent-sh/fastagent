@@ -64,8 +64,12 @@ export interface HarnessPort {
   cancelMessage(sessionId: string, messageId: string): Promise<Result>;
   abort(sessionId: string): Promise<AbortResult>;
   read(sessionId: string, page: Page): Promise<PortRead>;
-  /** Live: an entry is reported once it is durable, a message's `done` once its end is. Returns the unsubscribe. */
-  watch(sessionId: string, listener: (event: SessionEvent) => void): () => void;
+  /**
+   * Live: an entry is reported once it is durable, a message's `done` once its end is. `after` is the newest published
+   * entry when the event happened (for an entry, the one before it): where it sits against a read of the log, which a
+   * live event does not otherwise say. Returns the unsubscribe.
+   */
+  watch(sessionId: string, listener: (event: SessionEvent, after: string | undefined) => void): () => void;
   attachment(sessionId: string, ref: string): Promise<Attachment | undefined>;
   create(sessionId: string, fork?: ForkSource): Promise<Result>;
   rewind(sessionId: string, entryId: string): Promise<Result>;
