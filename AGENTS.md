@@ -10,7 +10,7 @@ The stable design center is the harness-neutral Agent Handler contract (`docs/SP
 
 | Document | Purpose |
 |---|---|
-| `docs/SPEC.md` | The locked Agent Handler contract, v1, which the code implements. Do not change its semantics without an explicit decision. |
+| `docs/SPEC.md` | The locked Agent Handler contract, v1. The code implements it once step 4's change from runs to messages lands (#788); until then `src/protocol.ts` is the run model it replaced. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
@@ -27,7 +27,8 @@ one place that cannot drift away from the code it explains. Directories that hav
 ```
 src/
 ├── channel.ts              # the Channel contract: ChannelModule / Routes / ChannelHandler / LongConnection*
-├── protocol.ts             # the Agent contract, SPEC v1 (docs/SPEC.md), as types, plus its limits and error values
+├── protocol.ts             # the Agent contract as types, plus its limits and error values: SPEC v1's run model until
+│                           # #788 moves it to messages (docs/SPEC.md)
 ├── harness-port.ts         # what the serving layer calls to run a session's work; a durable harness implements it
 ├── loop-port.ts            # LoopPort: the harness port for a harness that is only a loop: queue, idempotency, run
 │                           # markers in the session's own log through its one writer, closing interrupted runs
@@ -294,7 +295,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 - **The contract is harness-neutral.** `src/protocol.ts` must not import any harness (`@earendil-works/pi-*` only under `src/harnesses/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
-- **Per-run state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per run and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what keeps SPEC MUST 8 (process affinity only while a run is active or queued), which AgentCore and every horizontally-scaled channel host require. The serving layer may hold in memory only what a non-durable harness needs while a run is active or queued: the queue's order, the running run, a steer's target, and the session's one log writer with its key index (caches of the durable log) ([agent-service.md §9.3](docs/design/agent-service.md#93-runs-and-durability)). Everything a caller reads afterwards (accepted runs, entries) is durable before it is reported, and an idle session holds nothing in process. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
+- **Per-run state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per run and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what keeps SPEC MUST 8 (process affinity only while a message is taken or queued), which AgentCore and every horizontally-scaled channel host require. The serving layer may hold in memory only what a non-durable harness needs while a message is taken or queued: the queue's order, the work in progress, a steer's target, and the session's one log writer with its key and message index (caches of the durable log) ([agent-service.md §9.3](docs/design/agent-service.md#93-messages-and-durability)). Everything a caller reads afterwards (accepted messages, entries) is durable before it is reported, and an idle session holds nothing in process. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
 - **Public surface is scoped on purpose.** `src/core.ts` is harness- and runtime-neutral (no package but `effect`, no Node built-in; `src/protocol.ts` and `src/channel.ts` themselves import nothing), `src/node.ts` is harness-neutral but needs a Node runtime, `src/pi.ts` names the harness, and `src/index.ts` combines all of them. Pi-coupled internals (`piLoopHarness`, `piSessionBinder`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **Effect first.** Write with Effect, and with what Effect gives you, rather than hand-rolled async plumbing or a thin wrapper over it.
 - **Learn Effect from its source, not from guesses.** The installed `effect@4` ships uncompiled source and its own agent guide: read `node_modules/effect/AGENTS.md` before writing Effect code, and the relevant module under `node_modules/effect/src/` for how an API is actually used ([why](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive)). Prefer it over an invented API, a stale memory, or a web search. Read-only reference: never edit it, never import from a path inside it.
