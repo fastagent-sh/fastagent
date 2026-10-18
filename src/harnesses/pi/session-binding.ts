@@ -219,18 +219,20 @@ export async function bindPiSession(options: BindPiSessionOptions): ReturnType<t
       tools: sessionToolActivation(session),
     },
   };
-  // pi restores a resumed session's loadout from its transcript, keeping a declared tool an extension registers later
-  // pending until it does. The definition's defaults as they are NOW join it: every tool the definition registers
-  // (mounted or from `extensions/`, not pi's built-ins, which settings select) that activates on registration, and the
-  // discovery tools its exposures need. fastagent's own activation only adds, so a tool the transcript lacks is one the
-  // definition did not have on some earlier run, not the conversation's choice, and leaving it out would keep a tool
-  // from a long-lived chat after a release that briefly lacked it.
+  // pi restores a resumed session's loadout from its transcript (a declared tool an extension registers later stays
+  // pending), and applies `defaultTools` to it again only on `reload()`, which no binding calls. So what a NEW session
+  // would get now joins it: the settings' selection, every tool the definition registers (mounted or from
+  // `extensions/`; pi's own are the settings' to select) that activates on registration, and the discovery tools its
+  // exposures need. Activation only adds: a tool the transcript lacks is one an earlier run did not have, not the
+  // conversation's choice. pi's list for an unset `defaultTools` is not exported; it names only built-ins an assembly
+  // mounts or excludes (`omittedBuiltinNames`).
+  const selected = session.settingsManager.getDefaultTools() ?? [];
   const registered = session
     .getAllTools()
     .filter((tool) => tool.sourceInfo.source !== "builtin")
     .filter((tool) => isDefaultActiveTool(session.getToolDefinition(tool.name) ?? {}))
     .map((tool) => tool.name);
-  const defaults = [...registered, ...discoveryToolNames(tools)];
+  const defaults = [...selected, ...registered, ...discoveryToolNames(tools)];
   session.setActiveToolsByName([...new Set([...session.getActiveToolNames(), ...defaults])]);
   return result;
 }

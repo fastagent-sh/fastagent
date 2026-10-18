@@ -229,10 +229,12 @@ what AgentCore and every scaled channel host require). That is the default on an
 
 Reopening restores the loadout from the active transcript: pi does it itself (`AgentSession`'s constructor reads the
 newest system message's tool declarations, and keeps a declared tool an extension registers later pending until it
-does). There is no separate activation journal. The shared binder, for serving and chat, then adds the definition's
-current defaults: every tool the definition registers, mounted or from `extensions/`, that activates on registration,
-and the discovery tools its exposures need. Transcript removals are not honored: fastagent's own activation only adds,
-so a removal records a turn on which the definition did not mount the tool, not the conversation's choice.
+does). There is no separate activation journal. pi applies the `defaultTools` setting to a resumed session again only
+on `reload()`, which a binding never calls, so the shared binder, for serving and chat, adds what a new session would
+get now: the settings' selection, every tool the definition registers, mounted or from `extensions/`, that activates
+on registration, and the discovery tools its exposures need. Transcript removals are not honored: fastagent's own
+activation only adds, so a removal records a turn on which the definition or the settings did not offer the tool, not
+the conversation's choice.
 Discoveries survive rebind, resume, fork, and compaction on that branch.
 
 Every binding also owns a fresh `ModelRuntime`. Credentials are shared through their store, but extension
