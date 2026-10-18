@@ -89,8 +89,9 @@ const OWED_BY_THE_RUN = new Set(["command", "send_user_message", "send_message"]
 
 /**
  * The turns extensions start on this session and have not finished. `pi.sendUserMessage` and `pi.sendMessage` reach
- * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is this run's
- * alone, so the wrap never outlives the run.
+ * these two session methods, and pi discards the promise; wrapping the methods keeps it. The session is not busy until
+ * such a turn's run starts, after its `input` handlers, so waiting for idle alone could settle the run before it. The
+ * session is this run's alone, so the wrap never outlives the run.
  */
 function trackExtensionTurns(session: AgentSession): ReadonlySet<Promise<void>> {
   const pending = new Set<Promise<void>>();
@@ -395,7 +396,6 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
           const extensionMayTakeInput =
             bound.extensionRunner.getRegisteredCommands().length > 0 || bound.extensionRunner.hasHandlers("input");
           try {
-            if (stopRequested) abort("requested");
             const prepared = await toPiPromptOptions(first.prompt, "prompt");
             await bound.prompt(first.prompt.text, prepared);
             do {

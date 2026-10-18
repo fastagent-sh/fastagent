@@ -733,6 +733,33 @@ describe("the binding: deferred tools stay discovered", () => {
     expect(offered).toContain("alpha");
   });
 
+  it("a tool the settings newly select joins an EXISTING conversation", async () => {
+    // pi applies `defaultTools` again to a resumed session only on `reload()`, and every run binds a resumed session
+    // without one, so the binding is where an operator's change reaches a long-lived chat. Settings are read once per
+    // process: each phase is a machine of its own, as a restart after the edit would be.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-settings-session-"));
+    const sessions = piInMemorySessionRecordStore({ cwd });
+    const offered: string[][] = [];
+    const respond = (context: Parameters<typeof sentTools>[0]) => {
+      offered.push(sentTools(context).sort());
+      return fauxAssistantMessage("ok");
+    };
+    const machine = async (defaultTools: string[]) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-settings-machine-"));
+      await writeFile(join(dir, "settings.json"), JSON.stringify({ defaultTools }));
+      vi.stubEnv("PI_CODING_AGENT_DIR", dir);
+    };
+    try {
+      await machine(["read"]);
+      await collect((await agentWith([respond], { sessions, cwd })).invoke({ sessionId: "s", prompt: { text: "1" } }));
+      await machine(["read", "bash"]);
+      await collect((await agentWith([respond], { sessions, cwd })).invoke({ sessionId: "s", prompt: { text: "2" } }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(offered).toEqual([["read"], ["bash", "read"]]);
+  });
+
   it("a tool missing from one release returns to an EXISTING conversation when it is mounted again", async () => {
     // Pi records the turn without it as a removal; that is the definition's gap, not the conversation's choice.
     const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
