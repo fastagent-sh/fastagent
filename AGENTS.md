@@ -234,6 +234,9 @@ src/
 │   ├── eventbridge-cron.ts # a cron in EventBridge's dialect; discovery refuses what it cannot express
 │   └── state.ts            # schedule state under <stateRoot>/schedule/, incl. THE claim: the decision to fire,
 │                           # the outcome written back into it, and therefore the whole (bounded) fire history
+├── harnesses/pi-durable/   # pi-durable, the second harness (docs/design/agent-service.md §9.1)
+│   └── port.ts             # pi-durable as a HarnessPort: its submissions are the message records, its inbox the
+│                           # queue; the port adds session names, stop reasons, and where unanswered work ended
 └── harnesses/pi/           # the pi reference implementation
     ├── service.ts          # createAgentService: this harness's opener + the neutral mountAgentService
     ├── create.ts           # the assembly ladder L1–L2 as a VALUE (binding, store, default model), run as `agentOf`

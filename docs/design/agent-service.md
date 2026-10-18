@@ -1055,6 +1055,19 @@ loaded only when an agent chooses it, so the default path neither imports it nor
 chooses it and also declares what it cannot run (`extensions/`, `mcp.json`), or runs on Bun, is refused at start,
 and the error names the cause; nothing it declares is dropped silently.
 
+As built (`harnesses/pi-durable/port.ts`, passing the SPEC's suite on SQLite storage):
+
+- **Every served conversation is followed, listened to or not.** The port writes a run's end the moment it observes it
+  (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact; that write is also what
+  places the inputs pi-durable leaves waiting. It cannot wait for a caller, since none may be reading. So a process
+  holds one event stream per conversation it serves, for its life; a process that stopped between the run's end and
+  that write has it written when the port opens, from the conversation's tail.
+- **Kept beside pi-durable's records, in its own store:** which conversation a session id names, its name and times
+  (`fastagent.sessions`), and why a message was canceled (`fastagent.stops`), which pi-durable records only as
+  `aborted`.
+- **Not yet:** an agent choosing it (`harness: "pi-durable"`), and with it the definition's prompt, skills and tools
+  as pi-durable extensions; `tool_progress` (`toolProgress: false`); a `recent` fork, which copies the whole history.
+
 **DeepSeek Harness, read.** dsh was read from its source (0.2.1-alpha.2) rather than run. That version is on npm
 under the `alpha` tag, and `@deepseek-ai/dsh-base@0.2.1-alpha.2` resolves (350 packages); `latest` still points at
 0.0.1-rc.1, which does not install (it depends on a package that is not published). What its code and documentation
@@ -1295,7 +1308,7 @@ bound on each machine in `context.local.json`, and *context* is the whole. What 
 | 1 | Rename engine to harness in the code and the SPEC: a refactor, no change in behavior. Done |
 | 2 | Upgrade to pi 1.1.0. Done |
 | 3 | Declarations as files: `context.json`, with content at `content/<name>/`; `tools/` anchored on `defineTool`; the environment in `context.json`, installed by mise. Done |
-| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678). Done: the protocol and `LoopPort` for pi-coding-agent with its conformance suite, the SPEC and its change from runs to messages (§7.1), and channels, schedules and wake-ups on it. Not yet: pi-durable, duang, MCP |
+| 4 | The serving protocol (§7) on the harness port (§9.1), with `LoopPort` for pi-coding-agent, pi-durable as a second harness an agent opts into, and one conformance suite both pass; the SPEC rewritten; channels, schedules, wake-ups and duang move to it; MCP servers in `mcp.json`, their connections held by the serving process rather than one turn (#678). Done: the protocol and `LoopPort` for pi-coding-agent with its conformance suite, the SPEC and its change from runs to messages (§7.1), and channels, schedules and wake-ups on it. pi-durable's port, passing the suite. Not yet: an agent choosing pi-durable, duang, MCP |
 | 5 | ACP compatibility in both directions (§7.9); DeepSeek Harness's ACP server is the first ACP agent used as a harness |
 | 6 | Scaling out on AgentCore: a runtime session per conversation, and state in API storage (§10.2) |
 | Later | The agent's update loop (#605); evaluation; DeepSeek Harness as a native harness, if a run against its npm `alpha` release shows ACP leaves out too much; more content kinds |

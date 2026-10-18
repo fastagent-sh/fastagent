@@ -60,7 +60,8 @@ export function toRecord(entry: PiSessionEntry, parentEntryId: string | undefine
 
 type Message = Extract<PiSessionEntry, { type: "message" }>["message"];
 
-function messageRecord(entryId: string, message: Message): Pick<LogRecord, "kind" | "data"> {
+/** A pi-ai message as a record's kind and payload: one reading, shared by every harness built on pi-ai's messages. */
+export function messageRecord(entryId: string, message: Message): Pick<LogRecord, "kind" | "data"> {
   switch (message.role) {
     case "user":
       return {

@@ -25,13 +25,24 @@ export function entryImages(entryId: string, message: Message): { images?: Entry
   return images.length > 0 ? { images } : {};
 }
 
-/** The image `ref` names in `record`, or undefined when it names none there. The inverse of `entryImages`. */
-export function imageAt(record: SessionManager, ref: string): ImageRef | undefined {
+/** The entry and the position a ref names, or undefined when it is not one `entryImages` made. */
+export function parseImageRef(ref: string): { entryId: string; index: number } | undefined {
   const at = ref.lastIndexOf(":");
   const index = ref.slice(at + 1);
   // Canonical digits only, so one image has one ref (`:00` is not `:0`).
   if (at <= 0 || !/^(0|[1-9]\d*)$/.test(index)) return undefined;
-  const entry = record.getEntry(ref.slice(0, at)) as PiSessionEntry | undefined;
-  const image = entry?.type === "message" ? publishedImages(entry.message)[Number(index)] : undefined;
+  return { entryId: ref.slice(0, at), index: Number(index) };
+}
+
+/** The image a message publishes at `index`. */
+export function imageIn(message: Message, index: number): ImageRef | undefined {
+  const image = publishedImages(message)[index];
   return image ? { data: image.data, mimeType: image.mimeType } : undefined;
+}
+
+/** The image `ref` names in `record`, or undefined when it names none there. The inverse of `entryImages`. */
+export function imageAt(record: SessionManager, ref: string): ImageRef | undefined {
+  const at = parseImageRef(ref);
+  const entry = at && (record.getEntry(at.entryId) as PiSessionEntry | undefined);
+  return at && entry?.type === "message" ? imageIn(entry.message, at.index) : undefined;
 }
