@@ -21,7 +21,7 @@ import { Harness, type Storage, createRegistry, defineExtension, defineTool } fr
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { describe, expect, it, vi } from "vitest";
 import { piDurablePort } from "../src/harnesses/pi-durable/port.ts";
-import { LIMITS } from "../src/protocol.ts";
+import { type InvokeEvent, LIMITS } from "../src/protocol.ts";
 import { collect } from "../src/protocol-collect.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { describeProtocolConformance } from "./protocol-conformance.ts";
@@ -62,6 +62,8 @@ function gate(): { opened: Promise<void>; open: () => void } {
 let file = "";
 let held = gate();
 let effects = 0;
+/** How many `hold` calls have started. */
+let holds = 0;
 let open: { harness: Harness } | undefined;
 
 /** A property of `target` read through a proxy: its methods keep `target` as `this` (private fields need it). */
@@ -86,6 +88,7 @@ async function start(capacity?: number, wrap: Wrap = {}) {
       description: "waits until released",
       parameters,
       execute: async (_args, _api, ctx) => {
+        holds++;
         await Promise.race([
           held.opened,
           new Promise<void>((resolve) => ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true })),
@@ -269,4 +272,82 @@ describe("pi-durable port", () => {
       status: "done",
     });
   });
+
+  it("where failed work ended is written at once, though a new message starts work first", {
+    timeout: 30_000,
+  }, async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    held = gate();
+    let release!: () => void;
+    const reading = new Promise<void>((resolve) => (release = resolve));
+    let gated = false;
+    // The read before the end is written waits, so the next message starts work in between.
+    const agent = await start(undefined, {
+      storage: (storage) =>
+        new Proxy(storage, {
+          get: (target, key) =>
+            key === "submission"
+              ? async (...args: Parameters<Storage["submission"]>) => {
+                  const record = await target.submission(...args);
+                  if (record?.status === "unanswered" && !gated) {
+                    gated = true;
+                    await reading;
+                  }
+                  return record;
+                }
+              : bound(target, key),
+        }),
+    });
+    const session = agent.sessions.get("s");
+    const failed = collect(agent.invoke({ sessionId: "s", prompt: { text: "fail" } }));
+    void failed.catch(() => {});
+    await vi.waitFor(() => expect(gated).toBe(true), { timeout: 20_000 });
+    const next = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    await vi.waitFor(async () => expect((await session.messages.get({ messageId: next }))?.status).toBe("taken"));
+    const state = await session.read({ limit: 0 });
+    // Both planes say the same: the failed message is taken until where its work ended is written.
+    expect(state.ok && state.state.taken.length).toBe(2);
+    release();
+    await expect(failed).rejects.toThrow("boom");
+    expect((await session.messages.get({ messageId: next }))?.status).toBe("taken");
+    held.open();
+  });
+
+  it("canceling a message stops its work, and every message that work took ends canceled by cancel", async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    held = gate();
+    const agent = await start();
+    const session = agent.sessions.get("s");
+    const first = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" } }))).message.messageId;
+    const before = holds;
+    await vi.waitFor(() => expect(holds).toBe(before + 1), { timeout: 5000 });
+    const steer = (await receiptOf(agent.invoke({ sessionId: "s", prompt: { text: "hold" }, whenBusy: "steer" })))
+      .message.messageId;
+    // The first tool round ends, the steer is taken into the same work, and its own tool call holds again.
+    const firstRound = held;
+    held = gate();
+    firstRound.open();
+    await vi.waitFor(async () => expect((await session.messages.get({ messageId: steer }))?.status).toBe("taken"), {
+      timeout: 5000,
+    });
+    expect(await session.messages.cancel(first)).toEqual({ ok: true });
+    const canceled = { status: "done", outcome: { status: "canceled", by: "cancel" } };
+    await vi.waitFor(async () => expect(await session.messages.get({ messageId: first })).toMatchObject(canceled));
+    await vi.waitFor(async () => expect(await session.messages.get({ messageId: steer })).toMatchObject(canceled));
+  });
+
+  it("a thinking level the session's model does not take is refused, and nothing is written", async () => {
+    file = join(await mkdtemp(join(tmpdir(), "pi-durable-")), "state.sqlite");
+    const agent = await start();
+    await agent.sessions.create({ sessionId: "s" });
+    const refused = await agent.sessions.get("s").update({ name: "named", thinkingLevel: "banana" });
+    expect(refused).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    const read = await agent.sessions.get("s").read({ limit: 0 });
+    expect(read.ok && read.state.name).toBeUndefined();
+  });
 });
+
+async function receiptOf(events: AsyncIterable<InvokeEvent>) {
+  for await (const event of events) if (event.type === "accepted") return event;
+  throw new Error("not accepted");
+}

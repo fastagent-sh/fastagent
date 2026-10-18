@@ -1057,16 +1057,18 @@ and the error names the cause; nothing it declares is dropped silently.
 
 As built (`harnesses/pi-durable/port.ts`, passing the SPEC's suite on SQLite storage):
 
-- **A conversation is followed from its first use, listened to or not.** The port writes a run's end the moment it
-  observes it (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact; that write is also
-  what places the inputs pi-durable leaves waiting. It cannot wait for a caller, since none may be reading. Until it is
-  written, the message reads `taken`, on every plane. The stream's listener only queues each batch; the work runs on
-  the conversation's own queue, and a job that fails is logged and made good by a resync from the log (a
+- **A conversation is followed from its first use, listened to or not.** The port records a run's end the moment it
+  observes it (`watchEvents`), from the newest entry of that same commit, so `lastEntryId` is exact. The record is a
+  document (`fastagent.ends`) in a commit of its own, which waits for nothing: a write would queue behind work a new
+  message starts first. A separate write then places the inputs pi-durable leaves waiting after a failed or aborted
+  run. Until the end is recorded the message reads `taken`, and one function says which messages are taken for a
+  message's status and the session's state alike. The stream's listener only queues each batch; the work runs on the
+  conversation's own queue, and a job that fails is logged and made good by a resync from the log (a
   `serving_error` only when that fails too). When the port opens, it follows the conversations with work in flight or
-  an end a previous process did not write, and writes those from the conversation's tail.
+  an end a previous process did not record, and records those from the conversation's tail.
 - **Kept beside pi-durable's records, in its own store:** which conversation a session id names, its name and times
-  (`fastagent.sessions`), and why a message was canceled (`fastagent.stops`), which pi-durable records only as
-  `aborted`.
+  (`fastagent.sessions`), why a message was canceled (`fastagent.stops`), which pi-durable records only as
+  `aborted`, and where unanswered work ended (`fastagent.ends`).
 - **Not yet:** an agent choosing it (`harness: "pi-durable"`), and with it the definition's prompt, skills and tools
   as pi-durable extensions; `tool_progress` (`toolProgress: false`); a `recent` fork, which copies the whole history.
 

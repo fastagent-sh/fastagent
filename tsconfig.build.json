@@ -11,5 +11,8 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  // tsconfig.json's own exclusions, repeated because `exclude` replaces them, and pi-durable's port: not shipped until an
+  // agent can choose it, since its packages are devDependencies (docs/design/agent-service.md §9.1).
+  "exclude": ["src/scaffold/templates", "src/channels/*/scaffold", "src/harnesses/pi-durable"]
 }
