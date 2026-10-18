@@ -1,8 +1,8 @@
 /**
- * A SPEC v1 Agent whose runs a test scripts: `invoke` streams what the script yields for each request. The rest of
+ * A SPEC v1 Agent whose messages a test scripts: `invoke` streams what the script yields for each request. The rest of
  * the Agent is what a channel asks of it, kept just faithful enough to observe:
- *   - each run the script ends is recorded under its session, with its key and answer, so `read` and `runs.get`
- *     answer for it (a thread forks from a room by the run its reply chain names);
+ *   - each message the script ends is recorded under its session, with its key and answer, so `read` and
+ *     `messages.get` answer for it (a thread forks from a room by the message its reply chain names);
  *   - `sessions.create` records each fork it is asked for (`forks`);
  *   - `abort` records the session (`aborted`) and answers what `stopped` says, nothing running by default.
  */
@@ -13,12 +13,12 @@ import type {
   ForkSource,
   InvokeEvent,
   InvokeRequest,
-  RunOutcome,
-  RunStatus,
+  MessageStatus,
+  Outcome,
   Session,
 } from "../src/protocol.ts";
 import { failure } from "../src/protocol.ts";
-import { runText } from "../src/run-text.ts";
+import { answerText } from "../src/answer-text.ts";
 
 export type Script = (request: InvokeRequest) => AsyncIterable<InvokeEvent> | Iterable<InvokeEvent>;
 
@@ -31,7 +31,7 @@ export interface ScriptedAgent extends Agent {
 
 interface Kept {
   entries: Entry[];
-  runs: RunStatus[];
+  messages: MessageStatus[];
 }
 
 export function scriptedAgent(script: Script, options: { stopped?: (sessionId: string) => AbortResult } = {}) {
@@ -40,16 +40,15 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
   const aborted: string[] = [];
   let entries = 0;
 
-  /** Keep a run the script ended: its message and answer as entries, and the run, findable by its key. */
-  const keep = (request: InvokeRequest, sessionId: string, runId: string, outcome: RunOutcome, answer: string) => {
-    const kept = sessions.get(sessionId) ?? { entries: [], runs: [] };
+  /** Keep a message the script ended: it and its answer as entries, and its status, findable by its key. */
+  const keep = (request: InvokeRequest, sessionId: string, messageId: string, outcome: Outcome, answer: string) => {
+    const kept = sessions.get(sessionId) ?? { entries: [], messages: [] };
     sessions.set(sessionId, kept);
     const append = (kind: string, text: string): Entry => {
       const parentEntryId = kept.entries.at(-1)?.id;
       const entry: Entry = {
         id: `e${++entries}`,
         timestamp: Date.now(),
-        runId,
         kind,
         data: { text },
         ...(parentEntryId ? { parentEntryId } : {}),
@@ -59,12 +58,11 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
     };
     const message = append("user_message", request.prompt.text);
     const answered = answer === "" ? undefined : append("assistant_message", answer);
-    kept.runs.push({
-      runId,
+    kept.messages.push({
+      messageId,
       ...(request.source ? { source: request.source } : {}),
-      messages: [
-        { entryId: message.id, ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}) },
-      ],
+      ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
+      entryId: message.id,
       status: "done",
       endedAt: Date.now(),
       outcome,
@@ -80,7 +78,7 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
       const leafEntryId = kept.entries.at(-1)?.id;
       return {
         ok: true,
-        state: { status: "idle", queued: [], ...(leafEntryId ? { leafEntryId } : {}) },
+        state: { status: "idle", taken: [], queued: [], ...(leafEntryId ? { leafEntryId } : {}) },
         entries: kept.entries,
       };
     },
@@ -88,20 +86,18 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
     attachment: async () => undefined,
     abort: async () => {
       aborted.push(sessionId);
-      return options.stopped?.(sessionId) ?? { ok: true, stopped: { queued: [], compaction: false } };
+      return options.stopped?.(sessionId) ?? { ok: true, stopped: { taken: [], queued: [], compaction: false } };
     },
     rewind: async () => failure("unsupported", "not in this double"),
     compact: async () => failure("unsupported", "not in this double"),
     update: async () => failure("unsupported", "not in this double"),
     delete: async () => failure("unsupported", "not in this double"),
-    runs: {
+    messages: {
       get: async (key) =>
         sessions
           .get(sessionId)
-          ?.runs.find((run) =>
-            "runId" in key
-              ? run.runId === key.runId
-              : run.messages.some((message) => message.idempotencyKey === key.idempotencyKey),
+          ?.messages.find((message) =>
+            "messageId" in key ? message.messageId === key.messageId : message.idempotencyKey === key.idempotencyKey,
           ),
       follow: () => ({ [Symbol.asyncIterator]: async function* () {} }),
       cancel: async () => ({ ok: true }),
@@ -111,23 +107,18 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
   const agent: ScriptedAgent = {
     invoke: (request) => ({
       async *[Symbol.asyncIterator]() {
-        let runId: string | undefined;
+        let messageId: string | undefined;
         let sessionId = request.sessionId ?? "";
         let answer = "";
-        const textOf = runText(() => runId);
+        const textOf = answerText();
         for await (const event of script(request)) {
           if (event.type === "accepted") {
-            runId = event.run.runId;
+            messageId = event.message.messageId;
             sessionId = request.sessionId ?? event.sessionId;
           }
           if (event.type === "message_delta" || event.type === "entry") answer += textOf(event);
-          if (
-            runId !== undefined &&
-            event.type === "entry" &&
-            event.entry.kind === "run_ended" &&
-            event.entry.runId === runId
-          ) {
-            keep(request, sessionId, runId, (event.entry.data as { outcome: RunOutcome }).outcome, answer);
+          if (messageId !== undefined && event.type === "done" && event.message.messageId === messageId) {
+            keep(request, sessionId, messageId, event.message.outcome, answer);
           }
           yield event;
         }
@@ -151,7 +142,7 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
         delete: false,
         updatable: [],
         durableQueue: false,
-        durableRuns: false,
+        durableWork: false,
         toolProgress: true,
         usage: false,
       },
@@ -164,8 +155,8 @@ export function scriptedAgent(script: Script, options: { stopped?: (sessionId: s
   return agent;
 }
 
-/** What a stop answers when it stopped a run. */
-export const stoppedRun: AbortResult = { ok: true, stopped: { runId: "run", queued: [], compaction: false } };
+/** What a stop answers when it stopped work in progress. */
+export const stoppedRun: AbortResult = { ok: true, stopped: { taken: ["message"], queued: [], compaction: false } };
 
 /** `agent` with its sessions' `abort` answering `stopped`, each session it is called for recorded in `aborted`. */
 export function withStop(agent: Agent, stopped: (sessionId: string) => AbortResult): Agent & { aborted: string[] } {

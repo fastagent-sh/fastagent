@@ -79,11 +79,11 @@ A channel adapter should depend on the harness-neutral `@fastagent-sh/fastagent/
 
 | Export | Use |
 |---|---|
-| `Agent`, `InvokeEvent`, `Entry`, `RunOutcome` | the agent and what its runs report ([SPEC v1](SPEC.md)) |
+| `Agent`, `InvokeEvent`, `Entry`, `Outcome` | the agent and how its messages end ([SPEC v1](SPEC.md)) |
 | `ChannelModule`, `Routes`, `ChannelHandler` | HTTP route module and route types |
 | `LongConnectionChannelModule`, `LongConnection` | long-connection module and lifecycle types |
-| `collect` | buffer a run into its answer `{ sessionId, runId, text }` |
-| `AgentRejection`, `RunNotCompleted`, `RunUnfinished` | why `collect` has no answer: refused, ended otherwise, or cut off |
+| `collect` | buffer a message into its answer `{ sessionId, messageId, text }` |
+| `AgentRejection`, `MessageNotCompleted`, `MessageUnfinished` | why `collect` has no answer: refused, ended otherwise, or cut off |
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
@@ -94,7 +94,7 @@ Do not import from `src/harnesses/*`, `@earendil-works/*`, or the pi subpath in 
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { type ChannelModule, collect, RunNotCompleted, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
+import { type ChannelModule, collect, MessageNotCompleted, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
 
 export interface AcmeChannelOptions {
   secret: string;
@@ -125,13 +125,13 @@ export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
       if (!intent) return new Response(null, { status: 204 });
 
       try {
-        // The delivery id as the idempotency key: a platform's redelivery returns the same run, not a second one.
+        // The delivery id as the idempotency key: a platform's redelivery returns the same message, not a second one.
         const result = await collect(
           agent.invoke({ sessionId: intent.session, prompt: { text: intent.text }, idempotencyKey: intent.deliveryId }),
         );
         return Response.json({ text: result.text });
       } catch (error) {
-        if (error instanceof RunNotCompleted) {
+        if (error instanceof MessageNotCompleted) {
           return Response.json({ outcome: error.outcome }, { status: 502 });
         }
         throw error;
@@ -173,9 +173,9 @@ for await (const event of agent.invoke({ sessionId: session, prompt: { text } })
     await updateLivePreview(`Running ${event.name}…`);
   } else if (event.type === "entry" && event.entry.kind === "assistant_message") {
     answer = String((event.entry.data as { text?: string }).text ?? answer); // the settled text wins
-  } else if (event.type === "entry" && event.entry.kind === "run_ended") {
-    const { outcome } = event.entry.data as { outcome: RunOutcome };
-    return outcome.status === "completed" ? sendFinal(answer) : sendError(`the run ended ${outcome.status}`);
+  } else if (event.type === "done") {
+    const { outcome } = event.message;
+    return outcome.status === "completed" ? sendFinal(answer) : sendError(`the message ended ${outcome.status}`);
   }
 }
 ```
@@ -193,15 +193,16 @@ A channel adapter should:
 - return explicit 4xx responses for invalid input,
 - surface post-ACK failures in operator logs,
 - choose clear session IDs and document same-session behavior,
-- handle every run outcome, not only `completed`,
-- stop work it no longer wants with `runs.cancel` or `abort`: a Caller that stops reading only detaches,
+- handle every message outcome, not only `completed`,
+- stop work it no longer wants with `messages.cancel` or `abort`: a Caller that stops reading only detaches,
 - avoid importing harness-specific code,
 - keep provider SDK dependencies out of `@fastagent-sh/fastagent` unless the adapter is first-party and lightweight.
 
 ## Sessions and concurrency
 
-Channels choose the `sessionId`. A session runs one run at a time: a message that arrives while it is running queues
-behind the run by default (`whenBusy: "steer"` joins the running run instead, `"reject"` refuses it as `busy`).
+Channels choose the `sessionId`. A session works on one message at a time: a message that arrives while it works
+queues behind the work in progress by default (`whenBusy: "steer"` has the work in progress take it instead,
+`"reject"` refuses it as `busy`).
 
 Good session choices depend on the external system:
 

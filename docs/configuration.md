@@ -670,7 +670,7 @@ Generate today's digest and send it with slack-send to channel C0123456789.
 - **One conversation per schedule.** Every fire continues `schedule:<name>`, so the agent sees what its earlier runs
   did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.
-  What a run said is in its session under `<stateRoot>/sessions/`.
+  What the agent said is in its session under `<stateRoot>/sessions/`.
 - **Each instant fires at most once**, even with several schedulers over one state root: a claim under
   `<stateRoot>/schedule/claims/<name>/` is taken before the turn. After downtime one overdue run is caught up, not
   one per missed instant; a schedule that has never fired starts at its next instant. A run still going when the

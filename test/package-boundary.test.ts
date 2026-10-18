@@ -217,11 +217,11 @@ describe("the assembly's parts stay out of the public surface", () => {
     // `collect` throws one of three, and a caller branches on which: refused before anything ran, ended without an
     // answer, or a stream that stopped before its run did. A type-only export would leave nothing to `instanceof`.
     const core = (await import(resolve(srcDir, "core.ts"))) as Record<string, unknown>;
-    for (const name of ["AgentRejection", "RunNotCompleted", "RunUnfinished"]) {
+    for (const name of ["AgentRejection", "MessageNotCompleted", "MessageUnfinished"]) {
       expect(typeof core[name], name).toBe("function");
     }
     const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(index.RunNotCompleted).toBe(core.RunNotCompleted);
+    expect(index.MessageNotCompleted).toBe(core.MessageNotCompleted);
   });
 
   it("no entry exports an assembly part", async () => {

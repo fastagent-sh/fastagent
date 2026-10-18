@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { type PiSessionRecordStore, piSessionRecordStore } from "../src/harnesses/pi/session-store.ts";
 import { defineTool } from "../src/harnesses/pi/tool.ts";
-import type { Agent, Entry, InvokeEvent, RunOutcome, SessionState } from "../src/protocol.ts";
+import type { Agent, Entry, InvokeEvent, Outcome, SessionState } from "../src/protocol.ts";
 import { fauxAgent } from "./agent.ts";
 
 const echoTool: AgentTool = {
@@ -33,10 +33,8 @@ async function invoked(events: AsyncIterable<InvokeEvent>): Promise<InvokeEvent[
   return out;
 }
 const run = (agent: Agent, sessionId: string, text = "go") => invoked(agent.invoke({ sessionId, prompt: { text } }));
-const outcomeOf = (events: InvokeEvent[]): RunOutcome | undefined => {
-  const ended = events.find((e) => e.type === "entry" && e.entry.kind === "run_ended") as { entry: Entry } | undefined;
-  return (ended?.entry.data as { outcome?: RunOutcome } | undefined)?.outcome;
-};
+const outcomeOf = (events: InvokeEvent[]): Outcome | undefined =>
+  events.flatMap((e) => (e.type === "done" ? [e.message.outcome] : []))[0];
 const deltas = (events: InvokeEvent[], channel: "text" | "thinking") =>
   events.flatMap((e) => (e.type === "message_delta" && e.channel === channel ? [e.delta] : [])).join("");
 
@@ -368,11 +366,14 @@ describe("messages", () => {
         }
       })();
       await toolStarted.promise;
-      // The steer's stream ends with the run it joined, so it is read alongside it.
+      // The steer's stream ends with its own done, so it is read alongside the first.
       const steered = invoked(agent.invoke({ sessionId: "sU", prompt: { text: "a steer" }, whenBusy: "steer" }));
       released.resolve();
       await running;
-      expect((await steered)[0], label).toMatchObject({ type: "accepted", joined: true });
+      expect((await steered).at(-1), label).toMatchObject({
+        type: "done",
+        message: { answer: { text: "steered answer" } },
+      });
       expect(seen, label).toEqual(["user:go", "answer", "tool", "user:a steer", "answer"]);
       expect(readable, label).toEqual([true, true]);
     }
@@ -428,6 +429,7 @@ describe("messages", () => {
     const user = all.find((e) => e.kind === "user_message") as Entry;
     expect(user.data).toEqual({
       text: "look",
+      messageId: expect.any(String),
       images: [
         { ref: expect.any(String), mimeType: "image/png" },
         { ref: expect.any(String), mimeType: "image/png" },
@@ -442,6 +444,7 @@ describe("messages", () => {
     await invoked(agent.invoke({ sessionId: "img", prompt: { text: "no picture" } }));
     expect((await entries(agent, "img")).filter((e) => e.kind === "user_message").at(-1)?.data).toEqual({
       text: "no picture",
+      messageId: expect.any(String),
     });
     const assistant = answers(all)[0] as Entry;
     expect(await agent.sessions.get("other").attachment(refs("user_message")[0] as string)).toBeUndefined();

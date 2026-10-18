@@ -18,19 +18,19 @@ const FORK_PROVENANCE = "fastagent.fork";
 export const LEAF_ANCHOR = "fastagent.leaf";
 
 /**
- * `LoopPort`'s run records (loop-port.ts), as custom entries of the session's own log. Not plane markers: `run_started`
- * and `run_ended` are published. A fork still leaves them out, since a fork copies history and not runs.
+ * `LoopPort`'s message records (loop-port.ts), as custom entries of the session's own log. Records of the log, which
+ * `LoopPort` reads and never publishes; a fork leaves them out, since a fork copies history and not messages.
  */
-export const RUN_MARKERS = {
-  run_accepted: "fastagent.run_accepted",
-  run_started: "fastagent.run_started",
-  run_ended: "fastagent.run_ended",
+export const MESSAGE_MARKERS = {
+  message_accepted: "fastagent.message_accepted",
+  message_taken: "fastagent.message_taken",
+  message_ended: "fastagent.message_ended",
 } as const;
 
-const RUN_MARKER_TYPES: ReadonlySet<string> = new Set(Object.values(RUN_MARKERS));
+const MESSAGE_MARKER_TYPES: ReadonlySet<string> = new Set(Object.values(MESSAGE_MARKERS));
 
-export function isRunMarker(entry: { type?: string; customType?: string }): boolean {
-  return entry.type === "custom" && entry.customType !== undefined && RUN_MARKER_TYPES.has(entry.customType);
+export function isMessageMarker(entry: { type?: string; customType?: string }): boolean {
+  return entry.type === "custom" && entry.customType !== undefined && MESSAGE_MARKER_TYPES.has(entry.customType);
 }
 
 /**

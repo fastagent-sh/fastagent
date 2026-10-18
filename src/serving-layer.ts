@@ -1,7 +1,7 @@
 /**
  * The serving layer: the SPEC v1 `Agent` over any harness port, written once (docs/design/agent-service.md §9.1). It
  * owns what is the same for every harness: naming sessions, the request rules a type cannot carry, the invoke stream
- * (a receipt, then the run replayed from its first entry), `follow`, and pages of `read`.
+ * (a receipt, then the message replayed from its own entry until its `done`), `follow`, and pages of `read`.
  */
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -71,8 +71,8 @@ const rejectRead =
       throw new AgentRejection(portFailed(operation, cause), { cause });
     });
 
-const unrecordedEnd = (runId: string): AgentError =>
-  agentError("internal", `run ${runId} has no recorded end; it reads as interrupted`);
+const unrecordedEnd = (messageId: string): AgentError =>
+  agentError("internal", `message ${messageId} has no recorded end; it reads as interrupted`);
 
 const failedStream = (error: AgentError): Stream.Stream<SessionEvent> =>
   Stream.succeed({ type: "serving_error", message: error.message });
@@ -85,25 +85,31 @@ const followFailed = (cause: unknown): Stream.Stream<SessionEvent> =>
 
 const entryEvent = (entry: Entry): SessionEvent => ({ type: "entry", entry });
 
-const belongsTo =
-  (runId: string) =>
-  (event: SessionEvent): boolean => {
+const isEntryOf = (messageId: string, entry: Entry): boolean =>
+  entry.kind === "user_message" && (entry.data as { messageId?: unknown }).messageId === messageId;
+
+/**
+ * Which live events belong to one message: nothing while it is queued; once its own entry arrives, every entry and
+ * live event of the session, since a session works on one thing at a time; and its own `done`. Errors always.
+ */
+function belongsTo(messageId: string, taken: boolean): (event: SessionEvent) => boolean {
+  let mine = taken;
+  return (event) => {
     switch (event.type) {
-      case "entry":
-        return event.entry.runId === runId;
       case "serving_error":
         return true;
       case "state":
         return false;
+      case "done":
+        return event.message.messageId === messageId;
+      case "entry":
+        if (isEntryOf(messageId, event.entry)) mine = true;
+        return mine;
       default:
-        return event.runId === runId;
+        return mine;
     }
   };
-
-const endsRun =
-  (runId: string) =>
-  (event: SessionEvent): boolean =>
-    event.type === "entry" && event.entry.kind === "run_ended" && event.entry.runId === runId;
+}
 
 const utf8 = new TextEncoder();
 
@@ -176,9 +182,10 @@ export function servingAgent(port: HarnessPort): Agent {
         let missedState: SessionEvent | undefined;
         const unwatch = port.watch(sessionId, (event) => {
           if (behind) {
-            // Entries come back from the log and deltas are allowed lost (SPEC v1 §5). An error is neither: it can be
-            // what ends a run's stream (a `run_ended` the storage refused), so it is never dropped.
-            if (event.type === "serving_error") Queue.offerUnsafe(backlog, { event, bytes: 0 });
+            // Entries come back from the log and deltas are allowed lost (SPEC v1 §5). An error and a `done` are
+            // neither: either can be what ends a message's stream, so neither is dropped.
+            if (event.type === "serving_error" || event.type === "done")
+              Queue.offerUnsafe(backlog, { event, bytes: 0 });
             if (event.type === "state") missedState = event;
             return;
           }
@@ -231,41 +238,43 @@ export function servingAgent(port: HarnessPort): Agent {
 
   const asIterable = <A>(stream: Stream.Stream<A, never>): AsyncIterable<A> => Stream.toAsyncIterable(stream);
 
-  /** A run's entries so far, then its live events, until its `run_ended`. */
-  const runStream = (
+  /** A message's part of the history so far, then its live events, until its `done`. */
+  const messageStream = (
     sessionId: string,
-    runId: string,
+    messageId: string,
     live: Watched["live"],
     after: string | undefined,
   ): Effect.Effect<{ ok: true; events: Stream.Stream<SessionEvent> } | { ok: false; error: AgentError }> =>
     Effect.gen(function* () {
-      const run = yield* fromPort(() => port.getRun(sessionId, { runId }));
-      if (!run) return failure("not_found", `no run ${runId}`);
-      const backfill = yield* fromPort(() => port.runEntries(sessionId, runId, after));
+      const message = yield* fromPort(() => port.getMessage(sessionId, { messageId }));
+      if (!message) return failure("not_found", `no message ${messageId}`);
+      const backfill = yield* fromPort(() => port.messageEntries(sessionId, messageId, after));
       if (!backfill.ok) return backfill;
       const recorded = Stream.fromIterable(backfill.entries.map(entryEvent));
-      const hasEnd = (entries: Entry[]) => entries.some((entry) => entry.kind === "run_ended");
-      if (run.status === "done" && !hasEnd(backfill.entries)) {
-        // Either its end lies before the cursor, or the storage refused to record it.
-        const whole = after === undefined ? backfill : yield* fromPort(() => port.runEntries(sessionId, runId));
-        if (whole.ok && hasEnd(whole.entries)) return { ok: true as const, events: recorded };
-        return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(runId))) };
+      if (message.status === "done" && !backfill.ended) {
+        return { ok: true as const, events: Stream.concat(recorded, failedStream(unrecordedEnd(messageId))) };
+      }
+      if (message.status === "done") {
+        return {
+          ok: true as const,
+          events: Stream.concat(recorded, Stream.succeed<SessionEvent>({ type: "done", message })),
+        };
       }
       const delivered = deliveredFrom(after);
       for (const [i, entry] of backfill.entries.entries()) delivered.read(entry, i === 0);
       const refill = (from: string | undefined) =>
-        Stream.fromEffect(fromPort(() => port.runEntries(sessionId, runId, from))).pipe(
+        Stream.fromEffect(fromPort(() => port.messageEntries(sessionId, messageId, from))).pipe(
           Stream.flatMap((page) =>
             page.ok ? Stream.fromIterable(page.entries) : Stream.fail(new AgentRejection(page.error)),
           ),
         );
-      const fresh = live(delivered, refill).pipe(Stream.filter(belongsTo(runId)));
-      // A run whose end the storage refused never sends `run_ended`; the `serving_error` that says so ends the wait.
+      const fresh = live(delivered, refill).pipe(Stream.filter(belongsTo(messageId, message.status === "taken")));
+      // A message whose end the storage refused never sends `done`; the `serving_error` that says so ends the wait.
       const ended = (event: SessionEvent) =>
-        endsRun(runId)(event)
+        event.type === "done"
           ? Effect.succeed(true)
           : event.type === "serving_error"
-            ? fromPort(() => port.getRun(sessionId, { runId })).pipe(
+            ? fromPort(() => port.getMessage(sessionId, { messageId })).pipe(
                 Effect.map((now) => now?.status === "done"),
                 Effect.catchCause(() => Effect.succeed(true)),
               )
@@ -273,7 +282,7 @@ export function servingAgent(port: HarnessPort): Agent {
       return { ok: true as const, events: Stream.concat(recorded, fresh).pipe(Stream.takeUntilEffect(ended)) };
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.succeed({ ok: false as const, error: portFailed("reading a run", portError(cause)) }),
+        Effect.succeed({ ok: false as const, error: portFailed("reading a message", portError(cause)) }),
       ),
     );
 
@@ -297,9 +306,9 @@ export function servingAgent(port: HarnessPort): Agent {
             ),
           );
           if (!admission.ok) return Stream.succeed<InvokeEvent>({ type: "rejected", error: admission.error });
-          const { run, joined, duplicate } = admission;
-          const replay = yield* runStream(sessionId, run.runId, live, undefined);
-          const receipt: InvokeEvent = { type: "accepted", sessionId, run, joined, duplicate };
+          const { message, duplicate } = admission;
+          const replay = yield* messageStream(sessionId, message.messageId, live, undefined);
+          const receipt: InvokeEvent = { type: "accepted", sessionId, message, duplicate };
           return Stream.concat(
             Stream.succeed(receipt),
             replay.ok ? replay.events : failedStream(replay.error),
@@ -401,19 +410,19 @@ export function servingAgent(port: HarnessPort): Agent {
       compact: (options) => checked(() => settle("compact")(port.compact(sessionId, options))),
       update: (settings) => checked(() => settle("update")(port.update(sessionId, settings))),
       delete: () => checked(() => settle("delete")(port.delete(sessionId))),
-      runs: {
+      messages: {
         get: (key) =>
           isAddressable(sessionId)
-            ? rejectRead("reading a run")(port.getRun(sessionId, key))
+            ? rejectRead("reading a message")(port.getMessage(sessionId, key))
             : Promise.resolve(undefined),
-        cancel: (runId) => checked(() => settle("cancel")(port.cancelRun(sessionId, runId))),
-        follow: (runId, options = {}) => {
+        cancel: (messageId) => checked(() => settle("cancel")(port.cancelMessage(sessionId, messageId))),
+        follow: (messageId, options = {}) => {
           if (!isAddressable(sessionId)) return rejectedStream(unaddressable(sessionId).error);
           return asIterable(
             Stream.unwrap(
               Effect.gen(function* () {
                 const { live } = yield* watched(sessionId);
-                const replay = yield* runStream(sessionId, runId, live, options.after);
+                const replay = yield* messageStream(sessionId, messageId, live, options.after);
                 return replay.ok
                   ? (replay.events as Stream.Stream<FollowEvent>)
                   : Stream.succeed<FollowEvent>({ type: "rejected", error: replay.error });

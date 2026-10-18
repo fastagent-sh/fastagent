@@ -38,7 +38,7 @@ import { liveEvents } from "./live-events.ts";
 import { contextOf, isRecord, toRecord } from "./log-records.ts";
 import { answeredOutcome, thrownFailure, toPiPromptOptions } from "./messages.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL } from "./models.ts";
-import { RUN_MARKERS, isConversationMessage } from "./session-markers.ts";
+import { MESSAGE_MARKERS, isConversationMessage } from "./session-markers.ts";
 import {
   MissingModel,
   modelBySpec,
@@ -209,7 +209,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     let closed = false;
 
     /** Total: a registry that cannot be built, or an entry chain that cannot be walked, leaves the pair out. */
-    const state = (): Omit<SessionState, "status" | "run" | "queued"> => {
+    const state = (): Omit<SessionState, "status" | "taken" | "queued"> => {
       const name = record.getSessionName();
       let resolved: ReturnType<typeof resolveSessionSettings>;
       let context: SessionState["context"];
@@ -459,7 +459,7 @@ export function piLoopHarness(options: PiLoopHarnessOptions): LoopHarness {
     const opened: LoopLog = {
       records: () => records,
       append: (kind, data) => {
-        const id = record.appendCustomEntry(RUN_MARKERS[kind], data);
+        const id = record.appendCustomEntry(MESSAGE_MARKERS[kind], data);
         const appended = records.at(-1);
         if (appended?.id !== id) throw new Error(`the ${kind} record ${id} was not seen being written`);
         return appended;

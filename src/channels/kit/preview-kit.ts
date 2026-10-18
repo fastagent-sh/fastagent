@@ -3,7 +3,7 @@
  * feishu/preview.ts, slack/preview.ts).
  */
 import type { InvokeEvent, Json, SessionEvent } from "../../protocol.ts";
-import { runText } from "../../run-text.ts";
+import { answerText } from "../../answer-text.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
 /** A terminal failure, as a channel hands it to its `onError`. */
@@ -40,8 +40,6 @@ interface ToolLine {
 
 /** The channel-neutral view STATE of one in-flight turn. */
 export interface TurnView {
-  /** The run the turn's invoke was accepted as: only its events are the turn's. */
-  runId?: string;
   thinking: string;
   tools: ToolLine[];
   /** tool-call id → its line, for the `tool_result` status flips (bookkeeping; renderers read `tools`). */
@@ -61,7 +59,7 @@ export function createTurnView(): TurnView {
     tools: [],
     toolById: new Map(),
     answer: "",
-    textOf: runText(() => view.runId),
+    textOf: answerText(),
     retrying: false,
   };
   return view;
@@ -78,16 +76,11 @@ export function applyTurnEvent(view: TurnView, e: InvokeEvent, now = Date.now())
     return true;
   };
   switch (e.type) {
-    case "accepted":
-      view.runId = e.run.runId;
-      return closedRetry;
     case "message_delta":
-      if (e.runId !== view.runId) return closedRetry;
       if (e.channel === "text") return appended(view.textOf(e));
       view.thinking += e.delta;
       return true;
     case "tool_started": {
-      if (e.runId !== view.runId) return closedRetry;
       const arg = summarizeToolArgs(e.args);
       const name = humanizeToolName(e.name);
       const line: ToolLine = { label: arg ? `${name} ${arg}` : name, status: "running" };
@@ -97,12 +90,11 @@ export function applyTurnEvent(view: TurnView, e: InvokeEvent, now = Date.now())
     }
     case "tool_progress": {
       const line = view.toolById.get(e.toolCallId);
-      if (e.runId !== view.runId || line?.status !== "running") return closedRetry;
+      if (line?.status !== "running") return closedRetry;
       line.progress = e.text;
       return true;
     }
     case "entry": {
-      if (e.entry.runId !== view.runId) return closedRetry;
       if (e.entry.kind === "assistant_message") return appended(view.textOf(e));
       if (e.entry.kind !== "tool_result") return closedRetry;
       const data = e.entry.data as { toolCallId?: string; isError?: boolean };

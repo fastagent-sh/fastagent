@@ -1,8 +1,8 @@
-/** Render an invoke stream to two sinks plus an exit code: 0 only for a run that ended `completed`. */
-import type { InvokeEvent, RunOutcome } from "../protocol.ts";
-import { runText } from "../run-text.ts";
+/** Render an invoke stream to two sinks plus an exit code: 0 only for a message that ended `completed`. */
+import { answerText } from "../answer-text.ts";
+import type { InvokeEvent, Outcome } from "../protocol.ts";
 
-function failure(outcome: RunOutcome): string | undefined {
+function failure(outcome: Outcome): string | undefined {
   switch (outcome.status) {
     case "completed":
       return undefined;
@@ -21,14 +21,14 @@ export async function runInvokeStream(
   err: (line: string) => void,
 ): Promise<number> {
   const toolName = new Map<string, string>(); // a tool result carries the id; its name came with tool_started
-  let runId: string | undefined;
-  const textOf = runText(() => runId);
+  let messageId: string | undefined;
+  const textOf = answerText();
   for await (const event of events) {
     const text = event.type === "message_delta" || event.type === "entry" ? textOf(event) : "";
     if (text !== "") out(text);
     switch (event.type) {
       case "accepted":
-        runId = event.run.runId;
+        messageId = event.message.messageId;
         break;
       case "rejected":
         err(`[fastagent] rejected: ${event.error.code}: ${event.error.message}`);
@@ -50,22 +50,22 @@ export async function runInvokeStream(
         err(`[fastagent] ${event.message}`);
         break;
       case "entry": {
-        if (event.entry.runId !== runId) break;
-        const data = event.entry.data as { toolCallId?: string; isError?: boolean; outcome?: RunOutcome };
+        const data = event.entry.data as { toolCallId?: string; isError?: boolean };
         if (event.entry.kind === "tool_result" && data.isError) {
           err(`[tool] ${toolName.get(data.toolCallId ?? "") ?? data.toolCallId} failed`);
         }
-        if (event.entry.kind === "run_ended") {
-          const failed = failure(data.outcome as RunOutcome);
-          if (failed === undefined) return 0;
-          err(`[fastagent] failed: ${failed}`);
-          return 1;
-        }
         break;
+      }
+      case "done": {
+        if (event.message.messageId !== messageId) break;
+        const failed = failure(event.message.outcome);
+        if (failed === undefined) return 0;
+        err(`[fastagent] failed: ${failed}`);
+        return 1;
       }
     }
   }
-  err("[fastagent] the stream ended before the run did");
+  err("[fastagent] the stream ended before the message did");
   return 1;
 }
 

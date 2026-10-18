@@ -156,7 +156,9 @@ describe("the idle watchdog", () => {
     const { fetchFn, push } = fakeSse();
     const agent = await connectAgent({ url: "http://x", fetchFn });
     const iterator = agent.invoke({ sessionId: "s", prompt: { text: "hi" } })[Symbol.asyncIterator]();
-    push(`data: ${JSON.stringify({ type: "accepted", sessionId: "s", run: { runId: "r", status: "running" } })}\n\n`);
+    push(
+      `data: ${JSON.stringify({ type: "accepted", sessionId: "s", message: { messageId: "m", status: "queued", position: 0 } })}\n\n`,
+    );
     expect(((await iterator.next()).value as InvokeEvent).type).toBe("accepted");
     await vi.advanceTimersByTimeAsync(4 * 30_000);
     const resumed = iterator.next();

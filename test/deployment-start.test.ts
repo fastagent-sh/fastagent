@@ -172,7 +172,7 @@ try {
       mise: join(root, ".state", "mise"),
       content: join(await realpath(root), "content"),
     });
-    expect(events.at(-1)?.entry).toMatchObject({ kind: "run_ended", data: { outcome: { status: "completed" } } });
+    expect(events.at(-1)).toMatchObject({ type: "done", message: { outcome: { status: "completed" } } });
     const result = events.find((event) => event.entry?.kind === "tool_result")?.entry?.data.text ?? "";
     expect(result).toContain("deployed-conversation");
     // The tool's working directory is the deployed definition on the storage, not the image's copy.

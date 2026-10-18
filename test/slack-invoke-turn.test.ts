@@ -109,7 +109,7 @@ describe("Slack turn attachment resolution", () => {
       ),
     );
 
-    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
     expect(prompt?.images).toEqual([{ mimeType: "image/png", data: "aW1n" }]);
     expect(prompt?.text).toContain("/state/DOC.txt");
   });

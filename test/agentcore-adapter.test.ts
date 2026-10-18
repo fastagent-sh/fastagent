@@ -397,7 +397,7 @@ describe("agentcore adapter: api envelope", () => {
   it("the payload the deploy prints runs a turn as printed", async () => {
     const res = await post(adapter(), INVOKE_PAYLOAD);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('"kind":"run_ended"');
+    expect(await res.text()).toContain('"type":"done"');
   });
 
   it("serves BOTH planes (IAM is the gateway), and refuses a request it cannot carry", async () => {

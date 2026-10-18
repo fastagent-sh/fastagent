@@ -2028,7 +2028,7 @@ describe("telegram /stop command", () => {
     const stopped = (session: string): AbortResult => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { queued: [], compaction: false } };
+      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [], compaction: false } };
       return failure(result, "no run");
     };
     return { stopped, aborted };

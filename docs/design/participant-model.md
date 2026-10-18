@@ -246,11 +246,11 @@ channel knows which place this one branched from and the reply chain the thread 
 then each message it replies to, nearest first). When the thread's session does not exist yet, the channel
 creates it with `sessions.create({ fork: { sessionId: <the room>, entryId, context: "recent" } })` (SPEC v1 §5),
 ONCE: the session existing is the record that the decision was taken, so there is no marker to persist and no
-decision to retry. The branch point is the first run the chain names (`kit/thread-fork.ts`): a channel invokes
-with the platform's message id as the `idempotencyKey`, so `runs.get({ idempotencyKey })` finds the run a user's
-message became, and the thread forks at that run's answer, at its message when it has none, and at the room's
-present when nothing in the chain names a run (a message the agent was not asked about, or one it posted
-itself) or the run is still queued. A message the channel posted for a run does not name it yet: that half of
+decision to retry. The branch point is the first protocol message the chain names (`kit/thread-fork.ts`): a channel
+invokes with the platform's message id as the `idempotencyKey`, so `messages.get({ idempotencyKey })` finds the
+message a user's chat message became, and the thread forks at its answer, at its own entry when it has none, and at
+the room's present when nothing in the chain names one (a chat message the agent was not asked about, or one it
+posted itself) or it is still queued. A chat message the channel posted for an answer does not name it yet: that half of
 agent-service.md §8.3 is [#796](https://github.com/fastagent-sh/fastagent/issues/796). `context: "recent"` is how the harness bounds what the model sees with
 one mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, measured with
 pi's `estimateTokens` on what the model will see (an attempt pi omitted costs nothing). A room compaction

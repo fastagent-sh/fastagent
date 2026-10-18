@@ -147,15 +147,15 @@ dir.
 
 ## `busy`
 
-A session runs one run at a time. A message for a running session queues behind the run by default
-(`whenBusy: "queue"`), so `busy` means one of two things: the request asked not to wait (`whenBusy: "reject"`,
-which is how a schedule's occurrence is skipped while its previous run goes on), or the session's queue is full
+A session works on one message at a time. A message for a working session queues behind the work in progress by
+default (`whenBusy: "queue"`), so `busy` means one of two things: the request asked not to wait (`whenBusy: "reject"`,
+which is how a schedule's occurrence is skipped while its previous one goes on), or the session's queue is full
 (`details.reason` says which).
 
 Fixes depend on the caller:
 
 - use distinct sessions for independent work,
-- send each message with an `idempotencyKey`, so a resend returns the run it already started,
+- send each message with an `idempotencyKey`, so a resend returns the message it already sent,
 - design tools to be idempotent if events can overlap.
 
 ## Tool, channel or schedule failed to load

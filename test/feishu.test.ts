@@ -1760,7 +1760,7 @@ describe("turn flow", () => {
       prompt: { text: "加一个新的页面" },
     })) {
     }
-    const asked = await protocol.sessions.get("feishu:oc_1").runs.get({ idempotencyKey: "om_original_ask" });
+    const asked = await protocol.sessions.get("feishu:oc_1").messages.get({ idempotencyKey: "om_original_ask" });
     const answer = asked?.status === "done" ? asked.answer?.entryId : undefined;
     expect(answer).toBeDefined();
     await flush(); // the group mention only matches once bot/v3/info has resolved this bot's open_id
@@ -2710,7 +2710,7 @@ describe("feishu stop command", () => {
     const stopped = (session: string): AbortResult => {
       aborted.push(session);
       if (result === "stopped") return stoppedRun;
-      if (result === "idle") return { ok: true, stopped: { queued: [], compaction: false } };
+      if (result === "idle") return { ok: true, stopped: { taken: [], queued: [], compaction: false } };
       return failure(result, "no run");
     };
     return { stopped, aborted };

@@ -88,12 +88,14 @@ describe("the HTTP binding", () => {
       headers: { "content-type": "application/json", accept: "application/json" },
     });
     expect(res.status).toBe(202);
-    const receipt = (await res.json()) as { type: string; run: { runId: string } };
+    const receipt = (await res.json()) as { type: string; message: { messageId: string } };
     expect(receipt.type).toBe("accepted");
     fake.release();
     const agent = await connectAgent({ url });
     await vi.waitFor(async () =>
-      expect(await agent.sessions.get("s").runs.get({ runId: receipt.run.runId })).toMatchObject({ status: "done" }),
+      expect(await agent.sessions.get("s").messages.get({ messageId: receipt.message.messageId })).toMatchObject({
+        status: "done",
+      }),
     );
   });
 
@@ -125,7 +127,7 @@ describe("the HTTP binding", () => {
     const url = await serve(loopPort(fakeLoopHarness(fake)));
     const agent = await connectAgent({ url });
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "one" } })) void _;
-    const run = await fetch(`${url}/sessions/s/runs/no-such-run`);
+    const run = await fetch(`${url}/sessions/s/messages/no-such-message`);
     expect([run.status, await run.json()]).toEqual([200, null]);
     expect((await fetch(`${url}/sessions/s/attachments/no-such-ref`)).status).toBe(404);
     const held = agent.invoke({ sessionId: "s", prompt: { text: "hold" } })[Symbol.asyncIterator]();
@@ -311,7 +313,7 @@ describe("the HTTP binding", () => {
     const invoked = await createAgentHandler(agent)(
       new Request("http://app/invoke", invokeBody({ sessionId: "s", prompt: { text: "hi" } })),
     );
-    expect(await invoked.text()).toContain('"kind":"run_ended"');
+    expect(await invoked.text()).toContain('"type":"done"');
   });
 
   it("carries a fork's context to the harness, and refuses one it does not know", async () => {
@@ -374,7 +376,9 @@ describe("the HTTP binding", () => {
     for await (const _ of agent.invoke({ sessionId: "s", prompt: { text: "two" } })) void _;
     expect(await next).toMatchObject({ value: { type: "entry" } });
     await iterator.return?.();
-    const queued = await fetch(`${url}/sessions/s/runs/no-such-run/events`, { signal: AbortSignal.timeout(2000) });
+    const queued = await fetch(`${url}/sessions/s/messages/no-such-message/events`, {
+      signal: AbortSignal.timeout(2000),
+    });
     expect(queued.status).toBe(404);
   });
 
@@ -393,22 +397,22 @@ describe("the HTTP binding", () => {
       return fetch(input, init);
     };
 
-  it("a connection lost before the receipt is settled by sending again with the key: one run, followed", async () => {
+  it("a connection lost before the receipt is settled by sending again with the key: one message, followed", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const agent = await connectAgent({ url, fetchFn: lostAfterSending() });
     const events = [];
     for await (const event of agent.invoke({ sessionId: "s", prompt: { text: "x" }, idempotencyKey: "k" })) {
       events.push(event);
     }
-    expect(events[0]).toMatchObject({ type: "accepted", sessionId: "s", joined: false });
-    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
-    const runs = await connectAgent({ url });
-    expect(await runs.sessions.get("s").runs.get({ idempotencyKey: "k" })).toMatchObject({ status: "done" });
-    const page = await runs.sessions.get("s").read();
+    expect(events[0]).toMatchObject({ type: "accepted", sessionId: "s", duplicate: true });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    const remote = await connectAgent({ url });
+    expect(await remote.sessions.get("s").messages.get({ idempotencyKey: "k" })).toMatchObject({ status: "done" });
+    const page = await remote.sessions.get("s").read();
     expect(page.ok ? page.entries.filter((e) => e.kind === "user_message") : []).toHaveLength(1);
   });
 
-  it("a request lost before it reached the server is sent again with its key, and runs once", async () => {
+  it("a request lost before it reached the server is sent again with its key, and is accepted once", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     let first = true;
     const lostBeforeSending: typeof fetch = async (input, init) => {
@@ -424,7 +428,7 @@ describe("the HTTP binding", () => {
       events.push(event);
     }
     expect(events[0]).toMatchObject({ type: "accepted", duplicate: false });
-    expect(events.at(-1)).toMatchObject({ type: "entry", entry: { kind: "run_ended" } });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
   it("a connection lost twice leaves it unknown, never rejected", async () => {
@@ -466,7 +470,7 @@ describe("the HTTP binding", () => {
     const agent = await connectAgent({ url, fetchFn: proxied });
     const session = agent.sessions.get("s");
     expect(await session.read()).toMatchObject({ ok: false, error: { code: "internal" } });
-    await expect(session.runs.get({ runId: "r" })).rejects.toBeInstanceOf(AgentRejection);
+    await expect(session.messages.get({ messageId: "m" })).rejects.toBeInstanceOf(AgentRejection);
     await expect(agent.sessions.list()).rejects.toMatchObject({ code: "internal" });
   });
 
@@ -495,7 +499,7 @@ describe("the HTTP binding", () => {
   it("a stream cut off before its end says so, and data that is not an event is not read as one", async () => {
     const url = await serve(loopPort(fakeLoopHarness(new FakeStore())));
     const sse = (body: string) => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-    const accepted = { type: "accepted", sessionId: "s", run: { runId: "r", status: "running" }, joined: false };
+    const accepted = { type: "accepted", sessionId: "s", message: { messageId: "m", status: "queued", position: 0 } };
     const cutOff: typeof fetch = async (input, init) =>
       String(input).endsWith("/invoke") ? sse(`data: ${JSON.stringify(accepted)}\n\n`) : fetch(input, init);
     const cut = await connectAgent({ url, fetchFn: cutOff });

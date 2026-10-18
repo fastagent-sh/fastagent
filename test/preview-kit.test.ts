@@ -102,18 +102,10 @@ describe("turn-view reducer", () => {
     expect(thinkingLine(createTurnView(), 6)).toBe("");
   });
 
-  it("the settled message adds what no delta carried; another run's events are not the turn's", () => {
-    const { view, changes } = apply([
-      ev.text("Hel"),
-      ev.answer("Hello"),
-      ev.text("ignored", "other-run"),
-      ev.thinking("not ours", "other-run"),
-      ev.toolStarted("t9", "read", {}, "other-run"),
-    ]);
+  it("the settled message adds what no delta carried", () => {
+    const { view, changes } = apply([ev.text("Hel"), ev.answer("Hello")]);
     expect(view.answer).toBe("Hello");
-    expect(view.thinking).toBe("");
-    expect(view.tools).toEqual([]);
-    expect(changes).toEqual([true, true, false, false, false]);
+    expect(changes).toEqual([true, true]);
   });
 
   it("composeTurnBody skips empty parts and joins with blank lines", () => {

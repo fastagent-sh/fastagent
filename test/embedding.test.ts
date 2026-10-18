@@ -60,7 +60,7 @@ describe("embedding: Express", () => {
     const app = express();
     app.use("/agent", nodeListener(agentApi()));
     const base = await listen(app);
-    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"kind":"run_ended"');
+    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"type":"done"');
     expect((await fetch(`${base}/agent/agent`)).status).toBe(200);
   });
 
@@ -150,7 +150,7 @@ describe("embedding: Fastify", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     started.push(() => app.close());
     const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
-    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"kind":"run_ended"');
+    expect(await (await post(`${base}/agent/invoke`, invokeBody)).text()).toContain('"type":"done"');
     expect((await fetch(`${base}/agent/agent`)).status).toBe(200);
   });
 

@@ -27,7 +27,7 @@ interface Agent {
   sessions: {
     create(options?: { sessionId?: string; fork?: ForkSource }): Promise<{ ok: true; sessionId: string } | { ok: false; error: AgentError }>;
     list(): Promise<SessionSummary[]>;
-    get(sessionId: string): Session; // read, follow, attachment, abort, rewind, compact, update, delete, runs
+    get(sessionId: string): Session; // read, follow, attachment, abort, rewind, compact, update, delete, messages
   };
   info(): AgentInfo; // protocolVersion and capabilities
   models(): Promise<ModelDescriptor[]>;
@@ -38,34 +38,35 @@ interface InvokeRequest {
   sessionId?: string; // absent: the Agent creates a session and names it in the receipt
   prompt: { text: string; images?: { mimeType: string; data: string }[] };
   whenBusy?: "queue" | "steer" | "reject"; // default "queue"
-  idempotencyKey?: string; // the Caller's key for this message: a resend returns the same run
-  source?: RunSource; // in process only
+  idempotencyKey?: string; // the Caller's key for this message: a resend returns the same message
+  source?: MessageSource; // in process only
 }
 
 type InvokeEvent =
-  | { type: "accepted"; sessionId: string; run: RunStatus; joined: boolean; duplicate: boolean }
+  | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }
   | { type: "rejected"; error: AgentError }
-  | SessionEvent; // entry, message_delta, tool_started, tool_progress, retry_scheduled, state, serving_error
+  | SessionEvent; // entry, done, message_delta, tool_started, tool_progress, retry_scheduled, state, serving_error
 ```
 
-An invoke's stream starts with `accepted` or `rejected`, then follows the run: its durable `entry` events
-(`user_message`, `assistant_message`, `tool_result`, …) and the live ones, and ends after the run's `run_ended` entry,
-whose `outcome` is `completed`, `failed`, `canceled`, `interrupted`, `max_tokens` or `intercepted`. A Caller that
-stops reading detaches; the run goes on, and `runs.cancel`, `abort` or `delete` stop it. Failures are values: an
-operation answers `{ ok: false, error }`, and an `AgentError` carries `code`, `message` and `retryable`.
+An invoke's stream starts with `accepted` or `rejected`, then follows the message: from its `user_message` entry, the
+durable `entry` events (`assistant_message`, `tool_result`, …) and the live ones, and ends with its `done` event, whose
+`outcome` is `completed`, `failed`, `canceled`, `interrupted`, `max_tokens` or `intercepted` and whose `answer` is the
+reply. A Caller that stops reading detaches; the work goes on, and `messages.cancel`, `abort` or `delete` stop it.
+Failures are values: an operation answers `{ ok: false, error }`, and an `AgentError` carries `code`, `message` and
+`retryable`.
 
 ## `collect`
 
 ```ts
-function collect(events: AsyncIterable<InvokeEvent>): Promise<{ sessionId: string; runId: string; text: string }>;
+function collect(events: AsyncIterable<InvokeEvent>): Promise<{ sessionId: string; messageId: string; text: string }>;
 
 class AgentRejection extends Error { code: ErrorCode; retryable: boolean } // the invoke was refused: nothing ran
-class RunNotCompleted extends Error { outcome: RunOutcome; sessionId: string; runId: string } // it ended otherwise
-class RunUnfinished extends Error {} // the stream stopped before its run ended (the process or connection went away)
+class MessageNotCompleted extends Error { outcome: Outcome; sessionId: string; messageId: string } // it ended otherwise
+class MessageUnfinished extends Error {} // the stream stopped before its message ended (the process or connection went away)
 ```
 
-Returns the run's last `assistant_message` text when its outcome is `completed`, and throws one of the three
-otherwise. An `intercepted` run (a command took the message, and no model was called) is a `RunNotCompleted`.
+Returns the message's answer when its outcome is `completed`, and throws one of the three otherwise. An
+`intercepted` message (a command took it, and no model was called) is a `MessageNotCompleted`.
 
 ## HTTP/host helpers
 
@@ -83,7 +84,7 @@ bodies are JSON (`content-type: application/json`), decoded strictly: an unknown
 headers and answers no preflight unless `corsOrigins` names the origins (exact, or `["*"]`) a page may call it from;
 otherwise cross-origin is the mounting app's decision. Event streams are
 Server-Sent Events, one JSON event per `data:` line, with comment heartbeats (`: ping`) so a client can tell a quiet
-run from a dead connection.
+work from a dead connection.
 
 ```
 POST   /invoke                            {sessionId?, prompt, whenBusy?, idempotencyKey?} → SSE
@@ -95,10 +96,10 @@ GET    /sessions/{s}/attachments/{ref}
 POST   /sessions/{s}/abort
 POST   /sessions/{s}/rewind               {entryId}
 POST   /sessions/{s}/compact              {instructions?}
-GET    /sessions/{s}/runs                 ?idempotencyKey=
-GET    /sessions/{s}/runs/{r}
-GET    /sessions/{s}/runs/{r}/events      ?after= — SSE
-POST   /sessions/{s}/runs/{r}/cancel
+GET    /sessions/{s}/messages             ?idempotencyKey=
+GET    /sessions/{s}/messages/{m}
+GET    /sessions/{s}/messages/{m}/events  ?after= — SSE
+POST   /sessions/{s}/messages/{m}/cancel
 GET    /agent                             protocolVersion and capabilities
 GET    /agent/models
 GET    /agent/commands
@@ -112,7 +113,7 @@ DELETE /control/sessions/{s}
 `connectAgent` is the same `Agent` over that wire, for a web panel, a desktop app or another service. It imports
 nothing beyond the protocol. `fetchFn` is where a gateway's credential goes; it rides every request, the streams
 included. A connection lost before the receipt is settled by resending with the request's `idempotencyKey`, so set
-one when a run must not happen twice.
+one when a message must not be sent twice.
 
 **FastAgent authenticates nothing.** Put a gateway, an authenticating proxy, a private network or your own
 middleware in front of either; without one, a public port is a public remote control.

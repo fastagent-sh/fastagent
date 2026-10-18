@@ -19,7 +19,7 @@ export type Attachment = ImageRef;
 
 export type WhenBusy = "queue" | "steer" | "reject";
 
-export type RunSource = { kind: "channel" | "schedule" | "wake" | "api"; name?: string };
+export type MessageSource = { kind: "channel" | "schedule" | "wake" | "api"; name?: string };
 
 export interface InvokeRequest {
   sessionId?: string;
@@ -38,7 +38,7 @@ export type Usage = {
   cost?: number;
 };
 
-export type RunOutcome =
+export type Outcome =
   | { status: "completed" }
   | { status: "max_tokens" }
   | { status: "intercepted" }
@@ -46,32 +46,35 @@ export type RunOutcome =
   | { status: "canceled"; by: "cancel" | "abort" | "delete" }
   | { status: "failed"; error: AgentError };
 
-export type RunMessage = { entryId?: string; idempotencyKey?: string };
+export type DoneMessage = {
+  messageId: string;
+  idempotencyKey?: string;
+  source?: MessageSource;
+  status: "done";
+  entryId?: string;
+  /** The history's last entry when the work that took it ended; present whenever `entryId` is. */
+  lastEntryId?: string;
+  takenAt?: number;
+  endedAt: number;
+  outcome: Outcome;
+  /** Reported once per piece of work, on the first message it took (SPEC v1 §4). */
+  usage?: Usage;
+  answer?: { entryId: string; text: string };
+};
 
-export type RunStatus = {
-  runId: string;
-  source?: RunSource;
-  messages: RunMessage[];
-} & (
-  | { status: "queued"; position: number }
-  | { status: "running"; startedAt: number }
-  | {
-      status: "done";
-      startedAt?: number;
-      endedAt: number;
-      outcome: RunOutcome;
-      usage?: Usage;
-      answer?: { entryId: string; text: string };
-    }
-);
+export type MessageStatus =
+  | ({ messageId: string; idempotencyKey?: string; source?: MessageSource } & (
+      | { status: "queued"; position: number }
+      | { status: "taken"; entryId: string; takenAt: number }
+    ))
+  | DoneMessage;
 
-export type RunKey = { runId: string } | { idempotencyKey: string };
+export type MessageKey = { messageId: string } | { idempotencyKey: string };
 
 export interface Entry {
   id: string;
   parentEntryId?: string;
   timestamp: number;
-  runId?: string;
   kind: string;
   data: Json;
 }
@@ -79,8 +82,9 @@ export interface Entry {
 export interface SessionState {
   name?: string;
   status: "idle" | "running" | "compacting";
-  run?: { runId: string; startedAt: number };
-  queued: { runId: string; idempotencyKey?: string; preview: string }[];
+  taken: { messageId: string; takenAt: number }[];
+  /** In the order they will be taken: steered messages first. */
+  queued: { messageId: string; idempotencyKey?: string; preview: string }[];
   model?: string;
   thinkingLevel?: string;
   thinkingLevels?: string[];
@@ -97,21 +101,26 @@ export interface SessionSummary {
   preview?: string;
 }
 
-/** The events of a run that are not durable: a reconnecting caller sees the entries it missed, not these. */
+/**
+ * What a session is doing, as it happens, and not durable: a reconnecting caller sees the entries it missed, not these.
+ * A session works on one thing at a time, so they belong to its work in progress, or to a compaction.
+ */
 export type LiveEvent =
-  | { type: "message_delta"; runId: string; channel: "text" | "thinking"; delta: string }
-  | { type: "tool_started"; runId: string; toolCallId: string; name: string; args: Json }
-  | { type: "tool_progress"; runId: string; toolCallId: string; text: string }
-  | { type: "retry_scheduled"; runId?: string; attempt: number; maxAttempts: number; delayMs: number; reason: string };
+  | { type: "message_delta"; channel: "text" | "thinking"; delta: string }
+  | { type: "tool_started"; toolCallId: string; name: string; args: Json }
+  | { type: "tool_progress"; toolCallId: string; text: string }
+  | { type: "retry_scheduled"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
 
 export type SessionEvent =
   | { type: "entry"; entry: Entry }
+  /** A message that ended, from its durable record: it ends that message's follow and invoke stream. */
+  | { type: "done"; message: DoneMessage }
   | { type: "state"; state: SessionState }
   | LiveEvent
   | { type: "serving_error"; message: string };
 
 export type InvokeEvent =
-  | { type: "accepted"; sessionId: string; run: RunStatus; joined: boolean; duplicate: boolean }
+  | { type: "accepted"; sessionId: string; message: MessageStatus; duplicate: boolean }
   | { type: "rejected"; error: AgentError }
   | SessionEvent;
 
@@ -141,7 +150,7 @@ export type AgentError = {
 export type Result = { ok: true } | { ok: false; error: AgentError };
 
 export type AbortResult =
-  | { ok: true; stopped: { runId?: string; queued: string[]; compaction: boolean } }
+  | { ok: true; stopped: { taken: string[]; queued: string[]; compaction: boolean } }
   | { ok: false; error: AgentError };
 
 export type ReadResult =
@@ -169,7 +178,7 @@ export interface Capabilities {
   delete: boolean;
   updatable: UpdatableField[];
   durableQueue: boolean;
-  durableRuns: boolean;
+  durableWork: boolean;
   toolProgress: boolean;
   usage: boolean;
 }
@@ -214,10 +223,10 @@ export interface Session {
   compact(options?: { instructions?: string }): Promise<Result>;
   update(settings: SessionSettings): Promise<Result>;
   delete(): Promise<Result>;
-  runs: {
-    get(key: RunKey): Promise<RunStatus | undefined>;
-    follow(runId: string, options?: { after?: string }): AsyncIterable<FollowEvent>;
-    cancel(runId: string): Promise<Result>;
+  messages: {
+    get(key: MessageKey): Promise<MessageStatus | undefined>;
+    follow(messageId: string, options?: { after?: string }): AsyncIterable<FollowEvent>;
+    cancel(messageId: string): Promise<Result>;
   };
 }
 
@@ -241,7 +250,7 @@ export function failure(code: ErrorCode, message: string, details?: Json): { ok:
   return { ok: false, error: agentError(code, message, details) };
 }
 
-/** What `sessions.list`, `runs.get`, `attachment`, `models` and `commands` reject with (SPEC v1 §2). */
+/** What `sessions.list`, `messages.get`, `attachment`, `models` and `commands` reject with (SPEC v1 §2). */
 export class AgentRejection extends Error implements AgentError {
   readonly code: string;
   readonly retryable: boolean;

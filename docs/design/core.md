@@ -17,7 +17,7 @@ behavior belongs in the other `docs/` guides.
 FastAgent serves file-defined agents. Its stable center is the harness-neutral Agent Handler:
 
 ```ts
-agent.invoke(request) => AsyncIterable<InvokeEvent>   // and agent.sessions, whose runs outlive their callers
+agent.invoke(request) => AsyncIterable<InvokeEvent>   // and agent.sessions, whose messages outlive their callers
 ```
 
 The contract separates three things that otherwise form an integration matrix:
@@ -222,8 +222,8 @@ sessions, and machinery paths. `dev`, `start` and `invoke` share it rather than 
 implementations. Every rung's assembly runs as `agentOf`: `piLoopHarness` behind `loopPort`, behind `servingAgent`
 (§4).
 
-Each run binds a fresh `AgentSession` to its record and disposes it when the run settles. Continuity comes from
-`PiSessionRecordStore`, not a resident session: process affinity only while a run is active or queued (SPEC MUST 8,
+Each piece of work binds a fresh `AgentSession` to its record and disposes it when the work settles. Continuity comes
+from `PiSessionRecordStore`, not a resident session: process affinity only while a message is taken or queued (SPEC MUST 8,
 what AgentCore and every scaled channel host require). That is the default on an axis a deployment owns;
 [conformance-levels.md](conformance-levels.md) states what each posture owes.
 
@@ -256,18 +256,18 @@ each written once:
 
 | Layer | Owns |
 |---|---|
-| `serving-layer.ts` (`servingAgent`) | Session ids, the request rules a type cannot carry, the invoke stream (a receipt, then the run replayed from its first entry), `follow`, and pages of `read`. The same for every harness |
-| `loop-port.ts` (`loopPort`) | What a harness that is only a loop lacks: admission and the queue, idempotency keys, steering, run records (`run_accepted`, `run_started`, `run_ended`) written into the session's own log through its one writer, and closing the runs a previous process left open |
-| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per run, and what became of each message it was handed (taken as a user message, consumed by an extension, or never run) |
+| `serving-layer.ts` (`servingAgent`) | Session ids, the request rules a type cannot carry, the invoke stream (a receipt, then the message replayed from its own entry until its `done`), `follow`, and pages of `read`. The same for every harness |
+| `loop-port.ts` (`loopPort`) | What a harness that is only a loop lacks: admission and the queue, idempotency keys, steering, message records (`message_accepted`, `message_taken`, `message_ended`, never published) written into the session's own log through its one writer, and ending the messages a previous process left open |
+| `harnesses/pi/loop-harness.ts` (`piLoopHarness`) | One `SessionManager` per held session as its log, a fresh `AgentSession` per piece of work, and what became of each message it was handed (taken as a user message, consumed by an extension, or never taken) |
 
-pi's vocabulary is read in three modules: `live-events.ts` turns its events into a run's live events (deltas, a tool
+pi's vocabulary is read in three modules: `live-events.ts` turns its events into the work's live events (deltas, a tool
 call's status line, retries), `log-records.ts` its journal entries into the log's records and how full the context
 is, and `messages.ts` an answer into its outcome and a thrown error into a failure, `retryable` read from the
 provider's status or network code before its prose. The Promise crossings are `src/effect-port.ts`
 ([Promise ports](#promise-ports)); a fault the port reports is the serving layer's `internal` failure, logged.
 
-A run settles on one outcome, decided in order: a thrown error, a fault while observing the run, a failure an
-extension reported for work the run owes (a command, or a message it sent), a retry pi started after answer text was
+A piece of work settles on one outcome, decided in order: a thrown error, a fault while observing it, a failure an
+extension reported for work it owes (a command, or a message it sent), a retry pi started after answer text was
 streamed, the last answer, and, when an extension took the message and no model ran, `intercepted`. A stop that
 arrives before pi starts its agent run (or the automatic compaction `prompt()` runs first) is applied when it does
 (#691).
@@ -374,9 +374,10 @@ would duplicate that rule and drift from it: a result for a call pi-ai later dro
 provider unpaired, and every later turn is rejected. Replay does not make side-effecting tools
 exactly-once.
 
-A session runs one run at a time (SPEC v1 §3.2). A message that arrives while it runs queues behind it by default,
-joins the running run with `whenBusy: "steer"`, or is refused with `busy` with `whenBusy: "reject"`, which is how a
-schedule's occurrence is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
+A session works on one thing at a time (SPEC v1 §3.2). A message that arrives while it works queues behind it by
+default, is taken by the work in progress with `whenBusy: "steer"` (or, arriving after that work answered, by the next
+work, ahead of the queue), or is refused with `busy` with `whenBusy: "reject"`, which is how a schedule's occurrence
+is skipped. Telegram, Slack and Feishu/Lark also serialize their own turns per session (see
 §7), because each turn reads its discussion when it starts.
 
 ## 7. Channels and hosting
@@ -425,8 +426,8 @@ stateful chat channels; `/core` stays free of Node and of every package but Effe
 eager subscription, heartbeat, serialization and iterator cleanup; callers own their event shapes.
 Synchronous subscription errors reach the HTTP error boundary before a response is created; errors
 during body streaming close the source and heartbeat and propagate through the response body. The
-remote client (`protocol-remote.ts`) ends an invoke stream at its run's `run_ended`; a stream cut off before then ends
-with `serving_error`, so a caller never reads a cut run as an ended one.
+remote client (`protocol-remote.ts`) ends an invoke stream at its message's `done`; a stream cut off before then ends
+with `serving_error`, so a caller never reads a cut message as an ended one.
 
 ### Shared chat execution
 
@@ -455,12 +456,12 @@ intent before committing the exact discussion snapshot consumed (a buffer's entr
 cursor); later discussion waits for the next answered turn. Effect
 interruption and process termination preserve unfinished intent for recovery.
 
-A turn is one invoke (`invoke-turn-kit.ts` `turnStream`): `whenBusy: "queue"`, so a collision with a run the
-channel did not start (a wake-up, an API caller) waits behind it, and `idempotencyKey` set to the turn's platform
-message id, so a turn the store replays after a restart is the run it already started: an ended run is replayed,
-answer included, and only an `interrupted` one runs again. The channel's own queue still serializes its turns,
-because a turn's discussion and attachments are read when it starts, not when it arrives. The stream pulls only
-on downstream demand; a reader that leaves only detaches, so the run goes on.
+A turn is one invoke (`invoke-turn-kit.ts` `turnStream`): `whenBusy: "queue"`, so a collision with work the channel
+did not start (a wake-up, an API caller) waits behind it, and `idempotencyKey` set to the turn's platform message id,
+so a turn the store replays after a restart is the message it already sent: one that ended is replayed, answer
+included, and only an `interrupted` one is taken again. The channel's own queue still serializes its turns, because
+a turn's discussion and attachments are read when it starts, not when it arrives. The stream pulls only on downstream
+demand; a reader that leaves only detaches, so the work goes on.
 
 `delivery.ts` owns coalescing preview fibers and ordered native append/status queues. A preview starts
 its first write synchronously, cancels pending pacing at finish, and joins an issued write before the
@@ -701,16 +702,16 @@ receives the original error.
 
 Every fire is an invoke of the SPEC v1 Agent, with its `source`. A schedule's is
 `{ sessionId: "schedule:<name>", whenBusy: "reject", idempotencyKey: <the slot> }`: an occurrence that finds the
-previous run still going is refused, and settled `skipped`. A wake-up's is
+previous work still going is refused, and settled `skipped`. A wake-up's is
 `{ sessionId: <its session>, whenBusy: "queue", idempotencyKey: "wake:<id>@<fireAt>" }`: it runs after whatever
-runs there, and its `accepted` is its delivery, so the wake loop goes on to the next due wake-up while the run is
+runs there, and its `accepted` is its delivery, so the wake loop goes on to the next due wake-up while the message is
 followed to its end apart, for the log line that is a wake-up's whole record. Queued, a wake-up is refused only while
 the process or its session's queue is full: a one-shot one goes back in the store for the next poll, and a recurring
-one has its next occurrence. A run whose stream ends on a `serving_error` (its end could not be recorded, or missed
+one has its next occurrence. A message whose stream ends on a `serving_error` (its end could not be recorded, or missed
 events could not be read back) fails with that error, in the claim's log line and the external fire's reply.
 
 `stop()` interrupts pending waits synchronously without canceling a claimed occurrence: interrupting a read of a
-run's stream only detaches from it (SPEC v1 §3.1), so the run goes on to its end and stays in its session. A
+message's stream only detaches from it (SPEC v1 §3.1), so the work goes on to its end and stays in its session. A
 claimed cron occurrence finishes execution and settlement before its loop exits; no next wake is claimed. The
 process itself is not waited for, so a restart can still land between a cron claim and its settlement:
 the next `start()` reads the claims it is about to arm and settles an unsettled one as `interrupted`,

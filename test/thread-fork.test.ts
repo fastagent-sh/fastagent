@@ -1,9 +1,9 @@
-/** Where a new thread starts from: a fork of its room at the run its reply chain names. */
+/** Where a new thread starts from: a fork of its room at the message its reply chain names. */
 import { describe, expect, it, vi } from "vitest";
 import { forkThread } from "../src/channels/kit/thread-fork.ts";
 import { log } from "../src/log.ts";
 import { loopPort } from "../src/loop-port.ts";
-import { type Agent, type RunStatus, failure } from "../src/protocol.ts";
+import { type Agent, type MessageStatus, failure } from "../src/protocol.ts";
 import { servingAgent } from "../src/serving-layer.ts";
 import { FakeStore, fakeLoopHarness } from "./fake-loop-harness.ts";
 
@@ -24,18 +24,18 @@ const said = async (agent: Agent, sessionId: string) => {
 };
 
 describe("forkThread", () => {
-  it("forks at the answer of the first run its chain names, nearest first", async () => {
+  it("forks at the answer of the first message its chain names, nearest first", async () => {
     const agent = await roomWith([
       ["m1", "first"],
       ["m2", "second"],
       ["m3", "third"],
     ]);
-    // "card" is no run's message (the agent posted it), so the next one up names the run.
+    // "card" is no message the channel invoked with (the agent posted it), so the next one up names one.
     await forkThread(agent, { sessionId: "thread", room: "room", chain: ["card", "m2", "m1"] }, "[test]");
     expect(await said(agent, "thread")).toEqual(["first", "second"]);
   });
 
-  it("forks at the room's present when nothing in its chain names a run", async () => {
+  it("forks at the room's present when nothing in its chain names a message", async () => {
     const agent = await roomWith([
       ["m1", "first"],
       ["m2", "second"],
@@ -63,17 +63,17 @@ describe("forkThread", () => {
     }
   });
 
-  it("a run without an answer forks at its message; a queued one at the present", async () => {
+  it("a message without an answer forks at its own entry; a queued one at the present", async () => {
     const forks: unknown[] = [];
-    const stub = (run: RunStatus) =>
+    const stub = (message: MessageStatus) =>
       ({
         sessions: {
           get: (sessionId: string) => ({
             read: async () =>
               sessionId === "room"
-                ? { ok: true, state: { status: "idle", queued: [], leafEntryId: "leaf" }, entries: [] }
+                ? { ok: true, state: { status: "idle", taken: [], queued: [], leafEntryId: "leaf" }, entries: [] }
                 : failure("not_found", "no session"),
-            runs: { get: async () => run },
+            messages: { get: async () => message },
           }),
           create: async (options: unknown) => {
             forks.push(options);
@@ -82,12 +82,8 @@ describe("forkThread", () => {
         },
       }) as unknown as Agent;
     const thread = { sessionId: "thread", room: "room", chain: ["m1"] };
-    await forkThread(
-      stub({ runId: "r", messages: [{ entryId: "asked" }], status: "running", startedAt: 0 }),
-      thread,
-      "",
-    );
-    await forkThread(stub({ runId: "r", messages: [{}], status: "queued", position: 1 }), thread, "");
+    await forkThread(stub({ messageId: "m", entryId: "asked", status: "taken", takenAt: 0 }), thread, "");
+    await forkThread(stub({ messageId: "m", status: "queued", position: 0 }), thread, "");
     expect(forks).toEqual([
       { sessionId: "thread", fork: { sessionId: "room", entryId: "asked", context: "recent" } },
       { sessionId: "thread", fork: { sessionId: "room", context: "recent" } },

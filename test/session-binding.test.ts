@@ -79,7 +79,7 @@ const entriesOf = (events: InvokeEvent[]): Entry[] =>
 
 describe("the binding: the definition reaches the model", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it("keeps gateway error bodies in the session record and the run's outcome, outside server logs", async () => {
+  it("keeps gateway error bodies in the session record and the message's outcome, outside server logs", async () => {
     const { faux } = makeFaux();
     const body = "gateway echoed private request: do-not-log";
     const message = await streamPiMessages(
@@ -92,10 +92,8 @@ describe("the binding: the definition reaches the model", () => {
     const agent = await agentWith([message], { sessions });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
-      const ended = entriesOf(await invoked(agent.invoke({ sessionId: "gateway", prompt: { text: "hi" } }))).find(
-        (entry) => entry.kind === "run_ended",
-      );
-      expect(ended?.data).toMatchObject({
+      const ended = (await invoked(agent.invoke({ sessionId: "gateway", prompt: { text: "hi" } }))).at(-1);
+      expect(ended?.type === "done" && ended.message).toMatchObject({
         outcome: { status: "failed", error: { message: expect.stringContaining(body) } },
       });
       const record = await sessions.openOrCreate("gateway");
@@ -143,7 +141,7 @@ describe("the binding: the definition reaches the model", () => {
     expect((await collect(reopened.invoke({ sessionId: "fork", prompt: { text: "next" } }))).text).toBe("continued");
   });
 
-  it("compacts after a tool inside one run without repeating its side effect", async () => {
+  it("compacts after a tool inside one piece of work without repeating its side effect", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-same-run-compaction-"));
     // pi's own settings, where pi keeps them: this agent inherits the machine it runs on, so the suite gives it a
     // machine of its own rather than a definition-local override (there is no such thing any more).
@@ -195,18 +193,16 @@ describe("the binding: the definition reaches the model", () => {
       record.appendMessage(fauxAssistantMessage("h".repeat(1200)));
     }
 
-    const entries = entriesOf(
-      await invoked(agent.invoke({ sessionId: "compact", prompt: { text: "get large then answer" } })),
-    );
+    const events = await invoked(agent.invoke({ sessionId: "compact", prompt: { text: "get large then answer" } }));
+    const entries = entriesOf(events);
     expect(entries.filter((e) => e.kind === "assistant_message").at(-1)?.data).toMatchObject({ text: "final answer" });
     expect(toolRuns).toBe(1);
     expect(requests[0]).toBe("assistant");
     expect(requests.at(-1)).toBe("assistant");
     expect(requests).toContain("summary");
     expect(record.getEntries().filter((e) => e.type === "compaction")).toHaveLength(1);
-    // One run, with the compaction inside it.
-    expect(entries.filter((e) => e.kind === "run_started")).toHaveLength(1);
-    expect(entries.filter((e) => e.kind === "run_ended")).toHaveLength(1);
+    // One message, answered once, with the compaction inside its work.
+    expect(events.filter((e) => e.type === "done")).toMatchObject([{ message: { outcome: { status: "completed" } } }]);
     expect(entries.filter((e) => e.kind === "compaction")).toHaveLength(1);
   });
 

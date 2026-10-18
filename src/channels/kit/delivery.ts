@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { InvokeEvent, RunOutcome } from "../../protocol.ts";
+import type { InvokeEvent } from "../../protocol.ts";
 import { log } from "../../log.ts";
 import type { ChannelFailure } from "./preview-kit.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
@@ -15,16 +15,16 @@ import { PortFailure, portJoin } from "../../effect-port.ts";
 export type TurnEnd = { answered: true } | { failure: ChannelFailure };
 
 /**
- * Whether this event ends the turn, and how: the invoke refused (nothing ran), or the turn's run ended. A run that
- * stopped at its output limit, or that a command took, still answers with what it wrote.
+ * Whether this event ends the turn, and how: the invoke refused (nothing ran), or the turn's message ended. A message
+ * whose work stopped at its output limit, or that a command took, still answers with what was written.
  */
-export function turnEnd(event: InvokeEvent, runId: string | undefined): TurnEnd | undefined {
+export function turnEnd(event: InvokeEvent, messageId: string | undefined): TurnEnd | undefined {
   if (event.type === "rejected") {
     const { code, message, retryable } = event.error;
     return { failure: { details: message, retryable, code } };
   }
-  if (event.type !== "entry" || event.entry.kind !== "run_ended" || event.entry.runId !== runId) return undefined;
-  const { outcome } = event.entry.data as { outcome: RunOutcome };
+  if (event.type !== "done" || event.message.messageId !== messageId) return undefined;
+  const { outcome } = event.message;
   switch (outcome.status) {
     case "completed":
     case "max_tokens":
@@ -35,15 +35,15 @@ export function turnEnd(event: InvokeEvent, runId: string | undefined): TurnEnd 
         failure: { details: outcome.error.message, retryable: outcome.error.retryable, code: outcome.error.code },
       };
     case "canceled":
-      return { failure: { details: `the run was canceled (${outcome.by})`, retryable: false, code: "canceled" } };
+      return { failure: { details: `the work was canceled (${outcome.by})`, retryable: false, code: "canceled" } };
     case "interrupted":
-      return { failure: { details: "the run was interrupted", retryable: true, code: "interrupted" } };
+      return { failure: { details: "the work was interrupted", retryable: true, code: "interrupted" } };
   }
 }
 
 /**
- * A turn whose stream ended before its run did, after the agent said why (`serving_error`: the run's end could not be
- * recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
+ * A turn whose stream ended before its message did, after the agent said why (`serving_error`: the message's end could
+ * not be recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
  */
 export function unfinishedTurn(servingError: string | undefined): ChannelFailure | undefined {
   return servingError === undefined ? undefined : { details: servingError, retryable: true, code: "serving_error" };
@@ -79,7 +79,7 @@ export function renderReply(
           yield* notify({ details: "the turn ended without completing", retryable: false }, "abnormal-turn");
       }),
     );
-    let runId: string | undefined;
+    let messageId: string | undefined;
     let servingError: string | undefined;
     const failWith = (failure: ChannelFailure) =>
       Effect.gen(function* () {
@@ -89,9 +89,9 @@ export function renderReply(
         );
       });
     yield* Stream.runForEachWhile(events, (event) => {
-      if (event.type === "accepted") runId = event.run.runId;
+      if (event.type === "accepted") messageId = event.message.messageId;
       if (event.type === "serving_error") servingError = event.message;
-      const end = turnEnd(event, runId);
+      const end = turnEnd(event, messageId);
       if (end === undefined) {
         return Effect.try({
           try: () => {

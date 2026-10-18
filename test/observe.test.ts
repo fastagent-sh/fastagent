@@ -19,13 +19,13 @@ describe("logAgentLoop", () => {
     const passed = await drain(wrapped.invoke({ sessionId: "s1", prompt: { text: "effect" } }));
     const plain = await drain(agent.invoke({ sessionId: "s2", prompt: { text: "effect" } }));
     expect(passed.map((e) => e.type)).toEqual(plain.map((e) => e.type));
-    expect(lines.some((l) => /run session=s1/.test(l) && /effect/.test(l))).toBe(true);
+    expect(lines.some((l) => /message session=s1/.test(l) && /effect/.test(l))).toBe(true);
     expect(lines.some((l) => /tool ✓ effect/.test(l))).toBe(true);
     expect(lines.some((l) => /reply: answer: effect/.test(l))).toBe(true);
     expect(lines.some((l) => /■ completed/.test(l))).toBe(true);
   });
 
-  it("traces a failed run with its error", async () => {
+  it("traces a failed message with its error", async () => {
     const lines: string[] = [];
     const wrapped = logAgentLoop(servingAgent(loopPort(fakeLoopHarness(new FakeStore()))), (l) => lines.push(l));
     await drain(wrapped.invoke({ sessionId: "s", prompt: { text: "fail" } }));
